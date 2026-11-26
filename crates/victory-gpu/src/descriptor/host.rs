@@ -180,6 +180,14 @@ pub(crate) struct HostHeap {
     /// (`victory_shader::emit::SLOT_STRIDES`): an upload buffer of
     /// `SLOT_STRIDES_COUNT` dwords, its GPU address and its mapping.
     strides: Option<(ID3D12Resource, u64, usize)>,
+    /// View heaps: the title address ([`view_address`]) of the view at each
+    /// slot, low dword then high, 0 for a slot without a buffer or
+    /// ray-tracing structure view, for shaders that pick a descriptor by an
+    /// index they compute and use only its address
+    /// (`victory_shader::emit::SLOT_VIEW_ADDRESSES`,
+    /// `SLOT_TABLE_VIEW_ADDRESSES`): the same slots as `strides`, written
+    /// where it is, `SLOT_STRIDES_COUNT` * 8 bytes.
+    addresses: Option<(ID3D12Resource, u64, usize)>,
     /// Title slots holding buffer views. Such a view gets its host slot
     /// (and its memory a host copy) only when something reads it: a draw
     /// through a table, or [`HostHeap::buffer_slots`] for shaders that pick
@@ -1590,6 +1598,19 @@ impl HostHeap {
                 Some((buffer, gpu, data as usize))
             })
             .flatten();
+        let addresses = (!sampler)
+            .then(|| {
+                let bytes = u64::from(victory_shader::emit::SLOT_STRIDES_COUNT) * 8;
+                let (buffer, data) = host.upload_buffer(bytes)?;
+                // SAFETY: the buffer's whole mapping; a live buffer.
+                let gpu = unsafe {
+                    std::ptr::write_bytes(data, 0, bytes as usize);
+                    buffer.GetGPUVirtualAddress()
+                };
+                crate::host::name(&buffer, || "title addresses by view heap slot".to_owned());
+                Some((buffer, gpu, data as usize))
+            })
+            .flatten();
         let h = HostHeap {
             buffer_sweep: Mutex::default(),
             buffer_frame: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -1615,6 +1636,7 @@ impl HostHeap {
             free: std::sync::atomic::AtomicU32::new(extra),
             too_long: std::sync::atomic::AtomicU32::new(u32::MAX),
             strides,
+            addresses,
             buffers: Slots::new(count as usize),
             changed: Slots::new(count as usize),
             textures: Mutex::default(),
@@ -1789,6 +1811,17 @@ impl HostHeap {
     /// The table's buffer, for a list to hold.
     pub(crate) fn strides_buffer(&self) -> Option<&ID3D12Resource> {
         self.strides.as_ref().map(|s| &s.0)
+    }
+
+    /// The GPU address of the table of title addresses by title slot (view
+    /// heaps; `victory_shader::emit::SLOT_VIEW_ADDRESSES`).
+    pub(crate) fn addresses_gpu(&self) -> Option<u64> {
+        self.addresses.as_ref().map(|s| s.1)
+    }
+
+    /// That table's buffer, for a list to hold.
+    pub(crate) fn addresses_buffer(&self) -> Option<&ID3D12Resource> {
+        self.addresses.as_ref().map(|s| &s.0)
     }
 
     /// Up to `max` title slots whose texture view is due at `frame`, each
@@ -2747,6 +2780,7 @@ impl HostHeap {
         }
         let (stride, kind) = view.map_or((None, 0), view_stride_and_kind);
         self.write_stride(index, stride.unwrap_or(0) | kind);
+        self.write_address(index, view.and_then(view_address).unwrap_or(0));
         let was = if stride.is_some() {
             self.buffers.put(index);
             true
@@ -2770,6 +2804,24 @@ impl HostHeap {
             // single aligned dword: either value is one the slot had, and
             // dynamic slots are exclusively owned until submission finishes).
             unsafe { (*data as *mut u32).add(index as usize).write_volatile(word) };
+        }
+        // Every slot the strides table is written for: no address until the
+        // view's own is written after this ([`HostHeap::write_address`]).
+        self.write_address(index, 0);
+    }
+
+    /// Writes the title address of the view at view-heap slot `index` into
+    /// the host's [`victory_shader::emit::SLOT_VIEW_ADDRESSES`] table (0:
+    /// none). Always after [`HostHeap::write_stride`] for the same slot,
+    /// which clears it.
+    #[inline]
+    fn write_address(&self, index: u32, address: u64) {
+        if let Some((_, _, data)) = &self.addresses
+            && index < victory_shader::emit::SLOT_STRIDES_COUNT
+        {
+            // SAFETY: inside the mapping (8 bytes a slot, 8-aligned); one
+            // aligned quadword, as for the strides.
+            unsafe { (*data as *mut u64).add(index as usize).write_volatile(address) };
         }
     }
 
@@ -2801,6 +2853,7 @@ impl HostHeap {
         self.put(index);
         self.twin_made(index, kept.is_some() && twinned(view));
         self.write_stride(index, if kept.is_some() { view_stride_word(view) } else { 0 });
+        self.write_address(index, if kept.is_some() { view_address(view).unwrap_or(0) } else { 0 });
         self.keep(index, kept.flatten());
     }
 
@@ -2834,13 +2887,14 @@ impl HostHeap {
                 let twin = twinned(&view);
                 let kept = make_twinned(&view, views.slot(at), Some(views.slot(at + 1)))?;
                 let stride_word = view_stride_word(&view);
+                let address = view_address(&view).unwrap_or(0);
                 let listed = Listed {
                     kind: crate::draw::view_kind(&view),
                     texture: is_texture_view(&view),
                     ready: (0, 0, false),
                     tabled: None,
                 };
-                views.made.insert(words, ListView { view, at, twin, stride_word, kept, listed });
+                views.made.insert(words, ListView { view, at, twin, stride_word, address, kept, listed });
             }
             let made = &views.made[&words];
             self.copy_from(index, views.slot(made.at));
@@ -2851,6 +2905,7 @@ impl HostHeap {
                 self.clear_twin(index);
             }
             self.write_stride(index, made.stride_word);
+            self.write_address(index, made.address);
             self.keep(index, made.kept.clone());
             Some(made.listed)
         })
@@ -3260,6 +3315,10 @@ impl HostHeap {
             } else if for_draw {
                 // Left for later and stale since: out of the sets and the stride table.
                 let _ = self.note_buffer(index, None, false);
+            } else {
+                // A buffer view left for later (`shown` 0) gave its address
+                // when written: no longer.
+                self.write_address(index, 0);
             }
             return None;
         };
@@ -5769,6 +5828,73 @@ mod tests {
         assert!(heap.make_listed(0x1234, rec, s0 + 3).is_some());
         assert_eq!(read_stride(s0 + 3), 8 | VIEW_INTEGER);
     }
+
+    /// The table of title addresses (`SLOT_VIEW_ADDRESSES`) holds, for every
+    /// slot, the address of the view written there last, at once: a view
+    /// the title writes and a dispatch then picks in the same frame finds
+    /// the new address, not the one before.
+    #[test]
+    fn view_addresses_follow_each_write_of_a_slot_at_once() {
+        let Some(heap) = HostHeap::new(false, 4) else {
+            return; // no host GPU
+        };
+        let Some((_, _, data)) = heap.addresses else {
+            panic!("view heap should allocate the table of view addresses");
+        };
+        let read = |slot: u32| -> u64 {
+            // SAFETY: inside the `SLOT_STRIDES_COUNT` * 8 mapping.
+            unsafe { *(data as *const u64).add(slot as usize) }
+        };
+        let memory = vec![0u64; 1 << 12];
+        let base = (memory.as_ptr() as u64).next_multiple_of(4096);
+        // A raw buffer view (R32_TYPELESS 39, buffer, flags raw) of 64 dwords
+        // of placed title memory at `at`, from element `first`.
+        let raw = |uav: bool, at: u64, first: u32| {
+            let resource: [u32; 14] = [1, 0, 0, 0, 4096, 0, 1, 1 | 1 << 16, 0, 1, 0, 1, 0, 0];
+            let mut desc = [0u32; 16];
+            desc[..10].copy_from_slice(&if uav {
+                [39, 1, first, 0, 64, 0, 0, 0, 1, 0]
+            } else {
+                [39, 1, 5768, 0, first, 0, 64, 0, 1, 0]
+            });
+            (desc[10], desc[11]) = (at as u32, (at >> 32) as u32);
+            View::Placed(uav, resource, desc)
+        };
+        let s = heap.dynamic(4).unwrap();
+        for uav in [false, true] {
+            let a = raw(uav, base, 0);
+            assert_eq!(view_address(&a), Some(base), "uav {uav}");
+            heap.make_at(s, &a);
+            assert_eq!(read(s), base, "uav {uav}");
+            // Rewritten in the same frame: the new address, from its first
+            // element on.
+            let b = raw(uav, base + 8192, 4);
+            let at = view_address(&b).unwrap();
+            assert_eq!(at, base + 8192 + 16, "uav {uav}");
+            heap.make_at(s, &b);
+            assert_eq!(read(s), at, "uav {uav}");
+            // A slot made something else reads no address.
+            heap.make_null(s);
+            assert_eq!(read(s), 0);
+            heap.make_at(s, &a);
+            heap.null_raw_at(s);
+            assert_eq!(read(s), 0);
+        }
+        // Through the views a list keeps (made, then the cached copy).
+        let mut slot_mem = [0u32; 8];
+        crate::descriptor::record(slot_mem.as_mut_ptr() as u64, raw(false, base, 0));
+        let rec = [slot_mem[0], slot_mem[1], slot_mem[2]];
+        assert!(heap.make_listed(0x5678, rec, s + 1).is_some());
+        assert_eq!(read(s + 1), base);
+        heap.make_null(s + 2);
+        assert!(heap.make_listed(0x5678, rec, s + 2).is_some());
+        assert_eq!(read(s + 2), base);
+        // A title slot the heap notes (as `mirror` does).
+        let _ = heap.note_buffer(1, Some(&raw(false, base + 4096, 0)), false);
+        assert_eq!(read(1), base + 4096);
+        let _ = heap.note_buffer(1, None, false);
+        assert_eq!(read(1), 0);
+    }
 }
 
 /// What is known of a record a list's tables hold, in that recording of the
@@ -5790,6 +5916,8 @@ struct ListView {
     at: u32,
     twin: bool,
     stride_word: u32,
+    /// [`view_address`] of `view` (0: none).
+    address: u64,
     kept: Kept,
     listed: Listed,
 }

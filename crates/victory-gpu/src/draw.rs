@@ -1752,6 +1752,26 @@ impl State {
                         }
                         continue;
                     }
+                    if srv
+                        && (slot == victory_shader::emit::SLOT_VIEW_ADDRESSES
+                            || slot == victory_shader::emit::SLOT_TABLE_VIEW_ADDRESSES)
+                    {
+                        // Ours: the title addresses of the views a shader
+                        // picks by an index it computes and walks by address.
+                        match self.heap_addresses(list, slot == victory_shader::emit::SLOT_VIEW_ADDRESSES) {
+                            // SAFETY: an open list; the table lives as long
+                            // as the heap the list holds.
+                            Some(gpu) => unsafe {
+                                if compute {
+                                    l.SetComputeRootShaderResourceView(param, gpu);
+                                } else {
+                                    l.SetGraphicsRootShaderResourceView(param, gpu);
+                                }
+                            },
+                            None => once!("a shader picks view addresses without a view heap set"),
+                        }
+                        continue;
+                    }
                     if srv && slot == victory_shader::emit::SLOT_TABLE_STRIDES {
                         // Ours: the shader inspects typed view kinds for its
                         // descriptor tables only (already mirrored by `tables`),
@@ -2139,6 +2159,34 @@ impl State {
         // Tag bit 1 (distinct from `heap_buffers`'s `| 1` and aligned guest pointers).
         if list.first_use(gpu as usize | 2)
             && let Some(buffer) = host.strides_buffer()
+        {
+            list.keep(buffer);
+        }
+        Some(gpu)
+    }
+
+    /// The GPU address of the bound view heap's table of title addresses by
+    /// slot (`victory_shader::emit::SLOT_VIEW_ADDRESSES` and
+    /// `SLOT_TABLE_VIEW_ADDRESSES`). The table is written where the strides
+    /// table is, so it is as up to date as that one for the same kind of
+    /// pick: for a pick from the whole heap (`heap`) the heap pass of
+    /// [`Self::heap_buffers`] runs first (once a frame), for a pick from a
+    /// table the draw's tables are mirrored before it records.
+    fn heap_addresses(&self, list: &HostList, heap: bool) -> Option<u64> {
+        if heap {
+            self.heap_buffers(list)?;
+        }
+        let host = self
+            .heaps
+            .iter()
+            .filter(|&&h| h != 0)
+            .map(|&h| crate::descriptor::heap(h as This))
+            .find(|h| !h.samplers())?
+            .host()?;
+        let gpu = host.addresses_gpu()?;
+        // Tag bit 2 (distinct from the strides' `| 1` and `| 2`).
+        if list.first_use(gpu as usize | 4)
+            && let Some(buffer) = host.addresses_buffer()
         {
             list.keep(buffer);
         }
