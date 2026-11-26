@@ -2649,6 +2649,9 @@ mod atomic_tests {
 }
 
 #[cfg(test)]
+mod viewaddr_tests;
+
+#[cfg(test)]
 mod barycentric_tests {
     use super::container::SigElement;
     use super::*;

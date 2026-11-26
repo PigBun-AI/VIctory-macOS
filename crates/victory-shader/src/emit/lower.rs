@@ -3086,6 +3086,48 @@ impl<'a> Lower<'a> {
         Some((lo, hi))
     }
 
+    /// [`Self::view_address`] of a buffer view picked from a heap at an
+    /// index the code computes (a ray-tracing structure walked by address):
+    /// the pair the host keeps for its slot
+    /// ([`super::shader::SLOT_VIEW_ADDRESSES`]); none for a load at a fixed
+    /// place, or where the slot is not known.
+    fn indexed_view_address(&mut self, site: Site) -> Option<(V, V)> {
+        let a = self.scalar.get(&site).copied()?;
+        a.dynamic?;
+        let table = match self.x.native.layout.get(a.param)?.root {
+            RootType::ResourceHeap => super::shader::SLOT_VIEW_ADDRESSES,
+            RootType::Table => super::shader::SLOT_TABLE_VIEW_ADDRESSES,
+            _ => return None,
+        };
+        if std::env::var_os("VICTORY_DESC_WHY").is_some() {
+            eprintln!("VIEW-ADDRESS-INDEXED param={} root slot t{table}", a.param);
+        }
+        let slot = self.heap_index(site, 0, false).ok()?;
+        let c = self.cur;
+        let i32t = self.s.t.i32;
+        // Inside the table whatever the index, as `slot_word` keeps it.
+        let last = self.s.m.i32(super::shader::SLOT_STRIDES_COUNT - 1);
+        let slot = self.s.op(c, "binary.i32", Attr::ReadNone, i32t, 40, &[slot, last]);
+        self.s.m.tag(slot, Tag::Clamp);
+        let three = self.s.m.i32(3);
+        let byte = self.s.m.bin(c, Bin::Shl, slot, three);
+        let h = self.s.root_srv_handle(table);
+        let iu = self.s.m.undef(i32t);
+        let mask = self.s.m.i8(3);
+        let align = self.s.m.i32(4);
+        let r = self.s.op(
+            c,
+            "rawBufferLoad.f32",
+            Attr::ReadOnly,
+            self.s.t.res_ret,
+            139,
+            &[h, byte, iu, mask, align],
+        );
+        let lo = self.s.m.extract(c, r, 0);
+        let hi = self.s.m.extract(c, r, 1);
+        Some((self.as_int(lo), self.as_int(hi)))
+    }
+
     /// `lo`, `hi` plus the instruction's byte offset `off`, with the carry.
     fn address_plus(&mut self, lo: V, hi: V, off: i32) -> (V, V) {
         if off == 0 {
@@ -6564,9 +6606,14 @@ impl<'a> Lower<'a> {
             // A buffer view the code only takes the address of, to walk
             // the memory behind it (a ray-tracing structure): the address
             // from the host, the other dwords have no value.
-            if count <= 4
-                && let Some((lo, hi)) = self.view_address(site)
-            {
+            let address = if count <= 4 {
+                self.view_address(site).or_else(|| {
+                    (count == 4).then(|| self.indexed_view_address(site)).flatten()
+                })
+            } else {
+                None
+            };
+            if let Some((lo, hi)) = address {
                 for k in 0..count {
                     let reg = Reg::S(code + k as u8);
                     match k {
