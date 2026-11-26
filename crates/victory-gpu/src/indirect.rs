@@ -984,7 +984,7 @@ void main() {
                 info.ClearStoredMessages();
                 gpu.list.CopyBufferRegion(&target, 0, &src, 0, 65536);
                 if barrier {
-                    gpu.list.ResourceBarrier(&[crate::host::transition(&target, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
+                    crate::host::HostList::finish_placed_write(&gpu.list, &target);
                 }
                 gpu.list.SetComputeRootSignature(&pass.root);
                 gpu.list.SetPipelineState(&pass.pso);
