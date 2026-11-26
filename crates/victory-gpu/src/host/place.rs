@@ -193,6 +193,13 @@ fn shaders_own(src: usize, len: usize) -> Option<std::sync::Arc<Shadow>> {
 }
 
 impl HostList {
+    /// Relinquish the placed copy's write state before the title resumes.
+    /// The next consumer may be another copy, a shader, or a later list
+    /// in this same ExecuteCommandLists batch (no buffer decay yet).
+    pub(crate) unsafe fn finish_placed_write(list: &ID3D12GraphicsCommandList, dst: &ID3D12Resource) {
+        unsafe { list.ResourceBarrier(&[transition(dst, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON)]) };
+    }
+
     /// Copies `len` bytes of title memory at `src` to `dst`, at this place of
     /// the list (see the file). `false` if it is to be done at submission.
     pub(crate) fn place_copy(&self, dst: usize, src: usize, len: usize) -> bool {
@@ -244,7 +251,10 @@ impl HostList {
             },
             (None, None) => return false,
         }
-        unsafe { wait_for_all(host, &self.list) };
+        unsafe {
+            Self::finish_placed_write(&self.list, &to.buffer);
+            wait_for_all(host, &self.list);
+        }
         STATS[0].fetch_add(1, Ordering::Relaxed);
         STATS[1].fetch_add(len as u64, Ordering::Relaxed);
         to.gpu_writes(self, dst as u64, len as u64);
