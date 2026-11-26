@@ -961,6 +961,55 @@ void main() {
         assert_eq!(run(&mut warp, 2), [0, 0, 0]);
     }
 
+    // Run alone: the debug layer must be enabled before device creation.
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    #[ignore]
+    fn copy_dest_root_srv_debug_pair() {
+        assert_eq!(std::env::var("VICTORY_D3D12_WARP").as_deref(), Ok("1"));
+        assert_eq!(std::env::var("VICTORY_D3D12_DEBUG").as_deref(), Ok("1"));
+        // SAFETY: isolated WARP device; resources stay live until fence completion.
+        unsafe {
+            let mut debug: Option<ID3D12Debug> = None;
+            D3D12GetDebugInterface(&mut debug).unwrap();
+            debug.unwrap().EnableDebugLayer();
+            let mut gpu = WarpHarness::new().expect("WARP required");
+            let info: ID3D12InfoQueue = gpu.device.cast().unwrap();
+            let pass = compile_cs(&gpu.device, crate::host::CARD_COMPARE).unwrap();
+            for barrier in [false, true] {
+                let (src, _, _) = gpu.shared_buffer(65536);
+                let target = gpu.default_uav(65536);
+                let hashes = gpu.default_uav(65536);
+                let flags = gpu.default_uav(65536);
+                info.ClearStoredMessages();
+                gpu.list.CopyBufferRegion(&target, 0, &src, 0, 65536);
+                if barrier {
+                    gpu.list.ResourceBarrier(&[crate::host::transition(&target, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)]);
+                }
+                gpu.list.SetComputeRootSignature(&pass.root);
+                gpu.list.SetPipelineState(&pass.pso);
+                gpu.list.SetComputeRootShaderResourceView(1, target.GetGPUVirtualAddress());
+                gpu.list.SetComputeRootUnorderedAccessView(2, hashes.GetGPUVirtualAddress());
+                gpu.list.SetComputeRootUnorderedAccessView(3, flags.GetGPUVirtualAddress());
+                let args = [0u32, 0, 65536, 1, 0, 0];
+                gpu.list.SetComputeRoot32BitConstants(0, 6, args.as_ptr().cast(), 0);
+                gpu.list.Dispatch(1, 1, 1);
+                gpu.submit_and_wait();
+                let mut errors = Vec::new();
+                for i in 0..info.GetNumStoredMessagesAllowedByRetrievalFilter() {
+                    let mut size = 0;
+                    info.GetMessage(i, None, &mut size).unwrap();
+                    let mut buf = vec![0usize; size.div_ceil(size_of::<usize>())];
+                    let msg = buf.as_mut_ptr().cast::<D3D12_MESSAGE>();
+                    info.GetMessage(i, Some(msg), &mut size).unwrap();
+                    if (*msg).Severity.0 <= D3D12_MESSAGE_SEVERITY_ERROR.0 { errors.push((*msg).ID.0); }
+                }
+                println!("WARP barrier={barrier}: error IDs {errors:?}");
+                if barrier { assert!(errors.is_empty()); } else { assert_eq!(errors, [538]); }
+            }
+        }
+    }
+
     /// What the passes over copies in the card's memory cost on the card
     /// (ignored: a measurement): rounds of a few passes of some pieces and a
     /// wait, as a frame has them. `VICTORY_BENCH_CS=<file>` times another
