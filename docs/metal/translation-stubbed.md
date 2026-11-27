@@ -28,8 +28,8 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - owner / chain / hop: shared / shader / 5 MSC 4.0.3 (back/src/msc)
 - freq: 4,852 (census:2026-11-27); used=yes; status=gap
 - Xbox hardware / driver does: RDNA2 interpolates in LDS: a pixel program can read P0/P10/P20 (parameter at each vertex) and compute any interpolation (flat, provoking vertex, custom)
-- deviation: MSC 4.0.3 refuses dx.op.attributeAtVertex.f32 (MSC manual: "GetAttributeAtVertex not supported"; 4852 of 12067 Ps containers = 40%; 330 CREATE_GRAPHICS_PIPELINE refusals in the 370 s run). Every pipeline with such a pixel shader is not created, its draws are dropped: the largest single block of missing geometry/materials seen in the run. (Another hand is working on this in metal-livetr.)
-- restore_plan (how to break through): Translator lowering that MSC accepts: SV_Barycentrics (accepted, linear only, MSC manual) plus the three vertex values as plain inputs supplied per-vertex from the vertex/mesh stage (flat-pull via a vertex-pulling stage-in buffer indexed by SV_PrimitiveID*3+vertex) and manual interpolation in the pixel shader. Fidelity: exact for linear interpolation; perspective-correct weights come from SV_Barycentrics (perspective) and centroid is refused by MSC (feature table). Feasibility 可行 for non-centroid; 待验证 for centroid/sample modes. Sources: MSC UserManual.md "Feature support matrix" (metal-irconverter 4.0.3), 2026-11-27; census/mac-side.md.
+- deviation: MSC 4.0.3 refuses dx.op.attributeAtVertex.f32 (MSC manual: "GetAttributeAtVertex not supported"; 4852 of 12067 Ps containers = 40%; 330 CREATE_GRAPHICS_PIPELINE refusals in the 370 s run). Every pipeline with such a pixel shader is not created, its draws are dropped: the largest single block of missing geometry/materials seen in the run. (Another hand is working on this in metal-livetr.) Run r6: 330 refusals, 103 pipelines, 102 mesh (C-B-011).
+- restore_plan (how to break through): Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / DXIL rewrite before MSC / translator switch; fidelity first (the lead's list, 2026-11-27). One candidate for the translator route: SV_Barycentrics (accepted, linear only, MSC manual) plus the three vertex values as plain inputs supplied per-vertex from the vertex/mesh stage (flat-pull via a vertex-pulling stage-in buffer indexed by SV_PrimitiveID*3+vertex) and manual interpolation in the pixel shader. Fidelity: exact for linear interpolation; perspective-correct weights come from SV_Barycentrics (perspective) and centroid is refused by MSC (feature table). Feasibility 可行 for non-centroid; 待验证 for centroid/sample modes. Sources: MSC UserManual.md "Feature support matrix" (metal-irconverter 4.0.3), 2026-11-27; census/mac-side.md.
 - tests: —
 - notes: code: emit/lower.rs per_vertex; census.json failures; mac-side.md. Same cause 330x in the run.
 
@@ -53,7 +53,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: gpu:pipeline/library.rs::names_change_with_what_goes_into_the_pipeline|a_rejected_blob_gives_an_empty_library|the_library_file_is_mapped_and_replaced(+2)
 - notes: code: front/src/library.rs, front/src/shell/library.rs. Census archive numbers: research/census/census.json archive.
 
-## 6. C-V-010 — mesh PSO refused at host creation (front E_NOTIMPL 0x80004001 after back refusal), draws dropped
+## 6. C-B-010 — ExecuteIndirect of draws through a geometry shader: skipped by tools/metal/run.sh default (VICTORY_METAL_SKIP_GS_INDIRECT=1; the back's own default draws them)
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: 996 (docs/metal/m5-gs.md (old base run 20261127-200844-metal: 996 EXECUTE_INDIRECT with a GS, MaxCommandCount 1, no count buffer)); used=yes; status=gap
+- Xbox hardware / driver does: the command processor runs every indirect draw; the title ends frames with indirect GS draws (996 calls in 400 s on the old base)
+- deviation: With the run.sh default those draws are not drawn at all, so anything the title draws through GS indirect execution is missing. Reason for the skip: with them the picture of the old base went black (m5-gs.md); in r6, with them skipped, the picture still goes black between intro scenes (t=205/250/340 s): the cause is not found, black alone is not the GS.
+- restore_plan (how to break through): Restore condition: obtain a frame capture that contains an indirect GS draw, check the nodes against it (tools/metal/replay.sh, docs/metal/m4-newbase.md), and as soon as they pass switch the default back on (delete the skip default in run.sh): the default configuration must not stay away from the Xbox behaviour (user requirement). The back already draws them by default (draw.rs:1093-1095). Feasibility 可行 once a capture exists.
+- tests: back/tests/gfx_draw.rs::indirect_gs_records_with_no_many_or_zero_instances_match_the_direct_draws|indirect_draws_through_a_geometry_shader_match_the_direct_ones
+- notes: code: metal/back/src/draw.rs:1093; tools/metal/run.sh:39-42,125. freq is from the OLD base (per the lead); my own run 20261127-221938-map had 0 ExecuteIndirect reach the front (C-V-013).
+
+## 7. C-V-010 — mesh PSO refused at host creation (front E_NOTIMPL 0x80004001 after back refusal), draws dropped
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 389 (runlog:20261127-221938-map); used=yes; status=gap
@@ -63,7 +73,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/pipeline/host.rs refusal log; front/src/shell/device.rs:274. Other hand works on GS/barycentrics on metal-livetr.
 
-## 7. S-G-006 — geometry shaders (title ES/GS programs) and the rectangle-list stage the translator itself writes
+## 8. C-B-011 — GetAttributeAtVertex / dx.op.attributeAtVertex.f32 in a pipeline: MSC 4.0.3 refuses the shader, CREATE_GRAPHICS_PIPELINE fails, draws dropped
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: 330 (research/game-runs/20261127-metal-livetr-r6 (stderr.log: 330 back refusals, 103 pipelines, 102 of them mesh); same cause in 20261127-221938-map: 330); used=yes; status=gap
+- Xbox hardware / driver does: RDNA2 interpolates attributes in LDS: pixel programs read the three vertices' values (P0/P10/P20, flat/provoking vertex, own barycentric weights)
+- deviation: MSC 4.0.3 does not implement it ("GetAttributeAtVertex not supported", MSC manual): 330 refusals in one 409 s run over 103 distinct pipelines (102 mesh + 1 other); each pipeline is not made and its draws never appear. In the package 4852 of 12067 pixel programs contain it (S-G-002).
+- restore_plan (how to break through): Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / rewrite the DXIL before MSC / translator switch; fidelity first. (Today's numbers decide nothing: cost is recorded only.) Sources for the routes: MSC manual feature matrix, MTL4 fragment input docs, census/mac-side.md (2026-11-27). Feasibility 待验证.
+- tests: front/tests/pso.rs::subobjects_sit_where_the_d3d12_structures_put_them|a_vertex_pixel_stream_parses_to_the_state(+6)
+- notes: code: back/src/msc (refusal), front/src/shell/device.rs:302 (E_NOTIMPL answer); translator emitter emit/lower.rs per_vertex. Other hand (metal-livetr) investigates; see S-G-002 / S-M-002.
+
+## 9. S-G-006 — geometry shaders (title ES/GS programs) and the rectangle-list stage the translator itself writes
 
 - owner / chain / hop: shared / shader / 2 IR build + structure (ir.rs, structure.rs, io.rs, spill.rs)
 - freq: 195 (census:2026-11-27); used=yes; status=gap
@@ -73,7 +93,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: shader:emit/rect.rs::the_rectangle_stage_is_a_geometry_shader|rectangle_stages_that_cannot_be_made_are_refused
 - notes: census translate.failures Gs 195; rect: emit/rect.rs
 
-## 8. S-I-016 — compute programs with no wave32 lowering (wave64 shapes the half-exchange does not cover)
+## 10. C-B-013 — typed buffer view of R32G32B32_FLOAT (format 6): WRITE_DESCRIPTOR refused "Metal has no texture-buffer pixel format for it"
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: 52 (research/game-runs/20261127-metal-livetr-r6 (stderr.log: 52 back WRITE_DESCRIPTOR refusals, plus 49 front CreateShaderResourceView 0x80004001)); used=yes; status=gap
+- Xbox hardware / driver does: typed buffer (vertex-fetch-like) views of any 3-component format are native
+- deviation: the view is refused and reads zeros (the shader sees black/zero data): 52 refusals in one run.
+- restore_plan (how to break through): Metal now has MTLPixelFormatRGB32Float/Uint/Sint for texture buffers, read-only (no MTLTextureUsageShaderWrite) from macOS 27.0 (MTLPixelFormat.h lines 181-208, SDK MacOSX27.2, 2026-11-27): add the three formats to the back's table for SRV views. For a typed UAV of R32G32B32 fall back to raw stride-12 loads/stores in the translator. Feasibility 可行 for SRV, 待验证 for UAV.
+- tests: back/tests/typed_gpu.rs::refused_views_write_nothing
+- notes: code: back/src/format.rs, back/src/typed.rs. This replaces the earlier note in C-F-006 that Metal had no such format.
+
+## 11. S-I-016 — compute programs with no wave32 lowering (wave64 shapes the half-exchange does not cover)
 
 - owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
 - freq: 26 (census:2026-11-27); used=yes; status=gap
@@ -83,7 +113,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: census: research/census/census.json translate.failures class "Cs: no wave32 lowering ..." count 26; translated_with_host_wave64 26.
 
-## 9. C-F-029 — conservative rasterization (PSO raster.conservative=1)
+## 12. C-F-029 — conservative rasterization (PSO raster.conservative=1)
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 22 (callstats:20261127-221938-map); used=yes; status=gap
@@ -93,7 +123,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/pso.rs. 12 of 1340 PSOs have conservative=1.
 
-## 10. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
+## 13. C-B-012 — mesh pipeline whose output exceeds Metal's 32768-byte total mesh size: back refuses CREATE_GRAPHICS_PIPELINE
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: 14 (research/game-runs/20261127-metal-livetr-r6 (stderr.log: 10 x 35840, 4 x 34816)); used=yes; status=gap
+- Xbox hardware / driver does: NGG/mesh shader outputs up to 128 vertices/256 primitives in on-chip memory, no 32 KiB total cap
+- deviation: the pipeline is not made and its draws are dropped (14 refusals in one 409 s run; 520 of 8765 Ms containers in the package, S-G-005). VICTORY_MESH_OVER_LIMIT=1 lets them through on the Mac but queue hangs are known (docs/mac/macos.md).
+- restore_plan (how to break through): Split the mesh shader (more groups, fewer outputs per group) or repack in the translator; cap is a Metal fact: see S-G-005. Feasibility 待验证.
+- tests: back/tests/gfx_pipeline.rs::the_biggest_mesh_output_dxil_allows_compiles
+- notes: code: back/src/pipeline.rs mesh limit check
+
+## 14. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -103,7 +143,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/pipeline.rs "shader does not translate"; translator: crates/victory-shader/src/emit/wave.rs. freq=3 logged programs in this run, 26 containers in census.
 
-## 11. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
+## 15. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -113,7 +153,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/indirect.rs, mac/hlsl.rs. FINDING for the Mac lead: tools/metal/run.sh did not set VICTORY_HELPER_DXC in this run. freq=3 dropped signatures in the log.
 
-## 12. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
+## 16. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75 (applied at every launch; no per-run counter)); used=yes; status=gap
@@ -123,7 +163,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. owner=mac: loader patch; Mac lead fills the history and the effects of turning it off. Observed in run 20261127-221938-map: swapchain 1280x720 R8G8B8A8_UNORM, 2 buffers.
 
-## 13. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
+## 17. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75); used=yes; status=unproven
@@ -133,7 +173,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. Switch default 0/off; docs/mac/macos.md table row VICTORY_UPSCALER.
 
-## 14. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
+## 18. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
 
 - owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
 - freq: 1 (census:2026-11-27); used=yes; status=gap
@@ -143,7 +183,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: shader:emit/mod.rs::heap_texture_atomic_widths; shader:emit/size_tests.rs::a_counter_texture_is_set_by_a_store_of_one_channel
 - notes: code: emit/lower.rs atomics, resource.rs; census failure: 1 Ps "atomicBinOp.i64". freq: 1 program in census (low), 0 in run.
 
-## 15. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
+## 19. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 0 (callstats:20261127-221938-map); used=no; status=unproven
@@ -153,7 +193,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/query.rs. callstats: no query calls.
 
-## 16. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
+## 20. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -163,7 +203,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/caps.rs. CheckFeatureSupport 2069 calls.
 
-## 17. C-F-053 — ResolveSubresource (MSAA resolve)
+## 21. C-F-053 — ResolveSubresource (MSAA resolve)
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -173,7 +213,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/device.rs
 
-## 18. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
+## 22. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -183,7 +223,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::timestamps_rise_in_recording_order_and_resolve_into_the_buffer
 - notes: code: front/src/timestamps.rs. proto has no timestamp op yet (docs/metal/proto.md).
 
-## 19. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
+## 23. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -193,7 +233,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/timestamps.rs QueryHeap::new
 
-## 20. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
+## 24. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 0 (none); used=no; status=gap
@@ -203,7 +243,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Marked FUTURE by the request of the lead (2026-11-27). Do not schedule before the fidelity-phase nodes are proven.
 
-## 21. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
+## 25. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -213,7 +253,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/list.rs (unwritten methods log once). No evidence of calls in runlog:20261127-221938-map.
 
-## 22. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
+## 26. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -223,7 +263,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/device.rs f[76] create_committed. Whether the title reads DCC surfaces is untested.
 
-## 23. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
+## 27. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -233,7 +273,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: no code; absence verified by grep -i htile in crates/victory-gpu and crates/victory-shader (only hash constants match).
 
-## 24. C-F-014 — buffer UAV typed with misaligned first element
+## 28. C-F-014 — buffer UAV typed with misaligned first element
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=gap
@@ -243,7 +283,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/typed_gpu.rs::refused_views_write_nothing
 - notes: code: back/src/typed.rs
 
-## 25. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
+## 29. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=unproven
@@ -253,7 +293,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::pix_markers_become_debug_labels
 - notes: code: front/src/timestamps.rs pix_text
 
-## 26. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
+## 30. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
 
 - owner / chain / hop: shared / shader / 2 IR build + structure (ir.rs, structure.rs, io.rs, spill.rs)
 - freq: not measured (none); used=unknown; status=unproven
@@ -263,7 +303,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-shader/src/ir.rs:1410; emit/lower.rs float rules ~258, 3915-4036. Used: unknown (needs instruction scan).
 
-## 27. C-X-010 — clwb loops replaced by NOPs under Rosetta (L4, mac/clwb.rs)
+## 31. C-X-010 — clwb loops replaced by NOPs under Rosetta (L4, mac/clwb.rs)
 
 - owner / chain / hop: mac / command / 8 Mac host layer (Wine, Rosetta, loader, HLE memory)
 - freq: not measured (none); used=unknown; status=unknown
@@ -273,7 +313,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: SKELETON for the Mac lead (docs/mac/PATCHES.md): PATCHES.md L4
 
-## 28. C-X-014 — queue recovery after device loss (TDR) NOT ported; DirectStorage per-worker handles NOT ported
+## 32. C-X-014 — queue recovery after device loss (TDR) NOT ported; DirectStorage per-worker handles NOT ported
 
 - owner / chain / hop: mac / command / 8 Mac host layer (Wine, Rosetta, loader, HLE memory)
 - freq: not measured (none); used=unknown; status=unknown
