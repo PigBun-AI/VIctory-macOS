@@ -80,6 +80,14 @@ unchanged). Remove when the Windows line's `build.rs` picks the right form for g
 wrapper that swaps `-lunwind` for llvm-mingw's static `libunwind.a` (what `tools/macos/gnullvm-cc.sh` does
 with `libgcc_eh` on Homebrew). An exe built before this fix must be relinked.
 
+*Fix, 2026-11-27 (exit status).* `check.sh` piped each cargo command through `tee` and `tail`, so the script's status was
+that of the last pipe stage: a failed cross build (error in the log, stale `victory.exe` listed) still returned 0, and the
+native steps' `grep ... || true` hid a failed test run the same way. Each step now writes to its own log, is summarised
+afterwards, and is judged by cargo's own exit status; all steps run, each failure prints `!! step failed: <step> (exit N)`,
+the last line names them (`check FAILED: cross build, native tests`) and the status is 1; a stale exe is not listed after a failed cross
+build. Still plain `sh` (`sync-windows.sh` runs it as `sh tools/mac/check.sh`; `sync-windows.sh` already turns a non-zero status
+with three green logs into a failed step).
+
 New files only. `env.sh` reuses the toolchain of a sibling `VIctory-macOS/target/toolchain` (or
 `VICTORY_MAC_TOOLCHAIN`). Remove when the Mac fork's `setup.sh` is the one way to a toolchain.
 
