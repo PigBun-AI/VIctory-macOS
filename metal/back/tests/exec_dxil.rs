@@ -229,8 +229,14 @@ fn a_pipeline_is_tied_to_its_root_signature() {
         ..RootSigDesc::default()
     };
     let a = fx.root_sig(&desc);
-    let b = fx.root_sig(&desc);
+    // (An identical description is the same signature to D3D12, which
+    // `RootSig::compatible_with` accepts; a different one is refused.)
+    let other = fx.root_sig(&RootSigDesc {
+        params: vec![constants_param(2), descriptor_param(RootParamKind::UAV)],
+        ..RootSigDesc::default()
+    });
     let pso = pipeline(&fx, a, &dxil);
+    let b = other;
     let c = vec![
         begin(1, q),
         set_sig(b),

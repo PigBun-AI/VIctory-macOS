@@ -247,7 +247,6 @@ fn what_this_back_does_not_do_is_refused_before_anything_runs() {
     let prefix = w.fill_a(1, 0x33);
     let mut layout = Barrier::memory(stage::BLIT, stage::DISPATCH);
     layout.class = BarrierClass::LAYOUT;
-    let gfx = BindPoint::GRAPHICS;
     let sync = Command::SyncRecord(SyncRecord {
         op: SyncOp::NOP,
         status: Status::OK,
@@ -265,41 +264,6 @@ fn what_this_back_does_not_do_is_refused_before_anything_runs() {
         (
             "DISPATCH_INDIRECT",
             Command::DispatchIndirect(DispatchIndirect { args_va: 0x1000 }),
-        ),
-        (
-            "graphics root signature",
-            Command::SetRootSignature(SetRootSignature {
-                bind_point: gfx,
-                root_sig: RootSigId(1),
-            }),
-        ),
-        (
-            "graphics root constants",
-            Command::SetRootConstants(SetRootConstants {
-                bind_point: gfx,
-                root_index: 0,
-                dest_offset: 0,
-                data: &[],
-            }),
-        ),
-        (
-            "graphics root descriptor",
-            Command::SetRootDescriptor(SetRootDescriptor {
-                bind_point: gfx,
-                root_index: 0,
-                kind: RootParamKind::CBV,
-                _pad: 0,
-                gpu_va: 0,
-            }),
-        ),
-        (
-            "graphics root table",
-            Command::SetRootTable(SetRootTable {
-                bind_point: gfx,
-                root_index: 0,
-                heap: HeapId(1),
-                index: 0,
-            }),
         ),
         ("layout barrier", Command::Barrier(layout)),
     ];

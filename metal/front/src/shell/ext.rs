@@ -59,14 +59,6 @@ impl ListObj_Impl {
         self.list.lock().unwrap().marker(']', "");
     }
 
-    /// The contents are undefined afterwards, so keeping them is legal.
-    pub(super) fn x_DiscardResource(
-        &self,
-        _presource: Ref<ID3D12Resource>,
-        _pregion: *const D3D12_DISCARD_REGION,
-    ) {
-    }
-
     pub(super) fn x_WriteBufferImmediate(
         &self,
         count: u32,

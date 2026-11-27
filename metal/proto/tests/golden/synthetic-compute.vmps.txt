@@ -1,6 +1,6 @@
 # golden bytes of synthetic-compute.vmps (448 bytes), synthetic. Hex words, 16 per line.
 # Regenerate: UPDATE_GOLDEN=1 cargo test (see the test that reads this file).
-56 4d 50 53 54 52 4d 00 04 00 00 00 20 00 00 00
+56 4d 50 53 54 52 4d 00 05 00 00 00 20 00 00 00
 03 00 00 00 00 00 00 00 c0 01 00 00 10 00 00 00
 04 00 01 00 10 00 00 00 01 00 00 00 01 00 00 00
 01 00 00 00 00 00 00 00 01 00 01 00 10 00 00 00

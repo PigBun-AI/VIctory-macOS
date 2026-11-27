@@ -23,8 +23,8 @@
 //! test less with writes, no stencil, every sample, one sample per pixel).
 //! The legacy description has every field explicitly.
 //!
-//! Not carried: stream output, tessellation and geometry stages (refused
-//! with `E_NOTIMPL` when present), view instancing, `RASTERIZER1/2` and
+//! Not carried: stream output and tessellation stages (refused
+//! with `E_NOTIMPL` when present; a geometry shader is carried), view instancing, `RASTERIZER1/2` and
 //! `DEPTH_STENCIL2` (their float depth bias / separate stencil masks have
 //! no use in the game's pipelines yet), cached PSO blobs and flags (ignored:
 //! the back has its own caching, the debug flag changes nothing).
@@ -730,16 +730,12 @@ fn stencil_face(f: &StencilOps) -> Result<StencilFace, PsoError> {
 
 /// The proto description for `state` with its resolved input layout.
 ///
-/// Refused as `E_NOTIMPL` (the back has no such pipeline): hull, domain or
-/// geometry shaders, stream output, patch topologies, view instancing. A
+/// Refused as `E_NOTIMPL` (the back has no such pipeline): hull or domain
+/// shaders, stream output, patch topologies, view instancing. A
 /// depth-bounds test is dropped (the back says so when it builds the
 /// pipeline; the flag travels in the description).
 pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsPsoDesc, PsoError> {
-    for (code, name) in [
-        (&state.hs, "hull"),
-        (&state.ds, "domain"),
-        (&state.gs, "geometry"),
-    ] {
+    for (code, name) in [(&state.hs, "hull"), (&state.ds, "domain")] {
         if code.addr != 0 || code.len != 0 {
             return Err(notimpl(format!("a {name} shader")));
         }
@@ -768,9 +764,10 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
     d.ps = stage(state.ps, "pixel")?;
     d.amp = stage(state.amp, "amplification")?;
     d.ms = stage(state.ms, "mesh")?;
+    d.gs = stage(state.gs, "geometry")?;
     if d.kind().is_none() {
         return Err(invalid(
-            "a graphics pipeline has a vertex shader, or a mesh shader (with an optional amplification shader)",
+            "a graphics pipeline has a vertex shader (with an optional geometry shader), or a mesh shader (with an optional amplification shader)",
         ));
     }
 
@@ -801,17 +798,29 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
     let b = &state.blend;
     d.blend.alpha_to_coverage = u8::from(b.alpha_to_coverage);
     d.blend.independent = u8::from(b.independent);
-    for (out, r) in d.blend.rt.iter_mut().zip(&b.rt) {
+    for (i, (out, r)) in d.blend.rt.iter_mut().zip(&b.rt).enumerate() {
+        // D3D12 reads target 0 only unless blends are independent, and the
+        // blend (logic) fields only when that blend (logic) is enabled: what is
+        // not read is whatever the application left there (often zeros, which
+        // are not valid enum values). Canonicalise it to `D3D12_DEFAULT`.
+        let used = b.independent || i == 0;
+        let r = if used { r } else { &RtBlend::DEFAULT };
+        let d0 = &RtBlend::DEFAULT;
         out.enable = u8::from(r.enable);
         out.logic_enable = u8::from(r.logic_enable);
         out.write_mask = r.write_mask & 0xF;
-        out.logic_op = logic_op(r.logic_op)?;
-        out.src = blend_factor(r.src)?;
-        out.dst = blend_factor(r.dst)?;
-        out.op = blend_op(r.op)?;
-        out.src_alpha = blend_factor(r.src_alpha)?;
-        out.dst_alpha = blend_factor(r.dst_alpha)?;
-        out.op_alpha = blend_op(r.op_alpha)?;
+        out.logic_op = logic_op(if r.logic_enable {
+            r.logic_op
+        } else {
+            d0.logic_op
+        })?;
+        let q = if r.enable { r } else { d0 };
+        out.src = blend_factor(q.src)?;
+        out.dst = blend_factor(q.dst)?;
+        out.op = blend_op(q.op)?;
+        out.src_alpha = blend_factor(q.src_alpha)?;
+        out.dst_alpha = blend_factor(q.dst_alpha)?;
+        out.op_alpha = blend_op(q.op_alpha)?;
     }
 
     let r = &state.raster;
@@ -831,18 +840,23 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
 
     let s = &state.depth;
     d.depth.depth_enable = u8::from(s.depth_enable);
-    d.depth.depth_write = match s.depth_write_mask {
+    // Depth state is read only with the depth test on, stencil state only with
+    // the stencil test on: otherwise canonical defaults (see the blend note).
+    let dd = PipelineState::default().depth;
+    let depth_on = if s.depth_enable { s } else { &dd };
+    d.depth.depth_write = match depth_on.depth_write_mask {
         0 => 0,
         1 => 1,
         m => return Err(invalid(format!("depth write mask {m}"))),
     };
-    d.depth.depth_func = compare(s.depth_func)?;
+    d.depth.depth_func = compare(depth_on.depth_func)?;
     d.depth.stencil_enable = u8::from(s.stencil_enable);
     d.depth.stencil_read_mask = s.stencil_read_mask;
     d.depth.stencil_write_mask = s.stencil_write_mask;
     d.depth.depth_bounds = u8::from(s.depth_bounds);
-    d.depth.front = stencil_face(&s.front)?;
-    d.depth.back = stencil_face(&s.back)?;
+    let stencil_on = if s.stencil_enable { s } else { &dd };
+    d.depth.front = stencil_face(&stencil_on.front)?;
+    d.depth.back = stencil_face(&stencil_on.back)?;
 
     d.rt_count = state.rt_count;
     d.rt_formats = state.rt_formats;
@@ -862,6 +876,7 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use victory_metal_proto::pso::PsoKind;
 
     #[test]
     fn enum_tables_cover_exactly_the_d3d12_values() {
@@ -909,14 +924,77 @@ mod tests {
     }
 
     #[test]
+    fn state_that_is_not_enabled_is_not_read() {
+        // An application that skips the fields of a disabled blend or stencil
+        // state leaves zeros there; D3D12 ignores them.
+        let mut s = PipelineState::default();
+        s.vs = Bytecode { addr: 8, len: 8 };
+        let zero = RtBlend {
+            enable: false,
+            logic_enable: false,
+            src: 0,
+            dst: 0,
+            op: 0,
+            src_alpha: 0,
+            dst_alpha: 0,
+            op_alpha: 0,
+            logic_op: 0,
+            write_mask: 0xF,
+        };
+        s.blend.rt = [zero; 8];
+        s.depth.stencil_enable = false;
+        let z = StencilOps {
+            fail: 0,
+            depth_fail: 0,
+            pass: 0,
+            func: 0,
+        };
+        s.depth.front = z;
+        s.depth.back = z;
+        let d = to_proto(&s, &[]).unwrap();
+        let mut want = GraphicsPsoDesc::new();
+        want.vs = StageCode { addr: 8, len: 8 };
+        assert_eq!(d, want);
+        // Depth state with the depth test off.
+        s.depth.depth_enable = false;
+        s.depth.depth_func = 0;
+        s.depth.depth_write_mask = 0;
+        assert!(to_proto(&s, &[]).is_ok());
+        // Targets 1.. are not read unless blends are independent.
+        let mut t = PipelineState::default();
+        t.vs = Bytecode { addr: 8, len: 8 };
+        t.blend.rt[3].enable = true;
+        t.blend.rt[3].src = 0;
+        assert!(to_proto(&t, &[]).is_ok());
+        // Enabled state is still checked.
+        t.blend.independent = true;
+        assert!(to_proto(&t, &[]).is_err());
+        let mut u = PipelineState::default();
+        u.vs = Bytecode { addr: 8, len: 8 };
+        u.depth.stencil_enable = true;
+        u.depth.front = z;
+        assert!(to_proto(&u, &[]).is_err());
+        let mut v = PipelineState::default();
+        v.vs = Bytecode { addr: 8, len: 8 };
+        v.blend.rt[0].logic_enable = true;
+        v.blend.rt[0].logic_op = 16;
+        assert!(to_proto(&v, &[]).is_err());
+    }
+
+    #[test]
     fn refusals_name_what_is_missing() {
         let mut s = PipelineState::default();
         s.vs = Bytecode { addr: 8, len: 8 };
         let mut t = s.clone();
         t.gs = Bytecode { addr: 8, len: 8 };
+        let d = to_proto(&t, &[]).unwrap();
+        assert_eq!(d.kind(), Some(PsoKind::Geometry));
+        assert_eq!(d.gs.addr, 8);
+        let mut t = s.clone();
+        t.hs = Bytecode { addr: 8, len: 8 };
         let e = to_proto(&t, &[]).unwrap_err();
         assert_eq!(e.hr, Hr::E_NOTIMPL);
-        assert!(e.why.contains("geometry"));
+        assert!(e.why.contains("hull"));
         let mut t = s.clone();
         t.stream_output_entries = 1;
         assert_eq!(to_proto(&t, &[]).unwrap_err().hr, Hr::E_NOTIMPL);

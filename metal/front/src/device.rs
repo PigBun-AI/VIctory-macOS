@@ -1045,6 +1045,10 @@ impl Drop for Queue {
 
 /// One recorded call. `Command` borrows its variable part, so root
 /// constants are held by value until the block is encoded.
+/// `BEGIN_RENDER_PASS` makes `Cmd` the big variant (a few hundred bytes); a
+/// list holds few of them next to the draws, which are small, so it is kept
+/// inline rather than boxed.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Cmd(Command<'static>),
@@ -1068,7 +1072,12 @@ pub fn encode_block(
     mut new_list_id: impl FnMut() -> u32,
 ) -> Result<Vec<u8>> {
     let mut e = Encoder::new(caps);
-    let bad = |_| Hr::E_INVALIDARG;
+    let bad = |e: victory_metal_proto::Error| {
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            eprintln!("victory-metal front: a command was refused when encoding: {e}");
+        }
+        Hr::E_INVALIDARG
+    };
     for items in lists {
         let list = victory_metal_proto::ListId(new_list_id());
         e.push(&Command::BeginList(BeginList {
@@ -1126,13 +1135,15 @@ pub enum ListState {
 
 /// `ID3D12GraphicsCommandList` (compute subset).
 pub struct CommandList {
-    dev: Arc<Device>,
+    pub(crate) dev: Arc<Device>,
     pub kind: u32,
-    items: Vec<Item>,
+    pub(crate) items: Vec<Item>,
     pub state: ListState,
     /// First error found while recording; reported by `close`, as D3D12's
     /// debug layer and drivers do.
     error: Option<Hr>,
+    /// Render pass derivation (`render.rs`).
+    pub(crate) render: crate::render::RenderRec,
 }
 
 impl CommandList {
@@ -1144,11 +1155,18 @@ impl CommandList {
             items: Vec::new(),
             state: ListState::Recording,
             error: None,
+            render: Default::default(),
         }
     }
 
+    /// A command of the stream. Anything but state setting and barriers is
+    /// not a render command, so it ends the render pass first (a render
+    /// encoder cannot copy or dispatch).
     fn push(&mut self, c: Command<'static>) {
         if self.state == ListState::Recording {
+            if !crate::render::is_state_command(&c) {
+                self.leave_render();
+            }
             self.items.push(Item::Cmd(c));
         }
     }
@@ -1157,7 +1175,15 @@ impl CommandList {
         &self.dev
     }
 
+    #[track_caller]
     pub(crate) fn fail(&mut self, e: Hr) {
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") && self.error.is_none() {
+            eprintln!(
+                "victory-metal front: a list call failed the list with {:#010x} at {}",
+                e.0 as u32,
+                std::panic::Location::caller()
+            );
+        }
         self.error.get_or_insert(e);
     }
 
@@ -1169,6 +1195,9 @@ impl CommandList {
 
     /// `Close`. A second `Close` returns S_OK, as D3DMetal does.
     pub fn close(&mut self) -> Result<Arc<[Item]>> {
+        if self.state == ListState::Recording {
+            self.leave_render();
+        }
         self.state = ListState::Closed;
         match self.error {
             Some(e) => Err(e),
@@ -1180,6 +1209,7 @@ impl CommandList {
     pub fn reset(&mut self) {
         self.items.clear();
         self.error = None;
+        self.render = Default::default();
         self.state = ListState::Recording;
     }
 
@@ -1305,6 +1335,9 @@ impl CommandList {
 
     pub fn resource_barrier(&mut self, barriers: &[ResourceBarrier]) {
         for b in barriers {
+            if let ResourceBarrier::Transition { res, .. } = *b {
+                self.barrier_on_attachment(res);
+            }
             match *b {
                 ResourceBarrier::Transition {
                     res,
@@ -1347,8 +1380,12 @@ impl CommandList {
     }
 
     pub fn set_compute_root_signature(&mut self, rs: &RootSignature) {
+        self.set_root_signature(BindPoint::COMPUTE, rs);
+    }
+
+    pub fn set_root_signature(&mut self, bind_point: BindPoint, rs: &RootSignature) {
         self.push(Command::SetRootSignature(SetRootSignature {
-            bind_point: BindPoint::COMPUTE,
+            bind_point,
             root_sig: rs.id,
         }));
     }
@@ -1383,13 +1420,23 @@ impl CommandList {
         dest_offset: u32,
         values: &[u32],
     ) {
+        self.set_root_constants(BindPoint::COMPUTE, root_index, dest_offset, values);
+    }
+
+    pub fn set_root_constants(
+        &mut self,
+        bind_point: BindPoint,
+        root_index: u32,
+        dest_offset: u32,
+        values: &[u32],
+    ) {
         if values.len() > cmd::MAX_ROOT_CONSTANTS {
             self.fail(Hr::E_INVALIDARG);
             return;
         }
         if self.state == ListState::Recording {
             self.items.push(Item::RootConstants {
-                bind_point: BindPoint::COMPUTE,
+                bind_point,
                 root_index,
                 dest_offset,
                 values: values.to_vec(),
@@ -1404,8 +1451,18 @@ impl CommandList {
         kind: RootParamKind,
         gpu_va: u64,
     ) {
+        self.set_root_descriptor(BindPoint::COMPUTE, root_index, kind, gpu_va);
+    }
+
+    pub fn set_root_descriptor(
+        &mut self,
+        bind_point: BindPoint,
+        root_index: u32,
+        kind: RootParamKind,
+        gpu_va: u64,
+    ) {
         self.push(Command::SetRootDescriptor(SetRootDescriptor {
-            bind_point: BindPoint::COMPUTE,
+            bind_point,
             root_index,
             kind,
             _pad: 0,
@@ -1415,9 +1472,13 @@ impl CommandList {
 
     /// `SetComputeRootDescriptorTable`: `gpu_handle` is a handle of a shader-visible heap.
     pub fn set_compute_root_table(&mut self, root_index: u32, gpu_handle: u64) {
+        self.set_root_table(BindPoint::COMPUTE, root_index, gpu_handle);
+    }
+
+    pub fn set_root_table(&mut self, bind_point: BindPoint, root_index: u32, gpu_handle: u64) {
         match self.dev.resolve_gpu(gpu_handle) {
             Ok((heap, index)) => self.push(Command::SetRootTable(SetRootTable {
-                bind_point: BindPoint::COMPUTE,
+                bind_point,
                 root_index,
                 heap,
                 index,
@@ -1431,6 +1492,7 @@ impl CommandList {
     }
 
     /// A call outside this milestone: remembered, reported at `close`.
+    #[track_caller]
     pub fn unsupported(&mut self) {
         self.fail(Hr::E_NOTIMPL);
     }

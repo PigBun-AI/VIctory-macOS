@@ -18,7 +18,7 @@ with `VICTORY_METAL_NOTIMPL_LOG`.
 | `SetMarker` / `BeginEvent` / `EndEvent` (queue) | accepted | `shell/ext.rs` |
 | `EnqueueMakeResident` | fence signalled at once (unified memory, everything resident, like `MakeResident`) | `shell/ext.rs` |
 | `SetBackgroundProcessingMode` | `S_OK`, no measurements | `shell/ext.rs` |
-| `DiscardResource` | accepted, contents kept (undefined afterwards is allowed) | `shell/ext.rs` |
+| `DiscardResource` | whole resource: store action discard in a render pass (m4-render); otherwise accepted, contents kept | `shell/list.rs` |
 | `CheckFeatureSupport(OPTIONS12).EnhancedBarriersSupported` | 0 (was 1): no `ID3D12GraphicsCommandList7`, `victory-gpu` falls back to `ResourceBarrier` | `caps.rs` |
 | `CheckFeatureSupport(OPTIONS).TiledResourcesTier` | 0 (was 2): no reserved resources, so the title (and `victory-gpu` tiles.rs `wanted()`) takes the non-tiled path | `caps.rs` |
 

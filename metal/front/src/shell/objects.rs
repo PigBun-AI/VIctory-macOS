@@ -48,7 +48,14 @@ impl QueueObj_Impl {
             };
             lists.push(items);
         }
-        let _ = self.queue.execute(&lists);
+        if let Err(e) = self.queue.execute(&lists)
+            && super::log_errors()
+        {
+            eprintln!(
+                "victory-metal front: ExecuteCommandLists failed: {:#010x}",
+                e.0 as u32
+            );
+        }
     }
 
     pub(super) fn x_Signal(&self, pfence: Ref<ID3D12Fence>, value: u64) -> WResult<()> {

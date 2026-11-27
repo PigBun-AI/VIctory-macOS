@@ -23,7 +23,7 @@ use std::time::Instant;
 
 use victory_metal_proto::cmd::{Command, MAX_LABEL, WriteImmediate};
 
-use crate::device::{Buffer, CommandList, Item};
+use crate::device::{Buffer, CommandList, Item, ListState};
 use crate::hresult::Hr;
 
 /// `D3D12_QUERY_HEAP_TYPE_TIMESTAMP`.
@@ -141,6 +141,10 @@ impl CommandList {
             self.fail(Hr::E_INVALIDARG);
             return;
         };
+        // The back writes through a blit: not inside a render pass.
+        if self.state == ListState::Recording {
+            self.leave_render();
+        }
         self.push_item(Item::Cmd(Command::WriteImmediate(WriteImmediate {
             dst: victory_metal_proto::ResId(res),
             size: 4,
@@ -177,6 +181,9 @@ impl CommandList {
         {
             self.fail(Hr::E_INVALIDARG);
             return;
+        }
+        if self.state == ListState::Recording {
+            self.leave_render();
         }
         for i in 0..count {
             self.push_item(Item::Cmd(Command::WriteImmediate(WriteImmediate {

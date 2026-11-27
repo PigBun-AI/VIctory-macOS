@@ -1,9 +1,10 @@
-# golden bytes of create-graphics-pipeline-args.vmsa (2080 bytes), synthetic. Hex words, 16 per line.
+# golden bytes of create-graphics-pipeline-args.vmsa (2096 bytes), synthetic. Hex words, 16 per line.
 # Regenerate: UPDATE_GOLDEN=1 cargo test (see the test that reads this file).
 01 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 10 00 00 00 00 00 00
 00 02 00 00 00 00 00 00 00 20 00 00 00 00 00 00
 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00
 50 4f 53 49 54 49 4f 4e 00 00 00 00 00 00 00 00

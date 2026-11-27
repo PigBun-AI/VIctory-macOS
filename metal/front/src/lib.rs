@@ -29,6 +29,7 @@ pub mod indirect;
 pub mod library;
 pub mod mock;
 pub mod pso;
+pub mod render;
 pub mod resource;
 pub mod rootsig;
 pub mod state;

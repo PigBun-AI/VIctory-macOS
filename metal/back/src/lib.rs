@@ -28,6 +28,8 @@ pub mod descriptors;
 #[cfg(target_vendor = "apple")]
 pub mod device;
 #[cfg(target_vendor = "apple")]
+pub mod draw;
+#[cfg(target_vendor = "apple")]
 pub mod error;
 #[cfg(target_vendor = "apple")]
 pub mod exec;
@@ -41,6 +43,8 @@ pub mod indirect;
 pub mod m0;
 #[cfg(target_vendor = "apple")]
 pub mod memory;
+#[cfg(target_vendor = "apple")]
+pub mod mirror;
 #[cfg(target_vendor = "apple")]
 pub mod msc;
 #[cfg(target_vendor = "apple")]

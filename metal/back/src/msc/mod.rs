@@ -42,8 +42,9 @@ mod pipeline;
 mod root;
 
 pub use compile::{
-    Compat, CompileOptions, Converted, FragmentInfo, FunctionConstant, GraphicsCompile,
-    InputTopology, MeshInfo, Reflection, ShaderStage, VertexInfo, VertexInput,
+    Compat, CompileOptions, Converted, FragmentInfo, FunctionConstant, GeometryInfo,
+    GraphicsCompile, InputTopology, MeshInfo, Reflection, ShaderStage, StageInElement, VertexInfo,
+    VertexInput,
 };
 pub use pipeline::ShaderPipeline;
 pub use root::{

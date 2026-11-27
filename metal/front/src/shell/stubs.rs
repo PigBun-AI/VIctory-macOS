@@ -825,12 +825,10 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.x_ClearState(ppipelinestate)
     }
     fn DrawInstanced(&self, vertexcountperinstance: u32, instancecount: u32, startvertexlocation: u32, startinstancelocation: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::DrawInstanced");
-        self.unsupported_call();
+        self.x_DrawInstanced(vertexcountperinstance, instancecount, startvertexlocation, startinstancelocation)
     }
     fn DrawIndexedInstanced(&self, indexcountperinstance: u32, instancecount: u32, startindexlocation: u32, basevertexlocation: i32, startinstancelocation: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::DrawIndexedInstanced");
-        self.unsupported_call();
+        self.x_DrawIndexedInstanced(indexcountperinstance, instancecount, startindexlocation, basevertexlocation, startinstancelocation)
     }
     fn Dispatch(&self, threadgroupcountx: u32, threadgroupcounty: u32, threadgroupcountz: u32) {
         self.x_Dispatch(threadgroupcountx, threadgroupcounty, threadgroupcountz)
@@ -853,24 +851,19 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.unsupported_call();
     }
     fn IASetPrimitiveTopology(&self, primitivetopology: windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY) {
-        super::note_notimpl("ID3D12GraphicsCommandList::IASetPrimitiveTopology");
-        self.unsupported_call();
+        self.x_IASetPrimitiveTopology(primitivetopology)
     }
     fn RSSetViewports(&self, numviewports: u32, pviewports: *const D3D12_VIEWPORT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::RSSetViewports");
-        self.unsupported_call();
+        self.x_RSSetViewports(numviewports, pviewports)
     }
     fn RSSetScissorRects(&self, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::RSSetScissorRects");
-        self.unsupported_call();
+        self.x_RSSetScissorRects(numrects, prects)
     }
     fn OMSetBlendFactor(&self, blendfactor: *const f32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::OMSetBlendFactor");
-        self.unsupported_call();
+        self.x_OMSetBlendFactor(blendfactor)
     }
     fn OMSetStencilRef(&self, stencilref: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::OMSetStencilRef");
-        self.unsupported_call();
+        self.x_OMSetStencilRef(stencilref)
     }
     fn SetPipelineState(&self, ppipelinestate: windows::core::Ref<ID3D12PipelineState>) {
         self.x_SetPipelineState(ppipelinestate)
@@ -889,74 +882,62 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.x_SetComputeRootSignature(prootsignature)
     }
     fn SetGraphicsRootSignature(&self, prootsignature: windows::core::Ref<ID3D12RootSignature>) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRootSignature");
-        self.unsupported_call();
+        self.x_SetGraphicsRootSignature(prootsignature)
     }
     fn SetComputeRootDescriptorTable(&self, rootparameterindex: u32, basedescriptor: &D3D12_GPU_DESCRIPTOR_HANDLE) {
         self.x_SetComputeRootDescriptorTable(rootparameterindex, basedescriptor)
     }
     fn SetGraphicsRootDescriptorTable(&self, rootparameterindex: u32, basedescriptor: &D3D12_GPU_DESCRIPTOR_HANDLE) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRootDescriptorTable");
-        self.unsupported_call();
+        self.x_SetGraphicsRootDescriptorTable(rootparameterindex, basedescriptor)
     }
     fn SetComputeRoot32BitConstant(&self, rootparameterindex: u32, srcdata: u32, destoffsetin32bitvalues: u32) {
         self.x_SetComputeRoot32BitConstant(rootparameterindex, srcdata, destoffsetin32bitvalues)
     }
     fn SetGraphicsRoot32BitConstant(&self, rootparameterindex: u32, srcdata: u32, destoffsetin32bitvalues: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstant");
-        self.unsupported_call();
+        self.x_SetGraphicsRoot32BitConstant(rootparameterindex, srcdata, destoffsetin32bitvalues)
     }
     fn SetComputeRoot32BitConstants(&self, rootparameterindex: u32, num32bitvaluestoset: u32, psrcdata: *const core::ffi::c_void, destoffsetin32bitvalues: u32) {
         self.x_SetComputeRoot32BitConstants(rootparameterindex, num32bitvaluestoset, psrcdata, destoffsetin32bitvalues)
     }
     fn SetGraphicsRoot32BitConstants(&self, rootparameterindex: u32, num32bitvaluestoset: u32, psrcdata: *const core::ffi::c_void, destoffsetin32bitvalues: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstants");
-        self.unsupported_call();
+        self.x_SetGraphicsRoot32BitConstants(rootparameterindex, num32bitvaluestoset, psrcdata, destoffsetin32bitvalues)
     }
     fn SetComputeRootConstantBufferView(&self, rootparameterindex: u32, bufferlocation: u64) {
         self.x_SetComputeRootConstantBufferView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootConstantBufferView(&self, rootparameterindex: u32, bufferlocation: u64) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRootConstantBufferView");
-        self.unsupported_call();
+        self.x_SetGraphicsRootConstantBufferView(rootparameterindex, bufferlocation)
     }
     fn SetComputeRootShaderResourceView(&self, rootparameterindex: u32, bufferlocation: u64) {
         self.x_SetComputeRootShaderResourceView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootShaderResourceView(&self, rootparameterindex: u32, bufferlocation: u64) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRootShaderResourceView");
-        self.unsupported_call();
+        self.x_SetGraphicsRootShaderResourceView(rootparameterindex, bufferlocation)
     }
     fn SetComputeRootUnorderedAccessView(&self, rootparameterindex: u32, bufferlocation: u64) {
         self.x_SetComputeRootUnorderedAccessView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootUnorderedAccessView(&self, rootparameterindex: u32, bufferlocation: u64) {
-        super::note_notimpl("ID3D12GraphicsCommandList::SetGraphicsRootUnorderedAccessView");
-        self.unsupported_call();
+        self.x_SetGraphicsRootUnorderedAccessView(rootparameterindex, bufferlocation)
     }
     fn IASetIndexBuffer(&self, pview: *const D3D12_INDEX_BUFFER_VIEW) {
-        super::note_notimpl("ID3D12GraphicsCommandList::IASetIndexBuffer");
-        self.unsupported_call();
+        self.x_IASetIndexBuffer(pview)
     }
     fn IASetVertexBuffers(&self, startslot: u32, numviews: u32, pviews: *const D3D12_VERTEX_BUFFER_VIEW) {
-        super::note_notimpl("ID3D12GraphicsCommandList::IASetVertexBuffers");
-        self.unsupported_call();
+        self.x_IASetVertexBuffers(startslot, numviews, pviews)
     }
     fn SOSetTargets(&self, startslot: u32, numviews: u32, pviews: *const D3D12_STREAM_OUTPUT_BUFFER_VIEW) {
         super::note_notimpl("ID3D12GraphicsCommandList::SOSetTargets");
         self.unsupported_call();
     }
     fn OMSetRenderTargets(&self, numrendertargetdescriptors: u32, prendertargetdescriptors: *const D3D12_CPU_DESCRIPTOR_HANDLE, rtssinglehandletodescriptorrange: windows::core::BOOL, pdepthstencildescriptor: *const D3D12_CPU_DESCRIPTOR_HANDLE) {
-        super::note_notimpl("ID3D12GraphicsCommandList::OMSetRenderTargets");
-        self.unsupported_call();
+        self.x_OMSetRenderTargets(numrendertargetdescriptors, prendertargetdescriptors, rtssinglehandletodescriptorrange, pdepthstencildescriptor)
     }
     fn ClearDepthStencilView(&self, depthstencilview: &D3D12_CPU_DESCRIPTOR_HANDLE, clearflags: D3D12_CLEAR_FLAGS, depth: f32, stencil: u8, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::ClearDepthStencilView");
-        self.unsupported_call();
+        self.x_ClearDepthStencilView(depthstencilview, clearflags, depth, stencil, numrects, prects)
     }
     fn ClearRenderTargetView(&self, rendertargetview: &D3D12_CPU_DESCRIPTOR_HANDLE, colorrgba: *const f32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::ClearRenderTargetView");
-        self.unsupported_call();
+        self.x_ClearRenderTargetView(rendertargetview, colorrgba, numrects, prects)
     }
     fn ClearUnorderedAccessViewUint(&self, viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE, viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE, presource: windows::core::Ref<ID3D12Resource>, values: *const u32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
         self.x_ClearUnorderedAccessViewUint(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
@@ -1005,8 +986,7 @@ impl ID3D12GraphicsCommandList1_Impl for ListObj_Impl {
         self.unsupported_call();
     }
     fn OMSetDepthBounds(&self, min: f32, max: f32) {
-        super::note_notimpl("ID3D12GraphicsCommandList1::OMSetDepthBounds");
-        self.unsupported_call();
+        self.x_OMSetDepthBounds(min, max)
     }
     fn SetSamplePositions(&self, numsamplesperpixel: u32, numpixels: u32, psamplepositions: *const D3D12_SAMPLE_POSITION) {
         super::note_notimpl("ID3D12GraphicsCommandList1::SetSamplePositions");
@@ -1087,8 +1067,7 @@ impl ID3D12GraphicsCommandList5_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList6_Impl for ListObj_Impl {
     fn DispatchMesh(&self, threadgroupcountx: u32, threadgroupcounty: u32, threadgroupcountz: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList6::DispatchMesh");
-        self.unsupported_call();
+        self.x_DispatchMesh(threadgroupcountx, threadgroupcounty, threadgroupcountz)
     }
 }
 

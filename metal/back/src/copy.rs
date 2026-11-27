@@ -7,7 +7,9 @@
 //! the original API would call an error is checked here and is an
 //! [`Error`], never a silent clamp or a wrong copy:
 //!
-//! * the region lies inside the mip level, and inside the buffer
+//! * the region lies inside the mip level (a compressed mip: inside its size
+//!   rounded up to whole blocks, as the original API's footprint of a 2x2 or
+//!   1x1 BC mip is one 4x4 block), and inside the buffer
 //!   (`offset + last row` reaches no further than its length);
 //! * the row pitch is at least one row of the region and a multiple of the
 //!   texel size (of the block size for compressed formats): what Metal needs
@@ -176,7 +178,12 @@ fn check_texture(
         let end = o
             .checked_add(s)
             .ok_or_else(|| Error::BadArgument(format!("{what}: region overflows")))?;
-        if end > mip[axis] {
+        // A compressed mip is stored in whole blocks: the footprint of a 2x2
+        // mip of a BC texture is one 4x4 block, and the original API copies
+        // it whole (`GetCopyableFootprints` says 4x4). The edge of the mip is
+        // therefore its size rounded up to the block.
+        let edge = mip[axis].next_multiple_of(block);
+        if end > edge {
             return Err(Error::BadArgument(format!(
                 "{what}: region {o}+{s} on axis {axis} is outside mip {} of {}",
                 loc.mip, mip[axis]
@@ -190,9 +197,7 @@ fn check_texture(
             }
             if s % block != 0 {
                 if end == mip[axis] {
-                    size[axis] = s
-                        .next_multiple_of(block)
-                        .min(mip[axis].next_multiple_of(block));
+                    size[axis] = s.next_multiple_of(block).min(edge);
                 } else {
                     return Err(Error::BadArgument(format!(
                         "{what}: size {s} on axis {axis} is not a whole number of {block}-texel blocks"
@@ -391,8 +396,9 @@ impl CommandList {
     }
 
     /// `CopyTextureRegion` from a texture to a texture of the same texel
-    /// layout. Partial copies of depth-stencil textures are refused (Metal
-    /// copies both planes or none; use [`copy_texture_resource`](Self::copy_texture_resource)).
+    /// layout. Where Metal's blit cannot do it (other Metal formats, a
+    /// compressed side against an uncompressed one, one plane of a
+    /// depth-stencil texture) the region goes through a private buffer.
     pub fn copy_texture(
         &mut self,
         dst: &TexLoc<'_>,
@@ -400,15 +406,13 @@ impl CommandList {
         size: [u32; 3],
     ) -> Result<()> {
         self.live()?;
+        if let Some(blocks) = block_copy_shape(src, dst, size)? {
+            return self.copy_texture_through_buffer(dst, src, blocks);
+        }
         let (sf, sl, size) = check_texture(self, src, size, "texture copy source")?;
         let (df, dl, _) = check_texture(self, dst, size, "texture copy destination")?;
         if size.contains(&0) {
             return Ok(());
-        }
-        if sf.planes() > 1 || df.planes() > 1 {
-            return Err(Error::Unsupported(
-                "copying one plane or a region of a depth-stencil texture".into(),
-            ));
         }
         if sl.bytes != dl.bytes || sl.block != dl.block {
             return Err(Error::BadArgument(format!(
@@ -458,6 +462,58 @@ impl CommandList {
         Ok(())
     }
 
+    /// A copy between a block-compressed texture and an uncompressed one
+    /// whose texel is as big as a block (`R32G32B32A32_UINT` and `BC3`, the
+    /// way a shader-made BC texture is put into the real one): the original
+    /// API allows it and counts the region in the source's texels, one block
+    /// of the compressed side being one texel of the other. Metal's texture
+    /// to texture blit wants equal pixel formats, so the region goes through
+    /// a private buffer laid out as `blocks` blocks: texture to buffer in the
+    /// source's format, then buffer to texture in the destination's.
+    fn copy_texture_through_buffer(
+        &mut self,
+        dst: &TexLoc<'_>,
+        src: &TexLoc<'_>,
+        blocks: [u32; 3],
+    ) -> Result<()> {
+        let (sf, df) = (
+            format::require(src.texture.desc().format)?,
+            format::require(dst.texture.desc().format)?,
+        );
+        let (sx, dx) = (footprint(sf, src.plane)?, footprint(df, dst.plane)?);
+        let row_pitch = blocks[0]
+            .checked_mul(u32::from(sx.1.bytes))
+            .ok_or_else(|| Error::BadArgument("texture copy: region overflows".into()))?;
+        let total = u64::from(row_pitch) * u64::from(blocks[1]) * u64::from(blocks[2]);
+        let staging = self
+            .queue()
+            .device()
+            .create_buffer(crate::memory::BufferKind::Default, total.max(16))?;
+        // The region in each side's texels: a compressed side counts four
+        // texels to a block.
+        let texels = |l: &PlaneLayout| {
+            let (bw, bh) = (u32::from(l.block.0), u32::from(l.block.1));
+            [blocks[0] * bw, blocks[1] * bh, blocks[2]]
+        };
+        let (src_texels, dst_texels) = (texels(&sx.1), texels(&dx.1));
+        let loc_in = |dxgi: u32, t: [u32; 3]| BufLoc {
+            buffer: &staging,
+            offset: 0,
+            format: dxgi,
+            row_pitch,
+            rows: t[1],
+        };
+        // Everything copied before is finished and visible first: a plane of
+        // a depth-stencil texture written just before read back wrong
+        // (Rosetta, 2026-11-27) with only the tracked hazards ordered.
+        self.order_blits();
+        self.copy_texture_to_buffer(&loc_in(sx.0, src_texels), src, src_texels)?;
+        self.order_blits();
+        self.copy_buffer_to_texture(dst, &loc_in(dx.0, dst_texels), dst_texels)?;
+        self.keep_buffers.push(staging);
+        Ok(())
+    }
+
     /// `CopyResource` of two textures: every subresource. They must have the
     /// same dimension, size, mips, array size, samples and Metal format.
     pub fn copy_texture_resource(&mut self, dst: &Texture, src: &Texture) -> Result<()> {
@@ -468,11 +524,32 @@ impl CommandList {
                 "copy of a texture of another device".into(),
             ));
         }
-        let same = a.dim == b.dim
+        let shape = a.dim == b.dim
             && (a.width, a.height, a.depth_or_array) == (b.width, b.height, b.depth_or_array)
             && a.mips == b.mips
-            && a.samples == b.samples
-            && dst.pixel_format() == src.pixel_format();
+            && a.samples == b.samples;
+        if shape && dst.pixel_format() != src.pixel_format() && a.samples == 1 {
+            // Formats of one family (`R8G8B8A8_TYPELESS` and its sRGB view
+            // format): every subresource goes through `copy_texture`, which
+            // moves the bytes.
+            if dst.same(src) {
+                return Err(Error::BadArgument("copy of a texture onto itself".into()));
+            }
+            for slice in 0..a.array_len() {
+                for mip in 0..a.mips {
+                    let at = |t| TexLoc {
+                        texture: t,
+                        mip,
+                        slice,
+                        plane: 0,
+                        origin: [0; 3],
+                    };
+                    self.copy_texture(&at(dst), &at(src), a.mip_size(mip))?;
+                }
+            }
+            return Ok(());
+        }
+        let same = shape && dst.pixel_format() == src.pixel_format();
         if !same {
             return Err(Error::BadArgument(format!(
                 "CopyResource between textures of different descriptions: {a:?} and {b:?}"
@@ -492,6 +569,56 @@ impl CommandList {
         self.copies.keep.push(d);
         Ok(())
     }
+}
+
+/// A plane of a texture as a buffer footprint sees it: the DXGI format to
+/// name it by (a depth-stencil texture's depth plane is 32-bit, its stencil
+/// plane 8-bit) and its layout.
+fn footprint(f: &Format, plane: u32) -> Result<(u32, PlaneLayout)> {
+    let layout = plane_layout(f, plane)?;
+    let dxgi = match (f.planes(), plane) {
+        (1, _) => f.dxgi,
+        (_, 0) => format::dxgi::R32_TYPELESS,
+        _ => format::dxgi::R8_TYPELESS,
+    };
+    Ok((dxgi, layout))
+}
+
+/// The region of a copy in blocks (`[x, y, z]`) when Metal's texture to
+/// texture blit cannot do it and a private buffer can: between a
+/// block-compressed texture and an uncompressed one of equal texel and block
+/// size, between formats of one layout that Metal names differently, and
+/// of one plane of a depth-stencil texture (the blit moves both or none).
+/// `None` for any other pair (the ordinary copy then applies).
+fn block_copy_shape(
+    src: &TexLoc<'_>,
+    dst: &TexLoc<'_>,
+    size: [u32; 3],
+) -> Result<Option<[u32; 3]>> {
+    let (sf, df) = (
+        format::require(src.texture.desc().format)?,
+        format::require(dst.texture.desc().format)?,
+    );
+    let planar = sf.planes() > 1 || df.planes() > 1;
+    let (sl, dl) = (plane_layout(sf, src.plane)?, plane_layout(df, dst.plane)?);
+    let one = (1, 1);
+    let single = sl.bytes == dl.bytes;
+    // A compressed side and an uncompressed one whose texel is its block.
+    let mixed = single
+        && ((sl.block == one && dl.block == (4, 4)) || (sl.block == (4, 4) && dl.block == one));
+    // The same layout in another Metal format (`R8G8B8A8_TYPELESS` to its
+    // sRGB view format): the original API copies the bytes, Metal's blit
+    // wants equal formats.
+    let recast = single
+        && sl.block == dl.block
+        && (planar || src.texture.pixel_format() != dst.texture.pixel_format());
+    Ok((mixed || recast).then(|| {
+        [
+            size[0].div_ceil(u32::from(sl.block.0)),
+            size[1].div_ceil(u32::from(sl.block.1)),
+            size[2],
+        ]
+    }))
 }
 
 /// `(slice, level)` of a location as Metal wants them: a 3D texture has

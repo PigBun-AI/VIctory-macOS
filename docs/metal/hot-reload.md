@@ -52,6 +52,36 @@ pair under D3DMetal gives the reference frames. A scene that needs movement
 gets its own input file (declarative ranges by world frame) next to the
 neutral one.
 
+### Frame workbench (extends layer 1; same milestone)
+
+Order: after indirect GS draws and a stable menu, together with layers 1-2.
+
+- Capture format: **the base's own `victory replay` capture** (new base
+  mac/livetr: `docs/replay.md`, `crates/victory-gpu/src/replay`). It records
+  at the host D3D12 level, i.e. at seam A: what victory-gpu sends the GPU and
+  the memory it reads. So one capture replays on Windows (real D3D12), on the
+  Mac under D3DMetal, and on the Mac on our back (`victory replay` under
+  Wine with our `d3d12.dll`), with no conversion. Captures need a diagnostics
+  build (`cargo build --profile diag -p victory --features diagnostics`), are
+  ~9 GB per frame, live outside the repository; use the capture's own
+  `shaders/` so both sides run the same DXIL; `notes.txt` lists what was not
+  recorded. `victory replay` already compares with the presented image
+  (`--compare`) and times each command.
+- Two stages: replaying a capture on our back with the proto recorder on
+  gives a proto stream of that frame; the native workbench works on that
+  stream. The proto recording stays as the back's own regression format.
+- Workbench (native arm64, no game, no Wine): step by draw / pass; view any
+  intermediate target (RT, depth, G-buffer, shadow map, UAV); disable a pass
+  or draw; hot-swap a shader and replay at once; GPU time per pass
+  (Metal 4 counter heaps). First UI: a Metal window with keys, plus an HTML
+  report per frame (thumbnails of every pass, timings, diffs) for batch runs.
+- Reference: the same capture replayed on Windows (real D3D12, per-pass GPU
+  timing there) is the answer; D3DMetal is the secondary one. Pass-by-pass
+  images are compared and the first draw departing beyond a tolerance is
+  named. Captures made on the Mac with our back are readable on Windows too.
+- Resource viewer: textures (Xbox tiling, BC formats) and vertex streams as
+  decoded, to check resource decoding apart from rendering.
+
 ## Layer 2: shader hot swap
 
 - The back keys every pipeline by the hash of its inputs (DXIL bytes + root

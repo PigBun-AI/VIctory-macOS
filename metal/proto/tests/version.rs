@@ -14,6 +14,9 @@ const PINNED: &[(u32, u64)] = &[
     (2, 0x8de9_d9a2_a9f0_459a),
     (3, 0x2d1e_9fc1_0830_d6b8),
     (4, 0x40a6_60d4_a98c_bd01),
+    // 3 and 4 above are this base\'s history; the old base (metal-backend) pinned its own v3/v4.
+    // 5 is the merge of both: the old base\'s render commands and passes with this base\'s WRITE_IMMEDIATE.
+    (5, 0x897b_d386_4a20_f9b2),
 ];
 
 #[test]

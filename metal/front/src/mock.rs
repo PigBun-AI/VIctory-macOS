@@ -667,7 +667,7 @@ impl State {
             return Status::INVALID_ARG;
         }
         let d = a.desc;
-        for s in [&d.vs, &d.ps, &d.amp, &d.ms] {
+        for s in [&d.vs, &d.ps, &d.amp, &d.ms, &d.gs] {
             if s.is_present() {
                 // SAFETY: the stage's bytes are valid for the call (the front's contract).
                 let magic = unsafe {

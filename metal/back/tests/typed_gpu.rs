@@ -261,9 +261,9 @@ fn refused_views_write_nothing() {
     let before = entry(&heap, 0);
     let align = d.typed_view_alignment(&f);
     assert!(align >= 4 && align.is_power_of_two(), "{align}");
-    // Not a multiple of the alignment: unsupported (no fallback).
+    // A UAV not on the alignment: unsupported (a SRV gets a mirror, below).
     let e = heap
-        .write_typed_buffer(0, &buf, &f, 1, 8, ViewAccess::Read)
+        .write_typed_buffer(0, &buf, &f, 1, 8, ViewAccess::ReadWrite)
         .unwrap_err();
     assert!(matches!(e, Error::Unsupported(_)), "{e}");
     // Past the end, empty, and overflowing ranges.
@@ -337,4 +337,79 @@ fn views_outlive_the_gpu_work_that_uses_them() {
         let got = dst.read_u32s(0, 4).unwrap();
         assert_eq!(got[1], round + 1, "round {round}");
     }
+}
+
+/// A typed SRV off the texture-buffer alignment reads an aligned copy of its
+/// range (`mirror`): the game's `R16_UINT` views start at odd element
+/// numbers. The shader sees the right elements, `GetDimensions` the count,
+/// a change made by the CPU between lists shows in the next list, and the
+/// same view is one mirror.
+#[test]
+fn a_misaligned_typed_srv_reads_a_refreshed_copy() {
+    let Some(dxil) = dxil_or_skip("typed_copy", "cs_6_6", COPY) else {
+        return;
+    };
+    let (_g, d, q) = setup();
+    let p = pipeline(&d, &dxil);
+    let f16 = typed_format(dxgi::R16_UINT).unwrap();
+    let f32f = r32(&d);
+    for (first, n) in [(1u64, 7u64), (3, 20), (83, 9), (8, 8), (4093, 3)] {
+        let src = d.create_buffer(BufferKind::Shared, 8192).unwrap();
+        let dst = d.create_buffer(BufferKind::Shared, 4096).unwrap();
+        let halves: Vec<u8> = (0..4096u32)
+            .flat_map(|i| ((i % 60000 + 1) as u16).to_le_bytes())
+            .collect();
+        src.write(0, &halves).unwrap();
+        let heap = DescriptorHeap::new(&d, 8).unwrap();
+        heap.write_typed_buffer(1, &src, &f16, first, n, ViewAccess::Read)
+            .unwrap_or_else(|e| panic!("first {first}: {e}"));
+        heap.write_typed_buffer(2, &dst, &f32f, 0, n, ViewAccess::ReadWrite)
+            .unwrap();
+        let again = src.mirror_count();
+        heap.write_typed_buffer(3, &src, &f16, first, n, ViewAccess::Read)
+            .unwrap();
+        assert_eq!(src.mirror_count(), again, "the same view is one mirror");
+        for round in 0..2u32 {
+            if round == 1 {
+                // The CPU changes the source between lists.
+                let bytes: Vec<u8> = (0..4096u32)
+                    .flat_map(|i| ((i % 5000 + 7) as u16).to_le_bytes())
+                    .collect();
+                src.write(0, &bytes).unwrap();
+            }
+            dst.write_u32s(0, &[0xdead_beef; 32]).unwrap();
+            dispatch(&q, &p, &heap, [1, 2, n as u32, 0], 32);
+            let got = dst.read_u32s(0, 32).unwrap();
+            let (m, add) = if round == 0 { (60000, 1) } else { (5000, 7) };
+            let mut want = [0xdead_beefu32; 32];
+            for i in 0..n.min(4096 - first) {
+                want[i as usize] = ((first + i) as u32 % m) + add;
+            }
+            want[0] += 1_000_000 * n as u32 + 1000 * n as u32;
+            assert_eq!(
+                &got[..n as usize],
+                &want[..n as usize],
+                "first {first} n {n} round {round}"
+            );
+            assert_eq!(&got[n as usize..], &want[n as usize..], "nothing past n");
+        }
+    }
+}
+
+/// Mirrors are counted and given back with their source buffer.
+#[test]
+fn mirrors_are_released_with_their_buffer() {
+    let (_g, d, _q) = setup();
+    let f16 = typed_format(dxgi::R16_UINT).unwrap();
+    let heap = DescriptorHeap::new(&d, 8).unwrap();
+    let before = d.mirror_totals();
+    {
+        let src = d.create_buffer(BufferKind::Shared, 4096).unwrap();
+        heap.write_typed_buffer(0, &src, &f16, 1, 100, ViewAccess::Read)
+            .unwrap();
+        heap.write_typed_buffer(1, &src, &f16, 3, 100, ViewAccess::Read)
+            .unwrap();
+        assert_eq!(d.mirror_totals(), (before.0 + 2, before.1 + 400));
+    }
+    assert_eq!(d.mirror_totals(), before);
 }

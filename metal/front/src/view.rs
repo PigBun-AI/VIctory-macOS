@@ -321,10 +321,24 @@ fn target(
         depth_stencil,
         mip: p.mip_first,
         first_slice: first,
-        slice_count: count,
+        slice_count: target_slices(rd, p.mip_first, first, count),
         plane: p.plane as u8,
         read_only: if depth_stencil { p.flags } else { 0 },
     })
+}
+
+/// The slices a target view renders to: "to the end" (0) is resolved here,
+/// because a render pass needs the number.
+fn target_slices(rd: &ResourceDesc, mip: u32, first: u32, count: u32) -> u32 {
+    if count != 0 {
+        return count;
+    }
+    let slices = if rd.dimension == DIM_TEXTURE3D {
+        (rd.depth().max(1) >> mip).max(1)
+    } else {
+        rd.array_size()
+    };
+    slices.saturating_sub(first).max(1)
 }
 
 /// A render target view: `D3D12_RTV_DIMENSION` 2 = 1D, 3 = 1D array, 4 = 2D,
@@ -371,7 +385,7 @@ pub fn default_target(res: ResId, rd: &ResourceDesc, depth_stencil: bool) -> Res
         depth_stencil,
         mip: 0,
         first_slice: 0,
-        slice_count: 0,
+        slice_count: target_slices(rd, 0, 0, 0),
         plane: 0,
         read_only: 0,
     })
@@ -679,7 +693,7 @@ mod tests {
         let w = default_target(r, &rd, false).unwrap();
         assert_eq!(
             (w.dim, w.slice_count, w.format),
-            (TexViewDim::TEX2D_ARRAY, 0, 28)
+            (TexViewDim::TEX2D_ARRAY, 4, 28)
         );
     }
 
