@@ -146,13 +146,15 @@ See `docs/metal/m2-textures.md`, last section.
   (its compute half passes; it stops at a graphics pipeline with blend factor
   0) and the aborting `set_targets_caches_keys_and_clears_on_host_state_lost`
   (skipped in the runs). They belong to the render encoder.
-* `draw::tests::unordered_1d_and_3d_textures_keep_their_writes`: the 3D
-  round passes; the 1D round (`RWTexture1D<float>`, width 4096) reads 0 where
-  the shader wrote. It failed the same way before this branch. A back-level
-  1D UAV write read through another view works
-  (`texture_gpu::a_1d_texture_is_written_and_read_through_views`), the
-  descriptors and dispatches are as for 2D, and the back reports nothing;
-  what is left is how the converted shader addresses a 1D texture. Open.
+* 1D textures: the Metal Shader Converter compiles `Texture1D` /
+  `RWTexture1D` accesses as `texture2d` ones (the metallib of a
+  `Texture1D.SampleLevel` equals the `Texture2D` one byte for byte), so a real
+  `MTLTextureType1D` bound to such a shader reads 0 (and ignores writes). The
+  back therefore makes every 1D texture and 1D view a 2D one of height 1
+  (`texture.rs`, `ViewDim::texture_type`; `clear.rs` clears them as 2D). Test:
+  `tests/exec_sample_1d.rs`. This was the whiteout of the world scene (the
+  4096x1 tone-curve table sampled as 0) and the old
+  `draw::tests::unordered_1d_and_3d_textures_keep_their_writes` failure.
 * Graphics-side indirect (draw, draw-indexed, dispatch-mesh, vertex and index
   buffer arguments): numbers reserved, `UNSUPPORTED`.
 * Castable-format lists are a flag: a view outside the list is not refused.

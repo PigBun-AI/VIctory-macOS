@@ -70,8 +70,12 @@ impl Device {
 
 fn source(shape: Shape, comp: Comp) -> String {
     let (tex, write) = match shape {
-        Shape::D1 => ("texture1d", "tex.write(v, p.x0 + t.x)"),
-        Shape::D1Array => ("texture1d_array", "tex.write(v, p.x0 + t.x, p.z0 + t.z)"),
+        // 1D textures are 2D of height 1 (`ViewDim::texture_type`).
+        Shape::D1 => ("texture2d", "tex.write(v, uint2(p.x0 + t.x, 0))"),
+        Shape::D1Array => (
+            "texture2d_array",
+            "tex.write(v, uint2(p.x0 + t.x, 0), p.z0 + t.z)",
+        ),
         Shape::D2 => ("texture2d", "tex.write(v, uint2(p.x0 + t.x, p.y0 + t.y))"),
         Shape::D2Array => (
             "texture2d_array",

@@ -130,8 +130,10 @@ impl TextureDesc {
     fn texture_type(&self) -> MTLTextureType {
         let array = self.array_len() > 1;
         match (self.dim, self.samples > 1, array) {
-            (TexDim::D1, _, false) => MTLTextureType::Type1D,
-            (TexDim::D1, _, true) => MTLTextureType::Type1DArray,
+            // mac S5-back: a 1D texture is a 2D texture of height 1 (see
+            // `ViewDim::texture_type`).
+            (TexDim::D1, _, false) => MTLTextureType::Type2D,
+            (TexDim::D1, _, true) => MTLTextureType::Type2DArray,
             (TexDim::D2, false, false) => MTLTextureType::Type2D,
             (TexDim::D2, false, true) => MTLTextureType::Type2DArray,
             (TexDim::D2, true, false) => MTLTextureType::Type2DMultisample,
@@ -218,8 +220,14 @@ pub enum ViewDim {
 impl ViewDim {
     fn texture_type(self) -> MTLTextureType {
         match self {
-            ViewDim::D1 => MTLTextureType::Type1D,
-            ViewDim::D1Array => MTLTextureType::Type1DArray,
+            // The Metal Shader Converter turns `Texture1D` and
+            // `Texture1DArray` accesses into `texture2d` / `texture2d_array`
+            // ones (the metallib of a `Texture1D.SampleLevel` is byte for byte
+            // the `Texture2D` one), so a real `MTLTextureType1D` binds as an
+            // unrelated type and reads 0: the title's 4096x1 tone-curve table
+            // came out as zero and the world was white. Both are 2D of height 1.
+            ViewDim::D1 => MTLTextureType::Type2D,
+            ViewDim::D1Array => MTLTextureType::Type2DArray,
             ViewDim::D2 => MTLTextureType::Type2D,
             ViewDim::D2Array => MTLTextureType::Type2DArray,
             ViewDim::D2Ms => MTLTextureType::Type2DMultisample,
