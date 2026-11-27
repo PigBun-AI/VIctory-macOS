@@ -272,7 +272,7 @@ blocks and go through `Link::call`. The back allocates all handles.
 Tests use `MockLink` (`mock.rs`): it records submitted blocks and sync calls,
 answers with fake handles and `gpu_va`s, can fail the next call of an op, and the
 integration tests (`tests/device.rs`) compare the produced bytes with golden
-proto blocks (`tests/golden/compute-block.bin`).
+proto blocks (`tests/golden/compute-block.vmps`).
 
 ## 8. COM implementation choice
 

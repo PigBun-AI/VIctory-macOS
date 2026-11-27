@@ -1,5 +1,5 @@
 //! The core against a mock `Link`: what the front sends for what the
-//! application does. Golden bytes: tests/golden/compute-block.bin
+//! application does. Golden bytes: tests/golden/compute-block.vmps
 //! (`UPDATE_GOLDEN=1 cargo test -p victory-metal-front --test device`).
 
 use std::sync::Arc;
@@ -369,7 +369,7 @@ fn golden_bytes() {
     let (block, ..) = record_compute(&dev, &link);
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/golden/compute-block.bin"
+        "/tests/golden/compute-block.vmps"
     );
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::write(path, &block).unwrap();
