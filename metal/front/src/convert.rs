@@ -102,7 +102,14 @@ pub fn sampler(s: &SamplerParams) -> Result<SamplerDesc> {
         mip_lod_bias: s.mip_lod_bias,
         min_lod: s.min_lod,
         max_lod: s.max_lod,
-        max_anisotropy: s.max_anisotropy,
+        // MaxAnisotropy only counts for the anisotropic filters (D3D12_FILTER
+        // bit 6); every application fills it in (16 is common) for the others,
+        // and proto reads "more than 1" as anisotropic.
+        max_anisotropy: if s.filter & 0x40 != 0 {
+            s.max_anisotropy.clamp(1, 16)
+        } else {
+            1
+        },
         border_color: s.border_color,
     })
 }
@@ -296,5 +303,62 @@ mod tests {
         assert_eq!(visibility(2), Err(Hr::E_NOTIMPL));
         assert_eq!(visibility(5), Ok(ShaderVisibility::FRAGMENT));
         assert_eq!(visibility(9), Err(Hr::E_INVALIDARG));
+    }
+
+    fn params(filter: u32) -> SamplerParams {
+        SamplerParams {
+            filter,
+            address_u: 1,
+            address_v: 2,
+            address_w: 5,
+            mip_lod_bias: -0.5,
+            max_anisotropy: 16,
+            comparison: 4,
+            border_color: [0.0, 0.0, 0.0, 1.0],
+            min_lod: 1.0,
+            max_lod: 9.0,
+        }
+    }
+
+    /// D3D12 spec (SDK 10.0.22621) D3D12_SAMPLER_DESC / D3D12_FILTER.
+    #[test]
+    fn sampler_fields_follow_the_spec() {
+        // every valid D3D12_FILTER value: point/linear combinations x reduction, anisotropic x reduction
+        for red in 0..4u32 {
+            for bits in 0..8u32 {
+                let f = red << 7 | (bits & 1) | (bits >> 1 & 1) << 2 | (bits >> 2 & 1) << 4;
+                let d = sampler(&params(f)).unwrap();
+                let lin = |b: u32| if bits >> b & 1 == 1 { Filter::LINEAR } else { Filter::NEAREST };
+                assert_eq!((d.mip_filter, d.mag_filter, d.min_filter), (lin(0), lin(1), lin(2)), "{f:#x}");
+                assert_eq!(d.max_anisotropy, 1, "MaxAnisotropy is ignored without the anisotropic filter {f:#x}");
+                assert_eq!(d.reduction.0 as u32, red);
+                // the comparison function counts for comparison filters only
+                assert_eq!(d.compare == CompareFunc::LESS_EQUAL, red == 1);
+            }
+            let f = 0x55 | red << 7; // ANISOTROPIC, COMPARISON_ANISOTROPIC, MINIMUM_/MAXIMUM_ANISOTROPIC
+            let d = sampler(&params(f)).unwrap();
+            assert_eq!((d.mip_filter, d.mag_filter, d.min_filter), (Filter::LINEAR, Filter::LINEAR, Filter::LINEAR));
+            assert_eq!(d.max_anisotropy, 16);
+        }
+        // anisotropy outside 1..=16 is clamped for anisotropic filters
+        let mut p = params(0x55);
+        p.max_anisotropy = 0;
+        assert_eq!(sampler(&p).unwrap().max_anisotropy, 1);
+        p.max_anisotropy = 99;
+        assert_eq!(sampler(&p).unwrap().max_anisotropy, 16);
+        // addressing: WRAP, MIRROR, CLAMP, BORDER, MIRROR_ONCE are 1..=5 in D3D12
+        let d = sampler(&params(0x15)).unwrap();
+        assert_eq!((d.address_u, d.address_v, d.address_w), (AddressMode::WRAP, AddressMode::MIRROR, AddressMode::MIRROR_ONCE));
+        for m in 1..=5u32 {
+            assert_eq!(address_mode(m).unwrap().0 as u32, m - 1);
+        }
+        assert!(address_mode(0).is_err() && address_mode(6).is_err());
+        // LOD range, bias and border colour pass through
+        assert_eq!((d.min_lod, d.max_lod, d.mip_lod_bias, d.border_color), (1.0, 9.0, -0.5, [0.0, 0.0, 0.0, 1.0]));
+        // reserved bits are refused; a comparison filter needs a function
+        assert!(sampler(&params(0x2)).is_err());
+        let mut c = params(0x80 | 0x15);
+        c.comparison = 0;
+        assert!(sampler(&c).is_err());
     }
 }
