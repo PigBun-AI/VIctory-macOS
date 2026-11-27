@@ -1005,7 +1005,12 @@ pub fn encode_block(
     mut new_list_id: impl FnMut() -> u32,
 ) -> Result<Vec<u8>> {
     let mut e = Encoder::new(caps);
-    let bad = |_| Hr::E_INVALIDARG;
+    let bad = |e: victory_metal_proto::Error| {
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            eprintln!("victory-metal front: a command was refused when encoding: {e}");
+        }
+        Hr::E_INVALIDARG
+    };
     for items in lists {
         let list = victory_metal_proto::ListId(new_list_id());
         e.push(&Command::BeginList(BeginList {

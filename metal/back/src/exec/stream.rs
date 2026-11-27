@@ -42,7 +42,12 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
     let mut open: Option<u32> = None;
     let mut seen = HashSet::new();
     for c in decoder {
-        let c = c.map_err(|e| e.status())?;
+        let c = c.map_err(|e| {
+            if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                eprintln!("victory-metal back: a command of the stream is refused: {e}");
+            }
+            e.status()
+        })?;
         match &c {
             Command::BeginList(b) => {
                 if open.is_some() || b.list.is_null() || !seen.insert(b.list.0) {
@@ -165,6 +170,9 @@ impl State {
                 return Status::BAD_STREAM;
             };
             if let Err(s) = run.command(&c) {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    eprintln!("victory-metal back: {:?} failed: {s:?}", c.opcode());
+                }
                 // Dropping `run` drops the open list and the unflushed ones.
                 return s;
             }

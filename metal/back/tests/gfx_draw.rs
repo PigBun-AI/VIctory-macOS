@@ -1046,3 +1046,101 @@ fn clearing_stencil_in_a_pass_sets_the_value_the_stencil_test_reads() {
     }
     assert_image(&got, &want, "stencil clear rect");
 }
+
+const PS_UAV: &str = "struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+RWByteAddressBuffer bits : register(u1);\n\
+[earlydepthstencil] float4 main(VSOut i) : SV_Target0 { bits.Store(0, 0x1234); return i.col; }\n";
+
+/// A pixel shader that writes a buffer through a root UAV, behind the
+/// depth test (early depth), then a barrier and a copy of the buffer: the
+/// order the Wine suite records (barrier before the pass is ended by the copy).
+#[test]
+fn a_pixel_shader_buffer_write_is_visible_after_the_barrier_and_copy_and_the_depth_test_gates_it() {
+    let Some(ps) = dxil_or_skip("draw_ps_uav", "ps_6_6", PS_UAV) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.ps = ps;
+    let mut rd = RootSigDesc::default();
+    let mut p = descriptor_param(RootParamKind::UAV);
+    p.shader_register = 1;
+    rd.params.push(p);
+    g.sig = g.fx.root_sig(&rd);
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let d = g.texture(format::D32_FLOAT, tex_usage::DEPTH_STENCIL);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0; 8]);
+    let mut desc = g.desc();
+    desc.ds_format = format::D32_FLOAT;
+    desc.depth.depth_enable = 1;
+    desc.depth.depth_write = 1;
+    desc.depth.depth_func = CompareFunc::LESS;
+    let pso = g.pso(desc);
+    for (z, want) in [(0.9f32, 0u32), (0.2, 0x1234)] {
+        let mut tri = BIG;
+        tri.z = z;
+        let (_vb, va) = g.vertex_buffer(&tri.vertices());
+        let mut cmds = vec![begin(1, g.q)];
+        cmds.extend(g.state(pso, va, 3 * STRIDE));
+        cmds.push(root_va_graphics(0, RootParamKind::UAV, out.gpu_va));
+        // As the Wine suite does it: the clears come as passes of their own
+        // (the targets are not bound yet), then a pass that loads both.
+        let mut clear_color = begin_pass(t, LoadAction::CLEAR, [0.0, 0.0, 0.0, 1.0]);
+        let mut clear_depth = <BeginRenderPass as Wire>::ZERO;
+        clear_depth.ds = DepthAttachment {
+            res: d,
+            format: format::D32_FLOAT,
+            dimension: TexViewDim::TEX2D,
+            mip: 0,
+            depth_load: LoadAction::CLEAR,
+            stencil_load: LoadAction::LOAD,
+            first_slice: 0,
+            slice_count: 1,
+            clear_depth: 0.5,
+            clear_stencil: 0,
+            _pad: 0,
+        };
+        cmds.push(fill(out.res, 0, 0, 256));
+        cmds.push(Command::BeginRenderPass(clear_depth));
+        cmds.push(end_pass());
+        if let Command::BeginRenderPass(bp) = &mut clear_color {
+            bp.rt_count = 1;
+        }
+        cmds.push(clear_color);
+        cmds.push(end_pass());
+        let mut load = begin_pass_depth(t, d, format::D32_FLOAT, [0.0; 4]);
+        if let Command::BeginRenderPass(bp) = &mut load {
+            bp.rt[0].load = LoadAction::LOAD;
+            bp.ds.depth_load = LoadAction::LOAD;
+            bp.ds.stencil_load = LoadAction::LOAD;
+        }
+        cmds.push(load);
+        cmds.push(draw(3));
+        cmds.push(Command::Barrier(Barrier::memory(
+            stage::FRAGMENT,
+            stage::BLIT,
+        )));
+        cmds.push(end_pass());
+        cmds.push(copy(rb.res, out.res, 256));
+        cmds.push(end(1));
+        assert_eq!(
+            g.fx.submit(&cmds),
+            Status::OK,
+            "{:?}",
+            g.fx.executor().last_error()
+        );
+        g.settle();
+        assert_eq!(cpu_read(rb.cpu_addr, 1)[0], want, "z = {z}");
+    }
+}
+
+fn root_va_graphics(root_index: u32, kind: RootParamKind, gpu_va: u64) -> Command<'static> {
+    Command::SetRootDescriptor(SetRootDescriptor {
+        bind_point: BindPoint::GRAPHICS,
+        root_index,
+        kind,
+        _pad: 0,
+        gpu_va,
+    })
+}
