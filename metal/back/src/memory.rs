@@ -44,6 +44,22 @@ pub enum BufferKind {
     Wrapped,
 }
 
+/// Storage, CPU cache and hazard tracking mode of a buffer of this kind (and
+/// of a heap that holds buffers of it). Nothing is hazard tracked: the
+/// backend orders everything with barriers.
+pub(crate) fn resource_options(kind: BufferKind) -> MTLResourceOptions {
+    let storage = match kind {
+        BufferKind::Default => MTLResourceOptions::StorageModePrivate,
+        BufferKind::Upload => {
+            MTLResourceOptions::StorageModeShared | MTLResourceOptions::CPUCacheModeWriteCombined
+        }
+        BufferKind::Readback | BufferKind::Shared | BufferKind::Wrapped => {
+            MTLResourceOptions::StorageModeShared
+        }
+    };
+    storage | MTLResourceOptions::HazardTrackingModeUntracked
+}
+
 /// One live buffer in the [`AddressMap`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AddressEntry {
@@ -92,7 +108,7 @@ impl AddressMap {
 }
 
 /// Releases a page claim when dropped.
-struct PageGuard {
+pub(crate) struct PageGuard {
     pages: Arc<Mutex<crate::pages::PageRegistry>>,
     claim: Claim,
 }
@@ -129,6 +145,9 @@ pub(crate) struct BufferInner {
     cpu: Option<NonNull<u8>>,
     pages: Option<PageGuard>,
     managed: bool,
+    /// The heap a placed buffer lives in: kept alive for as long as the
+    /// buffer (and, after it, the GPU work that used it; see [`crate::heap`]).
+    _heap: Option<crate::heap::Heap>,
     /// Texture buffers made over this buffer ([`Buffer::texture_view`]);
     /// they live and die with it.
     views: Mutex<HashMap<ViewKey, TextureView>>,
@@ -445,15 +464,7 @@ impl Device {
                 self.inner.caps.max_buffer_len
             )));
         }
-        let options = match kind {
-            BufferKind::Default => MTLResourceOptions::StorageModePrivate,
-            BufferKind::Upload => {
-                MTLResourceOptions::StorageModeShared
-                    | MTLResourceOptions::CPUCacheModeWriteCombined
-            }
-            BufferKind::Readback | BufferKind::Shared => MTLResourceOptions::StorageModeShared,
-            BufferKind::Wrapped => unreachable!("rejected above"),
-        } | MTLResourceOptions::HazardTrackingModeUntracked;
+        let options = resource_options(kind);
         let raw = self
             .inner
             .raw
@@ -462,7 +473,7 @@ impl Device {
         let cpu = (kind != BufferKind::Default)
             .then(|| NonNull::new(raw.contents().as_ptr().cast::<u8>()))
             .flatten();
-        self.finish_buffer(raw, kind, set, len, cpu, None, managed)
+        self.finish_buffer(raw, kind, set, len, cpu, None, managed, None)
     }
 
     /// Wraps caller memory without copying (`newBufferWithBytesNoCopy`):
@@ -531,11 +542,12 @@ impl Device {
             NonNull::new(ptr),
             Some(guard),
             true,
+            None,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn finish_buffer(
+    pub(crate) fn finish_buffer(
         &self,
         raw: Retained<ProtocolObject<dyn MTLBuffer>>,
         kind: BufferKind,
@@ -544,6 +556,7 @@ impl Device {
         cpu: Option<NonNull<u8>>,
         pages: Option<PageGuard>,
         managed: bool,
+        heap: Option<crate::heap::Heap>,
     ) -> Result<Buffer> {
         raw.setLabel(Some(&NSString::from_str(match kind {
             BufferKind::Default => "victory default",
@@ -580,6 +593,7 @@ impl Device {
                 cpu,
                 pages,
                 managed,
+                _heap: heap,
                 views: Mutex::new(HashMap::new()),
             }),
         })

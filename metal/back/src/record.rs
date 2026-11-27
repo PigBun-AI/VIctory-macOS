@@ -61,14 +61,16 @@ pub struct CommandList {
     encoder: Option<ComputeEncoder>,
     table: ArgumentTable,
     ended: bool,
-    keep_buffers: Vec<Buffer>,
+    pub(crate) keep_buffers: Vec<Buffer>,
+    /// Texture copies: what they keep alive and touch ([`crate::copy`]).
+    pub(crate) copies: crate::copy::CopyState,
     keep_pipelines: Vec<ComputePipeline>,
     last_pipeline: Option<*const ()>,
     splits: HashMap<u64, (u16, u8)>,
     /// Buffer ranges written by copies and fills since the last barrier that
     /// orders blits (see [`CommandList::blit_hazard`]).
     blit_writes: Vec<(Buffer, u64, u64)>,
-    stats: ListStats,
+    pub(crate) stats: ListStats,
 }
 
 // A command buffer and its encoder may move between threads as long as one
@@ -95,6 +97,7 @@ impl Queue {
             encoder: None,
             ended: false,
             keep_buffers: Vec::new(),
+            copies: Default::default(),
             keep_pipelines: Vec::new(),
             last_pipeline: None,
             splits: HashMap::new(),
@@ -141,7 +144,7 @@ impl CommandList {
         self.queue.alloc_constants(size, align)
     }
 
-    fn live(&self) -> Result<()> {
+    pub(crate) fn live(&self) -> Result<()> {
         if self.ended {
             Err(Error::BadArgument("command list already ended".into()))
         } else {
@@ -210,7 +213,7 @@ impl CommandList {
 
     /// Makes the encoder for a command of `stage` current and encodes the
     /// barriers it needs.
-    fn prepare(&mut self, stage: u16) -> Result<&ComputeEncoder> {
+    pub(crate) fn prepare(&mut self, stage: u16) -> Result<&ComputeEncoder> {
         let actions = self
             .tracker
             .command(stage)
@@ -219,7 +222,7 @@ impl CommandList {
         self.encoder_ref()
     }
 
-    fn check_buffer(&self, buffer: &Buffer, offset: u64, size: u64, what: &str) -> Result<()> {
+    pub(crate) fn check_buffer(&self, buffer: &Buffer, offset: u64, size: u64, what: &str) -> Result<()> {
         if !buffer.belongs_to(self.queue.device()) {
             return Err(Error::BadArgument(format!(
                 "{what}: buffer of another device"
@@ -260,11 +263,35 @@ impl CommandList {
             .any(|w| overlaps(dst, dst_off, w) || src.is_some_and(|(sb, so)| overlaps(sb, so, w)));
         // A very long list of distinct writes: stop tracking, order everything.
         if hazard || self.blit_writes.len() >= 256 {
-            self.tracker.barrier(BLIT, BLIT, VIS_DEVICE);
-            self.blit_writes.clear();
+            self.order_blits();
         }
         self.blit_writes
             .push((dst.clone(), dst_off, dst_off + size));
+    }
+
+    /// A copy that only reads `[off, off + size)` of `buf` (a texture upload
+    /// reads its source buffer): asks for a barrier when an earlier copy
+    /// wrote those bytes since the last one.
+    pub(crate) fn blit_read_hazard(&mut self, buf: &Buffer, off: u64, size: u64) {
+        let hazard = self
+            .blit_writes
+            .iter()
+            .any(|w| w.0.same(buf) && off < w.2 && w.1 < off + size);
+        if hazard {
+            self.order_blits();
+        }
+    }
+
+    /// A copy that writes `[off, off + size)` of `buf` (a texture download).
+    pub(crate) fn blit_write_hazard(&mut self, buf: &Buffer, off: u64, size: u64) {
+        self.blit_hazard(buf, off, None, size);
+    }
+
+    /// Orders every copy and fill before this point against the ones after.
+    pub(crate) fn order_blits(&mut self) {
+        self.tracker.barrier(BLIT, BLIT, VIS_DEVICE);
+        self.blit_writes.clear();
+        self.copies.accesses.clear();
     }
 
     /// `CopyBufferRegion`: `size` bytes from `src[src_offset..]` to
@@ -439,6 +466,7 @@ impl CommandList {
         self.tracker.barrier(producer, consumer, vis);
         if producer & BLIT != 0 && consumer & BLIT != 0 {
             self.blit_writes.clear();
+            self.copies.accesses.clear();
         }
         Ok(())
     }

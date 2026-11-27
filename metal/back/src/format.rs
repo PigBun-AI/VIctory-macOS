@@ -57,7 +57,7 @@ use objc2_metal::{MTLPixelFormat, MTLTextureUsage};
 
 use crate::error::{Error, Result};
 
-/// DXGI format numbers used here (`DXGI_FORMAT`, values fixed since DXGI 1.0).
+/// DXGI format numbers used here (the format enum of the original graphics API, values fixed since DXGI 1.0).
 pub mod dxgi {
     macro_rules! formats {
         ($($name:ident = $n:expr,)*) => { $(pub const $name: u32 = $n;)* };
