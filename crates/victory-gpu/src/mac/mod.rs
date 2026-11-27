@@ -5,6 +5,7 @@
 
 pub mod adapter;
 pub mod drop_stats;
+pub mod frames;
 pub mod hlsl;
 pub mod present_cap;
 pub mod render_size;

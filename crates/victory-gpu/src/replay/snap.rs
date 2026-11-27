@@ -133,6 +133,7 @@ pub(super) fn present(r: &Recorder, texture: &ID3D12Resource, state: u32) {
             let due = match r.settings.at {
                 At::Seconds(s) => r.began.elapsed().as_secs_f64() >= s,
                 At::Frame(f) => presents >= f,
+                At::World(n) => crate::mac::world::reached(n), // mac (I2)
                 At::Trigger => false,
             };
             if due || r.settings.folder.join("go").exists() {

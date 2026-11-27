@@ -371,6 +371,44 @@ out at load (nothing is patched unless exactly 8 are found). The loop scan is a 
 `crash.rs`'s `clwb_loop` (test included) so `crash.rs` is untouched; if the Windows line changes
 the pattern, change the copy. `VICTORY_NOP_CLWB=0/1`. Remove with G2, or if Rosetta handles `clwb`.
 
+### L5 — the title's hang watchdog off, `VICTORY_MAC_NO_WATCHDOG=1` (`mac/watchdog.rs`, hook in `apps/victory/src/mac.rs`)
+
+**Off by default; not fidelity.** With `VICTORY_MAC_NO_WATCHDOG=1` (anything but empty or `0`) the three jumps to the
+watchdog's crash path are made two-byte NOPs (`66 90`) at load, and the log gets one line:
+`non-fidelity: title hang watchdog disabled` (stdout and `tracing`). Without the variable nothing is read or patched.
+
+*What it is.* The title's own watchdog (see "Title crash at 0x2215c35" under G7): once a second it checks the heartbeat
+(`title+0x22149f0`) of each registered thread against a limit, and counts 30 checks (`ebp = 0x1e`) without a
+finished main-thread frame; when either fails it writes `[0]` on purpose (`mov dword ptr [0], 0` at +0x2215c35,
+then `int3`). A recording run, `VICTORY_CAPTURE_FRAMES` or the Metal path make world frames take many seconds, and
+the title kills itself in the world, so a long capture run cannot finish. Ported from VIctory-macOS `origin/main`
+commit `a38f26d9` (`VICTORY_NO_HANG_WATCHDOG`, `hang_watchdog` of `KnownBuild`): three sites, build 1.0.2.1.
+
+*Sites (read again from the exe's bytes with a disassembler, 2026-11-27).*
+
+| site | bytes | jump |
+|---|---|---|
+| `+0x2215bdc` | `73 2e` → `66 90` | `jae` after `vucomiss xmm8, xmm7` (heartbeat age vs. limit), to the crash path `+0x2215c0c` |
+| `+0x2215c70` | `74 04` → `66 90` | `je` after `dec ebp` (30 checks without a frame), to `+0x2215c76`, on to the crash path |
+| `+0x2215d84` | `74 04` → `66 90` | the same count-down in the loop's other form, to `+0x2215d8a` (reporting call, then the crash) |
+
+*Safety.* Only when the exe's BLAKE3 is the Series 1.0.2.1 one (`b99f876b…`, as L1's extra sites) and all three
+sites hold the expected bytes: compared first, all of them, and nothing is written on any mismatch. Otherwise the
+watchdog stays on and the log says why (`title hang watchdog left on: title+0x… holds … where … was expected`, or
+`build … is not Series 1.0.2.1`). Unit tests (`mac/watchdog.rs`) run on a synthetic image, not on the exe.
+
+*Fidelity.* The game's logic, rendering and timing are untouched; the only change is that the title no longer
+terminates itself when it is slow. Anything that needs the watchdog to fire (a real hang) now hangs instead of
+crashing, so a run with it on can stall for good: give such runs a wall-clock limit outside the game. Frames
+captured with it on are as faithful as without; the log line above marks the run so its numbers are not
+mistaken for a plain run's.
+
+*Launcher.* Not set by `tools/mac/run.sh` (another change owns that file); export the variable by hand or add it
+there when the capture runs need it.
+
+*Remove when* frames are fast enough that the watchdog never fires (the Metal backend, or a measured run with a
+world frame under a second shows it quiet), or when the Windows line gets a switch of its own.
+
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 
 New `victory-hle/src/modules/mac.rs`, registered in `modules/mod.rs` **only when `rosetta()`**,
@@ -388,7 +426,7 @@ when it is unset the container test returns with a "skipped" message instead of 
 the old behaviour on the Windows machine, set `VICTORY_LIVE_CORPUS` to the two folders. Remove this
 patch if the Windows line makes the same change.
 
-### M5 — `tools/mac/push-check.sh`, `docs/mac/PUSH.md`
+### M6 — `tools/mac/push-check.sh`, `docs/mac/PUSH.md`
 
 The check before a push to the public `fork`: policy, credential scan, privacy scan (internal
 addresses, home-directory and drive paths, `*.local` e-mail addresses, the author of `mac:`
@@ -532,6 +570,29 @@ The default stays **perf** until the 3D-missing question is settled and the owne
 `profile="${VICTORY_MAC_PROFILE:-perf}"` -> `fidelity` in `run.sh`, plus (separately, as a loader change) making `VICTORY_OUTPUT=0` the
 code's default in `resolution.rs` `default_output_on`, so that a start without `run.sh` agrees. Perf stays as the explicit profile for
 debugging and speed work, marked `non-fidelity` in the log, and no fidelity result may cite a perf run.
+
+### I2 — record and capture by world frame: `w<N>` (`victory-gpu/src/mac/frames.rs`, 3 hooks)
+
+`VICTORY_RECORD_AT=w<N>` and `VICTORY_CAPTURE_FRAMES=...,w<N>,...` name the **N-th world frame after world
+frame 1** (I1's clock): `w0` is world frame 1, `w300` is world frame 301, which is present `first + 300` where
+`first` is the present that latched world frame 1 (788 in one run, 1209 in the next: a present number such as `f300`
+names a different moment each time, `w300` the same one). `f<N>` and bare present numbers work as before, and
+`VICTORY_CAPTURE_FRAMES` may mix both (`64,w12`). Off by default: nothing changes unless a `w<N>` is given.
+
+*How.* The Mac layer owns the parsing and the question: `frames::parse_world`, `parse_list`, `listed` (is this present
+one of the targets, given `world::first_present()`) and `world::reached(n)` ("has world frame 1 + n been reached",
+asked of the clock at every present). Upstream edits are one line each, marked `mac (I2)`: `replay/record.rs`
+(`At::World`, the `w<N>` branch of `parse_at`, and `log_latch()` so the log says when world frame 1 latched),
+`replay/snap.rs` (the `At::World(n) => world::reached(n)` arm beside `At::Frame`), and `capture.rs` (`listed()` takes the
+list through `frames::listed`). Tests: `mac/frames.rs` (native) and `record.rs`'s `parse_at` test.
+
+*Notes.* A `w<N>` capture lands the same few frames after the trigger as `f<N>` does (the recorder arms, then takes
+the next whole frame). `VICTORY_CAPTURE_FRAMES=w0` cannot trace the world's first frame's draws ahead of time (it is
+only known to be world frame 1 once presented); use `w1` or later. The world starts only once a frame has 500 title
+draws (`VICTORY_WORLD_DRAWS`); with `w<N>` and no world ever reached, nothing triggers.
+
+*Fidelity.* None affected: it only chooses which frame is recorded or saved. *Remove when* the Windows line's
+recorder names world frames itself (then drop `frames.rs` and the three hooks; `world.rs` stays for I1).
 
 ## Not ported this round (decided with the Windows line as the reference)
 

@@ -30,20 +30,20 @@ static LOG: AtomicBool = AtomicBool::new(false);
 
 /// The latch and the count (a type so that tests own theirs: the process-wide
 /// one is driven by whatever presents in the same test binary).
-struct Clock {
+pub(crate) struct Clock {
     world_frame: AtomicU64,
     /// The title's present number (`queue::FRAMES`) of world frame 1.
     first_present: AtomicU64,
 }
 
 impl Clock {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { world_frame: AtomicU64::new(0), first_present: AtomicU64::new(0) }
     }
 
     /// One present: `present` is its number, `draws` those since the last one.
     /// Returns whether this present is world frame 1.
-    fn advance(&self, present: u64, draws: u64, threshold: u64) -> bool {
+    pub(crate) fn advance(&self, present: u64, draws: u64, threshold: u64) -> bool {
         let now = self.world_frame.load(Relaxed);
         if now > 0 {
             self.world_frame.store(now + 1, Relaxed);
@@ -55,6 +55,11 @@ impl Clock {
         } else {
             false
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn world_frame(&self) -> u64 {
+        self.world_frame.load(Relaxed)
     }
 }
 
@@ -83,6 +88,13 @@ pub fn world_frame() -> u64 {
 /// (the number the frame log and `VICTORY_CAPTURE_FRAMES` use).
 pub fn first_present() -> Option<u64> {
     Some(CLOCK.first_present.load(Relaxed)).filter(|&n| n != 0)
+}
+
+/// Whether world frame `1 + n` has been reached: the hook the recorder
+/// asks at every present for `VICTORY_RECORD_AT=w<n>` (patch I2,
+/// [`super::frames`]).
+pub fn reached(n: u64) -> bool {
+    super::frames::reached(world_frame(), n)
 }
 
 /// Asks for a log line when the world starts (set by the consumers, so a

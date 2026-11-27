@@ -18,18 +18,20 @@ pub(crate) fn folder() -> Option<&'static PathBuf> {
         .or_else(trigger::dir)
 }
 
-/// Frames listed in `VICTORY_CAPTURE_FRAMES` (comma-separated): saved
+/// Frames listed in `VICTORY_CAPTURE_FRAMES` (comma-separated, present
+/// numbers or mac `w<N>`): saved
 /// too, and their draws traced at debug level.
 pub(crate) fn listed(n: u64) -> bool {
-    static LIST: std::sync::OnceLock<Vec<u64>> = std::sync::OnceLock::new();
-    let named = LIST
-        .get_or_init(|| {
-            let list = std::env::var("VICTORY_CAPTURE_FRAMES").unwrap_or_default();
-            list.split(',')
-                .filter_map(|f| f.trim().parse().ok())
-                .collect()
-        })
-        .contains(&n);
+    // mac (I2): items are present numbers or `w<N>` (the N-th world frame
+    // after world frame 1), `crate::mac::frames`.
+    static LIST: std::sync::OnceLock<Vec<crate::mac::frames::Target>> = std::sync::OnceLock::new();
+    let named = crate::mac::frames::listed(
+        LIST.get_or_init(|| {
+            crate::mac::frames::parse_list(&std::env::var("VICTORY_CAPTURE_FRAMES").unwrap_or_default())
+        }),
+        n,
+        crate::mac::world::first_present(),
+    );
     // `VICTORY_CAPTURE_WORLD`: also the 2nd and the 6th frame after the first
     // one that ran 500 draws or more (a title's first 3D frames: their
     // numbers depend on how long the menus were shown), and the 30th and

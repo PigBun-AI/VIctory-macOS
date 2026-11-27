@@ -49,17 +49,23 @@ pub enum At {
     Seconds(f64),
     /// A number of presents.
     Frame(u64),
+    /// mac (I2): `w<N>`, the N-th world frame after world frame 1
+    /// (`crate::mac::frames`); asked of the world clock at every present.
+    World(u64),
     /// When a file named `go` appears in the folder (this works in the
     /// other cases too).
     Trigger,
 }
 
 impl Settings {
-    /// From `VICTORY_RECORD`, `VICTORY_RECORD_AT` (seconds, or `f<frame>`),
+    /// From `VICTORY_RECORD`, `VICTORY_RECORD_AT` (seconds, `f<frame>`, or mac `w<N>`),
     /// `VICTORY_RECORD_FRAMES` and `VICTORY_RECORD_ALWAYS=1`.
     pub fn from_env() -> Option<Settings> {
         let folder = PathBuf::from(std::env::var_os("VICTORY_RECORD").filter(|v| !v.is_empty())?);
         let at = parse_at(&std::env::var("VICTORY_RECORD_AT").unwrap_or_default());
+        if matches!(at, At::World(_)) {
+            crate::mac::world::log_latch(); // mac (I2)
+        }
         let frames = std::env::var("VICTORY_RECORD_FRAMES")
             .ok()
             .and_then(|v| v.trim().parse().ok())
@@ -76,6 +82,10 @@ impl Settings {
 
 fn parse_at(text: &str) -> At {
     let text = text.trim();
+    // mac (I2): `w<N>`.
+    if let Some(n) = crate::mac::frames::parse_world(text) {
+        return At::World(n);
+    }
     if let Some(frame) = text.strip_prefix('f').and_then(|n| n.parse().ok()) {
         return At::Frame(frame);
     }
@@ -2739,6 +2749,9 @@ mod tests {
         assert_eq!(parse_at("120"), At::Seconds(120.0));
         assert_eq!(parse_at(" 1.5 "), At::Seconds(1.5));
         assert_eq!(parse_at("f900"), At::Frame(900));
+        assert_eq!(parse_at("w300"), At::World(300));
+        assert_eq!(parse_at(" w0 "), At::World(0));
+        assert_eq!(parse_at("w"), At::Trigger);
         assert_eq!(parse_at(""), At::Trigger);
         assert_eq!(parse_at("later"), At::Trigger);
     }
