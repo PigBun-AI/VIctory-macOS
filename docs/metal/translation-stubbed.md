@@ -129,7 +129,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - freq: 26 (census:2026-11-27); used=yes; status=gap
 - Xbox hardware / driver does: any wave64 program runs
 - deviation: 26 containers (of 2763 Cs); dispatches of them are dropped by victory-gpu (3 logged in the 370 s run, C-V-011). Whatever they compute (culling, skinning, particles, post passes) is missing from the picture.
-- restore_plan (how to break through): Identify the unsupported shapes from the 26 (sample hashes in census.json translate.failures) and extend wave.rs lowering; census says "host-wave-64 scan translates the 26" (translated_with_host_wave64=26), so a build option exists: enable it by default. Feasibility 可行 (already translates under the scan).
+- restore_plan (how to break through): The census translates these 26 only when the host runs wave 64 (translated_with_host_wave64=26; the Apple GPU host is 32 lanes, MSC refuses any other wave size: probe-results m1-msc-features-2026-11-27), so on the Mac the way out is to extend the half-wave lowering (emit/wave.rs, emit/mod.rs:517-830) to these shapes; the shapes are in census.json translate.failures (sample hashes). Feasibility 待验证.
 - tests: —
 - notes: census: research/census/census.json translate.failures class "Cs: no wave32 lowering ..." count 26; translated_with_host_wave64 26.
 
@@ -163,7 +163,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: victory-loader mac::clwb tests::finds_the_loops_the_title_has_and_only_those (native)
 - notes: A test would need a runtime check that no GPU read bypasses the CPU: add counter "title pages read by GPU without copy" (0 today).
 
-## 17. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
+## 17. S-I-025 — compute programs with a descriptor read only as data ("a descriptor read only as data is not supported")
+
+- owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
+- freq: 5 (census:2026-11-27); used=yes; status=gap
+- Xbox hardware / driver does: any SGPR range may be a descriptor or plain data; the hardware does not care
+- deviation: 5 Cs containers do not translate (census.json translate.failures); dispatches of them are dropped.
+- restore_plan (how to break through): Teach resource.rs to keep a descriptor that is only copied/read as data as plain dwords (translator work; first look at sample hashes 002e93a6cc2aa355, 07c93bfb77fecebb ...). Feasibility 待验证.
+- tests: —
+- notes: census.json translate.failures class "Cs: a descriptor read only as data is not supported" 5; example GFX10 code at 0x2070.
+
+## 18. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
 
 - owner / chain / hop: mac / command / victory-hle display.rs, dsp.rs, speech.rs, xpackage.rs, gameinput.rs, apu.rs (all marked `shortcut:` in code)
 - freq: 4 (log); used=yes; status=unproven
@@ -173,7 +183,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none per stub
 - notes: Windows-line stubs, generic; listed because the user asked for every stub.
 
-## 18. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
+## 19. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -183,7 +193,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/pipeline.rs "shader does not translate"; translator: crates/victory-shader/src/emit/wave.rs. freq=3 logged programs in this run, 26 containers in census.
 
-## 19. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
+## 20. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -193,7 +203,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/indirect.rs, mac/hlsl.rs. FINDING for the Mac lead: tools/metal/run.sh did not set VICTORY_HELPER_DXC in this run. freq=3 dropped signatures in the log.
 
-## 20. mac.loader.resolution — title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER
+## 21. mac.loader.resolution — title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER
 
 - owner / chain / hop: mac / command / loader patch L3 (resolution.rs)
 - freq: 2 (log); used=yes; status=proven
@@ -203,7 +213,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: victory-loader mac::resolution tests (10: the_default_output_is_720p_on_a_mac, the_output_block_is_the_titles, the_output_code_keeps_the_titles_else_path, the_scale_codes, a_site_is_written_only_over_its_bytes, a_refused_site_leaves_the_group_as_it_was, ...)
 - notes: Patch application is proven (tests + log); its visual/logic consequences are not.
 
-## 21. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
+## 22. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 2 (log); used=yes; status=proven
@@ -213,7 +223,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: indirect::tests (26); mac::hlsl::tests::the_shader_model_is_raised_to_6
 - notes: 1 per process at start-up.
 
-## 22. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
+## 23. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75 (applied at every launch; no per-run counter)); used=yes; status=gap
@@ -223,7 +233,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. owner=mac: loader patch; Mac lead fills the history and the effects of turning it off. Observed in run 20261127-221938-map: swapchain 1280x720 R8G8B8A8_UNORM, 2 buffers.
 
-## 23. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
+## 24. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75); used=yes; status=unproven
@@ -233,7 +243,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. Switch default 0/off; docs/mac/macos.md table row VICTORY_UPSCALER.
 
-## 24. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
+## 25. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
 
 - owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
 - freq: 1 (census:2026-11-27); used=yes; status=gap
@@ -243,7 +253,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: shader:emit/mod.rs::heap_texture_atomic_widths; shader:emit/size_tests.rs::a_counter_texture_is_set_by_a_store_of_one_channel
 - notes: code: emit/lower.rs atomics, resource.rs; census failure: 1 Ps "atomicBinOp.i64". freq: 1 program in census (low), 0 in run.
 
-## 25. mac.res.output — title output size (swap chain / output resolution)
+## 26. mac.res.output — title output size (swap chain / output resolution)
 
 - owner / chain / hop: mac / command / resolution chain
 - freq: 1 (log); used=yes; status=unproven
@@ -253,7 +263,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::resolution tests (see mac.loader.resolution)
 - notes: Placeholder; Metal owner will fill details after the resolution investigation returns.
 
-## 26. mac.hle.working_set_statistics — XMemGetWorkingSetStatistics returns limit/used for the title
+## 27. mac.hle.working_set_statistics — XMemGetWorkingSetStatistics returns limit/used for the title
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs XMemGetWorkingSetStatistics
 - freq: 1 (static-census); used=yes; status=unproven
@@ -263,7 +273,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: xmem::tests::statistics_have_the_console_layout
 - notes: Code marks it `shortcut:`; unused so far in runs.
 
-## 27. shared.object.unknown_method — any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL)
+## 28. shared.object.unknown_method — any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -273,7 +283,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 1 occurrence in r5, 0 in ab/new-10 (one run).
 
-## 28. shared.draw.no_host_pipeline — draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated)
+## 29. shared.draw.no_host_pipeline — draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -283,7 +293,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: pipeline::make::tests (6: pending_pipeline_is_recorded_for_the_next_launch, ...)
 - notes: Counts for the Metal-owned part are in their matrix; the row marks the shared drop point (draw.rs).
 
-## 29. shared.residency.make_resident — MakeResident/Evict ("Unsupported: MakeResident" once per process on D3DMetal)
+## 30. shared.residency.make_resident — MakeResident/Evict ("Unsupported: MakeResident" once per process on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -293,7 +303,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: residency::tests (3)
 - notes: —
 
-## 30. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
+## 31. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 0 (callstats:20261127-221938-map); used=no; status=unproven
@@ -303,7 +313,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/query.rs. callstats: no query calls.
 
-## 31. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
+## 32. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -313,7 +323,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/caps.rs. CheckFeatureSupport 2069 calls.
 
-## 32. C-F-053 — ResolveSubresource (MSAA resolve)
+## 33. C-F-053 — ResolveSubresource (MSAA resolve)
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -323,7 +333,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/device.rs
 
-## 33. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
+## 34. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -333,7 +343,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::timestamps_rise_in_recording_order_and_resolve_into_the_buffer
 - notes: code: front/src/timestamps.rs. proto has no timestamp op yet (docs/metal/proto.md).
 
-## 34. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
+## 35. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -343,7 +353,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/timestamps.rs QueryHeap::new
 
-## 35. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
+## 36. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 0 (none); used=no; status=gap
@@ -353,7 +363,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Marked FUTURE by the request of the lead (2026-11-27). Do not schedule before the fidelity-phase nodes are proven.
 
-## 36. shared.fence.wait — fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149)
+## 37. shared.fence.wait — fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -363,7 +373,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: fence::tests (2) ; test asserts E_NOTIMPL for the unsupported form
 - notes: Count: 0 lines in ab and r5.
 
-## 37. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
+## 38. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -373,7 +383,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: Hit would be silent for titles that ignore E_NOTIMPL.
 
-## 38. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
+## 39. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -383,7 +393,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: draw::tests (6)
 - notes: Zero occurrences: dormant risk.
 
-## 39. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
+## 40. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -393,7 +403,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/list.rs (unwritten methods log once). No evidence of calls in runlog:20261127-221938-map.
 
-## 40. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
+## 41. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -403,7 +413,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/device.rs f[76] create_committed. Whether the title reads DCC surfaces is untested.
 
-## 41. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
+## 42. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -413,7 +423,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: no code; absence verified by grep -i htile in crates/victory-gpu and crates/victory-shader (only hash constants match).
 
-## 42. C-F-014 — buffer UAV typed with misaligned first element
+## 43. C-F-014 — buffer UAV typed with misaligned first element
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=gap
@@ -423,7 +433,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/typed_gpu.rs::refused_views_write_nothing
 - notes: code: back/src/typed.rs
 
-## 43. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
+## 44. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=unproven
@@ -433,7 +443,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::pix_markers_become_debug_labels
 - notes: code: front/src/timestamps.rs pix_text
 
-## 44. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
+## 45. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
 
 - owner / chain / hop: shared / shader / 2 IR build + structure (ir.rs, structure.rs, io.rs, spill.rs)
 - freq: not measured (none); used=unknown; status=unproven
@@ -443,7 +453,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-shader/src/ir.rs:1410; emit/lower.rs float rules ~258, 3915-4036. Used: unknown (needs instruction scan).
 
-## 45. mac.res.internal — title internal (render) resolution
+## 46. mac.res.internal — title internal (render) resolution
 
 - owner / chain / hop: mac / command / resolution chain
 - freq: not measured (unknown); used=unknown; status=unproven
@@ -453,7 +463,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: Placeholder.
 
-## 46. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
+## 47. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
 
 - owner / chain / hop: mac / command / victory-gpu mac/rosetta.rs fault_tracking()
 - freq: not measured (unknown); used=yes; status=proven
@@ -463,7 +473,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::rosetta::tests::the_variable_decides_and_tests_track (native + Wine: pass)
 - notes: Decision proven by test; its cost is measured in logs. 0x140456fe2 hang (tracking on) was in victory.exe safecopy (G6).
 
-## 47. mac.fault.ntquery_class7 — NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder()
+## 48. mac.fault.ntquery_class7 — NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder()
 
 - owner / chain / hop: mac / command / Wine NtQueryVirtualMemory
 - freq: not measured (unknown); used=yes; status=gap
@@ -473,7 +483,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: watch::many_askers_tests::holes_are_known_until_the_runtime_tells, watch::many_askers_tests::no_mapping_is_lost_between_askers, watch::tests::what_is_left_alone_is_no_known_hole (3 FAIL under Wine)
 - notes: Only reached with tracking on; frequency unknown.
 
-## 48. mac.fault.xmem_no_write_watch — MEM_WRITE_WATCH left off the pools under Rosetta
+## 49. mac.fault.xmem_no_write_watch — MEM_WRITE_WATCH left off the pools under Rosetta
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs (A6)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -483,7 +493,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none specific (xmem tests do not assert it)
 - notes: —
 
-## 49. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
+## 50. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs commit(), commit_refused(); Wine/macOS commit
 - freq: not measured (unknown); used=yes; status=unproven
@@ -493,7 +503,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: xmem::tests::commit_limit_report_includes_request_and_system_commit, transfers_shrink_the_title_budget, statistics_have_the_console_layout
 - notes: 16 reservations total 62 GB virtual; only committed part matters.
 
-## 50. mac.hle.cool_fox_residency — 32 GB residency budgets, fallback heaps, GPU pool back-off and deferred uploads under low commit
+## 51. mac.hle.cool_fox_residency — 32 GB residency budgets, fallback heaps, GPU pool back-off and deferred uploads under low commit
 
 - owner / chain / hop: mac / command / victory-gpu residency.rs (cool_fox 32 GB residency budgets), pool.rs back-off
 - freq: not measured (unknown); used=yes; status=unproven
@@ -503,7 +513,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: residency::tests (bake_and_lookahead_leave_room_for_live_game_allocations, either_constraint_enters_pressure_and_both_must_recover, prefetch_respects_existing_budgets_and_resumes_after_recovery); pool::tests::a_failed_block_is_not_retried_for_each_small_upload (Wine: pass)
 - notes: Mac observation only; the budgets were written on Windows PCs.
 
-## 51. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
+## 52. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
 
 - owner / chain / hop: mac / command / Mac fork #204 alias.rs NOT ported (PATCHES.md "Not ported")
 - freq: not measured (unknown); used=yes; status=gap
@@ -513,7 +523,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none in this tree (alias.rs absent)
 - notes: Fidelity: removes the copy latency/race window; correctness impact today unknown (copies hold).
 
-## 52. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
+## 53. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -523,7 +533,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: Marked here because the shared layer relays the capability.
 
-## 53. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
+## 54. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=gap
