@@ -169,7 +169,7 @@ impl RootSig {
         Ok(RootSig { api: msc.api, raw })
     }
 
-    pub(crate) fn layout(&self, _msc: &Msc) -> TopLevelLayout {
+    pub(crate) fn layout(&self, params: usize, static_samplers: usize) -> TopLevelLayout {
         // SAFETY: a live root signature; the buffer has `n` slots.
         let n = unsafe { (self.api.IRRootSignatureGetResourceCount)(self.raw) };
         let mut locs = vec![ffi::IRResourceLocation::default(); n];
@@ -177,7 +177,7 @@ impl RootSig {
             // SAFETY: as above.
             unsafe { (self.api.IRRootSignatureGetResourceLocations)(self.raw, locs.as_mut_ptr()) };
         }
-        TopLevelLayout::from_locations(locations(&locs))
+        TopLevelLayout::from_locations(locations(&locs), params, static_samplers)
     }
 }
 
@@ -451,7 +451,10 @@ impl Msc {
 
         // The layout: the root signature's, or else what the shader reports.
         let layout = match &rs {
-            Some(rs) => rs.layout(self),
+            Some(rs) => rs.layout(
+                root.map_or(0, |r| r.params.len()),
+                root.map_or(0, |r| r.static_samplers.len()),
+            ),
             None => {
                 // SAFETY: a live reflection.
                 let n = unsafe { (api.IRShaderReflectionGetResourceCount)(refl.raw) };
@@ -462,7 +465,8 @@ impl Msc {
                         (api.IRShaderReflectionGetResourceLocations)(refl.raw, locs.as_mut_ptr())
                     };
                 }
-                TopLevelLayout::from_locations(locations(&locs))
+                let n = locs.len();
+                TopLevelLayout::from_locations(locations(&locs), n, 0)
             }
         };
 

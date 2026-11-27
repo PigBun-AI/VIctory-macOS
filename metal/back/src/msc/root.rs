@@ -162,14 +162,28 @@ pub struct ArgLocation {
 /// The layout of the top-level argument buffer of a root signature.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct TopLevelLayout {
-    /// One entry per root parameter, in parameter order.
+    /// One entry per root parameter, in parameter order; with static
+    /// samplers one more entry follows them (see `static_sampler_table`).
     pub entries: Vec<ArgLocation>,
+    /// Index in `entries` of the table of the root signature's static
+    /// samplers. MSC does not bake static samplers into the shader: it adds
+    /// a pointer to a table of sampler descriptors (one
+    /// [`IrDescriptorTableEntry::sampler`](crate::descriptors::IrDescriptorTableEntry)
+    /// per sampler, in the order of `static_samplers`) after the root
+    /// parameters, which the host fills in.
+    pub static_sampler_table: Option<usize>,
     /// Bytes the buffer needs (end of the last entry, rounded up to 8).
     pub size: u32,
 }
 
 impl TopLevelLayout {
-    pub(crate) fn from_locations(entries: Vec<ArgLocation>) -> TopLevelLayout {
+    pub(crate) fn from_locations(
+        entries: Vec<ArgLocation>,
+        params: usize,
+        static_samplers: usize,
+    ) -> TopLevelLayout {
+        let static_sampler_table =
+            (static_samplers > 0 && entries.len() == params + 1).then_some(params);
         let end = entries
             .iter()
             .map(|e| u64::from(e.offset) + e.size)
@@ -178,6 +192,7 @@ impl TopLevelLayout {
         TopLevelLayout {
             size: end.next_multiple_of(8) as u32,
             entries,
+            static_sampler_table,
         }
     }
 }

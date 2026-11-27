@@ -261,7 +261,7 @@ impl Msc {
     pub fn layout(&self, desc: &RootSignatureDesc) -> Result<TopLevelLayout, MscError> {
         let c = root::CRootSignature::new(desc);
         let rs = compile::RootSig::create(self, &c)?;
-        Ok(rs.layout(self))
+        Ok(rs.layout(desc.params.len(), desc.static_samplers.len()))
     }
 }
 
