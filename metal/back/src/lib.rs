@@ -8,7 +8,7 @@
 //!   that may name Metal 3 command objects).
 //! * the M1 executor core, Metal 4 only (architecture note 2.6, rules 6
 //!   and 11): [`device`], [`memory`], [`residency`], [`descriptors`],
-//!   [`record`], [`queue`], [`pipeline`], with the pure pieces
+//!   [`record`], [`queue`], [`pipeline`], [`render`] (graphics and mesh pipelines), with the pure pieces
 //!   [`stages`], [`pages`], [`barrier`].
 //!
 //! The API of those modules is plain Rust: no wire protocol types.
@@ -41,6 +41,8 @@ pub mod pipeline;
 pub mod queue;
 #[cfg(target_vendor = "apple")]
 pub mod record;
+#[cfg(target_vendor = "apple")]
+pub mod render;
 #[cfg(target_vendor = "apple")]
 pub mod residency;
 #[cfg(target_vendor = "apple")]

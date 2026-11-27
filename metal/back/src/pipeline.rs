@@ -34,6 +34,12 @@ pub struct Library {
 unsafe impl Send for Library {}
 unsafe impl Sync for Library {}
 
+impl Library {
+    pub(crate) fn raw(&self) -> &ProtocolObject<dyn MTLLibrary> {
+        &self.raw
+    }
+}
+
 struct PipelineInner {
     raw: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     device: Arc<DeviceInner>,

@@ -155,6 +155,25 @@ pub mod gpu_family {
     pub const METAL3: u32 = 5001;
 }
 
+/// `IRInputTopology`.
+pub mod input_topology {
+    pub const UNDEFINED: u32 = 0;
+    pub const POINT: u32 = 1;
+    pub const LINE: u32 = 2;
+    pub const TRIANGLE: u32 = 3;
+}
+
+/// `IRStageInCodeGenerationMode`.
+pub const STAGE_IN_METAL_VERTEX_FETCH: u32 = 0;
+
+/// `IRDualSourceBlendingConfiguration` / `IRDepthFeedbackConfiguration`
+/// (the two enums have the same three values).
+pub mod feature_config {
+    pub const DECIDE_AT_RUNTIME: u32 = 0;
+    pub const FORCE_ENABLED: u32 = 1;
+    pub const FORCE_DISABLED: u32 = 2;
+}
+
 /// `IROperatingSystem_macOS`.
 pub const OS_MACOS: u32 = 0;
 
@@ -299,6 +318,51 @@ pub struct IRVersionedASInfo {
     pub max_payload_size_in_bytes: u32,
 }
 
+/// `IRVertexInputInfo_1_0`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IRVertexInputInfo {
+    pub name: *const c_char,
+    pub attributeIndex: u8,
+}
+
+/// `IRVersionedVSInfo` (`IRVSInfo_1_0` inlined).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IRVersionedVSInfo {
+    pub version: u32,
+    pub instance_id_index: i32,
+    pub vertex_id_index: i32,
+    pub vertex_output_size_in_bytes: u32,
+    pub needs_draw_params: bool,
+    pub vertex_inputs: *mut IRVertexInputInfo,
+    pub num_vertex_inputs: usize,
+}
+
+impl Default for IRVersionedVSInfo {
+    fn default() -> Self {
+        IRVersionedVSInfo {
+            version: 0,
+            instance_id_index: -1,
+            vertex_id_index: -1,
+            vertex_output_size_in_bytes: 0,
+            needs_draw_params: false,
+            vertex_inputs: std::ptr::null_mut(),
+            num_vertex_inputs: 0,
+        }
+    }
+}
+
+/// `IRVersionedFSInfo` (`IRFSInfo_1_0` inlined).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct IRVersionedFSInfo {
+    pub version: u32,
+    pub num_render_targets: i32,
+    pub rt_index_int: u8,
+    pub discards: bool,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct IRFunctionConstant {
@@ -335,6 +399,12 @@ const _: () = {
     assert!(offset_of!(IRVersionedMSInfo, num_threads) == 20);
     assert!(size_of::<IRVersionedASInfo>() == 20);
     assert!(size_of::<IRFunctionConstant>() == 16);
+    assert!(size_of::<IRVertexInputInfo>() == 16);
+    assert!(size_of::<IRVersionedVSInfo>() == 40);
+    assert!(offset_of!(IRVersionedVSInfo, vertex_inputs) == 24);
+    assert!(offset_of!(IRVersionedVSInfo, num_vertex_inputs) == 32);
+    assert!(size_of::<IRVersionedFSInfo>() == 12);
+    assert!(offset_of!(IRVersionedFSInfo, rt_index_int) == 8);
 };
 
 // ---- the function table -----------------------------------------------------
@@ -393,6 +463,12 @@ api! {
     fn IRCompilerSetEntryPointName(*mut IRCompiler, *const c_char);
     fn IRCompilerSetMinimumGPUFamily(*mut IRCompiler, u32);
     fn IRCompilerSetMinimumDeploymentTarget(*mut IRCompiler, u32, *const c_char);
+    fn IRCompilerSetInputTopology(*mut IRCompiler, u32);
+    fn IRCompilerSetStageInGenerationMode(*mut IRCompiler, u32);
+    fn IRCompilerSetDualSourceBlendingConfiguration(*mut IRCompiler, u32);
+    fn IRCompilerSetDepthFeedbackConfiguration(*mut IRCompiler, u32);
+    fn IRCompilerSetIntRTMask(*mut IRCompiler, u8);
+    fn IRCompilerSetSampleMask(*mut IRCompiler, u32);
     fn IRCompilerIgnoreRootSignature(*mut IRCompiler, bool);
     fn IRCompilerIgnoreDebugInformation(*mut IRCompiler, bool);
     fn IRCompilerAllocCompileAndLink(*mut IRCompiler, *const c_char, *const IRObject, *mut *mut IRError) -> *mut IRObject;
@@ -421,6 +497,10 @@ api! {
     fn IRShaderReflectionReleaseMeshInfo(*mut IRVersionedMSInfo) -> bool;
     fn IRShaderReflectionCopyAmplificationInfo(*const IRShaderReflection, u32, *mut IRVersionedASInfo) -> bool;
     fn IRShaderReflectionReleaseAmplificationInfo(*mut IRVersionedASInfo) -> bool;
+    fn IRShaderReflectionCopyVertexInfo(*const IRShaderReflection, u32, *mut IRVersionedVSInfo) -> bool;
+    fn IRShaderReflectionReleaseVertexInfo(*mut IRVersionedVSInfo) -> bool;
+    fn IRShaderReflectionCopyFragmentInfo(*const IRShaderReflection, u32, *mut IRVersionedFSInfo) -> bool;
+    fn IRShaderReflectionReleaseFragmentInfo(*mut IRVersionedFSInfo) -> bool;
     fn IRShaderReflectionGetResourceCount(*const IRShaderReflection) -> usize;
     fn IRShaderReflectionGetResourceLocations(*const IRShaderReflection, *mut IRResourceLocation);
     fn IRShaderReflectionCopyJSONString(*const IRShaderReflection) -> *const c_char;

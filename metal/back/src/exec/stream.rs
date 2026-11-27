@@ -30,7 +30,7 @@ use victory_metal_proto::stream::Decoder;
 use victory_metal_proto::types::{BarrierClass, BindPoint, RootParamKind, format};
 
 use super::tlab::SlotKind;
-use super::{Pso, RootSig, State, status_of};
+use super::{Pso, PsoBody, RootSig, State, status_of};
 use crate::queue::Queue;
 use crate::record::CommandList;
 
@@ -441,6 +441,10 @@ impl Run<'_> {
         let (list, bound) = self.list()?;
         let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let PsoBody::Compute { pipeline, threads } = &pso.body else {
+            // A dispatch needs a compute pipeline.
+            return Err(Status::INVALID_ARG);
+        };
         // The pipeline was made for one root signature; its argument buffer
         // layout is what the shader reads.
         if !Arc::ptr_eq(&pso.root_sig, &sig) {
@@ -455,7 +459,7 @@ impl Run<'_> {
             list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
         }
         bound.dirty = false;
-        list.dispatch(&pso.pipeline, [c.x, c.y, c.z], pso.threads)
+        list.dispatch(pipeline, [c.x, c.y, c.z], *threads)
             .map_err(|e| status_of(&e))
     }
 
