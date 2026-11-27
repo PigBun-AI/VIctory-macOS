@@ -131,6 +131,9 @@ pub(crate) struct State {
     pub(crate) psos: Table<Arc<Pso>>,
     pub(crate) fences: Table<crate::queue::Fence>,
     pub(crate) queues: Table<crate::queue::Queue>,
+    /// Why the last call refused, for `Executor::last_error` (the wire has
+    /// only a status). Taken by the executor after each call.
+    pub(crate) note: Option<String>,
 }
 
 /// `Error` to the status a `Link` call answers with.
@@ -231,10 +234,17 @@ impl Executor {
             SyncOp::CREATE_COMPUTE_PIPELINE => {
                 typed(args, len, |a| self.create_compute_pipeline(a))
             }
-            op if op.is_known() => match self.with_state(|st| st.call(op, args, len)) {
-                Ok(s) => s,
-                Err(s) => s,
-            },
+            op if op.is_known() => {
+                match self.with_state(|st| (st.call(op, args, len), st.note.take())) {
+                    Ok((s, note)) => {
+                        if let Some(n) = note {
+                            self.note_error(n);
+                        }
+                        s
+                    }
+                    Err(s) => s,
+                }
+            }
             op if (victory_metal_proto::sync::SYNC_RESERVED_START
                 ..=victory_metal_proto::sync::SYNC_RESERVED_END)
                 .contains(&op.0) =>

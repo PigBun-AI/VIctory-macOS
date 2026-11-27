@@ -70,7 +70,7 @@ modules know nothing of the wire protocol.
 | CREATE_BUFFER / DESTROY_BUFFER | implemented | DEFAULT, UPLOAD, READBACK, SHARED; size 0, WRAPPED, unknown kind, flags → `INVALID_ARG`; destroy is deferred while the GPU may use it |
 | WRAP_MEMORY | implemented | page aligned, mapped (`msync`: a hole → `INVALID_ARG`), `CONFLICT` if a page is behind another buffer |
 | CREATE_DESC_HEAP / DESTROY_DESC_HEAP | implemented for CBV_SRV_UAV and SAMPLER | RTV, DSV → `UNSUPPORTED` (M3); a heap that is not shader visible is a staging heap |
-| WRITE_DESCRIPTOR | partly | NONE, CBV, buffer SRV/UAV (RAW, STRUCTURED) implemented. TYPED, `HAS_COUNTER`, SAMPLER → `UNSUPPORTED` |
+| WRITE_DESCRIPTOR | partly | NONE, CBV, buffer SRV/UAV (RAW, STRUCTURED, TYPED) implemented. `HAS_COUNTER` (M3: append/consume buffers), SAMPLER → `UNSUPPORTED` |
 | COPY_DESCRIPTORS | implemented | same heap kind, memmove semantics |
 | CREATE_ROOT_SIGNATURE / DESTROY_ROOT_SIGNATURE | implemented | layout by the rules below |
 | CREATE_COMPUTE_PIPELINE | **placeholder**: `UNSUPPORTED` | arguments and the root-signature handle are still checked. Pipelines in tests come from `Executor::create_compute_pipeline_from_msl` (not on the wire) |
@@ -124,12 +124,35 @@ inside, no overlap); pipelines made before it keep the old layout and
 `DISPATCH` refuses the mismatch (`INVALID_ARG`). Tested with a constants-first
 layout end to end (`a_reflection_layout_replaces_the_rule_based_one`).
 
+## Typed buffer views
+
+`Buffer<T>` / `RWBuffer<T>` are texture buffers over the `MTLBuffer` (`back/src/typed.rs`,
+`Buffer::texture_view`): a table of 44 DXGI formats (not the three-channel 32-bit ones, typeless,
+depth or block-compressed: `UNSUPPORTED`), `ShaderRead` for a SRV, `ShaderRead | ShaderWrite`
+(+ `ShaderAtomic` for `R32_UINT/SINT`) for a UAV. The descriptor holds the address of the first
+element, the texture's `gpuResourceID`, the length in bytes and the typed flag (checked on the GPU:
+`FirstElement`, `NumElements`, `GetDimensions`, format conversion, atomics).
+
+* **Alignment.** Metal wants a texture buffer at a multiple of
+  `max(minimumLinearTextureAlignment, minimumTextureBufferAlignment)` (16 bytes for every format of
+  the table on the Apple M5 Max). A smaller offset is not refused by the runtime without the
+  validation layer, but the GPU reads from the aligned address below it, and MSC 4.0.3 does not apply
+  the descriptor's texture-view offset to typed accesses (measured). So a view whose
+  `FirstElement * element size` is not a multiple of the alignment is refused: `UNSUPPORTED`, with
+  the reason in `Executor::last_error`, nothing written. No copy fallback (it would not be the same
+  memory). If a game hits this, the fix is a copy of the range made by the front; decide then.
+* **Lifetime.** Textures are cached per buffer (same format/offset/count/access, same texture), are in
+  the buffer's residency set from creation, and retire with the buffer after the same GPU work
+  (rule 11); a descriptor in a heap owns nothing.
+* A range outside the buffer is `INVALID_ARG`.
+
 ## Known issues
 
 * TLAB layout rules: the two doubts above.
 * DXIL pipelines (MSC) are not wired; so `DISPATCH`'s threads per group have no
   wire source yet (reflection's `numthreads`).
-* Not done: typed buffer views and counters, sampler objects, textures,
+* Not done: buffer counters (`HAS_COUNTER`; M3, needs an `R32Uint` texture buffer over the
+  counter and the `IRRuntimeCreateAppendBufferView` convention), sampler objects, textures,
   RTV/DSV, graphics, indirect dispatch, non-byte fill patterns, labels.
 * One mutex covers a block. A block that has to wait for the GPU (ring or
   command-buffer pool full, up to 10 s then `TIMEOUT`) waits with it held; a

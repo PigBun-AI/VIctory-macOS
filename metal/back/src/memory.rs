@@ -10,7 +10,7 @@
 //! handle retires the resource instead of freeing it; the GPU may still be
 //! reading it (see [`Residency::retire`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
@@ -18,12 +18,16 @@ use std::sync::{Arc, Mutex};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
-use objc2_metal::{MTLAllocation, MTLBuffer, MTLDevice, MTLResource, MTLResourceOptions};
+use objc2_metal::{
+    MTLAllocation, MTLBuffer, MTLDevice, MTLResource, MTLResourceOptions, MTLTexture,
+    MTLTextureDescriptor,
+};
 
 use crate::device::{Device, DeviceInner};
 use crate::error::{Error, Result};
 use crate::pages::Claim;
 use crate::residency::{Retired, SetKind};
+use crate::typed::{self, BufferTextureView, TypedFormat, ViewAccess};
 
 /// What a buffer is for; decides storage and CPU cache mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +104,21 @@ impl Drop for PageGuard {
     }
 }
 
+/// A texture buffer over part of a buffer, by what makes it different.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct ViewKey {
+    pixel: usize,
+    offset: u64,
+    width: u64,
+    access: ViewAccess,
+}
+
+/// A texture buffer of a buffer and the id the descriptors name it by.
+struct TextureView {
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    resource_id: u64,
+}
+
 pub(crate) struct BufferInner {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLBuffer>>,
     device: Arc<DeviceInner>,
@@ -110,6 +129,9 @@ pub(crate) struct BufferInner {
     cpu: Option<NonNull<u8>>,
     pages: Option<PageGuard>,
     managed: bool,
+    /// Texture buffers made over this buffer ([`Buffer::texture_view`]);
+    /// they live and die with it.
+    views: Mutex<HashMap<ViewKey, TextureView>>,
 }
 
 // The Metal buffer is thread-safe; `cpu` is a pointer into its memory that
@@ -133,10 +155,21 @@ impl Drop for BufferInner {
             .pages
             .take()
             .map(|g| Box::new(g) as Box<dyn std::any::Any + Send>);
+        let waits = self.device.in_flight_waits();
+        // The texture buffers go with the buffer, after the same GPU work.
+        let views = std::mem::take(self.views.get_mut().unwrap_or_else(|e| e.into_inner()));
+        for (_, view) in views {
+            self.device.residency.retire(Retired {
+                object: ProtocolObject::from_retained(view.texture),
+                kind: self.set,
+                waits: waits.clone(),
+                keep: None,
+            });
+        }
         self.device.residency.retire(Retired {
             object,
             kind: self.set,
-            waits: self.device.in_flight_waits(),
+            waits,
             keep,
         });
     }
@@ -236,6 +269,95 @@ impl Buffer {
             std::ptr::copy_nonoverlapping(values.as_ptr().cast::<u8>(), ptr, 4 * values.len())
         };
         Ok(())
+    }
+
+    /// A texture buffer over `elements` elements of `format` starting at byte
+    /// `first_byte`: what a typed buffer view needs (see [`crate::typed`]).
+    ///
+    /// A `first_byte` that is not a multiple of the device's alignment for the
+    /// format is [`Error::Unsupported`] (see [`crate::typed`]). The texture is added to this buffer's
+    /// residency set at once, cached (the same request gives the same
+    /// texture) and retired with the buffer.
+    pub fn texture_view(
+        &self,
+        format: &TypedFormat,
+        first_byte: u64,
+        elements: u64,
+        access: ViewAccess,
+    ) -> Result<BufferTextureView> {
+        let bytes = u64::from(format.bytes);
+        let end = elements
+            .checked_mul(bytes)
+            .and_then(|n| n.checked_add(first_byte));
+        if end.is_none_or(|end| end > self.inner.len) {
+            return Err(Error::BadArgument(format!(
+                "a typed view of {elements} x {bytes} bytes at byte {first_byte} is outside a buffer of {} bytes",
+                self.inner.len
+            )));
+        }
+        let device = &self.inner.device.raw;
+        let alignment = typed::texture_alignment(device, format.pixel);
+        typed::check_view(first_byte, elements, bytes, alignment)?;
+        let key = ViewKey {
+            pixel: format.pixel.0,
+            offset: first_byte,
+            width: elements,
+            access,
+        };
+        let mut views = self.inner.views.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = views.get(&key) {
+            return Ok(BufferTextureView {
+                resource_id: v.resource_id,
+            });
+        }
+        // A texture over a buffer shares its storage mode, cache mode and
+        // hazard tracking: the buffer's own options.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
+                format.pixel,
+                elements as usize,
+                self.inner.raw.resourceOptions(),
+                access.usage(format),
+            )
+        };
+        let texture = self
+            .inner
+            .raw
+            .newTextureWithDescriptor_offset_bytesPerRow(
+                &descriptor,
+                first_byte as usize,
+                (elements * bytes) as usize,
+            )
+            .ok_or_else(|| {
+                Error::Metal(format!(
+                    "texture buffer of {:?} x {} at byte {} of a {}-byte buffer: newTexture returned nil",
+                    format.pixel, elements, first_byte, self.inner.len
+                ))
+            })?;
+        texture.setLabel(Some(&NSString::from_str("victory typed view")));
+        if self.inner.managed {
+            let allocation: &ProtocolObject<dyn MTLAllocation> =
+                ProtocolObject::from_ref(&*texture);
+            self.inner.device.residency.add(self.inner.set, allocation);
+        }
+        let resource_id = typed::resource_id_of(texture.gpuResourceID());
+        views.insert(
+            key,
+            TextureView {
+                texture,
+                resource_id,
+            },
+        );
+        Ok(BufferTextureView { resource_id })
+    }
+
+    /// How many texture buffers this buffer holds (for tests).
+    pub fn texture_view_count(&self) -> usize {
+        self.inner
+            .views
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     fn checked_ptr(&self, offset: u64, len: u64) -> Result<*mut u8> {
@@ -458,6 +580,7 @@ impl Device {
                 cpu,
                 pages,
                 managed,
+                views: Mutex::new(HashMap::new()),
             }),
         })
     }

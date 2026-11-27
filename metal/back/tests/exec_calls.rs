@@ -409,12 +409,39 @@ fn write_descriptor_encodes_views_and_refuses_what_it_cannot() {
         Status::INVALID_ARG
     );
     assert_eq!(write(smp.heap, 0, ViewDesc::null()), Status::OK);
-    // Not done yet: typed views, buffer counters, sampler states.
+    // Typed views are texture buffers (tests/typed_gpu.rs runs them); what
+    // Metal cannot express is refused and says why.
     let typed = ViewDesc::typed(ViewKind::BUFFER_SRV, b.res, format::R32_UINT, 0, 4);
-    assert_eq!(write(heap.heap, 0, typed), Status::UNSUPPORTED);
-    let mut counter = srv(0, 4);
+    assert_eq!(write(heap.heap, 0, typed), Status::OK);
+    assert_eq!(entry(&heap, 0)[0], b.gpu_va);
+    assert_eq!(entry(&heap, 0)[2] & SIZE_MASK, 16);
+    assert_ne!(entry(&heap, 0)[1], 0, "a texture id");
+    let before = entry(&heap, 0);
+    // Format ids Metal has no texture-buffer format for (R32G32B32_FLOAT, UNKNOWN).
+    for f in [6, 0] {
+        let v = ViewDesc::typed(ViewKind::BUFFER_SRV, b.res, f, 0, 4);
+        assert_eq!(write(heap.heap, 0, v), Status::UNSUPPORTED, "format {f}");
+    }
+    // A first element not on the 16-byte alignment of a texture buffer.
+    let v = ViewDesc::typed(ViewKind::BUFFER_UAV, b.res, format::R32_UINT, 1, 4);
+    assert_eq!(write(heap.heap, 0, v), Status::UNSUPPORTED);
+    assert!(
+        fx.executor().last_error().unwrap().contains("alignment"),
+        "{:?}",
+        fx.executor().last_error()
+    );
+    // Out of the buffer: an invalid argument, not a Metal error.
+    let v = ViewDesc::typed(ViewKind::BUFFER_SRV, b.res, format::R32_UINT, 1020, 8);
+    assert_eq!(write(heap.heap, 0, v), Status::INVALID_ARG);
+    assert_eq!(entry(&heap, 0), before, "refused writes leave the slot");
+    // Counters are M3 (append/consume buffers): not in M1's compute set.
+    let mut counter = ViewDesc::structured(ViewKind::BUFFER_UAV, b.res, 16, 0, 4);
     counter.flags = ViewDesc::HAS_COUNTER;
     assert_eq!(write(heap.heap, 0, counter), Status::UNSUPPORTED);
+    // A counter on a SRV is not a thing in the API.
+    let mut counter = srv(0, 4);
+    counter.flags = ViewDesc::HAS_COUNTER;
+    assert_eq!(write(heap.heap, 0, counter), Status::INVALID_ARG);
     let mut sampler = ViewDesc::null();
     sampler.kind = ViewKind::SAMPLER;
     assert_eq!(write(smp.heap, 0, sampler), Status::UNSUPPORTED);

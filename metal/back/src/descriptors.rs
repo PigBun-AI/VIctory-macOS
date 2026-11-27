@@ -49,6 +49,7 @@ use crate::device::Device;
 use crate::error::{Error, Result};
 use crate::memory::{Buffer, BufferKind};
 use crate::residency::SetKind;
+use crate::typed::{TypedFormat, ViewAccess};
 
 /// Bind points of the MSC runtime (`kIR*BindPoint`, runtime header).
 pub mod bind_point {
@@ -288,6 +289,54 @@ impl DescriptorHeap {
             index,
             IrDescriptorTableEntry::buffer(gpu_va, buffer_metadata(size, 0, typed)?),
         )
+    }
+
+    /// Writes a typed buffer view (`Buffer<T>` / `RWBuffer<T>`): `num_elements`
+    /// elements of `format` starting at element `first_element` of `buffer`,
+    /// as MSC reads it: the buffer address, a texture buffer over the same
+    /// bytes ([`Buffer::texture_view`]), the length in bytes and the typed flag.
+    ///
+    /// Errors: not resident, outside the buffer, or a start that is not a
+    /// multiple of the texture-buffer alignment ([`Error::Unsupported`], see
+    /// [`crate::typed`]); nothing is written then.
+    pub fn write_typed_buffer(
+        &self,
+        index: u32,
+        buffer: &Buffer,
+        format: &TypedFormat,
+        first_element: u64,
+        num_elements: u64,
+        access: ViewAccess,
+    ) -> Result<()> {
+        let bytes = u64::from(format.bytes);
+        let (Some(first), Some(size)) = (
+            first_element.checked_mul(bytes),
+            num_elements.checked_mul(bytes),
+        ) else {
+            return Err(Error::BadArgument("typed view range overflows".into()));
+        };
+        self.check_resident(buffer.gpu_va(), 1)?;
+        let view = buffer.texture_view(format, first, num_elements, access)?;
+        self.write(
+            index,
+            IrDescriptorTableEntry {
+                gpu_va: buffer.gpu_va() + first,
+                texture_view_id: view.resource_id,
+                metadata: buffer_metadata(size, 0, true)?,
+            },
+        )
+    }
+
+    fn check_resident(&self, gpu_va: u64, len: u64) -> Result<()> {
+        match self.device.resolve_va(gpu_va, len) {
+            None => Err(Error::NotResident(format!(
+                "no live buffer contains {gpu_va:#x}"
+            ))),
+            Some((_, entry)) if !entry.resident => Err(Error::NotResident(format!(
+                "the buffer behind {gpu_va:#x} is in no residency set"
+            ))),
+            Some(_) => Ok(()),
+        }
     }
 
     /// [`write_buffer_view`](Self::write_buffer_view) for a whole [`Buffer`].

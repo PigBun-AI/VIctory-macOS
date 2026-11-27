@@ -16,6 +16,7 @@ use crate::descriptors::{DescriptorHeap, ENTRY_SIZE, IrDescriptorTableEntry};
 use crate::device::Device;
 use crate::memory::{Buffer, BufferKind as CoreKind};
 use crate::queue::{DeviceStatus, Queue};
+use crate::typed::{ViewAccess, typed_format};
 
 /// Queues one executor makes. Each has a constant ring and command
 /// buffer pool; the number is a guard, not a measured limit.
@@ -43,6 +44,7 @@ impl State {
             psos: Default::default(),
             fences: Default::default(),
             queues: Default::default(),
+            note: None,
         }
     }
 
@@ -266,17 +268,58 @@ impl State {
                 if h.sampler {
                     return Err(Status::INVALID_ARG);
                 }
-                if v.flags & victory_metal_proto::ViewDesc::HAS_COUNTER != 0 {
-                    // The counter is a second buffer MSC reads through its own
-                    // convention; not wired.
+                let uav = v.kind == ViewKind::BUFFER_UAV;
+                let has_counter = v.flags & victory_metal_proto::ViewDesc::HAS_COUNTER != 0;
+                let buffer = self.resources.get(v.resource.0).ok_or(Status::NOT_FOUND)?;
+                if has_counter {
+                    // A counter belongs to a structured (or raw) UAV.
+                    if !uav || v.form == BufferForm::TYPED {
+                        return Err(Status::INVALID_ARG);
+                    }
+                    // M3: append/consume buffers are not in the M1 compute set
+                    // (docs/metal/m1-back.md); the entry needs an R32Uint
+                    // texture buffer over the counter that MSC increments.
+                    self.note = Some(
+                        "WRITE_DESCRIPTOR: UAV counter (HAS_COUNTER) is not implemented".into(),
+                    );
                     return Err(Status::UNSUPPORTED);
                 }
-                let buffer = self.resources.get(v.resource.0).ok_or(Status::NOT_FOUND)?;
+                if v.form == BufferForm::TYPED {
+                    let Some(format) = typed_format(v.format) else {
+                        self.note = Some(format!(
+                            "WRITE_DESCRIPTOR: typed buffer view of format {}: Metal has no texture-buffer pixel format for it",
+                            v.format
+                        ));
+                        return Err(Status::UNSUPPORTED);
+                    };
+                    if v.num_elements == 0 {
+                        return h
+                            .heap
+                            .write(a.index, IrDescriptorTableEntry::default())
+                            .map_err(|e| status_of(&e));
+                    }
+                    let access = if uav {
+                        ViewAccess::ReadWrite
+                    } else {
+                        ViewAccess::Read
+                    };
+                    let r = h.heap.write_typed_buffer(
+                        a.index,
+                        buffer,
+                        &format,
+                        v.first_element,
+                        u64::from(v.num_elements),
+                        access,
+                    );
+                    if let Err(e) = &r {
+                        self.note = Some(format!("WRITE_DESCRIPTOR: typed buffer view: {e}"));
+                    }
+                    return r.map_err(|e| status_of(&e));
+                }
                 let unit = match v.form {
                     BufferForm::RAW => 4,
                     BufferForm::STRUCTURED => u64::from(v.structure_stride),
-                    // Typed views need a texture view of the buffer.
-                    _ => return Err(Status::UNSUPPORTED),
+                    _ => return Err(Status::INVALID_ARG),
                 };
                 if unit == 0 {
                     return Err(Status::INVALID_ARG);
