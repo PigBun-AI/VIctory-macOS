@@ -291,19 +291,16 @@ impl ID3D12Device_Impl for DeviceObj_Impl {
         self.x_GetResourceAllocationInfo(visiblemask, numresourcedescs, presourcedescs)
     }
     fn GetCustomHeapProperties(&self, nodemask: u32, heaptype: D3D12_HEAP_TYPE) -> D3D12_HEAP_PROPERTIES {
-        super::note_notimpl("ID3D12Device::GetCustomHeapProperties");
-        unsafe { core::mem::zeroed() }
+        self.x_GetCustomHeapProperties(nodemask, heaptype)
     }
     fn CreateCommittedResource(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC, initialresourcestate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
         self.x_CreateCommittedResource(pheapproperties, heapflags, pdesc, initialresourcestate, poptimizedclearvalue, riidresource, ppvresource)
     }
     fn CreateHeap(&self, pdesc: *const D3D12_HEAP_DESC, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device::CreateHeap");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreateHeap(pdesc, riid, ppvheap)
     }
     fn CreatePlacedResource(&self, pheap: windows::core::Ref<ID3D12Heap>, heapoffset: u64, pdesc: *const D3D12_RESOURCE_DESC, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device::CreatePlacedResource");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreatePlacedResource(pheap, heapoffset, pdesc, initialstate, poptimizedclearvalue, riid, ppvresource)
     }
     fn CreateReservedResource(&self, pdesc: *const D3D12_RESOURCE_DESC, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
         super::note_notimpl("ID3D12Device::CreateReservedResource");
@@ -702,8 +699,7 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.x_CopyBufferRegion(pdstbuffer, dstoffset, psrcbuffer, srcoffset, numbytes)
     }
     fn CopyTextureRegion(&self, pdst: *const D3D12_TEXTURE_COPY_LOCATION, dstx: u32, dsty: u32, dstz: u32, psrc: *const D3D12_TEXTURE_COPY_LOCATION, psrcbox: *const D3D12_BOX) {
-        super::note_notimpl("ID3D12GraphicsCommandList::CopyTextureRegion");
-        self.unsupported_call();
+        self.x_CopyTextureRegion(pdst, dstx, dsty, dstz, psrc, psrcbox)
     }
     fn CopyResource(&self, pdstresource: windows::core::Ref<ID3D12Resource>, psrcresource: windows::core::Ref<ID3D12Resource>) {
         self.x_CopyResource(pdstresource, psrcresource)
@@ -823,12 +819,10 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.unsupported_call();
     }
     fn ClearUnorderedAccessViewUint(&self, viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE, viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE, presource: windows::core::Ref<ID3D12Resource>, values: *const u32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::ClearUnorderedAccessViewUint");
-        self.unsupported_call();
+        self.x_ClearUnorderedAccessViewUint(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
     }
     fn ClearUnorderedAccessViewFloat(&self, viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE, viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE, presource: windows::core::Ref<ID3D12Resource>, values: *const f32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
-        super::note_notimpl("ID3D12GraphicsCommandList::ClearUnorderedAccessViewFloat");
-        self.unsupported_call();
+        self.x_ClearUnorderedAccessViewFloat(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
     }
     fn DiscardResource(&self, presource: windows::core::Ref<ID3D12Resource>, pregion: *const D3D12_DISCARD_REGION) {
         super::note_notimpl("ID3D12GraphicsCommandList::DiscardResource");
@@ -1065,8 +1059,7 @@ impl ID3D12Resource1_Impl for ResourceObj_Impl {
 
 impl ID3D12Resource2_Impl for ResourceObj_Impl {
     fn GetDesc1(&self) -> D3D12_RESOURCE_DESC1 {
-        super::note_notimpl("ID3D12Resource2::GetDesc1");
-        unsafe { core::mem::zeroed() }
+        self.x_GetDesc1()
     }
 }
 
@@ -1103,6 +1096,36 @@ impl ID3D12DescriptorHeap_Impl for HeapObj_Impl {
     }
     fn GetGPUDescriptorHandleForHeapStart(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
         self.x_GetGPUDescriptorHandleForHeapStart()
+    }
+}
+
+impl ID3D12Object_Impl for MemHeapObj_Impl {
+    fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
+    }
+    fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateData(guid, datasize, pdata)
+    }
+    fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateDataInterface(guid, pdata)
+    }
+    fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        self.private.d3d12_SetName(name)
+    }
+}
+
+impl ID3D12DeviceChild_Impl for MemHeapObj_Impl {
+    fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        super::query_device(&self.device_obj, riid, ppvdevice)
+    }
+}
+
+impl ID3D12Pageable_Impl for MemHeapObj_Impl {
+}
+
+impl ID3D12Heap_Impl for MemHeapObj_Impl {
+    fn GetDesc(&self) -> D3D12_HEAP_DESC {
+        self.x_GetDesc()
     }
 }
 

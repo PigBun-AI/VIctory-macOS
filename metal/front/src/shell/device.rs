@@ -21,7 +21,8 @@ use crate::descriptor::HeapDesc;
 use crate::device as dv;
 use crate::footprint;
 use crate::hresult::Hr;
-use crate::resource::{self, ResourceDesc};
+use crate::resource::{self, HeapProps, ResourceDesc};
+use crate::view::{self, ViewParams};
 
 #[implement(ID3D12Device14)]
 pub struct DeviceObj {
@@ -312,22 +313,24 @@ impl DeviceObj_Impl {
         pdesc: *const D3D12_SHADER_RESOURCE_VIEW_DESC,
         dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        let res = presource
+        let robj = presource
             .as_ref()
-            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
-            .map(|r| r.buffer.res);
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok());
+        let res = robj.as_ref().map(|r| r.resource.res);
         // SAFETY: optional pointer argument.
-        let Some(d) = (unsafe { pdesc.as_ref() }) else {
-            return;
+        let d = unsafe { pdesc.as_ref() };
+        let is_texture_view = match d {
+            Some(d) => d.ViewDimension != D3D12_SRV_DIMENSION_BUFFER,
+            None => robj.as_ref().is_some_and(|r| r.resource.is_texture()),
         };
-        if d.ViewDimension != D3D12_SRV_DIMENSION_BUFFER {
-            // textures: M3
-            super::note_notimpl(&format!(
-                "ID3D12Device::CreateShaderResourceView(view dimension {})",
-                d.ViewDimension.0
-            ));
-            return;
+        if is_texture_view {
+            let r = self.texture_view(dest, robj, false, |rd, id| match d {
+                Some(d) => view::srv(id, rd, &srv_params(d)?),
+                None => Ok(view::default_view(rd, id, false)),
+            });
+            return view_result("CreateShaderResourceView", d.map_or(0, |d| d.Format.0), r);
         }
+        let Some(d) = d else { return };
         // SAFETY: `ViewDimension` says which union member is live.
         let b = unsafe { d.Anonymous.Buffer };
         let r = self.dev.create_buffer_view(
@@ -346,6 +349,24 @@ impl DeviceObj_Impl {
         view_result("CreateShaderResourceView", d.Format.0, r);
     }
 
+    /// Writes a texture view (or a null one when the resource is null).
+    fn texture_view(
+        &self,
+        dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        robj: Option<&ResourceObj_Impl>,
+        uav: bool,
+        make: impl FnOnce(
+            &ResourceDesc,
+            victory_metal_proto::ResId,
+        ) -> crate::hresult::Result<crate::view::TextureView>,
+    ) -> crate::hresult::Result<()> {
+        let v = match robj {
+            Some(r) => make(&r.resource.desc, r.resource.res)?,
+            None => crate::view::TextureView::null(uav),
+        };
+        self.dev.create_texture_view(dest.ptr as u64, &v)
+    }
+
     pub(super) fn x_CreateUnorderedAccessView(
         &self,
         presource: Ref<ID3D12Resource>,
@@ -353,25 +374,28 @@ impl DeviceObj_Impl {
         pdesc: *const D3D12_UNORDERED_ACCESS_VIEW_DESC,
         dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        let res = presource
+        let robj = presource
             .as_ref()
-            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
-            .map(|r| r.buffer.res);
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok());
+        let res = robj.as_ref().map(|r| r.resource.res);
         let counter = pcounterresource
             .as_ref()
             .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
-            .map(|r| r.buffer.res);
+            .map(|r| r.resource.res);
         // SAFETY: optional pointer argument.
-        let Some(d) = (unsafe { pdesc.as_ref() }) else {
-            return;
+        let d = unsafe { pdesc.as_ref() };
+        let is_texture_view = match d {
+            Some(d) => d.ViewDimension != D3D12_UAV_DIMENSION_BUFFER,
+            None => robj.as_ref().is_some_and(|r| r.resource.is_texture()),
         };
-        if d.ViewDimension != D3D12_UAV_DIMENSION_BUFFER {
-            super::note_notimpl(&format!(
-                "ID3D12Device::CreateUnorderedAccessView(view dimension {})",
-                d.ViewDimension.0
-            ));
-            return;
+        if is_texture_view {
+            let r = self.texture_view(dest, robj, true, |rd, id| match d {
+                Some(d) => view::uav(id, rd, &uav_params(d)?),
+                None => Ok(view::default_view(rd, id, true)),
+            });
+            return view_result("CreateUnorderedAccessView", d.map_or(0, |d| d.Format.0), r);
         }
+        let Some(d) = d else { return };
         // SAFETY: `ViewDimension` says which union member is live.
         let b = unsafe { d.Anonymous.Buffer };
         let r = self.dev.create_buffer_view(
@@ -390,21 +414,58 @@ impl DeviceObj_Impl {
         view_result("CreateUnorderedAccessView", d.Format.0, r);
     }
 
+    /// Render targets and depth buffers are records of `(resource, mip,
+    /// slices, format)`: the descriptor heap has no memory on the back.
     pub(super) fn x_CreateRenderTargetView(
         &self,
-        _presource: Ref<ID3D12Resource>,
-        _pdesc: *const D3D12_RENDER_TARGET_VIEW_DESC,
-        _dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        presource: Ref<ID3D12Resource>,
+        pdesc: *const D3D12_RENDER_TARGET_VIEW_DESC,
+        dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        // Render targets are M3; the heap exists, nothing to write yet.
+        let robj = presource
+            .as_ref()
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok());
+        // SAFETY: optional pointer argument.
+        let d = unsafe { pdesc.as_ref() };
+        let tv = robj.as_ref().map(|r| {
+            let (rd, id) = (&r.resource.desc, r.resource.res);
+            match d {
+                Some(d) => rtv_params(d).and_then(|p| view::rtv(id, rd, &p)),
+                None => view::default_target(id, rd, false),
+            }
+        });
+        let r = match tv {
+            Some(Ok(v)) => self.dev.create_target_view(dest.ptr as u64, Some(v)),
+            Some(Err(e)) => Err(e),
+            None => self.dev.create_target_view(dest.ptr as u64, None),
+        };
+        view_result("CreateRenderTargetView", d.map_or(0, |d| d.Format.0), r);
     }
 
     pub(super) fn x_CreateDepthStencilView(
         &self,
-        _presource: Ref<ID3D12Resource>,
-        _pdesc: *const D3D12_DEPTH_STENCIL_VIEW_DESC,
-        _dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        presource: Ref<ID3D12Resource>,
+        pdesc: *const D3D12_DEPTH_STENCIL_VIEW_DESC,
+        dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
+        let robj = presource
+            .as_ref()
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok());
+        // SAFETY: optional pointer argument.
+        let d = unsafe { pdesc.as_ref() };
+        let tv = robj.as_ref().map(|r| {
+            let (rd, id) = (&r.resource.desc, r.resource.res);
+            match d {
+                Some(d) => dsv_params(d).and_then(|p| view::dsv(id, rd, &p)),
+                None => view::default_target(id, rd, true),
+            }
+        });
+        let r = match tv {
+            Some(Ok(v)) => self.dev.create_target_view(dest.ptr as u64, Some(v)),
+            Some(Err(e)) => Err(e),
+            None => self.dev.create_target_view(dest.ptr as u64, None),
+        };
+        view_result("CreateDepthStencilView", d.map_or(0, |d| d.Format.0), r);
     }
 
     pub(super) fn x_CreateSampler(
@@ -504,28 +565,117 @@ impl DeviceObj_Impl {
         numresourcedescs: u32,
         presourcedescs: *const D3D12_RESOURCE_DESC,
     ) -> D3D12_RESOURCE_ALLOCATION_INFO {
-        let mut size = 0u64;
-        for i in 0..numresourcedescs as usize {
+        let descs: Vec<ResourceDesc> = (0..numresourcedescs as usize)
             // SAFETY: the caller's array of descriptions.
-            let d = core_desc(unsafe { &*presourcedescs.add(i) });
-            if !d.is_buffer() {
-                return D3D12_RESOURCE_ALLOCATION_INFO {
-                    SizeInBytes: u64::MAX,
-                    Alignment: 0,
-                }; // textures: M3
+            .map(|i| core_desc(unsafe { &*presourcedescs.add(i) }))
+            .collect();
+        match self.dev.allocation_info(&descs) {
+            Some((size, alignment)) => D3D12_RESOURCE_ALLOCATION_INFO {
+                SizeInBytes: size,
+                Alignment: alignment,
+            },
+            None => D3D12_RESOURCE_ALLOCATION_INFO {
+                SizeInBytes: u64::MAX,
+                Alignment: 0,
+            },
+        }
+    }
+
+    /// Unified memory: `DEFAULT` is private (`NOT_AVAILABLE`), `UPLOAD` and
+    /// `READBACK` are CPU-visible, and there is one pool (`L0`).
+    pub(super) fn x_GetCustomHeapProperties(
+        &self,
+        nodemask: u32,
+        heaptype: D3D12_HEAP_TYPE,
+    ) -> D3D12_HEAP_PROPERTIES {
+        let mask = if nodemask == 0 { 1 } else { nodemask };
+        match resource::custom_heap_properties(heaptype.0 as u32, self.dev.sys.caps.unified_memory)
+        {
+            Ok(p) => D3D12_HEAP_PROPERTIES {
+                Type: D3D12_HEAP_TYPE_CUSTOM,
+                CPUPageProperty: D3D12_CPU_PAGE_PROPERTY(p.cpu_page as i32),
+                MemoryPoolPreference: D3D12_MEMORY_POOL(p.pool as i32),
+                CreationNodeMask: mask,
+                VisibleNodeMask: mask,
+            },
+            Err(_) => D3D12_HEAP_PROPERTIES::default(),
+        }
+    }
+
+    pub(super) fn x_CreateHeap(
+        &self,
+        pdesc: *const D3D12_HEAP_DESC,
+        riid: *const GUID,
+        ppvheap: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        let heap = match self.dev.create_heap(
+            core_props(&d.Properties),
+            d.SizeInBytes,
+            d.Alignment,
+            d.Flags.0 as u32,
+        ) {
+            Ok(h) => Arc::new(h),
+            Err(h) => {
+                return Err(creation_error(
+                    "ID3D12Device::CreateHeap",
+                    d.Properties.Type.0,
+                    h,
+                ));
             }
-            size += d.width.div_ceil(resource::DEFAULT_ALIGNMENT) * resource::DEFAULT_ALIGNMENT;
-        }
-        D3D12_RESOURCE_ALLOCATION_INFO {
-            SizeInBytes: size,
-            Alignment: resource::DEFAULT_ALIGNMENT,
-        }
+        };
+        let h = ComObject::new(MemHeapObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            heap,
+            props: d.Properties,
+            flags: d.Flags,
+        });
+        return_object(&h.to_interface::<IUnknown>(), riid, ppvheap)
+    }
+
+    pub(super) fn x_CreatePlacedResource(
+        &self,
+        pheap: Ref<ID3D12Heap>,
+        heapoffset: u64,
+        pdesc: *const D3D12_RESOURCE_DESC,
+        initialstate: D3D12_RESOURCE_STATES,
+        _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
+        riid: *const GUID,
+        ppvresource: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        let heap = pheap.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let heap = heap.cast_object_ref::<MemHeapObj>()?;
+        let resource = match self.dev.create_placed(
+            &heap.heap,
+            heapoffset,
+            &core_desc(d),
+            initialstate.0 as u32,
+        ) {
+            Ok(r) => r,
+            Err(h) => {
+                return Err(creation_error(
+                    "ID3D12Device::CreatePlacedResource",
+                    d.Dimension.0,
+                    h,
+                ));
+            }
+        };
+        let r = ComObject::new(ResourceObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            heap_props: heap.props,
+            heap_flags: heap.flags,
+            resource,
+        });
+        return_object(&r.to_interface::<IUnknown>(), riid, ppvresource)
     }
 
     pub(super) fn x_CreateCommittedResource(
         &self,
         pheapproperties: *const D3D12_HEAP_PROPERTIES,
-        _heapflags: D3D12_HEAP_FLAGS,
+        heapflags: D3D12_HEAP_FLAGS,
         pdesc: *const D3D12_RESOURCE_DESC,
         initialresourcestate: D3D12_RESOURCE_STATES,
         _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
@@ -534,28 +684,26 @@ impl DeviceObj_Impl {
     ) -> WResult<()> {
         let hp = require(pheapproperties)?;
         let d = require(pdesc)?;
-        let buffer = match self.dev.create_committed_buffer(
-            hp.Type.0 as u32,
+        let resource = match self.dev.create_committed(
+            core_props(hp),
             &core_desc(d),
             initialresourcestate.0 as u32,
         ) {
             Ok(b) => b,
             Err(h) => {
-                if h == Hr::E_NOTIMPL {
-                    // Textures and custom heaps: not built yet (see `note_notimpl`).
-                    super::note_notimpl(&format!(
-                        "ID3D12Device::CreateCommittedResource(dimension {}, heap type {})",
-                        d.Dimension.0, hp.Type.0
-                    ));
-                }
-                return Err(windows::core::Error::from(windows::core::HRESULT(h.0)));
+                return Err(creation_error(
+                    "ID3D12Device::CreateCommittedResource",
+                    d.Dimension.0,
+                    h,
+                ));
             }
         };
         let r = ComObject::new(ResourceObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),
             heap_props: *hp,
-            buffer,
+            heap_flags: heapflags,
+            resource,
         });
         return_object(&r.to_interface::<IUnknown>(), riidresource, ppvresource)
     }
@@ -676,4 +824,190 @@ fn view_result(what: &str, format: i32, r: crate::hresult::Result<()>) {
             eprintln!("victory-metal front: {what} failed: {:#010x}", h.0 as u32);
         }
     }
+}
+
+fn core_props(p: &D3D12_HEAP_PROPERTIES) -> HeapProps {
+    HeapProps {
+        ty: p.Type.0 as u32,
+        cpu_page: p.CPUPageProperty.0 as u32,
+        pool: p.MemoryPoolPreference.0 as u32,
+    }
+}
+
+/// A creation call that failed: say so for what is not built yet (with
+/// `VICTORY_METAL_NOTIMPL_LOG`), and hand the HRESULT back.
+fn creation_error(what: &str, detail: i32, h: Hr) -> windows::core::Error {
+    if h == Hr::E_NOTIMPL {
+        super::note_notimpl(&format!("{what}({detail})"));
+    }
+    windows::core::Error::from(windows::core::HRESULT(h.0))
+}
+
+fn srv_params(d: &D3D12_SHADER_RESOURCE_VIEW_DESC) -> crate::hresult::Result<ViewParams> {
+    let mut p = ViewParams {
+        dimension: d.ViewDimension.0 as u32,
+        format: d.Format.0 as u32,
+        mapping: d.Shader4ComponentMapping,
+        ..Default::default()
+    };
+    // SAFETY: `ViewDimension` says which union member is live.
+    unsafe {
+        match d.ViewDimension {
+            D3D12_SRV_DIMENSION_TEXTURE1D => {
+                let t = d.Anonymous.Texture1D;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURE1DARRAY => {
+                let t = d.Anonymous.Texture1DArray;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+                (p.first_slice, p.slice_count) = (t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2D => {
+                let t = d.Anonymous.Texture2D;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+                p.plane = t.PlaneSlice;
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2DARRAY => {
+                let t = d.Anonymous.Texture2DArray;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+                (p.first_slice, p.slice_count, p.plane) =
+                    (t.FirstArraySlice, t.ArraySize, t.PlaneSlice);
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2DMS => {
+                p.mip_count = 1;
+            }
+            D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY => {
+                let t = d.Anonymous.Texture2DMSArray;
+                (p.first_slice, p.slice_count, p.mip_count) = (t.FirstArraySlice, t.ArraySize, 1);
+            }
+            D3D12_SRV_DIMENSION_TEXTURE3D => {
+                let t = d.Anonymous.Texture3D;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURECUBE => {
+                let t = d.Anonymous.TextureCube;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+            }
+            D3D12_SRV_DIMENSION_TEXTURECUBEARRAY => {
+                let t = d.Anonymous.TextureCubeArray;
+                (p.mip_first, p.mip_count, p.min_lod) =
+                    (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp);
+                (p.first_slice, p.slice_count) = (t.First2DArrayFace, t.NumCubes);
+            }
+            _ => return Err(Hr::E_INVALIDARG),
+        }
+    }
+    Ok(p)
+}
+
+fn uav_params(d: &D3D12_UNORDERED_ACCESS_VIEW_DESC) -> crate::hresult::Result<ViewParams> {
+    let mut p = ViewParams {
+        dimension: d.ViewDimension.0 as u32,
+        format: d.Format.0 as u32,
+        ..Default::default()
+    };
+    // SAFETY: `ViewDimension` says which union member is live.
+    unsafe {
+        match d.ViewDimension {
+            D3D12_UAV_DIMENSION_TEXTURE1D => p.mip_first = d.Anonymous.Texture1D.MipSlice,
+            D3D12_UAV_DIMENSION_TEXTURE1DARRAY => {
+                let t = d.Anonymous.Texture1DArray;
+                (p.mip_first, p.first_slice, p.slice_count) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_UAV_DIMENSION_TEXTURE2D => {
+                let t = d.Anonymous.Texture2D;
+                (p.mip_first, p.plane) = (t.MipSlice, t.PlaneSlice);
+            }
+            D3D12_UAV_DIMENSION_TEXTURE2DARRAY => {
+                let t = d.Anonymous.Texture2DArray;
+                (p.mip_first, p.first_slice, p.slice_count, p.plane) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize, t.PlaneSlice);
+            }
+            D3D12_UAV_DIMENSION_TEXTURE3D => {
+                let t = d.Anonymous.Texture3D;
+                (p.mip_first, p.first_slice, p.slice_count) = (t.MipSlice, t.FirstWSlice, t.WSize);
+            }
+            _ => return Err(Hr::E_INVALIDARG),
+        }
+    }
+    Ok(p)
+}
+
+fn rtv_params(d: &D3D12_RENDER_TARGET_VIEW_DESC) -> crate::hresult::Result<ViewParams> {
+    let mut p = ViewParams {
+        dimension: d.ViewDimension.0 as u32,
+        format: d.Format.0 as u32,
+        ..Default::default()
+    };
+    // SAFETY: `ViewDimension` says which union member is live.
+    unsafe {
+        match d.ViewDimension {
+            D3D12_RTV_DIMENSION_TEXTURE1D => p.mip_first = d.Anonymous.Texture1D.MipSlice,
+            D3D12_RTV_DIMENSION_TEXTURE1DARRAY => {
+                let t = d.Anonymous.Texture1DArray;
+                (p.mip_first, p.first_slice, p.slice_count) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_RTV_DIMENSION_TEXTURE2D => {
+                let t = d.Anonymous.Texture2D;
+                (p.mip_first, p.plane) = (t.MipSlice, t.PlaneSlice);
+            }
+            D3D12_RTV_DIMENSION_TEXTURE2DARRAY => {
+                let t = d.Anonymous.Texture2DArray;
+                (p.mip_first, p.first_slice, p.slice_count, p.plane) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize, t.PlaneSlice);
+            }
+            D3D12_RTV_DIMENSION_TEXTURE2DMS => {}
+            D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY => {
+                let t = d.Anonymous.Texture2DMSArray;
+                (p.first_slice, p.slice_count) = (t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_RTV_DIMENSION_TEXTURE3D => {
+                let t = d.Anonymous.Texture3D;
+                (p.mip_first, p.first_slice, p.slice_count) = (t.MipSlice, t.FirstWSlice, t.WSize);
+            }
+            _ => return Err(Hr::E_INVALIDARG),
+        }
+    }
+    Ok(p)
+}
+
+fn dsv_params(d: &D3D12_DEPTH_STENCIL_VIEW_DESC) -> crate::hresult::Result<ViewParams> {
+    let mut p = ViewParams {
+        dimension: d.ViewDimension.0 as u32,
+        format: d.Format.0 as u32,
+        flags: d.Flags.0 as u32,
+        ..Default::default()
+    };
+    // SAFETY: `ViewDimension` says which union member is live.
+    unsafe {
+        match d.ViewDimension {
+            D3D12_DSV_DIMENSION_TEXTURE1D => p.mip_first = d.Anonymous.Texture1D.MipSlice,
+            D3D12_DSV_DIMENSION_TEXTURE1DARRAY => {
+                let t = d.Anonymous.Texture1DArray;
+                (p.mip_first, p.first_slice, p.slice_count) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_DSV_DIMENSION_TEXTURE2D => p.mip_first = d.Anonymous.Texture2D.MipSlice,
+            D3D12_DSV_DIMENSION_TEXTURE2DARRAY => {
+                let t = d.Anonymous.Texture2DArray;
+                (p.mip_first, p.first_slice, p.slice_count) =
+                    (t.MipSlice, t.FirstArraySlice, t.ArraySize);
+            }
+            D3D12_DSV_DIMENSION_TEXTURE2DMS => {}
+            D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY => {
+                let t = d.Anonymous.Texture2DMSArray;
+                (p.first_slice, p.slice_count) = (t.FirstArraySlice, t.ArraySize);
+            }
+            _ => return Err(Hr::E_INVALIDARG),
+        }
+    }
+    Ok(p)
 }

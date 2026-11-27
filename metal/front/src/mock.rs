@@ -320,7 +320,7 @@ impl State {
         let placed = if a.heap.0 == 0 {
             None
         } else if let Some(h) = self.mem_heaps.get(&a.heap.0) {
-            if h.kind != 0 || a.heap_offset >= h.size || a.heap_offset % PAGE != 0 {
+            if h.kind != 0 || a.heap_offset >= h.size || !a.heap_offset.is_multiple_of(PAGE) {
                 return Status::INVALID_ARG;
             }
             Some((a.heap.0, a.heap_offset))
@@ -370,7 +370,7 @@ impl State {
             return Status::NOT_FOUND;
         };
         if a.size == 0
-            || a.offset % PAGE != 0
+            || !a.offset.is_multiple_of(PAGE)
             || a.offset.checked_add(a.size).is_none_or(|e| e > h.size)
         {
             return Status::INVALID_ARG;

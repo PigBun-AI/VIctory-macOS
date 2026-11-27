@@ -242,7 +242,7 @@ impl Device {
         };
         if size == 0
             || !(alignment == resource::DEFAULT_ALIGNMENT || alignment == resource::MSAA_ALIGNMENT)
-            || size % alignment != 0
+            || !size.is_multiple_of(alignment)
         {
             return Err(Hr::E_INVALIDARG);
         }
@@ -271,7 +271,7 @@ impl Device {
         initial_state: u32,
     ) -> Result<Resource> {
         let desc = resource::validate_committed(heap.props.ty, desc, initial_state)?;
-        if offset % heap.alignment != 0 || offset >= heap.size {
+        if !offset.is_multiple_of(heap.alignment) || offset >= heap.size {
             return Err(Hr::E_INVALIDARG);
         }
         if desc.is_buffer() {
