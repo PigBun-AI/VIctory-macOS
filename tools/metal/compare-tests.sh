@@ -47,6 +47,7 @@ def parse(path):
     cur = None
     in_list, failed_list = False, set()
     unresolved = []
+    pending_last = None
     pending = None  # "test X ... " whose verdict follows output that bypassed the harness
     with open(path, errors="replace") as f:
         for line in f:
@@ -60,6 +61,7 @@ def parse(path):
                 # the verdict follows output that bypassed the harness; if it never
                 # comes on a line of its own, the "failures:" list at the end decides
                 pending = m.group(1)
+                pending_last = pending
                 unresolved.append(pending)
                 continue
             m = line_re.match(line)
@@ -85,8 +87,10 @@ def parse(path):
                 continue
             if cur and why.get(cur, 1) is None and line.strip():
                 why[cur] = line.strip()
-    for n in unresolved:
-        res[n] = "FAILED" if n in failed_list else "ok"
+    # a test binary that died mid-run (abort, crash) leaves its last test without a verdict
+    died = "process didn't exit successfully" in open(path, errors="replace").read()
+    for i, n in enumerate(unresolved):
+        res[n] = "FAILED" if (n in failed_list or (died and n == pending_last)) else "ok"
     return res, why
 
 d_res, d_why = parse(sys.argv[1])
