@@ -108,9 +108,13 @@ default changed (it was "off under Rosetta"): the file is Mac layer, no upstream
 first run found our own `vpmaskmovd` in `safecopy.rs` doing just that. G6 (`b7943221`) put plain `mov`s in
 its place, and with tracking on the loader patches the title's masked stores at load (L1), the 8 extra sites
 of #144 included (log: `masked stores  1242 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
-Runs with tracking on after G6 (3 before the change, the stability series after it, see the report
-`2026-11-27-tracking-report.md`) show no EmulateForward. Off, a world frame copies ~15 GB of title memory
-(~4 s a frame); on, the copies are the changed pages only.
+Evidence (2026-11-27, 15 default-config runs after the change, 10 of them the series with neutral input and
+Enter every 3 s, release exe of commit `4ab34ad8`): no EmulateForward, no title-watchdog crash, no warning or error
+from `titlewrite`, `shadow`, `inplace`, `safecopy` or `watch`; one run lasted 7 minutes into the streaming world
+(~870 frames). The runs that stopped (12 of 15) all stopped on the known D3DMetal `SetRenderVertexBuffers` crash (G7), and
+at the same rate as with tracking off (6 of 7), so tracking does not change it. Off, a world frame copies ~9-13 GB of
+title memory (median 2.9 s a frame over the first 100 world frames); on, ~80 MB (median 0.31 s, p95 0.54 s).
+One title `int3` at `image+0x31f50` (frame 64, intro) was seen once in a diag run; not reproduced (2 more diag runs).
 
 *Why not needed on Windows.* Windows resumes a store that faults partway. On a PC `rosetta()` is false and
 every hook does what it did before.
