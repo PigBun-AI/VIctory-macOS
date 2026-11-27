@@ -7,7 +7,8 @@
 #                          output), SYS32; makes sure the prefix exists; takes a lock on it
 #   metal_overrides d3dmetal|metal     the WINEDLLOVERRIDES value for a backend
 #   metal_install_front    puts our d3d12.dll / dxgi.dll in the prefix's system32 (the
-#                          Wine placeholders are kept as *.metal-orig)
+#                          Wine placeholders are kept as *.metal-orig) and the bridge's
+#                          placeholder victory_metal_bridge.dll (left there afterwards)
 #   metal_restore_front    puts the placeholders back (also what the EXIT trap does)
 #
 # Safety, in the order a mistake would cost:
@@ -42,6 +43,8 @@ metal_wine_init() {
     fi
     METAL_INSTALLED=0
     trap 'metal_cleanup' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # A prefix that does not exist yet is made here, without Mono/Gecko prompts.
     if [ ! -d "$SYS32" ]; then
         WINEDLLOVERRIDES="$METAL_BASE_OVERRIDES" "$WINE" cmd /c exit >/dev/null 2>&1 || true
@@ -80,6 +83,9 @@ metal_install_front() {
         [ -f "$SYS32/$n.dll" ] && mv "$SYS32/$n.dll" "$SYS32/$n.dll.metal-orig"
         cp "$STAGE/front/$n.dll" "$SYS32/$n.dll"
     done
+    # Wine finds a builtin-marked dll by name only when a file of that name exists
+    # in system32 (the real one comes from WINEDLLPATH): the bridge's placeholder.
+    cp "$STAGE/x86_64-windows/victory_metal_bridge.dll" "$SYS32/victory_metal_bridge.dll"
     METAL_INSTALLED=1
 }
 
