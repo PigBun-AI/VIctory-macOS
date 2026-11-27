@@ -961,6 +961,7 @@ extern "system" fn present(
             before_sync();
             crate::capture::dump_targets(frame);
         }
+        crate::capture::trigger::boundary(frame);
     }
     #[cfg(windows)]
     if behind::on() && !this.is_null() {

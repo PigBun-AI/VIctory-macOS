@@ -4,6 +4,7 @@
 //! size. Only in builds with diagnostics.
 
 use std::path::PathBuf;
+pub(crate) mod trigger;
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -14,6 +15,7 @@ pub(crate) fn folder() -> Option<&'static PathBuf> {
     FOLDER
         .get_or_init(|| std::env::var_os("VICTORY_CAPTURE").map(PathBuf::from))
         .as_ref()
+        .or_else(trigger::dir)
 }
 
 /// Frames listed in `VICTORY_CAPTURE_FRAMES` (comma-separated): saved
@@ -47,7 +49,7 @@ pub(crate) fn listed(n: u64) -> bool {
     });
     let first = WORLD.load(std::sync::atomic::Ordering::Relaxed);
     let after = n.wrapping_sub(first);
-    named || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after))
+    trigger::selected(n) || named || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after))
 }
 
 /// With a capture folder, for the frames [`listed`]: `what` is added to
@@ -163,14 +165,15 @@ pub(crate) fn save(n: u64, width: u32, height: u32, pitch: usize, bgra: bool, ro
 /// Saves 8-bit RGBA or BGRA rows as `<name>.png`, at half size.
 fn save_as(name: &str, width: u32, height: u32, pitch: usize, bgra: bool, rows: &[u8]) {
     let Some(folder) = folder() else { return };
-    let (w, h) = ((width / 2).max(1), (height / 2).max(1));
+    let step = width.div_ceil(1024).max(2);
+    let (w, h) = ((width / step).max(1), (height / step).max(1));
     // Filter byte 0 per row, then RGB of every other pixel of every other row.
     let mut raw = Vec::with_capacity((w as usize * 3 + 1) * h as usize);
     for y in 0..h as usize {
         raw.push(0);
-        let row = &rows[(2 * y).min(height as usize - 1) * pitch..];
+        let row = &rows[(step as usize * y).min(height as usize - 1) * pitch..];
         for x in 0..w as usize {
-            let p = &row[(2 * x).min(width as usize - 1) * 4..][..3];
+            let p = &row[(step as usize * x).min(width as usize - 1) * 4..][..3];
             if bgra {
                 raw.extend([p[2], p[1], p[0]]);
             } else {
@@ -358,7 +361,7 @@ static TARGETS: std::sync::Mutex<Vec<(usize, std::sync::Arc<crate::resource::Hos
 
 fn dump_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| folder().is_some() && crate::switch::on("VICTORY_DUMP_TARGETS"))
+    *ON.get_or_init(|| trigger::dir().is_some() || folder().is_some() && crate::switch::on("VICTORY_DUMP_TARGETS"))
 }
 
 /// Notes a title texture the frame being built renders to or writes.
