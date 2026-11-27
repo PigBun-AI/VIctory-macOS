@@ -86,3 +86,11 @@ pub unsafe extern "system" fn D3D12GetInterface(
 ) -> HRESULT {
     e::d3d12_get_interface()
 }
+
+/// Names the call-statistics file by this DLL and writes it when the DLL is
+/// unloaded (`VICTORY_METAL_CALLSTATS`, `victory_metal_front::callstats`).
+#[unsafe(no_mangle)]
+pub extern "system" fn DllMain(_instance: *mut c_void, reason: u32, _reserved: *mut c_void) -> i32 {
+    victory_metal_front::callstats::dll_main("d3d12", reason);
+    1
+}

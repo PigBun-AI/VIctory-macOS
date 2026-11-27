@@ -251,6 +251,7 @@ impl CommandList {
 
     /// `OMSetRenderTargets`. `rts[i]` is the view in slot `i` (None = null).
     pub fn set_render_targets(&mut self, rts: [Option<TargetView>; 8], ds: Option<TargetView>) {
+        crate::callstats::render_targets(rts.iter().flatten().count(), ds.is_some());
         if self.render.rt == rts && self.render.ds == ds {
             return;
         }
@@ -462,6 +463,7 @@ impl CommandList {
     /// `IASetPrimitiveTopology` with a `D3D_PRIMITIVE_TOPOLOGY` number; the
     /// five list and strip kinds exist, the rest is not supported.
     pub fn set_topology(&mut self, d3d: i32) {
+        crate::callstats::topology(d3d);
         let topology = match d3d {
             1 => Topology::POINT_LIST,
             2 => Topology::LINE_LIST,

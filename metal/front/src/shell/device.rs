@@ -295,6 +295,7 @@ impl DeviceObj_Impl {
         pppipelinestate: *mut *mut c_void,
     ) -> WResult<()> {
         let rs = rs.cast_object_ref::<RootSigObj>()?;
+        crate::callstats::pipeline_state(state);
         // SAFETY: the application's input layout (elements and names) is
         // valid for the call.
         let inputs = unsafe { pso::read_input_layout(state.input_layout) }.map_err(refuse)?;

@@ -38,6 +38,7 @@ pub unsafe fn d3d12_create_device(
     riid: *const GUID,
     ppdevice: *mut *mut c_void,
 ) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12CreateDevice");
     code((|| {
         if !adapter.is_null() {
             // Any COM object will do as the adapter the application got from us.
@@ -65,6 +66,7 @@ pub unsafe fn d3d12_serialize_root_signature(
     blob: *mut Option<ID3DBlob>,
     error: *mut Option<ID3DBlob>,
 ) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12SerializeRootSignature");
     if !error.is_null() {
         // SAFETY: writable out pointer.
         unsafe { *error = None };
@@ -90,6 +92,7 @@ pub unsafe fn d3d12_serialize_versioned_root_signature(
     blob: *mut Option<ID3DBlob>,
     error: *mut Option<ID3DBlob>,
 ) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12SerializeVersionedRootSignature");
     if !error.is_null() {
         // SAFETY: writable out pointer.
         unsafe { *error = None };
@@ -125,6 +128,7 @@ pub unsafe fn d3d12_create_root_signature_deserializer(
     riid: *const GUID,
     pp: *mut *mut c_void,
 ) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12CreateRootSignatureDeserializer");
     code((|| {
         let d = parse_blob(src, size)?;
         let obj = ComObject::new(RootSigDeserializerObj {
@@ -143,6 +147,7 @@ pub unsafe fn d3d12_create_versioned_root_signature_deserializer(
     riid: *const GUID,
     pp: *mut *mut c_void,
 ) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12CreateVersionedRootSignatureDeserializer");
     code((|| {
         let d = parse_blob(src, size)?;
         let obj = ComObject::new(VersionedDeserializerObj {
@@ -154,14 +159,17 @@ pub unsafe fn d3d12_create_versioned_root_signature_deserializer(
 }
 
 pub fn d3d12_get_debug_interface() -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12GetDebugInterface");
     SDK_COMPONENT_MISSING
 }
 
 pub fn d3d12_enable_experimental_features(n: u32) -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12EnableExperimentalFeatures");
     if n == 0 { S_OK } else { E_INVALIDARG }
 }
 
 pub fn d3d12_get_interface() -> HRESULT {
+    crate::callstats::call("d3d12.dll::D3D12GetInterface");
     E_NOINTERFACE
 }
 
@@ -172,6 +180,7 @@ pub fn d3d12_get_interface() -> HRESULT {
 /// # Safety
 /// `riid` valid; `pp` writable.
 pub unsafe fn dxgi_create_factory(riid: *const GUID, pp: *mut *mut c_void) -> HRESULT {
+    crate::callstats::call("dxgi.dll::CreateDXGIFactory*");
     if pp.is_null() {
         return E_POINTER;
     }
@@ -184,5 +193,6 @@ pub unsafe fn dxgi_create_factory(riid: *const GUID, pp: *mut *mut c_void) -> HR
 }
 
 pub fn dxgi_get_debug_interface() -> HRESULT {
+    crate::callstats::call("dxgi.dll::DXGIGetDebugInterface1");
     SDK_COMPONENT_MISSING
 }

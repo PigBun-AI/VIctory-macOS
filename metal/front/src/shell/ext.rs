@@ -95,6 +95,7 @@ impl ListObj_Impl {
         r#type: D3D12_QUERY_TYPE,
         index: u32,
     ) {
+        crate::callstats::query_op("end", r#type.0);
         let mut l = self.list.lock().unwrap();
         match pqueryheap
             .as_ref()
@@ -116,6 +117,7 @@ impl ListObj_Impl {
         pdestinationbuffer: Ref<ID3D12Resource>,
         aligneddestinationbufferoffset: u64,
     ) {
+        crate::callstats::query_op("resolve", r#type.0);
         let mut l = self.list.lock().unwrap();
         let heap = pqueryheap
             .as_ref()

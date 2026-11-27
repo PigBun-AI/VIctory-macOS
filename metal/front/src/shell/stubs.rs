@@ -17,15 +17,19 @@ use super::swapchain::*;
 
 impl IDXGIObject_Impl for FactoryObj_Impl {
     fn SetPrivateData(&self, name: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateData");
         self.private.dxgi_SetPrivateData(name, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, name: *const windows::core::GUID, punknown: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateDataInterface");
         self.private.dxgi_SetPrivateDataInterface(name, punknown)
     }
     fn GetPrivateData(&self, name: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetPrivateData");
         self.private.dxgi_GetPrivateData(name, pdatasize, pdata)
     }
     fn GetParent(&self, riid: *const windows::core::GUID, ppparent: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetParent");
         super::note_notimpl("IDXGIObject::GetParent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -33,18 +37,23 @@ impl IDXGIObject_Impl for FactoryObj_Impl {
 
 impl IDXGIFactory_Impl for FactoryObj_Impl {
     fn EnumAdapters(&self, adapter: u32) -> windows::core::Result<IDXGIAdapter> {
+        crate::callstats::call("IDXGIFactory::EnumAdapters");
         self.x_EnumAdapters(adapter)
     }
     fn MakeWindowAssociation(&self, windowhandle: windows::Win32::Foundation::HWND, flags: DXGI_MWA_FLAGS) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory::MakeWindowAssociation");
         self.x_MakeWindowAssociation(windowhandle, flags)
     }
     fn GetWindowAssociation(&self) -> windows::core::Result<windows::Win32::Foundation::HWND> {
+        crate::callstats::call("IDXGIFactory::GetWindowAssociation");
         self.x_GetWindowAssociation()
     }
     fn CreateSwapChain(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, pdesc: *const DXGI_SWAP_CHAIN_DESC, ppswapchain: windows::core::OutRef<IDXGISwapChain>) -> windows::core::HRESULT {
+        crate::callstats::call("IDXGIFactory::CreateSwapChain");
         self.x_CreateSwapChain(pdevice, pdesc, ppswapchain)
     }
     fn CreateSoftwareAdapter(&self, module: windows::Win32::Foundation::HMODULE) -> windows::core::Result<IDXGIAdapter> {
+        crate::callstats::call("IDXGIFactory::CreateSoftwareAdapter");
         super::note_notimpl("IDXGIFactory::CreateSoftwareAdapter");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -52,54 +61,67 @@ impl IDXGIFactory_Impl for FactoryObj_Impl {
 
 impl IDXGIFactory1_Impl for FactoryObj_Impl {
     fn EnumAdapters1(&self, adapter: u32) -> windows::core::Result<IDXGIAdapter1> {
+        crate::callstats::call("IDXGIFactory1::EnumAdapters1");
         self.x_EnumAdapters1(adapter)
     }
     fn IsCurrent(&self) -> windows::core::BOOL {
+        crate::callstats::call("IDXGIFactory1::IsCurrent");
         self.x_IsCurrent()
     }
 }
 
 impl IDXGIFactory2_Impl for FactoryObj_Impl {
     fn IsWindowedStereoEnabled(&self) -> windows::core::BOOL {
+        crate::callstats::call("IDXGIFactory2::IsWindowedStereoEnabled");
         super::note_notimpl("IDXGIFactory2::IsWindowedStereoEnabled");
         unsafe { core::mem::zeroed() }
     }
     fn CreateSwapChainForHwnd(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, hwnd: windows::Win32::Foundation::HWND, pdesc: *const DXGI_SWAP_CHAIN_DESC1, pfullscreendesc: *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC, prestricttooutput: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<IDXGISwapChain1> {
+        crate::callstats::call("IDXGIFactory2::CreateSwapChainForHwnd");
         self.x_CreateSwapChainForHwnd(pdevice, hwnd, pdesc, pfullscreendesc, prestricttooutput)
     }
     fn CreateSwapChainForCoreWindow(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, pwindow: windows::core::Ref<windows::core::IUnknown>, pdesc: *const DXGI_SWAP_CHAIN_DESC1, prestricttooutput: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<IDXGISwapChain1> {
+        crate::callstats::call("IDXGIFactory2::CreateSwapChainForCoreWindow");
         super::note_notimpl("IDXGIFactory2::CreateSwapChainForCoreWindow");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetSharedResourceAdapterLuid(&self, hresource: windows::Win32::Foundation::HANDLE) -> windows::core::Result<windows::Win32::Foundation::LUID> {
+        crate::callstats::call("IDXGIFactory2::GetSharedResourceAdapterLuid");
         super::note_notimpl("IDXGIFactory2::GetSharedResourceAdapterLuid");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn RegisterStereoStatusWindow(&self, windowhandle: windows::Win32::Foundation::HWND, wmsg: u32) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIFactory2::RegisterStereoStatusWindow");
         super::note_notimpl("IDXGIFactory2::RegisterStereoStatusWindow");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn RegisterStereoStatusEvent(&self, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIFactory2::RegisterStereoStatusEvent");
         super::note_notimpl("IDXGIFactory2::RegisterStereoStatusEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn UnregisterStereoStatus(&self, dwcookie: u32) {
+        crate::callstats::call("IDXGIFactory2::UnregisterStereoStatus");
         super::note_notimpl("IDXGIFactory2::UnregisterStereoStatus");
         
     }
     fn RegisterOcclusionStatusWindow(&self, windowhandle: windows::Win32::Foundation::HWND, wmsg: u32) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIFactory2::RegisterOcclusionStatusWindow");
         super::note_notimpl("IDXGIFactory2::RegisterOcclusionStatusWindow");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn RegisterOcclusionStatusEvent(&self, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIFactory2::RegisterOcclusionStatusEvent");
         super::note_notimpl("IDXGIFactory2::RegisterOcclusionStatusEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn UnregisterOcclusionStatus(&self, dwcookie: u32) {
+        crate::callstats::call("IDXGIFactory2::UnregisterOcclusionStatus");
         super::note_notimpl("IDXGIFactory2::UnregisterOcclusionStatus");
         
     }
     fn CreateSwapChainForComposition(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, pdesc: *const DXGI_SWAP_CHAIN_DESC1, prestricttooutput: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<IDXGISwapChain1> {
+        crate::callstats::call("IDXGIFactory2::CreateSwapChainForComposition");
         super::note_notimpl("IDXGIFactory2::CreateSwapChainForComposition");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -107,6 +129,7 @@ impl IDXGIFactory2_Impl for FactoryObj_Impl {
 
 impl IDXGIFactory3_Impl for FactoryObj_Impl {
     fn GetCreationFlags(&self) -> DXGI_CREATE_FACTORY_FLAGS {
+        crate::callstats::call("IDXGIFactory3::GetCreationFlags");
         super::note_notimpl("IDXGIFactory3::GetCreationFlags");
         unsafe { core::mem::zeroed() }
     }
@@ -114,15 +137,18 @@ impl IDXGIFactory3_Impl for FactoryObj_Impl {
 
 impl IDXGIFactory4_Impl for FactoryObj_Impl {
     fn EnumAdapterByLuid(&self, adapterluid: &windows::Win32::Foundation::LUID, riid: *const windows::core::GUID, ppvadapter: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory4::EnumAdapterByLuid");
         self.x_EnumAdapterByLuid(adapterluid, riid, ppvadapter)
     }
     fn EnumWarpAdapter(&self, riid: *const windows::core::GUID, ppvadapter: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory4::EnumWarpAdapter");
         self.x_EnumWarpAdapter(riid, ppvadapter)
     }
 }
 
 impl IDXGIFactory5_Impl for FactoryObj_Impl {
     fn CheckFeatureSupport(&self, feature: DXGI_FEATURE, pfeaturesupportdata: *mut core::ffi::c_void, featuresupportdatasize: u32) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory5::CheckFeatureSupport");
         super::note_notimpl("IDXGIFactory5::CheckFeatureSupport");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -130,16 +156,19 @@ impl IDXGIFactory5_Impl for FactoryObj_Impl {
 
 impl IDXGIFactory6_Impl for FactoryObj_Impl {
     fn EnumAdapterByGpuPreference(&self, adapter: u32, gpupreference: DXGI_GPU_PREFERENCE, riid: *const windows::core::GUID, ppvadapter: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory6::EnumAdapterByGpuPreference");
         self.x_EnumAdapterByGpuPreference(adapter, gpupreference, riid, ppvadapter)
     }
 }
 
 impl IDXGIFactory7_Impl for FactoryObj_Impl {
     fn RegisterAdaptersChangedEvent(&self, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIFactory7::RegisterAdaptersChangedEvent");
         super::note_notimpl("IDXGIFactory7::RegisterAdaptersChangedEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn UnregisterAdaptersChangedEvent(&self, dwcookie: u32) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIFactory7::UnregisterAdaptersChangedEvent");
         super::note_notimpl("IDXGIFactory7::UnregisterAdaptersChangedEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -147,27 +176,34 @@ impl IDXGIFactory7_Impl for FactoryObj_Impl {
 
 impl IDXGIObject_Impl for AdapterObj_Impl {
     fn SetPrivateData(&self, name: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateData");
         self.private.dxgi_SetPrivateData(name, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, name: *const windows::core::GUID, punknown: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateDataInterface");
         self.private.dxgi_SetPrivateDataInterface(name, punknown)
     }
     fn GetPrivateData(&self, name: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetPrivateData");
         self.private.dxgi_GetPrivateData(name, pdatasize, pdata)
     }
     fn GetParent(&self, riid: *const windows::core::GUID, ppparent: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetParent");
         self.x_GetParent(riid, ppparent)
     }
 }
 
 impl IDXGIAdapter_Impl for AdapterObj_Impl {
     fn EnumOutputs(&self, output: u32) -> windows::core::Result<IDXGIOutput> {
+        crate::callstats::call("IDXGIAdapter::EnumOutputs");
         self.x_EnumOutputs(output)
     }
     fn GetDesc(&self) -> windows::core::Result<DXGI_ADAPTER_DESC> {
+        crate::callstats::call("IDXGIAdapter::GetDesc");
         self.x_GetDesc()
     }
     fn CheckInterfaceSupport(&self, interfacename: *const windows::core::GUID) -> windows::core::Result<i64> {
+        crate::callstats::call("IDXGIAdapter::CheckInterfaceSupport");
         super::note_notimpl("IDXGIAdapter::CheckInterfaceSupport");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -175,12 +211,14 @@ impl IDXGIAdapter_Impl for AdapterObj_Impl {
 
 impl IDXGIAdapter1_Impl for AdapterObj_Impl {
     fn GetDesc1(&self) -> windows::core::Result<DXGI_ADAPTER_DESC1> {
+        crate::callstats::call("IDXGIAdapter1::GetDesc1");
         self.x_GetDesc1()
     }
 }
 
 impl IDXGIAdapter2_Impl for AdapterObj_Impl {
     fn GetDesc2(&self) -> windows::core::Result<DXGI_ADAPTER_DESC2> {
+        crate::callstats::call("IDXGIAdapter2::GetDesc2");
         super::note_notimpl("IDXGIAdapter2::GetDesc2");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -188,24 +226,30 @@ impl IDXGIAdapter2_Impl for AdapterObj_Impl {
 
 impl IDXGIAdapter3_Impl for AdapterObj_Impl {
     fn RegisterHardwareContentProtectionTeardownStatusEvent(&self, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIAdapter3::RegisterHardwareContentProtectionTeardownStatusEvent");
         super::note_notimpl("IDXGIAdapter3::RegisterHardwareContentProtectionTeardownStatusEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn UnregisterHardwareContentProtectionTeardownStatus(&self, dwcookie: u32) {
+        crate::callstats::call("IDXGIAdapter3::UnregisterHardwareContentProtectionTeardownStatus");
         super::note_notimpl("IDXGIAdapter3::UnregisterHardwareContentProtectionTeardownStatus");
         
     }
     fn QueryVideoMemoryInfo(&self, nodeindex: u32, memorysegmentgroup: DXGI_MEMORY_SEGMENT_GROUP, pvideomemoryinfo: *mut DXGI_QUERY_VIDEO_MEMORY_INFO) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIAdapter3::QueryVideoMemoryInfo");
         self.x_QueryVideoMemoryInfo(nodeindex, memorysegmentgroup, pvideomemoryinfo)
     }
     fn SetVideoMemoryReservation(&self, nodeindex: u32, memorysegmentgroup: DXGI_MEMORY_SEGMENT_GROUP, reservation: u64) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIAdapter3::SetVideoMemoryReservation");
         self.x_SetVideoMemoryReservation(nodeindex, memorysegmentgroup, reservation)
     }
     fn RegisterVideoMemoryBudgetChangeNotificationEvent(&self, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGIAdapter3::RegisterVideoMemoryBudgetChangeNotificationEvent");
         super::note_notimpl("IDXGIAdapter3::RegisterVideoMemoryBudgetChangeNotificationEvent");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn UnregisterVideoMemoryBudgetChangeNotification(&self, dwcookie: u32) {
+        crate::callstats::call("IDXGIAdapter3::UnregisterVideoMemoryBudgetChangeNotification");
         super::note_notimpl("IDXGIAdapter3::UnregisterVideoMemoryBudgetChangeNotification");
         
     }
@@ -213,104 +257,131 @@ impl IDXGIAdapter3_Impl for AdapterObj_Impl {
 
 impl IDXGIAdapter4_Impl for AdapterObj_Impl {
     fn GetDesc3(&self) -> windows::core::Result<DXGI_ADAPTER_DESC3> {
+        crate::callstats::call("IDXGIAdapter4::GetDesc3");
         self.x_GetDesc3()
     }
 }
 
 impl IDXGIObject_Impl for SwapChainObj_Impl {
     fn SetPrivateData(&self, name: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateData");
         self.private.dxgi_SetPrivateData(name, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, name: *const windows::core::GUID, punknown: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::SetPrivateDataInterface");
         self.private.dxgi_SetPrivateDataInterface(name, punknown)
     }
     fn GetPrivateData(&self, name: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetPrivateData");
         self.private.dxgi_GetPrivateData(name, pdatasize, pdata)
     }
     fn GetParent(&self, riid: *const windows::core::GUID, ppparent: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIObject::GetParent");
         self.x_GetParent(riid, ppparent)
     }
 }
 
 impl IDXGIDeviceSubObject_Impl for SwapChainObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGIDeviceSubObject::GetDevice");
         self.x_GetDevice(riid, ppdevice)
     }
 }
 
 impl IDXGISwapChain_Impl for SwapChainObj_Impl {
     fn Present(&self, syncinterval: u32, flags: DXGI_PRESENT) -> windows::core::HRESULT {
+        crate::callstats::call("IDXGISwapChain::Present");
         self.x_Present(syncinterval, flags)
     }
     fn GetBuffer(&self, buffer: u32, riid: *const windows::core::GUID, ppsurface: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::GetBuffer");
         self.x_GetBuffer(buffer, riid, ppsurface)
     }
     fn SetFullscreenState(&self, fullscreen: windows::core::BOOL, ptarget: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::SetFullscreenState");
         self.x_SetFullscreenState(fullscreen, ptarget)
     }
     fn GetFullscreenState(&self, pfullscreen: *mut windows::core::BOOL, pptarget: windows::core::OutRef<IDXGIOutput>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::GetFullscreenState");
         self.x_GetFullscreenState(pfullscreen, pptarget)
     }
     fn GetDesc(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_DESC> {
+        crate::callstats::call("IDXGISwapChain::GetDesc");
         self.x_GetDesc()
     }
     fn ResizeBuffers(&self, buffercount: u32, width: u32, height: u32, newformat: Common::DXGI_FORMAT, swapchainflags: &DXGI_SWAP_CHAIN_FLAG) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::ResizeBuffers");
         self.x_ResizeBuffers(buffercount, width, height, newformat, swapchainflags)
     }
     fn ResizeTarget(&self, pnewtargetparameters: *const Common::DXGI_MODE_DESC) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::ResizeTarget");
         self.x_ResizeTarget(pnewtargetparameters)
     }
     fn GetContainingOutput(&self) -> windows::core::Result<IDXGIOutput> {
+        crate::callstats::call("IDXGISwapChain::GetContainingOutput");
         super::note_notimpl("IDXGISwapChain::GetContainingOutput");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetFrameStatistics(&self, pstats: *mut DXGI_FRAME_STATISTICS) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain::GetFrameStatistics");
         super::note_notimpl("IDXGISwapChain::GetFrameStatistics");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetLastPresentCount(&self) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGISwapChain::GetLastPresentCount");
         self.x_GetLastPresentCount()
     }
 }
 
 impl IDXGISwapChain1_Impl for SwapChainObj_Impl {
     fn GetDesc1(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_DESC1> {
+        crate::callstats::call("IDXGISwapChain1::GetDesc1");
         self.x_GetDesc1()
     }
     fn GetFullscreenDesc(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_FULLSCREEN_DESC> {
+        crate::callstats::call("IDXGISwapChain1::GetFullscreenDesc");
         self.x_GetFullscreenDesc()
     }
     fn GetHwnd(&self) -> windows::core::Result<windows::Win32::Foundation::HWND> {
+        crate::callstats::call("IDXGISwapChain1::GetHwnd");
         self.x_GetHwnd()
     }
     fn GetCoreWindow(&self, refiid: *const windows::core::GUID, ppunk: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain1::GetCoreWindow");
         super::note_notimpl("IDXGISwapChain1::GetCoreWindow");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn Present1(&self, syncinterval: u32, presentflags: DXGI_PRESENT, ppresentparameters: *const DXGI_PRESENT_PARAMETERS) -> windows::core::HRESULT {
+        crate::callstats::call("IDXGISwapChain1::Present1");
         self.x_Present1(syncinterval, presentflags, ppresentparameters)
     }
     fn IsTemporaryMonoSupported(&self) -> windows::core::BOOL {
+        crate::callstats::call("IDXGISwapChain1::IsTemporaryMonoSupported");
         super::note_notimpl("IDXGISwapChain1::IsTemporaryMonoSupported");
         unsafe { core::mem::zeroed() }
     }
     fn GetRestrictToOutput(&self) -> windows::core::Result<IDXGIOutput> {
+        crate::callstats::call("IDXGISwapChain1::GetRestrictToOutput");
         super::note_notimpl("IDXGISwapChain1::GetRestrictToOutput");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn SetBackgroundColor(&self, pcolor: *const DXGI_RGBA) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain1::SetBackgroundColor");
         super::note_notimpl("IDXGISwapChain1::SetBackgroundColor");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetBackgroundColor(&self) -> windows::core::Result<DXGI_RGBA> {
+        crate::callstats::call("IDXGISwapChain1::GetBackgroundColor");
         super::note_notimpl("IDXGISwapChain1::GetBackgroundColor");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn SetRotation(&self, rotation: Common::DXGI_MODE_ROTATION) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain1::SetRotation");
         super::note_notimpl("IDXGISwapChain1::SetRotation");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetRotation(&self) -> windows::core::Result<Common::DXGI_MODE_ROTATION> {
+        crate::callstats::call("IDXGISwapChain1::GetRotation");
         super::note_notimpl("IDXGISwapChain1::GetRotation");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -318,27 +389,34 @@ impl IDXGISwapChain1_Impl for SwapChainObj_Impl {
 
 impl IDXGISwapChain2_Impl for SwapChainObj_Impl {
     fn SetSourceSize(&self, width: u32, height: u32) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain2::SetSourceSize");
         super::note_notimpl("IDXGISwapChain2::SetSourceSize");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetSourceSize(&self, pwidth: *mut u32, pheight: *mut u32) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain2::GetSourceSize");
         super::note_notimpl("IDXGISwapChain2::GetSourceSize");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn SetMaximumFrameLatency(&self, maxlatency: u32) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain2::SetMaximumFrameLatency");
         self.x_SetMaximumFrameLatency(maxlatency)
     }
     fn GetMaximumFrameLatency(&self) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGISwapChain2::GetMaximumFrameLatency");
         self.x_GetMaximumFrameLatency()
     }
     fn GetFrameLatencyWaitableObject(&self) -> windows::Win32::Foundation::HANDLE {
+        crate::callstats::call("IDXGISwapChain2::GetFrameLatencyWaitableObject");
         self.x_GetFrameLatencyWaitableObject()
     }
     fn SetMatrixTransform(&self, pmatrix: *const DXGI_MATRIX_3X2_F) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain2::SetMatrixTransform");
         super::note_notimpl("IDXGISwapChain2::SetMatrixTransform");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetMatrixTransform(&self, pmatrix: *mut DXGI_MATRIX_3X2_F) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain2::GetMatrixTransform");
         super::note_notimpl("IDXGISwapChain2::GetMatrixTransform");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -346,17 +424,21 @@ impl IDXGISwapChain2_Impl for SwapChainObj_Impl {
 
 impl IDXGISwapChain3_Impl for SwapChainObj_Impl {
     fn GetCurrentBackBufferIndex(&self) -> u32 {
+        crate::callstats::call("IDXGISwapChain3::GetCurrentBackBufferIndex");
         self.x_GetCurrentBackBufferIndex()
     }
     fn CheckColorSpaceSupport(&self, colorspace: Common::DXGI_COLOR_SPACE_TYPE) -> windows::core::Result<u32> {
+        crate::callstats::call("IDXGISwapChain3::CheckColorSpaceSupport");
         super::note_notimpl("IDXGISwapChain3::CheckColorSpaceSupport");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn SetColorSpace1(&self, colorspace: Common::DXGI_COLOR_SPACE_TYPE) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain3::SetColorSpace1");
         super::note_notimpl("IDXGISwapChain3::SetColorSpace1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn ResizeBuffers1(&self, buffercount: u32, width: u32, height: u32, format: Common::DXGI_FORMAT, swapchainflags: &DXGI_SWAP_CHAIN_FLAG, pcreationnodemask: *const u32, pppresentqueue: *const Option<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain3::ResizeBuffers1");
         super::note_notimpl("IDXGISwapChain3::ResizeBuffers1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -364,6 +446,7 @@ impl IDXGISwapChain3_Impl for SwapChainObj_Impl {
 
 impl IDXGISwapChain4_Impl for SwapChainObj_Impl {
     fn SetHDRMetaData(&self, r#type: DXGI_HDR_METADATA_TYPE, size: u32, pmetadata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("IDXGISwapChain4::SetHDRMetaData");
         super::note_notimpl("IDXGISwapChain4::SetHDRMetaData");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -371,147 +454,191 @@ impl IDXGISwapChain4_Impl for SwapChainObj_Impl {
 
 impl ID3D12Object_Impl for DeviceObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12Device_Impl for DeviceObj_Impl {
     fn GetNodeCount(&self) -> u32 {
+        crate::callstats::call("ID3D12Device::GetNodeCount");
         self.x_GetNodeCount()
     }
     fn CreateCommandQueue(&self, pdesc: *const D3D12_COMMAND_QUEUE_DESC, riid: *const windows::core::GUID, ppcommandqueue: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateCommandQueue");
         self.x_CreateCommandQueue(pdesc, riid, ppcommandqueue)
     }
     fn CreateCommandAllocator(&self, r#type: D3D12_COMMAND_LIST_TYPE, riid: *const windows::core::GUID, ppcommandallocator: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateCommandAllocator");
         self.x_CreateCommandAllocator(r#type, riid, ppcommandallocator)
     }
     fn CreateGraphicsPipelineState(&self, pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateGraphicsPipelineState");
         self.x_CreateGraphicsPipelineState(pdesc, riid, pppipelinestate)
     }
     fn CreateComputePipelineState(&self, pdesc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateComputePipelineState");
         self.x_CreateComputePipelineState(pdesc, riid, pppipelinestate)
     }
     fn CreateCommandList(&self, nodemask: u32, r#type: D3D12_COMMAND_LIST_TYPE, pcommandallocator: windows::core::Ref<ID3D12CommandAllocator>, pinitialstate: windows::core::Ref<ID3D12PipelineState>, riid: *const windows::core::GUID, ppcommandlist: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateCommandList");
         self.x_CreateCommandList(nodemask, r#type, pcommandallocator, pinitialstate, riid, ppcommandlist)
     }
     fn CheckFeatureSupport(&self, feature: D3D12_FEATURE, pfeaturesupportdata: *mut core::ffi::c_void, featuresupportdatasize: u32) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CheckFeatureSupport");
         self.x_CheckFeatureSupport(feature, pfeaturesupportdata, featuresupportdatasize)
     }
     fn CreateDescriptorHeap(&self, pdescriptorheapdesc: *const D3D12_DESCRIPTOR_HEAP_DESC, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateDescriptorHeap");
         self.x_CreateDescriptorHeap(pdescriptorheapdesc, riid, ppvheap)
     }
     fn GetDescriptorHandleIncrementSize(&self, descriptorheaptype: D3D12_DESCRIPTOR_HEAP_TYPE) -> u32 {
+        crate::callstats::call("ID3D12Device::GetDescriptorHandleIncrementSize");
         self.x_GetDescriptorHandleIncrementSize(descriptorheaptype)
     }
     fn CreateRootSignature(&self, nodemask: u32, pblobwithrootsignature: *const core::ffi::c_void, bloblengthinbytes: usize, riid: *const windows::core::GUID, ppvrootsignature: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateRootSignature");
         self.x_CreateRootSignature(nodemask, pblobwithrootsignature, bloblengthinbytes, riid, ppvrootsignature)
     }
     fn CreateConstantBufferView(&self, pdesc: *const D3D12_CONSTANT_BUFFER_VIEW_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateConstantBufferView");
         self.x_CreateConstantBufferView(pdesc, destdescriptor)
     }
     fn CreateShaderResourceView(&self, presource: windows::core::Ref<ID3D12Resource>, pdesc: *const D3D12_SHADER_RESOURCE_VIEW_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateShaderResourceView");
         self.x_CreateShaderResourceView(presource, pdesc, destdescriptor)
     }
     fn CreateUnorderedAccessView(&self, presource: windows::core::Ref<ID3D12Resource>, pcounterresource: windows::core::Ref<ID3D12Resource>, pdesc: *const D3D12_UNORDERED_ACCESS_VIEW_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateUnorderedAccessView");
         self.x_CreateUnorderedAccessView(presource, pcounterresource, pdesc, destdescriptor)
     }
     fn CreateRenderTargetView(&self, presource: windows::core::Ref<ID3D12Resource>, pdesc: *const D3D12_RENDER_TARGET_VIEW_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateRenderTargetView");
         self.x_CreateRenderTargetView(presource, pdesc, destdescriptor)
     }
     fn CreateDepthStencilView(&self, presource: windows::core::Ref<ID3D12Resource>, pdesc: *const D3D12_DEPTH_STENCIL_VIEW_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateDepthStencilView");
         self.x_CreateDepthStencilView(presource, pdesc, destdescriptor)
     }
     fn CreateSampler(&self, pdesc: *const D3D12_SAMPLER_DESC, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device::CreateSampler");
         self.x_CreateSampler(pdesc, destdescriptor)
     }
     fn CopyDescriptors(&self, numdestdescriptorranges: u32, pdestdescriptorrangestarts: *const D3D12_CPU_DESCRIPTOR_HANDLE, pdestdescriptorrangesizes: *const u32, numsrcdescriptorranges: u32, psrcdescriptorrangestarts: *const D3D12_CPU_DESCRIPTOR_HANDLE, psrcdescriptorrangesizes: *const u32, descriptorheapstype: D3D12_DESCRIPTOR_HEAP_TYPE) {
+        crate::callstats::call("ID3D12Device::CopyDescriptors");
         self.x_CopyDescriptors(numdestdescriptorranges, pdestdescriptorrangestarts, pdestdescriptorrangesizes, numsrcdescriptorranges, psrcdescriptorrangestarts, psrcdescriptorrangesizes, descriptorheapstype)
     }
     fn CopyDescriptorsSimple(&self, numdescriptors: u32, destdescriptorrangestart: &D3D12_CPU_DESCRIPTOR_HANDLE, srcdescriptorrangestart: &D3D12_CPU_DESCRIPTOR_HANDLE, descriptorheapstype: D3D12_DESCRIPTOR_HEAP_TYPE) {
+        crate::callstats::call("ID3D12Device::CopyDescriptorsSimple");
         self.x_CopyDescriptorsSimple(numdescriptors, destdescriptorrangestart, srcdescriptorrangestart, descriptorheapstype)
     }
     fn GetResourceAllocationInfo(&self, visiblemask: u32, numresourcedescs: u32, presourcedescs: *const D3D12_RESOURCE_DESC) -> D3D12_RESOURCE_ALLOCATION_INFO {
+        crate::callstats::call("ID3D12Device::GetResourceAllocationInfo");
         self.x_GetResourceAllocationInfo(visiblemask, numresourcedescs, presourcedescs)
     }
     fn GetCustomHeapProperties(&self, nodemask: u32, heaptype: D3D12_HEAP_TYPE) -> D3D12_HEAP_PROPERTIES {
+        crate::callstats::call("ID3D12Device::GetCustomHeapProperties");
         self.x_GetCustomHeapProperties(nodemask, heaptype)
     }
     fn CreateCommittedResource(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC, initialresourcestate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateCommittedResource");
         self.x_CreateCommittedResource(pheapproperties, heapflags, pdesc, initialresourcestate, poptimizedclearvalue, riidresource, ppvresource)
     }
     fn CreateHeap(&self, pdesc: *const D3D12_HEAP_DESC, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateHeap");
         self.x_CreateHeap(pdesc, riid, ppvheap)
     }
     fn CreatePlacedResource(&self, pheap: windows::core::Ref<ID3D12Heap>, heapoffset: u64, pdesc: *const D3D12_RESOURCE_DESC, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreatePlacedResource");
         self.x_CreatePlacedResource(pheap, heapoffset, pdesc, initialstate, poptimizedclearvalue, riid, ppvresource)
     }
     fn CreateReservedResource(&self, pdesc: *const D3D12_RESOURCE_DESC, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateReservedResource");
         super::note_notimpl("ID3D12Device::CreateReservedResource");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateSharedHandle(&self, pobject: windows::core::Ref<ID3D12DeviceChild>, pattributes: *const windows::Win32::Security::SECURITY_ATTRIBUTES, access: u32, name: &windows::core::PCWSTR) -> windows::core::Result<windows::Win32::Foundation::HANDLE> {
+        crate::callstats::call("ID3D12Device::CreateSharedHandle");
         super::note_notimpl("ID3D12Device::CreateSharedHandle");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn OpenSharedHandle(&self, nthandle: windows::Win32::Foundation::HANDLE, riid: *const windows::core::GUID, ppvobj: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::OpenSharedHandle");
         super::note_notimpl("ID3D12Device::OpenSharedHandle");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn OpenSharedHandleByName(&self, name: &windows::core::PCWSTR, access: u32) -> windows::core::Result<windows::Win32::Foundation::HANDLE> {
+        crate::callstats::call("ID3D12Device::OpenSharedHandleByName");
         super::note_notimpl("ID3D12Device::OpenSharedHandleByName");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn MakeResident(&self, numobjects: u32, ppobjects: *const Option<ID3D12Pageable>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::MakeResident");
         self.x_MakeResident(numobjects, ppobjects)
     }
     fn Evict(&self, numobjects: u32, ppobjects: *const Option<ID3D12Pageable>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::Evict");
         self.x_Evict(numobjects, ppobjects)
     }
     fn CreateFence(&self, initialvalue: u64, flags: D3D12_FENCE_FLAGS, riid: *const windows::core::GUID, ppfence: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateFence");
         self.x_CreateFence(initialvalue, flags, riid, ppfence)
     }
     fn GetDeviceRemovedReason(&self) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::GetDeviceRemovedReason");
         self.x_GetDeviceRemovedReason()
     }
     fn GetCopyableFootprints(&self, presourcedesc: *const D3D12_RESOURCE_DESC, firstsubresource: u32, numsubresources: u32, baseoffset: u64, playouts: *mut D3D12_PLACED_SUBRESOURCE_FOOTPRINT, pnumrows: *mut u32, prowsizeinbytes: *mut u64, ptotalbytes: *mut u64) {
+        crate::callstats::call("ID3D12Device::GetCopyableFootprints");
         self.x_GetCopyableFootprints(presourcedesc, firstsubresource, numsubresources, baseoffset, playouts, pnumrows, prowsizeinbytes, ptotalbytes)
     }
     fn CreateQueryHeap(&self, pdesc: *const D3D12_QUERY_HEAP_DESC, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateQueryHeap");
         self.x_CreateQueryHeap(pdesc, riid, ppvheap)
     }
     fn SetStablePowerState(&self, enable: windows::core::BOOL) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::SetStablePowerState");
         self.x_SetStablePowerState(enable)
     }
     fn CreateCommandSignature(&self, pdesc: *const D3D12_COMMAND_SIGNATURE_DESC, prootsignature: windows::core::Ref<ID3D12RootSignature>, riid: *const windows::core::GUID, ppvcommandsignature: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device::CreateCommandSignature");
         self.x_CreateCommandSignature(pdesc, prootsignature, riid, ppvcommandsignature)
     }
     fn GetResourceTiling(&self, ptiledresource: windows::core::Ref<ID3D12Resource>, pnumtilesforentireresource: *mut u32, ppackedmipdesc: *mut D3D12_PACKED_MIP_INFO, pstandardtileshapefornonpackedmips: *mut D3D12_TILE_SHAPE, pnumsubresourcetilings: *mut u32, firstsubresourcetilingtoget: u32, psubresourcetilingsfornonpackedmips: *mut D3D12_SUBRESOURCE_TILING) {
+        crate::callstats::call("ID3D12Device::GetResourceTiling");
         super::note_notimpl("ID3D12Device::GetResourceTiling");
         
     }
     fn GetAdapterLuid(&self) -> windows::Win32::Foundation::LUID {
+        crate::callstats::call("ID3D12Device::GetAdapterLuid");
         self.x_GetAdapterLuid()
     }
 }
 
 impl ID3D12Device1_Impl for DeviceObj_Impl {
     fn CreatePipelineLibrary(&self, plibraryblob: *const core::ffi::c_void, bloblength: usize, riid: *const windows::core::GUID, pppipelinelibrary: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device1::CreatePipelineLibrary");
         self.x_CreatePipelineLibrary(plibraryblob, bloblength, riid, pppipelinelibrary)
     }
     fn SetEventOnMultipleFenceCompletion(&self, ppfences: *const Option<ID3D12Fence>, pfencevalues: *const u64, numfences: u32, flags: D3D12_MULTIPLE_FENCE_WAIT_FLAGS, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device1::SetEventOnMultipleFenceCompletion");
         super::note_notimpl("ID3D12Device1::SetEventOnMultipleFenceCompletion");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn SetResidencyPriority(&self, numobjects: u32, ppobjects: *const Option<ID3D12Pageable>, ppriorities: *const D3D12_RESIDENCY_PRIORITY) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device1::SetResidencyPriority");
         super::note_notimpl("ID3D12Device1::SetResidencyPriority");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -519,46 +646,56 @@ impl ID3D12Device1_Impl for DeviceObj_Impl {
 
 impl ID3D12Device2_Impl for DeviceObj_Impl {
     fn CreatePipelineState(&self, pdesc: *const D3D12_PIPELINE_STATE_STREAM_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device2::CreatePipelineState");
         self.x_CreatePipelineState(pdesc, riid, pppipelinestate)
     }
 }
 
 impl ID3D12Device3_Impl for DeviceObj_Impl {
     fn OpenExistingHeapFromAddress(&self, paddress: *const core::ffi::c_void, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device3::OpenExistingHeapFromAddress");
         super::note_notimpl("ID3D12Device3::OpenExistingHeapFromAddress");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn OpenExistingHeapFromFileMapping(&self, hfilemapping: windows::Win32::Foundation::HANDLE, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device3::OpenExistingHeapFromFileMapping");
         super::note_notimpl("ID3D12Device3::OpenExistingHeapFromFileMapping");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn EnqueueMakeResident(&self, flags: D3D12_RESIDENCY_FLAGS, numobjects: u32, ppobjects: *const Option<ID3D12Pageable>, pfencetosignal: windows::core::Ref<ID3D12Fence>, fencevaluetosignal: u64) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device3::EnqueueMakeResident");
         self.x_EnqueueMakeResident(flags, numobjects, ppobjects, pfencetosignal, fencevaluetosignal)
     }
 }
 
 impl ID3D12Device4_Impl for DeviceObj_Impl {
     fn CreateCommandList1(&self, nodemask: u32, r#type: D3D12_COMMAND_LIST_TYPE, flags: D3D12_COMMAND_LIST_FLAGS, riid: *const windows::core::GUID, ppcommandlist: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device4::CreateCommandList1");
         super::note_notimpl("ID3D12Device4::CreateCommandList1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateProtectedResourceSession(&self, pdesc: *const D3D12_PROTECTED_RESOURCE_SESSION_DESC, riid: *const windows::core::GUID, ppsession: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device4::CreateProtectedResourceSession");
         super::note_notimpl("ID3D12Device4::CreateProtectedResourceSession");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateCommittedResource1(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC, initialresourcestate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device4::CreateCommittedResource1");
         super::note_notimpl("ID3D12Device4::CreateCommittedResource1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateHeap1(&self, pdesc: *const D3D12_HEAP_DESC, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device4::CreateHeap1");
         super::note_notimpl("ID3D12Device4::CreateHeap1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateReservedResource1(&self, pdesc: *const D3D12_RESOURCE_DESC, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device4::CreateReservedResource1");
         super::note_notimpl("ID3D12Device4::CreateReservedResource1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetResourceAllocationInfo1(&self, visiblemask: u32, numresourcedescs: u32, presourcedescs: *const D3D12_RESOURCE_DESC, presourceallocationinfo1: *mut D3D12_RESOURCE_ALLOCATION_INFO1) -> D3D12_RESOURCE_ALLOCATION_INFO {
+        crate::callstats::call("ID3D12Device4::GetResourceAllocationInfo1");
         super::note_notimpl("ID3D12Device4::GetResourceAllocationInfo1");
         unsafe { core::mem::zeroed() }
     }
@@ -566,34 +703,42 @@ impl ID3D12Device4_Impl for DeviceObj_Impl {
 
 impl ID3D12Device5_Impl for DeviceObj_Impl {
     fn CreateLifetimeTracker(&self, powner: windows::core::Ref<ID3D12LifetimeOwner>, riid: *const windows::core::GUID, ppvtracker: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device5::CreateLifetimeTracker");
         super::note_notimpl("ID3D12Device5::CreateLifetimeTracker");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn RemoveDevice(&self) {
+        crate::callstats::call("ID3D12Device5::RemoveDevice");
         super::note_notimpl("ID3D12Device5::RemoveDevice");
         
     }
     fn EnumerateMetaCommands(&self, pnummetacommands: *mut u32, pdescs: *mut D3D12_META_COMMAND_DESC) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device5::EnumerateMetaCommands");
         super::note_notimpl("ID3D12Device5::EnumerateMetaCommands");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn EnumerateMetaCommandParameters(&self, commandid: *const windows::core::GUID, stage: D3D12_META_COMMAND_PARAMETER_STAGE, ptotalstructuresizeinbytes: *mut u32, pparametercount: *mut u32, pparameterdescs: *mut D3D12_META_COMMAND_PARAMETER_DESC) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device5::EnumerateMetaCommandParameters");
         super::note_notimpl("ID3D12Device5::EnumerateMetaCommandParameters");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateMetaCommand(&self, commandid: *const windows::core::GUID, nodemask: u32, pcreationparametersdata: *const core::ffi::c_void, creationparametersdatasizeinbytes: usize, riid: *const windows::core::GUID, ppmetacommand: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device5::CreateMetaCommand");
         super::note_notimpl("ID3D12Device5::CreateMetaCommand");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateStateObject(&self, pdesc: *const D3D12_STATE_OBJECT_DESC, riid: *const windows::core::GUID, ppstateobject: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device5::CreateStateObject");
         super::note_notimpl("ID3D12Device5::CreateStateObject");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetRaytracingAccelerationStructurePrebuildInfo(&self, pdesc: *const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS, pinfo: *mut D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO) {
+        crate::callstats::call("ID3D12Device5::GetRaytracingAccelerationStructurePrebuildInfo");
         super::note_notimpl("ID3D12Device5::GetRaytracingAccelerationStructurePrebuildInfo");
         
     }
     fn CheckDriverMatchingIdentifier(&self, serializeddatatype: D3D12_SERIALIZED_DATA_TYPE, pidentifiertocheck: *const D3D12_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER) -> D3D12_DRIVER_MATCHING_IDENTIFIER_STATUS {
+        crate::callstats::call("ID3D12Device5::CheckDriverMatchingIdentifier");
         super::note_notimpl("ID3D12Device5::CheckDriverMatchingIdentifier");
         unsafe { core::mem::zeroed() }
     }
@@ -601,16 +746,19 @@ impl ID3D12Device5_Impl for DeviceObj_Impl {
 
 impl ID3D12Device6_Impl for DeviceObj_Impl {
     fn SetBackgroundProcessingMode(&self, mode: D3D12_BACKGROUND_PROCESSING_MODE, measurementsaction: D3D12_MEASUREMENTS_ACTION, heventtosignaluponcompletion: windows::Win32::Foundation::HANDLE, pbfurthermeasurementsdesired: *mut windows::core::BOOL) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device6::SetBackgroundProcessingMode");
         self.x_SetBackgroundProcessingMode(mode, measurementsaction, heventtosignaluponcompletion, pbfurthermeasurementsdesired)
     }
 }
 
 impl ID3D12Device7_Impl for DeviceObj_Impl {
     fn AddToStateObject(&self, paddition: *const D3D12_STATE_OBJECT_DESC, pstateobjecttogrowfrom: windows::core::Ref<ID3D12StateObject>, riid: *const windows::core::GUID, ppnewstateobject: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device7::AddToStateObject");
         super::note_notimpl("ID3D12Device7::AddToStateObject");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateProtectedResourceSession1(&self, pdesc: *const D3D12_PROTECTED_RESOURCE_SESSION_DESC1, riid: *const windows::core::GUID, ppsession: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device7::CreateProtectedResourceSession1");
         super::note_notimpl("ID3D12Device7::CreateProtectedResourceSession1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -618,22 +766,27 @@ impl ID3D12Device7_Impl for DeviceObj_Impl {
 
 impl ID3D12Device8_Impl for DeviceObj_Impl {
     fn GetResourceAllocationInfo2(&self, visiblemask: u32, numresourcedescs: u32, presourcedescs: *const D3D12_RESOURCE_DESC1, presourceallocationinfo1: *mut D3D12_RESOURCE_ALLOCATION_INFO1) -> D3D12_RESOURCE_ALLOCATION_INFO {
+        crate::callstats::call("ID3D12Device8::GetResourceAllocationInfo2");
         super::note_notimpl("ID3D12Device8::GetResourceAllocationInfo2");
         unsafe { core::mem::zeroed() }
     }
     fn CreateCommittedResource2(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC1, initialresourcestate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device8::CreateCommittedResource2");
         super::note_notimpl("ID3D12Device8::CreateCommittedResource2");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreatePlacedResource1(&self, pheap: windows::core::Ref<ID3D12Heap>, heapoffset: u64, pdesc: *const D3D12_RESOURCE_DESC1, initialstate: D3D12_RESOURCE_STATES, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device8::CreatePlacedResource1");
         super::note_notimpl("ID3D12Device8::CreatePlacedResource1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateSamplerFeedbackUnorderedAccessView(&self, ptargetedresource: windows::core::Ref<ID3D12Resource>, pfeedbackresource: windows::core::Ref<ID3D12Resource>, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device8::CreateSamplerFeedbackUnorderedAccessView");
         super::note_notimpl("ID3D12Device8::CreateSamplerFeedbackUnorderedAccessView");
         
     }
     fn GetCopyableFootprints1(&self, presourcedesc: *const D3D12_RESOURCE_DESC1, firstsubresource: u32, numsubresources: u32, baseoffset: u64, playouts: *mut D3D12_PLACED_SUBRESOURCE_FOOTPRINT, pnumrows: *mut u32, prowsizeinbytes: *mut u64, ptotalbytes: *mut u64) {
+        crate::callstats::call("ID3D12Device8::GetCopyableFootprints1");
         super::note_notimpl("ID3D12Device8::GetCopyableFootprints1");
         
     }
@@ -641,14 +794,17 @@ impl ID3D12Device8_Impl for DeviceObj_Impl {
 
 impl ID3D12Device9_Impl for DeviceObj_Impl {
     fn CreateShaderCacheSession(&self, pdesc: *const D3D12_SHADER_CACHE_SESSION_DESC, riid: *const windows::core::GUID, ppvsession: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device9::CreateShaderCacheSession");
         super::note_notimpl("ID3D12Device9::CreateShaderCacheSession");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn ShaderCacheControl(&self, kinds: D3D12_SHADER_CACHE_KIND_FLAGS, control: D3D12_SHADER_CACHE_CONTROL_FLAGS) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device9::ShaderCacheControl");
         super::note_notimpl("ID3D12Device9::ShaderCacheControl");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn CreateCommandQueue1(&self, pdesc: *const D3D12_COMMAND_QUEUE_DESC, creatorid: *const windows::core::GUID, riid: *const windows::core::GUID, ppcommandqueue: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device9::CreateCommandQueue1");
         super::note_notimpl("ID3D12Device9::CreateCommandQueue1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -656,12 +812,15 @@ impl ID3D12Device9_Impl for DeviceObj_Impl {
 
 impl ID3D12Device10_Impl for DeviceObj_Impl {
     fn CreateCommittedResource3(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC1, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device10::CreateCommittedResource3");
         self.x_CreateCommittedResource3(pheapproperties, heapflags, pdesc, initiallayout, poptimizedclearvalue, pprotectedsession, numcastableformats, pcastableformats, riidresource, ppvresource)
     }
     fn CreatePlacedResource2(&self, pheap: windows::core::Ref<ID3D12Heap>, heapoffset: u64, pdesc: *const D3D12_RESOURCE_DESC1, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device10::CreatePlacedResource2");
         self.x_CreatePlacedResource2(pheap, heapoffset, pdesc, initiallayout, poptimizedclearvalue, numcastableformats, pcastableformats, riid, ppvresource)
     }
     fn CreateReservedResource2(&self, pdesc: *const D3D12_RESOURCE_DESC, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device10::CreateReservedResource2");
         super::note_notimpl("ID3D12Device10::CreateReservedResource2");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -669,6 +828,7 @@ impl ID3D12Device10_Impl for DeviceObj_Impl {
 
 impl ID3D12Device11_Impl for DeviceObj_Impl {
     fn CreateSampler2(&self, pdesc: *const D3D12_SAMPLER_DESC2, destdescriptor: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12Device11::CreateSampler2");
         super::note_notimpl("ID3D12Device11::CreateSampler2");
         
     }
@@ -676,6 +836,7 @@ impl ID3D12Device11_Impl for DeviceObj_Impl {
 
 impl ID3D12Device12_Impl for DeviceObj_Impl {
     fn GetResourceAllocationInfo3(&self, visiblemask: u32, numresourcedescs: u32, presourcedescs: *const D3D12_RESOURCE_DESC1, pnumcastableformats: *const u32, ppcastableformats: *const *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, presourceallocationinfo1: *mut D3D12_RESOURCE_ALLOCATION_INFO1) -> D3D12_RESOURCE_ALLOCATION_INFO {
+        crate::callstats::call("ID3D12Device12::GetResourceAllocationInfo3");
         super::note_notimpl("ID3D12Device12::GetResourceAllocationInfo3");
         unsafe { core::mem::zeroed() }
     }
@@ -683,6 +844,7 @@ impl ID3D12Device12_Impl for DeviceObj_Impl {
 
 impl ID3D12Device13_Impl for DeviceObj_Impl {
     fn OpenExistingHeapFromAddress1(&self, paddress: *const core::ffi::c_void, size: usize, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device13::OpenExistingHeapFromAddress1");
         super::note_notimpl("ID3D12Device13::OpenExistingHeapFromAddress1");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -690,6 +852,7 @@ impl ID3D12Device13_Impl for DeviceObj_Impl {
 
 impl ID3D12Device14_Impl for DeviceObj_Impl {
     fn CreateRootSignatureFromSubobjectInLibrary(&self, nodemask: u32, plibraryblob: *const core::ffi::c_void, bloblengthinbytes: usize, subobjectname: &windows::core::PCWSTR, riid: *const windows::core::GUID, ppvrootsignature: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Device14::CreateRootSignatureFromSubobjectInLibrary");
         super::note_notimpl("ID3D12Device14::CreateRootSignatureFromSubobjectInLibrary");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -697,21 +860,26 @@ impl ID3D12Device14_Impl for DeviceObj_Impl {
 
 impl ID3D12Object_Impl for QueueObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for QueueObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -721,59 +889,75 @@ impl ID3D12Pageable_Impl for QueueObj_Impl {
 
 impl ID3D12CommandQueue_Impl for QueueObj_Impl {
     fn UpdateTileMappings(&self, presource: windows::core::Ref<ID3D12Resource>, numresourceregions: u32, presourceregionstartcoordinates: *const D3D12_TILED_RESOURCE_COORDINATE, presourceregionsizes: *const D3D12_TILE_REGION_SIZE, pheap: windows::core::Ref<ID3D12Heap>, numranges: u32, prangeflags: *const D3D12_TILE_RANGE_FLAGS, pheaprangestartoffsets: *const u32, prangetilecounts: *const u32, flags: D3D12_TILE_MAPPING_FLAGS) {
+        crate::callstats::call("ID3D12CommandQueue::UpdateTileMappings");
         super::note_notimpl("ID3D12CommandQueue::UpdateTileMappings");
         
     }
     fn CopyTileMappings(&self, pdstresource: windows::core::Ref<ID3D12Resource>, pdstregionstartcoordinate: *const D3D12_TILED_RESOURCE_COORDINATE, psrcresource: windows::core::Ref<ID3D12Resource>, psrcregionstartcoordinate: *const D3D12_TILED_RESOURCE_COORDINATE, pregionsize: *const D3D12_TILE_REGION_SIZE, flags: D3D12_TILE_MAPPING_FLAGS) {
+        crate::callstats::call("ID3D12CommandQueue::CopyTileMappings");
         super::note_notimpl("ID3D12CommandQueue::CopyTileMappings");
         
     }
     fn ExecuteCommandLists(&self, numcommandlists: u32, ppcommandlists: *const Option<ID3D12CommandList>) {
+        crate::callstats::call("ID3D12CommandQueue::ExecuteCommandLists");
         self.x_ExecuteCommandLists(numcommandlists, ppcommandlists)
     }
     fn SetMarker(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
+        crate::callstats::call("ID3D12CommandQueue::SetMarker");
         self.x_SetMarker(metadata, pdata, size)
     }
     fn BeginEvent(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
+        crate::callstats::call("ID3D12CommandQueue::BeginEvent");
         self.x_BeginEvent(metadata, pdata, size)
     }
     fn EndEvent(&self) {
+        crate::callstats::call("ID3D12CommandQueue::EndEvent");
         self.x_EndEvent()
     }
     fn Signal(&self, pfence: windows::core::Ref<ID3D12Fence>, value: u64) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12CommandQueue::Signal");
         self.x_Signal(pfence, value)
     }
     fn Wait(&self, pfence: windows::core::Ref<ID3D12Fence>, value: u64) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12CommandQueue::Wait");
         self.x_Wait(pfence, value)
     }
     fn GetTimestampFrequency(&self) -> windows::core::Result<u64> {
+        crate::callstats::call("ID3D12CommandQueue::GetTimestampFrequency");
         self.x_GetTimestampFrequency()
     }
     fn GetClockCalibration(&self, pgputimestamp: *mut u64, pcputimestamp: *mut u64) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12CommandQueue::GetClockCalibration");
         self.x_GetClockCalibration(pgputimestamp, pcputimestamp)
     }
     fn GetDesc(&self) -> D3D12_COMMAND_QUEUE_DESC {
+        crate::callstats::call("ID3D12CommandQueue::GetDesc");
         self.x_GetDesc()
     }
 }
 
 impl ID3D12Object_Impl for AllocatorObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for AllocatorObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -783,220 +967,284 @@ impl ID3D12Pageable_Impl for AllocatorObj_Impl {
 
 impl ID3D12CommandAllocator_Impl for AllocatorObj_Impl {
     fn Reset(&self) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12CommandAllocator::Reset");
         self.x_Reset()
     }
 }
 
 impl ID3D12Object_Impl for ListObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for ListObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
 
 impl ID3D12CommandList_Impl for ListObj_Impl {
     fn GetType(&self) -> D3D12_COMMAND_LIST_TYPE {
+        crate::callstats::call("ID3D12CommandList::GetType");
         self.x_GetType()
     }
 }
 
 impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
     fn Close(&self) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12GraphicsCommandList::Close");
         self.x_Close()
     }
     fn Reset(&self, pallocator: windows::core::Ref<ID3D12CommandAllocator>, pinitialstate: windows::core::Ref<ID3D12PipelineState>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12GraphicsCommandList::Reset");
         self.x_Reset(pallocator, pinitialstate)
     }
     fn ClearState(&self, ppipelinestate: windows::core::Ref<ID3D12PipelineState>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ClearState");
         self.x_ClearState(ppipelinestate)
     }
     fn DrawInstanced(&self, vertexcountperinstance: u32, instancecount: u32, startvertexlocation: u32, startinstancelocation: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::DrawInstanced");
         self.x_DrawInstanced(vertexcountperinstance, instancecount, startvertexlocation, startinstancelocation)
     }
     fn DrawIndexedInstanced(&self, indexcountperinstance: u32, instancecount: u32, startindexlocation: u32, basevertexlocation: i32, startinstancelocation: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::DrawIndexedInstanced");
         self.x_DrawIndexedInstanced(indexcountperinstance, instancecount, startindexlocation, basevertexlocation, startinstancelocation)
     }
     fn Dispatch(&self, threadgroupcountx: u32, threadgroupcounty: u32, threadgroupcountz: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::Dispatch");
         self.x_Dispatch(threadgroupcountx, threadgroupcounty, threadgroupcountz)
     }
     fn CopyBufferRegion(&self, pdstbuffer: windows::core::Ref<ID3D12Resource>, dstoffset: u64, psrcbuffer: windows::core::Ref<ID3D12Resource>, srcoffset: u64, numbytes: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::CopyBufferRegion");
         self.x_CopyBufferRegion(pdstbuffer, dstoffset, psrcbuffer, srcoffset, numbytes)
     }
     fn CopyTextureRegion(&self, pdst: *const D3D12_TEXTURE_COPY_LOCATION, dstx: u32, dsty: u32, dstz: u32, psrc: *const D3D12_TEXTURE_COPY_LOCATION, psrcbox: *const D3D12_BOX) {
+        crate::callstats::call("ID3D12GraphicsCommandList::CopyTextureRegion");
         self.x_CopyTextureRegion(pdst, dstx, dsty, dstz, psrc, psrcbox)
     }
     fn CopyResource(&self, pdstresource: windows::core::Ref<ID3D12Resource>, psrcresource: windows::core::Ref<ID3D12Resource>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::CopyResource");
         self.x_CopyResource(pdstresource, psrcresource)
     }
     fn CopyTiles(&self, ptiledresource: windows::core::Ref<ID3D12Resource>, ptileregionstartcoordinate: *const D3D12_TILED_RESOURCE_COORDINATE, ptileregionsize: *const D3D12_TILE_REGION_SIZE, pbuffer: windows::core::Ref<ID3D12Resource>, bufferstartoffsetinbytes: u64, flags: D3D12_TILE_COPY_FLAGS) {
+        crate::callstats::call("ID3D12GraphicsCommandList::CopyTiles");
         super::note_notimpl("ID3D12GraphicsCommandList::CopyTiles");
         self.unsupported_call();
     }
     fn ResolveSubresource(&self, pdstresource: windows::core::Ref<ID3D12Resource>, dstsubresource: u32, psrcresource: windows::core::Ref<ID3D12Resource>, srcsubresource: u32, format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ResolveSubresource");
         super::note_notimpl("ID3D12GraphicsCommandList::ResolveSubresource");
         self.unsupported_call();
     }
     fn IASetPrimitiveTopology(&self, primitivetopology: windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY) {
+        crate::callstats::call("ID3D12GraphicsCommandList::IASetPrimitiveTopology");
         self.x_IASetPrimitiveTopology(primitivetopology)
     }
     fn RSSetViewports(&self, numviewports: u32, pviewports: *const D3D12_VIEWPORT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::RSSetViewports");
         self.x_RSSetViewports(numviewports, pviewports)
     }
     fn RSSetScissorRects(&self, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::RSSetScissorRects");
         self.x_RSSetScissorRects(numrects, prects)
     }
     fn OMSetBlendFactor(&self, blendfactor: *const f32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::OMSetBlendFactor");
         self.x_OMSetBlendFactor(blendfactor)
     }
     fn OMSetStencilRef(&self, stencilref: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::OMSetStencilRef");
         self.x_OMSetStencilRef(stencilref)
     }
     fn SetPipelineState(&self, ppipelinestate: windows::core::Ref<ID3D12PipelineState>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetPipelineState");
         self.x_SetPipelineState(ppipelinestate)
     }
     fn ResourceBarrier(&self, numbarriers: u32, pbarriers: *const D3D12_RESOURCE_BARRIER) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ResourceBarrier");
         self.x_ResourceBarrier(numbarriers, pbarriers)
     }
     fn ExecuteBundle(&self, pcommandlist: windows::core::Ref<ID3D12GraphicsCommandList>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ExecuteBundle");
         super::note_notimpl("ID3D12GraphicsCommandList::ExecuteBundle");
         self.unsupported_call();
     }
     fn SetDescriptorHeaps(&self, numdescriptorheaps: u32, ppdescriptorheaps: *const Option<ID3D12DescriptorHeap>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetDescriptorHeaps");
         self.x_SetDescriptorHeaps(numdescriptorheaps, ppdescriptorheaps)
     }
     fn SetComputeRootSignature(&self, prootsignature: windows::core::Ref<ID3D12RootSignature>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRootSignature");
         self.x_SetComputeRootSignature(prootsignature)
     }
     fn SetGraphicsRootSignature(&self, prootsignature: windows::core::Ref<ID3D12RootSignature>) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRootSignature");
         self.x_SetGraphicsRootSignature(prootsignature)
     }
     fn SetComputeRootDescriptorTable(&self, rootparameterindex: u32, basedescriptor: &D3D12_GPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRootDescriptorTable");
         self.x_SetComputeRootDescriptorTable(rootparameterindex, basedescriptor)
     }
     fn SetGraphicsRootDescriptorTable(&self, rootparameterindex: u32, basedescriptor: &D3D12_GPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRootDescriptorTable");
         self.x_SetGraphicsRootDescriptorTable(rootparameterindex, basedescriptor)
     }
     fn SetComputeRoot32BitConstant(&self, rootparameterindex: u32, srcdata: u32, destoffsetin32bitvalues: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRoot32BitConstant");
         self.x_SetComputeRoot32BitConstant(rootparameterindex, srcdata, destoffsetin32bitvalues)
     }
     fn SetGraphicsRoot32BitConstant(&self, rootparameterindex: u32, srcdata: u32, destoffsetin32bitvalues: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstant");
         self.x_SetGraphicsRoot32BitConstant(rootparameterindex, srcdata, destoffsetin32bitvalues)
     }
     fn SetComputeRoot32BitConstants(&self, rootparameterindex: u32, num32bitvaluestoset: u32, psrcdata: *const core::ffi::c_void, destoffsetin32bitvalues: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRoot32BitConstants");
         self.x_SetComputeRoot32BitConstants(rootparameterindex, num32bitvaluestoset, psrcdata, destoffsetin32bitvalues)
     }
     fn SetGraphicsRoot32BitConstants(&self, rootparameterindex: u32, num32bitvaluestoset: u32, psrcdata: *const core::ffi::c_void, destoffsetin32bitvalues: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRoot32BitConstants");
         self.x_SetGraphicsRoot32BitConstants(rootparameterindex, num32bitvaluestoset, psrcdata, destoffsetin32bitvalues)
     }
     fn SetComputeRootConstantBufferView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRootConstantBufferView");
         self.x_SetComputeRootConstantBufferView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootConstantBufferView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRootConstantBufferView");
         self.x_SetGraphicsRootConstantBufferView(rootparameterindex, bufferlocation)
     }
     fn SetComputeRootShaderResourceView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRootShaderResourceView");
         self.x_SetComputeRootShaderResourceView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootShaderResourceView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRootShaderResourceView");
         self.x_SetGraphicsRootShaderResourceView(rootparameterindex, bufferlocation)
     }
     fn SetComputeRootUnorderedAccessView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetComputeRootUnorderedAccessView");
         self.x_SetComputeRootUnorderedAccessView(rootparameterindex, bufferlocation)
     }
     fn SetGraphicsRootUnorderedAccessView(&self, rootparameterindex: u32, bufferlocation: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetGraphicsRootUnorderedAccessView");
         self.x_SetGraphicsRootUnorderedAccessView(rootparameterindex, bufferlocation)
     }
     fn IASetIndexBuffer(&self, pview: *const D3D12_INDEX_BUFFER_VIEW) {
+        crate::callstats::call("ID3D12GraphicsCommandList::IASetIndexBuffer");
         self.x_IASetIndexBuffer(pview)
     }
     fn IASetVertexBuffers(&self, startslot: u32, numviews: u32, pviews: *const D3D12_VERTEX_BUFFER_VIEW) {
+        crate::callstats::call("ID3D12GraphicsCommandList::IASetVertexBuffers");
         self.x_IASetVertexBuffers(startslot, numviews, pviews)
     }
     fn SOSetTargets(&self, startslot: u32, numviews: u32, pviews: *const D3D12_STREAM_OUTPUT_BUFFER_VIEW) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SOSetTargets");
         super::note_notimpl("ID3D12GraphicsCommandList::SOSetTargets");
         self.unsupported_call();
     }
     fn OMSetRenderTargets(&self, numrendertargetdescriptors: u32, prendertargetdescriptors: *const D3D12_CPU_DESCRIPTOR_HANDLE, rtssinglehandletodescriptorrange: windows::core::BOOL, pdepthstencildescriptor: *const D3D12_CPU_DESCRIPTOR_HANDLE) {
+        crate::callstats::call("ID3D12GraphicsCommandList::OMSetRenderTargets");
         self.x_OMSetRenderTargets(numrendertargetdescriptors, prendertargetdescriptors, rtssinglehandletodescriptorrange, pdepthstencildescriptor)
     }
     fn ClearDepthStencilView(&self, depthstencilview: &D3D12_CPU_DESCRIPTOR_HANDLE, clearflags: D3D12_CLEAR_FLAGS, depth: f32, stencil: u8, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ClearDepthStencilView");
         self.x_ClearDepthStencilView(depthstencilview, clearflags, depth, stencil, numrects, prects)
     }
     fn ClearRenderTargetView(&self, rendertargetview: &D3D12_CPU_DESCRIPTOR_HANDLE, colorrgba: *const f32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ClearRenderTargetView");
         self.x_ClearRenderTargetView(rendertargetview, colorrgba, numrects, prects)
     }
     fn ClearUnorderedAccessViewUint(&self, viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE, viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE, presource: windows::core::Ref<ID3D12Resource>, values: *const u32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ClearUnorderedAccessViewUint");
         self.x_ClearUnorderedAccessViewUint(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
     }
     fn ClearUnorderedAccessViewFloat(&self, viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE, viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE, presource: windows::core::Ref<ID3D12Resource>, values: *const f32, numrects: u32, prects: *const windows::Win32::Foundation::RECT) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ClearUnorderedAccessViewFloat");
         self.x_ClearUnorderedAccessViewFloat(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
     }
     fn DiscardResource(&self, presource: windows::core::Ref<ID3D12Resource>, pregion: *const D3D12_DISCARD_REGION) {
+        crate::callstats::call("ID3D12GraphicsCommandList::DiscardResource");
         self.x_DiscardResource(presource, pregion)
     }
     fn BeginQuery(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, index: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::BeginQuery");
         super::note_notimpl("ID3D12GraphicsCommandList::BeginQuery");
         self.unsupported_call();
     }
     fn EndQuery(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, index: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::EndQuery");
         self.x_EndQuery(pqueryheap, r#type, index)
     }
     fn ResolveQueryData(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, startindex: u32, numqueries: u32, pdestinationbuffer: windows::core::Ref<ID3D12Resource>, aligneddestinationbufferoffset: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ResolveQueryData");
         self.x_ResolveQueryData(pqueryheap, r#type, startindex, numqueries, pdestinationbuffer, aligneddestinationbufferoffset)
     }
     fn SetPredication(&self, pbuffer: windows::core::Ref<ID3D12Resource>, alignedbufferoffset: u64, operation: D3D12_PREDICATION_OP) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetPredication");
         super::note_notimpl("ID3D12GraphicsCommandList::SetPredication");
         self.unsupported_call();
     }
     fn SetMarker(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::SetMarker");
         self.x_SetMarker(metadata, pdata, size)
     }
     fn BeginEvent(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList::BeginEvent");
         self.x_BeginEvent(metadata, pdata, size)
     }
     fn EndEvent(&self) {
+        crate::callstats::call("ID3D12GraphicsCommandList::EndEvent");
         self.x_EndEvent()
     }
     fn ExecuteIndirect(&self, pcommandsignature: windows::core::Ref<ID3D12CommandSignature>, maxcommandcount: u32, pargumentbuffer: windows::core::Ref<ID3D12Resource>, argumentbufferoffset: u64, pcountbuffer: windows::core::Ref<ID3D12Resource>, countbufferoffset: u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList::ExecuteIndirect");
         self.x_ExecuteIndirect(pcommandsignature, maxcommandcount, pargumentbuffer, argumentbufferoffset, pcountbuffer, countbufferoffset)
     }
 }
 
 impl ID3D12GraphicsCommandList1_Impl for ListObj_Impl {
     fn AtomicCopyBufferUINT(&self, pdstbuffer: windows::core::Ref<ID3D12Resource>, dstoffset: u64, psrcbuffer: windows::core::Ref<ID3D12Resource>, srcoffset: u64, dependencies: u32, ppdependentresources: *const Option<ID3D12Resource>, pdependentsubresourceranges: *const D3D12_SUBRESOURCE_RANGE_UINT64) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::AtomicCopyBufferUINT");
         super::note_notimpl("ID3D12GraphicsCommandList1::AtomicCopyBufferUINT");
         self.unsupported_call();
     }
     fn AtomicCopyBufferUINT64(&self, pdstbuffer: windows::core::Ref<ID3D12Resource>, dstoffset: u64, psrcbuffer: windows::core::Ref<ID3D12Resource>, srcoffset: u64, dependencies: u32, ppdependentresources: *const Option<ID3D12Resource>, pdependentsubresourceranges: *const D3D12_SUBRESOURCE_RANGE_UINT64) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::AtomicCopyBufferUINT64");
         super::note_notimpl("ID3D12GraphicsCommandList1::AtomicCopyBufferUINT64");
         self.unsupported_call();
     }
     fn OMSetDepthBounds(&self, min: f32, max: f32) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::OMSetDepthBounds");
         self.x_OMSetDepthBounds(min, max)
     }
     fn SetSamplePositions(&self, numsamplesperpixel: u32, numpixels: u32, psamplepositions: *const D3D12_SAMPLE_POSITION) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::SetSamplePositions");
         super::note_notimpl("ID3D12GraphicsCommandList1::SetSamplePositions");
         self.unsupported_call();
     }
     fn ResolveSubresourceRegion(&self, pdstresource: windows::core::Ref<ID3D12Resource>, dstsubresource: u32, dstx: u32, dsty: u32, psrcresource: windows::core::Ref<ID3D12Resource>, srcsubresource: u32, psrcrect: *const windows::Win32::Foundation::RECT, format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, resolvemode: D3D12_RESOLVE_MODE) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::ResolveSubresourceRegion");
         super::note_notimpl("ID3D12GraphicsCommandList1::ResolveSubresourceRegion");
         self.unsupported_call();
     }
     fn SetViewInstanceMask(&self, mask: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList1::SetViewInstanceMask");
         super::note_notimpl("ID3D12GraphicsCommandList1::SetViewInstanceMask");
         self.unsupported_call();
     }
@@ -1004,12 +1252,14 @@ impl ID3D12GraphicsCommandList1_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList2_Impl for ListObj_Impl {
     fn WriteBufferImmediate(&self, count: u32, pparams: *const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER, pmodes: *const D3D12_WRITEBUFFERIMMEDIATE_MODE) {
+        crate::callstats::call("ID3D12GraphicsCommandList2::WriteBufferImmediate");
         self.x_WriteBufferImmediate(count, pparams, pmodes)
     }
 }
 
 impl ID3D12GraphicsCommandList3_Impl for ListObj_Impl {
     fn SetProtectedResourceSession(&self, pprotectedresourcesession: windows::core::Ref<ID3D12ProtectedResourceSession>) {
+        crate::callstats::call("ID3D12GraphicsCommandList3::SetProtectedResourceSession");
         super::note_notimpl("ID3D12GraphicsCommandList3::SetProtectedResourceSession");
         self.unsupported_call();
     }
@@ -1017,38 +1267,47 @@ impl ID3D12GraphicsCommandList3_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList4_Impl for ListObj_Impl {
     fn BeginRenderPass(&self, numrendertargets: u32, prendertargets: *const D3D12_RENDER_PASS_RENDER_TARGET_DESC, pdepthstencil: *const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC, flags: D3D12_RENDER_PASS_FLAGS) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::BeginRenderPass");
         super::note_notimpl("ID3D12GraphicsCommandList4::BeginRenderPass");
         self.unsupported_call();
     }
     fn EndRenderPass(&self) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::EndRenderPass");
         super::note_notimpl("ID3D12GraphicsCommandList4::EndRenderPass");
         self.unsupported_call();
     }
     fn InitializeMetaCommand(&self, pmetacommand: windows::core::Ref<ID3D12MetaCommand>, pinitializationparametersdata: *const core::ffi::c_void, initializationparametersdatasizeinbytes: usize) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::InitializeMetaCommand");
         super::note_notimpl("ID3D12GraphicsCommandList4::InitializeMetaCommand");
         self.unsupported_call();
     }
     fn ExecuteMetaCommand(&self, pmetacommand: windows::core::Ref<ID3D12MetaCommand>, pexecutionparametersdata: *const core::ffi::c_void, executionparametersdatasizeinbytes: usize) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::ExecuteMetaCommand");
         super::note_notimpl("ID3D12GraphicsCommandList4::ExecuteMetaCommand");
         self.unsupported_call();
     }
     fn BuildRaytracingAccelerationStructure(&self, pdesc: *const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC, numpostbuildinfodescs: u32, ppostbuildinfodescs: *const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::BuildRaytracingAccelerationStructure");
         super::note_notimpl("ID3D12GraphicsCommandList4::BuildRaytracingAccelerationStructure");
         self.unsupported_call();
     }
     fn EmitRaytracingAccelerationStructurePostbuildInfo(&self, pdesc: *const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC, numsourceaccelerationstructures: u32, psourceaccelerationstructuredata: *const u64) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::EmitRaytracingAccelerationStructurePostbuildInfo");
         super::note_notimpl("ID3D12GraphicsCommandList4::EmitRaytracingAccelerationStructurePostbuildInfo");
         self.unsupported_call();
     }
     fn CopyRaytracingAccelerationStructure(&self, destaccelerationstructuredata: u64, sourceaccelerationstructuredata: u64, mode: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::CopyRaytracingAccelerationStructure");
         super::note_notimpl("ID3D12GraphicsCommandList4::CopyRaytracingAccelerationStructure");
         self.unsupported_call();
     }
     fn SetPipelineState1(&self, pstateobject: windows::core::Ref<ID3D12StateObject>) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::SetPipelineState1");
         super::note_notimpl("ID3D12GraphicsCommandList4::SetPipelineState1");
         self.unsupported_call();
     }
     fn DispatchRays(&self, pdesc: *const D3D12_DISPATCH_RAYS_DESC) {
+        crate::callstats::call("ID3D12GraphicsCommandList4::DispatchRays");
         super::note_notimpl("ID3D12GraphicsCommandList4::DispatchRays");
         self.unsupported_call();
     }
@@ -1056,10 +1315,12 @@ impl ID3D12GraphicsCommandList4_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList5_Impl for ListObj_Impl {
     fn RSSetShadingRate(&self, baseshadingrate: D3D12_SHADING_RATE, combiners: *const D3D12_SHADING_RATE_COMBINER) {
+        crate::callstats::call("ID3D12GraphicsCommandList5::RSSetShadingRate");
         super::note_notimpl("ID3D12GraphicsCommandList5::RSSetShadingRate");
         self.unsupported_call();
     }
     fn RSSetShadingRateImage(&self, shadingrateimage: windows::core::Ref<ID3D12Resource>) {
+        crate::callstats::call("ID3D12GraphicsCommandList5::RSSetShadingRateImage");
         super::note_notimpl("ID3D12GraphicsCommandList5::RSSetShadingRateImage");
         self.unsupported_call();
     }
@@ -1067,27 +1328,33 @@ impl ID3D12GraphicsCommandList5_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList6_Impl for ListObj_Impl {
     fn DispatchMesh(&self, threadgroupcountx: u32, threadgroupcounty: u32, threadgroupcountz: u32) {
+        crate::callstats::call("ID3D12GraphicsCommandList6::DispatchMesh");
         self.x_DispatchMesh(threadgroupcountx, threadgroupcounty, threadgroupcountz)
     }
 }
 
 impl ID3D12Object_Impl for FenceObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for FenceObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1097,18 +1364,22 @@ impl ID3D12Pageable_Impl for FenceObj_Impl {
 
 impl ID3D12Fence_Impl for FenceObj_Impl {
     fn GetCompletedValue(&self) -> u64 {
+        crate::callstats::call("ID3D12Fence::GetCompletedValue");
         self.x_GetCompletedValue()
     }
     fn SetEventOnCompletion(&self, value: u64, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Fence::SetEventOnCompletion");
         self.x_SetEventOnCompletion(value, hevent)
     }
     fn Signal(&self, value: u64) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Fence::Signal");
         self.x_Signal(value)
     }
 }
 
 impl ID3D12Fence1_Impl for FenceObj_Impl {
     fn GetCreationFlags(&self) -> D3D12_FENCE_FLAGS {
+        crate::callstats::call("ID3D12Fence1::GetCreationFlags");
         super::note_notimpl("ID3D12Fence1::GetCreationFlags");
         unsafe { core::mem::zeroed() }
     }
@@ -1116,21 +1387,26 @@ impl ID3D12Fence1_Impl for FenceObj_Impl {
 
 impl ID3D12Object_Impl for QueryHeapObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for QueryHeapObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1143,21 +1419,26 @@ impl ID3D12QueryHeap_Impl for QueryHeapObj_Impl {
 
 impl ID3D12Object_Impl for ResourceObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for ResourceObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1167,32 +1448,40 @@ impl ID3D12Pageable_Impl for ResourceObj_Impl {
 
 impl ID3D12Resource_Impl for ResourceObj_Impl {
     fn Map(&self, subresource: u32, preadrange: *const D3D12_RANGE, ppdata: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Resource::Map");
         self.x_Map(subresource, preadrange, ppdata)
     }
     fn Unmap(&self, subresource: u32, pwrittenrange: *const D3D12_RANGE) {
+        crate::callstats::call("ID3D12Resource::Unmap");
         self.x_Unmap(subresource, pwrittenrange)
     }
     fn GetDesc(&self) -> D3D12_RESOURCE_DESC {
+        crate::callstats::call("ID3D12Resource::GetDesc");
         self.x_GetDesc()
     }
     fn GetGPUVirtualAddress(&self) -> u64 {
+        crate::callstats::call("ID3D12Resource::GetGPUVirtualAddress");
         self.x_GetGPUVirtualAddress()
     }
     fn WriteToSubresource(&self, dstsubresource: u32, pdstbox: *const D3D12_BOX, psrcdata: *const core::ffi::c_void, srcrowpitch: u32, srcdepthpitch: u32) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Resource::WriteToSubresource");
         super::note_notimpl("ID3D12Resource::WriteToSubresource");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn ReadFromSubresource(&self, pdstdata: *mut core::ffi::c_void, dstrowpitch: u32, dstdepthpitch: u32, srcsubresource: u32, psrcbox: *const D3D12_BOX) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Resource::ReadFromSubresource");
         super::note_notimpl("ID3D12Resource::ReadFromSubresource");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn GetHeapProperties(&self, pheapproperties: *mut D3D12_HEAP_PROPERTIES, pheapflags: *mut D3D12_HEAP_FLAGS) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Resource::GetHeapProperties");
         self.x_GetHeapProperties(pheapproperties, pheapflags)
     }
 }
 
 impl ID3D12Resource1_Impl for ResourceObj_Impl {
     fn GetProtectedResourceSession(&self, riid: *const windows::core::GUID, ppprotectedsession: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Resource1::GetProtectedResourceSession");
         super::note_notimpl("ID3D12Resource1::GetProtectedResourceSession");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -1200,27 +1489,33 @@ impl ID3D12Resource1_Impl for ResourceObj_Impl {
 
 impl ID3D12Resource2_Impl for ResourceObj_Impl {
     fn GetDesc1(&self) -> D3D12_RESOURCE_DESC1 {
+        crate::callstats::call("ID3D12Resource2::GetDesc1");
         self.x_GetDesc1()
     }
 }
 
 impl ID3D12Object_Impl for HeapObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for HeapObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1230,33 +1525,41 @@ impl ID3D12Pageable_Impl for HeapObj_Impl {
 
 impl ID3D12DescriptorHeap_Impl for HeapObj_Impl {
     fn GetDesc(&self) -> D3D12_DESCRIPTOR_HEAP_DESC {
+        crate::callstats::call("ID3D12DescriptorHeap::GetDesc");
         self.x_GetDesc()
     }
     fn GetCPUDescriptorHandleForHeapStart(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        crate::callstats::call("ID3D12DescriptorHeap::GetCPUDescriptorHandleForHeapStart");
         self.x_GetCPUDescriptorHandleForHeapStart()
     }
     fn GetGPUDescriptorHandleForHeapStart(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        crate::callstats::call("ID3D12DescriptorHeap::GetGPUDescriptorHandleForHeapStart");
         self.x_GetGPUDescriptorHandleForHeapStart()
     }
 }
 
 impl ID3D12Object_Impl for MemHeapObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for MemHeapObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1266,27 +1569,33 @@ impl ID3D12Pageable_Impl for MemHeapObj_Impl {
 
 impl ID3D12Heap_Impl for MemHeapObj_Impl {
     fn GetDesc(&self) -> D3D12_HEAP_DESC {
+        crate::callstats::call("ID3D12Heap::GetDesc");
         self.x_GetDesc()
     }
 }
 
 impl ID3D12Object_Impl for RootSigObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for RootSigObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1296,21 +1605,26 @@ impl ID3D12RootSignature_Impl for RootSigObj_Impl {
 
 impl ID3D12Object_Impl for PsoObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for PsoObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1320,6 +1634,7 @@ impl ID3D12Pageable_Impl for PsoObj_Impl {
 
 impl ID3D12PipelineState_Impl for PsoObj_Impl {
     fn GetCachedBlob(&self) -> windows::core::Result<windows::Win32::Graphics::Direct3D::ID3DBlob> {
+        crate::callstats::call("ID3D12PipelineState::GetCachedBlob");
         super::note_notimpl("ID3D12PipelineState::GetCachedBlob");
         Err(windows::core::Error::from(E_NOTIMPL))
     }
@@ -1327,21 +1642,26 @@ impl ID3D12PipelineState_Impl for PsoObj_Impl {
 
 impl ID3D12Object_Impl for CmdSigObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for CmdSigObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
@@ -1354,60 +1674,74 @@ impl ID3D12CommandSignature_Impl for CmdSigObj_Impl {
 
 impl ID3D12Object_Impl for LibraryObj_Impl {
     fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::GetPrivateData");
         self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
     }
     fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateData");
         self.private.d3d12_SetPrivateData(guid, datasize, pdata)
     }
     fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetPrivateDataInterface");
         self.private.d3d12_SetPrivateDataInterface(guid, pdata)
     }
     fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12Object::SetName");
         self.private.d3d12_SetName(name)
     }
 }
 
 impl ID3D12DeviceChild_Impl for LibraryObj_Impl {
     fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12DeviceChild::GetDevice");
         super::query_device(&self.device_obj, riid, ppvdevice)
     }
 }
 
 impl ID3D12PipelineLibrary_Impl for LibraryObj_Impl {
     fn StorePipeline(&self, pname: &windows::core::PCWSTR, ppipeline: windows::core::Ref<ID3D12PipelineState>) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12PipelineLibrary::StorePipeline");
         self.x_StorePipeline(pname, ppipeline)
     }
     fn LoadGraphicsPipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12PipelineLibrary::LoadGraphicsPipeline");
         self.x_LoadGraphicsPipeline(pname, pdesc, riid, pppipelinestate)
     }
     fn LoadComputePipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12PipelineLibrary::LoadComputePipeline");
         self.x_LoadComputePipeline(pname, pdesc, riid, pppipelinestate)
     }
     fn GetSerializedSize(&self) -> usize {
+        crate::callstats::call("ID3D12PipelineLibrary::GetSerializedSize");
         self.x_GetSerializedSize()
     }
     fn Serialize(&self, pdata: *mut core::ffi::c_void, datasizeinbytes: usize) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12PipelineLibrary::Serialize");
         self.x_Serialize(pdata, datasizeinbytes)
     }
 }
 
 impl ID3D12PipelineLibrary1_Impl for LibraryObj_Impl {
     fn LoadPipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_PIPELINE_STATE_STREAM_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        crate::callstats::call("ID3D12PipelineLibrary1::LoadPipeline");
         self.x_LoadPipeline(pname, pdesc, riid, pppipelinestate)
     }
 }
 
 impl ID3D12RootSignatureDeserializer_Impl for RootSigDeserializerObj_Impl {
     fn GetRootSignatureDesc(&self) -> *mut D3D12_ROOT_SIGNATURE_DESC {
+        crate::callstats::call("ID3D12RootSignatureDeserializer::GetRootSignatureDesc");
         self.x_GetRootSignatureDesc()
     }
 }
 
 impl ID3D12VersionedRootSignatureDeserializer_Impl for VersionedDeserializerObj_Impl {
     fn GetRootSignatureDescAtVersion(&self, converttoversion: D3D_ROOT_SIGNATURE_VERSION) -> windows::core::Result<*mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC> {
+        crate::callstats::call("ID3D12VersionedRootSignatureDeserializer::GetRootSignatureDescAtVersion");
         self.x_GetRootSignatureDescAtVersion(converttoversion)
     }
     fn GetUnconvertedRootSignatureDesc(&self) -> *mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
+        crate::callstats::call("ID3D12VersionedRootSignatureDeserializer::GetUnconvertedRootSignatureDesc");
         self.x_GetUnconvertedRootSignatureDesc()
     }
 }

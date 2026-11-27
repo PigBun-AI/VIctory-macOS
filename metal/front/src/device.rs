@@ -252,6 +252,7 @@ impl Device {
         flags: u32,
     ) -> Result<Heap> {
         let mem = props.memory()?;
+        crate::callstats::heap_created(props.ty, size, flags);
         let alignment = if alignment == 0 {
             resource::DEFAULT_ALIGNMENT
         } else {
@@ -375,6 +376,7 @@ impl Device {
         initial_state: u32,
         heap: Option<Arc<Heap>>,
     ) -> Resource {
+        crate::callstats::resource_created(props.ty, &desc, initial_state, heap.is_some());
         self.tracker
             .lock()
             .unwrap()
@@ -484,6 +486,7 @@ impl Device {
     /// `CreateRootSignature`: a serialized blob (any version).
     pub fn create_root_signature(self: &Arc<Self>, blob: &[u8]) -> Result<RootSignature> {
         let d = rootsig::deserialize(blob)?;
+        crate::callstats::root_signature(&d);
         let proto = convert::root_signature(&d)?;
         let bytes = proto.encode().map_err(|_| Hr::E_INVALIDARG)?;
         let mut a = CreateRootSignatureArgs::new();
@@ -537,6 +540,7 @@ impl Device {
 
     pub fn create_descriptor_heap(self: &Arc<Self>, d: &HeapDesc) -> Result<DescriptorHeap> {
         descriptor::validate_heap_desc(d)?;
+        crate::callstats::descriptor_heap(d.ty, d.count, d.shader_visible());
         let kind = match d.ty {
             descriptor::TYPE_CBV_SRV_UAV => pt::HeapKind::CBV_SRV_UAV,
             descriptor::TYPE_SAMPLER => pt::HeapKind::SAMPLER,
@@ -644,6 +648,7 @@ impl Device {
 
     /// `CreateShaderResourceView` / `CreateUnorderedAccessView` on a texture.
     pub fn create_texture_view(&self, cpu_handle: u64, v: &TextureView) -> Result<()> {
+        crate::callstats::texture_view(v);
         let rec = (v.uav && v.resource.is_some()).then_some(Record::Uav(*v));
         self.write_descriptor_rec(cpu_handle, v.to_proto(), None, rec)
     }
@@ -651,6 +656,9 @@ impl Device {
     /// `CreateRenderTargetView` / `CreateDepthStencilView`: the heap has no
     /// memory on the back; the record is the descriptor. `None` is a null view.
     pub fn create_target_view(&self, cpu_handle: u64, v: Option<TargetView>) -> Result<()> {
+        if let Some(v) = &v {
+            crate::callstats::target_view(v);
+        }
         let (slot, index) = self.slot_of(cpu_handle)?;
         self.set_record(slot, index, v.map(Record::Target));
         Ok(())
@@ -682,6 +690,7 @@ impl Device {
 
     /// `CreateConstantBufferView`; a zero `size` or address is a null view.
     pub fn create_cbv(&self, cpu_handle: u64, gpu_va: u64, size: u32) -> Result<()> {
+        crate::callstats::cbv(size);
         let v = if gpu_va == 0 {
             ViewDesc::null()
         } else {
@@ -692,10 +701,12 @@ impl Device {
 
     /// `CreateShaderResourceView` / `CreateUnorderedAccessView` on a buffer.
     pub fn create_buffer_view(&self, cpu_handle: u64, v: &BufferView) -> Result<()> {
+        crate::callstats::buffer_view(v);
         self.write_descriptor(cpu_handle, v.to_proto()?, None)
     }
 
     pub fn create_sampler(&self, cpu_handle: u64, s: &convert::SamplerParams) -> Result<()> {
+        crate::callstats::sampler(s);
         self.write_descriptor(cpu_handle, ViewDesc::null(), Some(convert::sampler(s)?))
     }
 
@@ -1274,6 +1285,11 @@ impl CommandList {
         let (Some(d), Some(s)) = (dst.to_proto(), src.to_proto()) else {
             return self.fail(Hr::E_INVALIDARG);
         };
+        crate::callstats::copy_texture_region(
+            d.kind == pt::LocKind::FOOTPRINT,
+            s.kind == pt::LocKind::FOOTPRINT,
+            src_box.is_some(),
+        );
         // A buffer cannot copy to a buffer through here.
         if d.kind == pt::LocKind::FOOTPRINT && s.kind == pt::LocKind::FOOTPRINT {
             return self.fail(Hr::E_INVALIDARG);
@@ -1334,6 +1350,7 @@ impl CommandList {
     }
 
     pub fn resource_barrier(&mut self, barriers: &[ResourceBarrier]) {
+        crate::callstats::barriers(barriers);
         for b in barriers {
             if let ResourceBarrier::Transition { res, .. } = *b {
                 self.barrier_on_attachment(res);

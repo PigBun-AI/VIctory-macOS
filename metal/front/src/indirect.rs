@@ -102,7 +102,7 @@ impl CommandSignature {
         if u64::from(stride) < bytes || !stride.is_multiple_of(4) {
             return Err(Hr::E_INVALIDARG);
         }
-        Ok(CommandSignature {
+        let sig = CommandSignature {
             stride,
             args,
             root_sig: match (sets_root, root) {
@@ -110,7 +110,9 @@ impl CommandSignature {
                 _ => RootSigId::NULL,
             },
             record_bytes: bytes as u32,
-        })
+        };
+        crate::callstats::command_signature(&sig);
+        Ok(sig)
     }
 }
 
@@ -149,6 +151,7 @@ impl CommandList {
         args_offset: u64,
         count: Option<(&Buffer, u64)>,
     ) {
+        crate::callstats::execute_indirect(sig, max_count, count.is_some());
         if !args.desc.is_buffer()
             || !args_offset.is_multiple_of(4)
             || count.is_some_and(|(b, off)| !b.desc.is_buffer() || !off.is_multiple_of(4))

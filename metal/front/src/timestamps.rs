@@ -62,6 +62,7 @@ pub struct QueryHeap {
 impl QueryHeap {
     /// Only timestamp heaps exist; other types are `E_NOTIMPL` for the caller to say.
     pub fn new(ty: u32, count: u32) -> Result<QueryHeap, Hr> {
+        crate::callstats::query_heap(ty, count);
         if !matches!(ty, HEAP_TYPE_TIMESTAMP | HEAP_TYPE_COPY_QUEUE_TIMESTAMP) {
             return Err(Hr::E_NOTIMPL);
         }

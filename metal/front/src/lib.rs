@@ -15,6 +15,7 @@
 //! Versions (checked 2026-11-27): `windows` / `windows-core` 0.62.2.
 
 pub mod adapter;
+pub mod callstats;
 pub mod caps;
 pub mod connect;
 pub mod convert;

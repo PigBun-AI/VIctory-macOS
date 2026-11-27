@@ -202,6 +202,7 @@ def emit():
                 sig = ", ".join(["&self"] + ["%s: %s" % a for a in args])
                 call_args = ", ".join(a[0] for a in args)
                 w("    fn %s(%s)%s {" % (name, sig, " -> " + ret if ret else ""))
+                w('        crate::callstats::call("%s::%s");' % (iface, name))
                 if name in PRIVATE.get(iface, ()):
                     ptr_args = call_args
                     w("        self.private.%s_%s(%s)" % ("d3d12" if iface == "ID3D12Object" else "dxgi", name, ptr_args))

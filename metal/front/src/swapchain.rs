@@ -183,6 +183,14 @@ impl SwapChain {
         desc: SwapChainDesc,
     ) -> Result<Arc<SwapChain>> {
         desc.check()?;
+        crate::callstats::swapchain(
+            desc.width,
+            desc.height,
+            desc.format,
+            desc.buffer_count,
+            desc.swap_effect,
+            desc.flags,
+        );
         let mut a = CreateSwapchainArgs::new();
         a.window = window;
         a.width = desc.width;
