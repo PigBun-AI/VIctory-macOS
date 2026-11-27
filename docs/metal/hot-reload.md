@@ -41,20 +41,20 @@ through a sync op whose arguments are recordable.
 
 ### No hands in the loop
 
-Every game run is scripted (`tools/metal/run.sh`). `VICTORY_KEYS` walks the
+Every game run is scripted (`tools/mac/run.sh`, the one launcher; `tools/metal/run.sh` is a thin wrapper for `--backend metal`, `docs/mac/RUN.md`). `VICTORY_KEYS` walks the
 intro and the account screen (Enter is pad A through the keyboard's stand-in
 pad). Since mac/livetr patch I1 (ce8f1ab3, in d4e89736) the base's parser knows
 `SECONDS:Key`, `FROM-TO:Key` and the period form `FROM-TO/EVERY[+HOLD]:Key`, so
-`run.sh` passes its default `8-900/3:Enter` (every 3 s from the 8th second to
-the 900th) as it is; it no longer expands it.
+the launcher passes its default `8-3600/3:Enter` (every 3 s from the 8th second to
+the 3600th) as it is; it does not expand it.
 
 The world's input is fixed by `VICTORY_INPUT_REPLAY` (jsonl indexed by a *world
 frame*, `VICTORY_INPUT_RECORD` makes one). victory-gpu counts the world frame
 from the title's own draw recordings: it starts at the present where
 `VICTORY_WORLD_DRAWS` (500) draws have been recorded, and the log says which
 present is world frame 1; that number can be given to `VICTORY_CAPTURE_FRAMES`.
-`run.sh` sets `VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt` by
-default (`--input none` unsets it). Fixed-scene recordings and benchmarks name
+The launcher sets `VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt` by
+default for both backends (`--input none` unsets it). Fixed-scene recordings and benchmarks name
 this file and the key spec.
 
 ### Frame workbench (extends layer 1; same milestone)

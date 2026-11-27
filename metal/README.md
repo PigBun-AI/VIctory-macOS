@@ -25,7 +25,7 @@ Setup: the root `rust-toolchain.toml` applies; add the targets once with
     tools/metal/run-m0.sh --layer         # run the probe under Wine
     tools/metal/test-e2e.sh               # front-e2e under Wine: D3DMetal, then our back (timings)
     tools/metal/test-present.sh [--with-d3dmetal] [--screenshot FILE]   # swap chain under Wine: colour per frame, resize
-    tools/metal/run.sh [--lenient] [--timeout SEC] [-- args]   # the game on our backend (docs/metal/m4-present.md)
+    tools/metal/run.sh [--timeout SEC] [--fidelity|--perf] [-- args]   # thin wrapper: tools/mac/run.sh --backend metal (docs/mac/RUN.md)
     tools/metal/test-front-smoke.sh [--real]   # the front's ABI against D3DMetal's (mock / real back)
     tools/metal/test-wine.sh --backend d3dmetal|metal   # victory's cargo tests under Wine on either backend
     tools/metal/compare-tests.sh --run    # both of those, a per-test table; known gaps in

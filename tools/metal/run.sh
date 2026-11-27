@@ -1,176 +1,77 @@
 #!/bin/sh
-# Runs the game (or any victory.exe command) on our Metal backend: our
-# d3d12.dll / dxgi.dll, the bridge and the Metal back, in a prefix of their
-# own, through the upstream tools/macos/victory.sh (which stays as it is).
+# Runs the game (or any victory.exe command) on our Metal backend. A thin wrapper: it only turns
+# arguments into those of the one launcher, tools/mac/run.sh, and `exec`s
+#
+#   tools/mac/run.sh --backend metal "$@"
+#
+# It sets NO game environment (DXC helper, keys, input replay, fault tracking, masked, resolution,
+# WINEPREFIX, WINEDLLPATH/WINEDLLOVERRIDES, VICTORY_METAL_* ...): that is the launcher's, so the two
+# backends cannot drift (docs/mac/RUN.md). Debug switches of the back (VICTORY_METAL_LENIENT, _TRACE,
+# _SKIP_GS_INDIRECT, _DROPSTATS ...) are only passed through from the environment by the launcher.
 #
 #   tools/metal/run.sh [options] [-- victory.exe arguments]
 #
-#   --no-build        use the stage of the last tools/metal/build-unixlib.sh
-#   --timeout SEC     stop the run after SEC seconds (default 600; 0 = no limit)
-#   --out DIR         where the logs go (default research/game-runs/<time>-metal,
-#                     outside the repository: game-derived data never goes in it)
-#   --lenient         set VICTORY_METAL_LENIENT=1 (see below)
-#   --keys SPEC       VICTORY_KEYS for this run (default below; `none` = no scripted keys)
-#   --input FILE      VICTORY_INPUT_REPLAY for this run (default tools/mac/input/world-neutral.txt; `none` = unset)
-#   --exec            no timer, no log files, no summary: `exec` victory.sh as it is
-#                     (what the first version of this script did)
-#
-# Without arguments after `--` it runs the game:
-#   run --execute $GAME_DIR/game_scarlett_master.exe
-# GAME_DIR defaults to ~/Documents/GTA6Project/GTA6.Xbox.v1.0.2.1 (read only here).
-#
-# What it sets:
-#   WINEPREFIX=research/metal-play-prefix   made on first use (wineboot); our dlls are
-#                    installed into its system32, so NEVER the D3DMetal baseline prefix
-#                    VIctory-macOS/target/wineprefix-play (refused)
-#   WINEDLLOVERRIDES="d3d12,dxgi=n,b"       victory.sh puts its own `d3d12,d3d12core,dxgi=b`
-#                    before it; the last one wins, so d3d12 and dxgi are ours
-#   WINEDLLPATH=<stage>                     where the bridge's dll and unixlib are
-#   VICTORY_METAL_LOG=1                     back/front/bridge errors on stderr
-#   VICTORY_METAL_NOTIMPL_LOG=<file>        one line per call of an unimplemented method
-#   VICTORY_METAL_LENIENT=1 (--lenient)     survey mode: a list command without an encoding is skipped
-#                    instead of failing the list, so the game runs on and the gap list is complete
-#   VICTORY_KEYS=8-900/3:Enter              presses Enter (= pad A through the keyboard's stand-in pad)
-#                    every 3 s from 8 s on, so the intro and account screens go on by themselves
-#                    (the base parses the period form itself since mac/livetr d4e89736)
-#   VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt   the neutral input from the world's first frame
-#                    on (mac/livetr patch I1, docs/mac/PATCHES.md; the world frame is counted by present from
-#                    VICTORY_WORLD_DRAWS=500 draws, the log says which present is world frame 1)
-#   VICTORY_METAL_SKIP_GS_INDIRECT=1   (default here, `VICTORY_METAL_SKIP_GS_INDIRECT=0 run.sh` turns it off)
-#                    the back does not draw indirect geometry-shader draws: with them the picture of the old
-#                    base went black (docs/metal/m5-gs.md "What it does to the picture", docs/metal/m4-newbase.md);
-#                    the cause is not found yet. The code's default is to draw them.
-#   VICTORY_PATCH_MASKED=all VICTORY_FAULT_TRACKING=1   the game flags NOTES-victory-macos.md used
-#                    (a value already in the environment wins)
-# victory.toml (git-ignored, repository root) is written if missing: game dir, cache and data under
-# ~/Documents/GTA6Project/victory-data, all outside the repository.
-#
-# Output in the --out directory: stdout.log, stderr.log (Wine and victory.exe; the
-# "victory-metal ..." lines), notimpl.log, summary.txt (what was reached, exit status,
-# unimplemented methods by number of calls, the back's errors). After the time is up
-# the Wine processes of THIS prefix are stopped (wineserver -k with WINEPREFIX set);
-# other prefixes are never touched.
+# Old option          now
+#   --timeout SEC     --timeout SEC (the launcher's default is 900, the old one was 600)
+#   --out DIR         --out DIR. Without it: research/game-runs/<time>-metal (outside the repository;
+#                     the launcher's own default is target/mac-runs/<time>)
+#   --keys SPEC|none  --keys SPEC (`none` = --no-keys)
+#   --input FILE|none --input FILE|none
+#   --exec            --exec (now: `victory.exe <arguments after -->` in the run's environment, as the launcher defines it)
+#   --no-build        nothing (the launcher builds only with --build); this wrapper adds --build unless
+#                     --no-build is given, as the old script always built first
+#   GTA6_ROOT         the only variable set: ~/Documents/GTA6Project if unset (location of checkouts, seed data, Wine, research/)
+# Removed, no counterpart in the launcher:
+#   --lenient         (survey mode) set VICTORY_METAL_LENIENT=1 in the environment if needed
+#   victory.toml writing, the own summary, the own watchdog (the launcher writes summary.txt and stops
+#   only the wineserver of the run's own prefix)
+# Removed defaults: VICTORY_METAL_SKIP_GS_INDIRECT=1 (the default must not deviate from native behaviour;
+#   the GS skip is a registered skip node in the matrix; pass it by hand: VICTORY_METAL_SKIP_GS_INDIRECT=1 tools/metal/run.sh ...)
+# Every other option of the launcher (--fidelity, --perf, --prefix, --allow-concurrent, --print-env,
+# --capture-frames, --frametime-log ...) is passed on as it is.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$here/../.." && pwd)
-# shellcheck disable=SC1091
-. "$here/env.sh"
+# Where the checkouts, the seed data, Wine and research/ live (a location, not game configuration; env.sh uses
+# the same default). The launcher takes the parent of the checkout otherwise, which is worktrees/ here.
+GTA6_ROOT="${GTA6_ROOT:-$HOME/Documents/GTA6Project}"; export GTA6_ROOT
 
-build=1; timeout=600; out=""; plain=0; lenient=0
-keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-tools/mac/input/world-neutral.txt}"
-while [ $# -gt 0 ]; do
-    case "$1" in
+# Pass 1: what was asked (options before `--` only).
+build=1; have_out=0; dry=0
+for a in "$@"; do
+    case "$a" in
+        --) break ;;
         --no-build) build=0 ;;
-        --timeout) timeout=${2:?--timeout SEC}; shift ;;
-        --out) out=${2:?--out DIR}; shift ;;
-        --lenient) lenient=1 ;;
-        --keys) keys=${2:?--keys SPEC|none}; shift ;;
-        --input) input=${2:?--input FILE|none}; shift ;;
-        --exec) plain=1 ;;
-        --) shift; break ;;
-        *) echo "usage: $0 [--no-build] [--timeout SEC] [--out DIR] [--lenient] [--keys SPEC|none] [--input FILE|none] [--exec] [-- victory.exe args]" >&2; exit 2 ;;
+        --out) have_out=1 ;;
+        --print-env|--dry-run) dry=1 ;;
     esac
-    shift
 done
-GAME_DIR="${GAME_DIR:-$GTA6_ROOT/GTA6.Xbox.v1.0.2.1}"
-[ $# -gt 0 ] || set -- run --execute "$GAME_DIR/game_scarlett_master.exe"
 
-WINEPREFIX="${WINEPREFIX:-$GTA6_ROOT/research/metal-play-prefix}"
-case "$WINEPREFIX" in
-    *wineprefix-play*) echo "refusing to use the D3DMetal baseline prefix $WINEPREFIX" >&2; exit 2 ;;
-esac
-export WINEPREFIX
-WINE="$VICTORY_WINE_DIR/bin/wine"
-[ -x "$WINE" ] || { echo "no Wine at $WINE (see tools/metal/env.sh)" >&2; exit 1; }
-WINESERVER="$VICTORY_WINE_DIR/bin/wineserver"
-STAGE="${VICTORY_METAL_OUT:-$ROOT/metal/target/wine-stage}"
-
-# victory.toml: outside-the-repo paths (the repository refuses paths inside it).
-if [ ! -f "$ROOT/victory.toml" ]; then
-    cat >"$ROOT/victory.toml" <<TOML
-[paths]
-game_dir = '$GAME_DIR'
-cache_dir = '$GTA6_ROOT/victory-data/cache'
-data_dir = '$GTA6_ROOT/victory-data/data'
-test_titles = []
-TOML
-    echo "wrote $ROOT/victory.toml (git-ignored)"
-fi
-
-[ "$build" = 1 ] && "$here/build-unixlib.sh" >/dev/null
-[ -f "$STAGE/front/d3d12.dll" ] || { echo "no stage in $STAGE: run tools/metal/build-unixlib.sh" >&2; exit 1; }
-
-# The prefix: made on first use, without Mono/Gecko prompts.
-SYS32="$WINEPREFIX/drive_c/windows/system32"
-if [ ! -d "$SYS32" ]; then
-    echo "making the prefix $WINEPREFIX"
-    WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d" WINEDEBUG=-all "$WINE" wineboot -u >/dev/null 2>&1 || true
-    WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d" WINEDEBUG=-all "$WINE" cmd /c exit >/dev/null 2>&1 || true
-    [ -d "$SYS32" ] || { echo "the prefix was not made" >&2; exit 1; }
-fi
-# Our dlls over the placeholders (kept once as *.metal-orig); this prefix is ours alone.
-for n in d3d12 dxgi; do
-    [ -f "$SYS32/$n.dll.metal-orig" ] || { [ -f "$SYS32/$n.dll" ] && cp "$SYS32/$n.dll" "$SYS32/$n.dll.metal-orig"; }
-    cp "$STAGE/front/$n.dll" "$SYS32/$n.dll"
+# Pass 2: rotate the arguments through "$@", renaming the old ones.
+n=$#; rest=0
+while [ "$n" -gt 0 ]; do
+    a=$1; shift; n=$((n - 1))
+    if [ "$rest" = 1 ]; then set -- "$@" "$a"; continue; fi
+    case "$a" in
+        --no-build) ;;
+        --keys)
+            [ "$n" -gt 0 ] || { echo "tools/metal/run.sh: --keys needs SPEC|none" >&2; exit 2; }
+            v=$1; shift; n=$((n - 1))
+            if [ "$v" = none ]; then set -- "$@" --no-keys; else set -- "$@" --keys "$v"; fi ;;
+        --lenient)
+            echo "tools/metal/run.sh: --lenient is gone; set VICTORY_METAL_LENIENT=1 in the environment if you need it" >&2
+            exit 2 ;;
+        --) rest=1; set -- "$@" "$a" ;;
+        *) set -- "$@" "$a" ;;
+    esac
 done
-cp "$STAGE/x86_64-windows/victory_metal_bridge.dll" "$SYS32/victory_metal_bridge.dll"
 
-export WINEDLLPATH="$STAGE${WINEDLLPATH:+:$WINEDLLPATH}"
-export WINEDLLOVERRIDES="d3d12,dxgi=n,b"
-export VICTORY_METAL_LOG=1
-[ "$lenient" = 1 ] && export VICTORY_METAL_LENIENT=1
-# VICTORY_KEYS: the base reads `<from>-<to>/<every>[+<hold>]:<key>` itself (mac/livetr patch I1).
-if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$keys"; fi
-if [ "$input" = none ]; then unset VICTORY_INPUT_REPLAY; else export VICTORY_INPUT_REPLAY="$input"; fi
-export VICTORY_METAL_SKIP_GS_INDIRECT="${VICTORY_METAL_SKIP_GS_INDIRECT:-1}"
-export VICTORY_PATCH_MASKED="${VICTORY_PATCH_MASKED:-all}"
-export VICTORY_FAULT_TRACKING="${VICTORY_FAULT_TRACKING:-1}"
-# upstream's script, untouched; it enters its own checkout (this worktree) and builds victory.exe there
-VICTORY_SH="$ROOT/tools/macos/victory.sh"
-WINE="$WINE"; export WINE
-
-if [ "$plain" = 1 ]; then
-    exec "$VICTORY_SH" "$@"
+pre=""
+[ "$build" = 1 ] && [ "$dry" = 0 ] && pre="--build"
+if [ "$have_out" = 0 ] && [ "$dry" = 0 ]; then
+    out="$GTA6_ROOT/research/game-runs/$(date +%Y%m%d-%H%M%S)-metal"
+    # shellcheck disable=SC2086
+    exec "$ROOT/tools/mac/run.sh" --backend metal $pre --out "$out" "$@"
 fi
-
-[ -n "$out" ] || out="$GTA6_ROOT/research/game-runs/$(date +%Y%m%d-%H%M%S)-metal"
-mkdir -p "$out"
-# a Windows path for the Wine process: Z: is the Unix root
-VICTORY_METAL_NOTIMPL_LOG="Z:$(printf '%s' "$out/notimpl.log" | tr / '\\')"
-export VICTORY_METAL_NOTIMPL_LOG
-: >"$out/notimpl.log"
-echo "run: $* (limit ${timeout}s), logs in $out"
-start=$(date +%s)
-"$VICTORY_SH" "$@" >"$out/stdout.log" 2>"$out/stderr.log" &
-pid=$!
-if [ "$timeout" -gt 0 ]; then
-    (
-        sleep "$timeout"
-        echo "== time limit of ${timeout}s reached: stopping this prefix's Wine" >>"$out/stderr.log"
-        kill -TERM "$pid" 2>/dev/null || true
-        WINEPREFIX="$WINEPREFIX" "$WINESERVER" -k >/dev/null 2>&1 || true
-    ) &
-    wd=$!
-fi
-
-status=0
-wait "$pid" || status=$?
-if [ -n "${wd:-}" ]; then
-    pkill -P "$wd" 2>/dev/null || true
-    kill "$wd" 2>/dev/null || true
-fi
-# whatever Wine left of THIS prefix
-WINEPREFIX="$WINEPREFIX" "$WINESERVER" -k >/dev/null 2>&1 || true
-end=$(date +%s)
-{
-    echo "command: $*"
-    echo "seconds: $((end - start)) (limit $timeout); exit status: $status"
-    echo
-    echo "== the back's and the front's errors (first 40 distinct lines of stderr.log)"
-    grep -a '^victory-metal' "$out/stderr.log" | sort | uniq -c | sort -rn | head -40
-    echo
-    echo "== unimplemented methods, by number of calls"
-    "$here/notimpl-stats.sh" "$out/notimpl.log" 2>&1 | head -60
-} >"$out/summary.txt"
-cat "$out/summary.txt"
-exit "$status"
+# shellcheck disable=SC2086
+exec "$ROOT/tools/mac/run.sh" --backend metal $pre "$@"

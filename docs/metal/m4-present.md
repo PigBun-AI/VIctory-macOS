@@ -61,17 +61,16 @@ create device → create view → get layer → release_win_data. `release_layer
   as painted; title bar and frame normal. The screenshot was outside the repo and deleted.
   A second look at the game window (below) showed the window with the right title and size, black.
 
-## The game on our backend (`tools/metal/run.sh`)
+## The game on our backend (`tools/mac/run.sh --backend metal`)
 
-`tools/metal/run.sh [--lenient] [--timeout SEC] [--no-build] [--out DIR] [-- victory.exe args]`
-puts our dlls into `research/metal-play-prefix` (made on first use; the D3DMetal baseline
-`wineprefix-play` is refused), sets `WINEDLLOVERRIDES="d3d12,dxgi=n,b"`, `WINEDLLPATH`, `VICTORY_METAL_LOG=1`,
-`VICTORY_METAL_NOTIMPL_LOG`, and runs the upstream `tools/macos/victory.sh` (untouched; it builds
-victory.exe in this worktree). Without arguments: `run --execute <game dir>/game_scarlett_master.exe`.
-Logs and `summary.txt` go to `research/game-runs/<time>-metal` (outside the repo). `--timeout` default 600 s.
-`--lenient` (`VICTORY_METAL_LENIENT=1`): a list command without an encoding is skipped instead of failing
-the list; a survey mode so the game runs past the first missing draw call and the gap list is complete.
-`victory.toml` (git-ignored) is written if missing. `--exec` replaces the process with victory.sh as is.
+Since mac/livetr 4dc9fcaf the one launcher is `tools/mac/run.sh` (`docs/mac/RUN.md`); `tools/metal/run.sh` is a thin wrapper
+(`tools/mac/run.sh --backend metal`; it sets no game environment; `--timeout`, `--out`, `--keys`, `--input`, `--exec` are
+passed on, `--no-build` skips the `--build` the wrapper adds, `--lenient` is gone: set `VICTORY_METAL_LENIENT=1` in the
+environment). The launcher puts our dlls into `target/wineprefix-livetr-metal` (made on first use; the D3DMetal prefixes
+are refused), sets `WINEDLLOVERRIDES` (ending in `d3d12,dxgi=n,b`), `WINEDLLPATH`, `VICTORY_METAL_LOG=1`,
+`VICTORY_METAL_NOTIMPL_LOG`, and writes logs and `summary.txt` into the out directory (the wrapper's default:
+`research/game-runs/<time>-metal`, outside the repo). Default time limit 900 s. The text below describes the first runs of the
+old script (`--lenient` etc.) as they were.
 
 ### What the game reached (3 runs, 31 s / 300 s / 200 s)
 

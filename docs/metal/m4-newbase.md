@@ -92,7 +92,7 @@ misses ~800 (expected).
 ## After m5-gs, attributeAtVertex, replay (2026-11-27 22:35, on mac/livetr d4e89736)
 
 **m5-gs is carried** (indirect GS draws, cross-family BC castable lists refused in the front, CopyResource self
-copy; `m5-gs.md`). `run.sh` sets `VICTORY_METAL_SKIP_GS_INDIRECT=1` by default (run.sh only; the code draws them).
+copy; `m5-gs.md`). The launcher does not skip them (the default is the native behaviour; the skip is a registered skip node, `VICTORY_METAL_SKIP_GS_INDIRECT=1` by hand when needed).
 
 **attributeAtVertex, node by node.**
 
