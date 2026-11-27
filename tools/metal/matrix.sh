@@ -64,6 +64,11 @@ for r in mac_rows:
     mac_n += 1
     rows[r['id']] = r          # the Mac file wins
 rows = list(rows.values())
+# owner=ref-only: rows about D3DMetal's own behaviour (it is a reference, not a target; user decision
+# 2026-11-28 00:06). disposition is n/a; they are not gaps: left out of the coverage, the unproven
+# list and the stubbed list, and counted on the first line only.
+ref_only = [r for r in rows if r['owner'] == 'ref-only']
+rows = [r for r in rows if r['owner'] != 'ref-only']
 
 def num(x):
     try: return float(x)
@@ -86,7 +91,7 @@ for r in rows:
 
 out = []
 P = out.append
-P(f"rows: {len(rows)} (this line {MAIN}: {len(load(MAIN))}; Mac file {mac_from or 'not found, skipped'}: {mac_n}; skeleton rows of this file dropped when the Mac file is present)")
+P(f"rows: {len(rows)} counted + {len(ref_only)} ref-only, not counted (this line {MAIN}: {len(load(MAIN))}; Mac file {mac_from or 'not found, skipped'}: {mac_n}; skeleton rows of this file dropped when the Mac file is present)")
 
 def stats(sel):
     used = [r for r in sel if r['used'] == 'yes']

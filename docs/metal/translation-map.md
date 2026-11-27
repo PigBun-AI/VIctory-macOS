@@ -13,7 +13,7 @@ Working method: make each node right, in order; when every node is right, the pi
 
 | column | values |
 |---|---|
-| owner | `metal` this line (front/proto/back), `shared` shared translator or victory-gpu (annotated only, not changed here), `mac` loader patches, Rosetta, HLE memory, Wine (Mac lead fills; skeleton rows only) |
+| owner | `metal` this line (front/proto/back), `shared` shared translator or victory-gpu (annotated only, not changed here), `mac` loader patches, Rosetta, HLE memory, Wine (Mac lead fills; skeleton rows only), `ref-only` D3DMetal's own behaviour (its defects, no-op pipelines, out-of-range SetRenderVertexBuffers): D3DMetal is a reference, not a target (user, 2026-11-28 00:06); `disposition` is `n/a`, the row is not a gap and `tools/metal/matrix.sh` leaves it out of coverage and of both lists; `reference` may stay `d3dmetal` |
 | used | `yes` seen in the title (freq says how often, `freq_source` where from), `no` looked for and absent, `unknown` not measured |
 | status | `proven` a test with an independent reference (spec, AMD hardware, D3DMetal) passes on our path; `unproven` used but no such test, or only self-consistency tests; `gap` not implemented, stubbed, unsupported |
 | disposition | how the AMD hardware/driver part of the node is handled on the Mac path: `mapped` (same thing, other name), `translated` (rule-based conversion), `emulated` (done in software, differs in cost or edge cases), `stubbed` (accepted and ignored, or skipped), `unsupported` (refused) |
