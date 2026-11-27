@@ -45,7 +45,7 @@ The metal backend needs its stage (`--build`, `docs/mac/RUN.md`).
 | 5 | `never_requested:left_out` is zero | same summary, `never_requested=N`; top line `why=never_requested:left_out e.g. ray activation shader without BVH, left out` | 0. (`left_out` is evaluated at pipeline creation from `VICTORY_BVH_BUILDER=1`, so with the variable set it must be 0 from the first frame) |
 | 6 | The title was not killed | `== time limit 900s reached` in `stderr.log` (run.sh writes it only when the limit ended the run); no `0xc0000005`, no `kIOGPU`/`SubmissionsIgnored`; `summary.txt` "GPU errors" 0 | present / none. Compare with the builder-off run: a death only in the `on` run is F2 |
 | 7 | By-address memory worked | `title memory by address: a shader reads or writes through raw addresses` (once, when the first builder dispatch needs it), then every 10 s `title memory by address: N pages ... per frame ... that build ...` with "that build" > 0 | present, builds > 0 |
-| 8 | Lost accesses are not rising | `WARN title memory by address: shaders touched pages that had no copy ... frame= pages= made= held=` | few; not more than in the builder-off run (`check` prints the count of both). Each is a read that gave 0 or a dropped store |
+| 8 | Lost accesses are not rising | `WARN title memory by address: shaders touched pages that had no copy ... frame= pages= made= held=` | few; not more than in the builder-off run (`check` prints the count per log; compare by eye). Each is a read that gave 0 or a dropped store |
 | 9 | Cost | `ms/frame` lines, `frametime.log`, `mem.csv` | report only: builder on vs off per backend (7900XTX: ~+40 ms/frame; Mac: no number yet) |
 
 ## Garbage into title memory: guard and detection

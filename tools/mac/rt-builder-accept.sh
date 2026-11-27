@@ -34,7 +34,7 @@ check_one() { # $1 = stderr.log ; prints PASS/FAIL lines, returns 0 if all pass
     if [ -z "$sum" ]; then say FAIL "no drop-stats summary (VICTORY_MAC_DROP_STATS=1 not on, or run too short)"; else
         local rb lo
         rb=$(printf '%s' "$sum" | grep -o 'rt_builder_off=[0-9]*' | cut -d= -f2); lo=$(printf '%s' "$sum" | grep -o 'never_requested=[0-9]*' | cut -d= -f2)
-        [ "${rb:-0}" = 0 ] && say PASS "rt_builder_off=0 (whole run)" || say FAIL "rt_builder_off=$rb dispatches in the whole run (early ones before the builder was whole count; see per-present lines)"
+        if [ "${rb:-0}" = 0 ]; then say PASS "rt_builder_off=0 (whole run)"; elif [ -n "$runs" ]; then say INFO "rt_builder_off=$rb in the whole run (early dispatches before the builder was whole; the per-present check below decides)"; else say FAIL "rt_builder_off=$rb and the builder never ran"; fi
         [ "${lo:-0}" = 0 ] && say PASS "never_requested:left_out=0" || say FAIL "never_requested=$lo"
         printf '  info  %s\n' "$(printf '%s' "$sum" | sed 's/.*why\[/why[/; s/\] kind.*/]/')"
     fi
