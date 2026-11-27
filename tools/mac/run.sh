@@ -9,7 +9,8 @@
 # data = $VICTORY_DATA_DIR, else victory-data-livetr/data next to this checkout; cache = the
 # `cache` folder beside it, or --cache (outside the repository: derived game data never
 # goes in it), keys = Enter every 3 s from 8 s
-# (VICTORY_KEYS takes `<seconds>:<key>,...` or `<from>-<to>:<key>`), prefix =
+# (VICTORY_KEYS takes `<seconds>:<key>,...`, `<from>-<to>:<key>` or `<from>-<to>/<every>[+<hold>]:<key>`;
+# VICTORY_INPUT_RECORD / VICTORY_INPUT_REPLAY, docs/mac/PATCHES.md I1, are taken from the environment), prefix =
 # target/wineprefix-livetr (copy a working one there first, or let wineboot make it).
 # Wine: VICTORY_MAC_WINE_DIR, else ../VIctory-macOS/target/wine-cx next to this checkout.
 # Builds (once) the DXC front end tools/macos/dxc-d3dmetal.sh and sets

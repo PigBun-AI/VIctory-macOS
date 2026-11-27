@@ -138,8 +138,8 @@ off while `indirect::amd()` is true. Nothing is selected wrongly: there is no ot
 Runs a `victory.exe` under CrossOver Wine + D3DMetal in this checkout's own prefix
 (`target/wineprefix-livetr`: only that prefix's wineserver is ever stopped), outside-the-repo cache and data
 (`$VICTORY_DATA_DIR`, default `victory-data-livetr/data` next to the checkout), scripted keys, logs in `target/mac-runs/<time>`. Keys: this line's
-`VICTORY_KEYS` takes `<s>:<key>,...` or `<from>-<to>:<key>` (held); the `a-b/3:Enter` form of the Metal
-branch is not parsed here (the entry is dropped silently), so `run.sh` writes one `<s>:Enter` per 3 s.
+`VICTORY_KEYS` takes `<s>:<key>,...`, `<from>-<to>:<key>` (held) and, with patch I1, `<from>-<to>/<every>[+<hold>]:<key>`
+(`run.sh` itself still writes one `<s>:Enter` per 3 s, which also runs an exe built before I1). `VICTORY_INPUT_RECORD` and `VICTORY_INPUT_REPLAY` (I1) pass through from the environment.
 
 ### Findings of the first run under Rosetta (2026-11-27, not fixed)
 
@@ -203,6 +203,46 @@ addresses, home-directory and drive paths, `*.local` e-mail addresses, the autho
 commits, a private word list kept outside the repository), binaries and game files. Also
 `.gitignore` entries for `tools/mac/privacy.local.txt`. Usage in `docs/mac/PUSH.md`. Pure Mac
 tooling, nothing to recycle; delete it if pushes to the fork stop.
+
+### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
+
+*What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is
+off unless a variable is set, and with none set the title reads the host exactly as before.
+
+- `VICTORY_INPUT_RECORD=<file.jsonl>`: writes each change of a pad or of the held keys, tagged with the
+  world frame. Refuses a path inside a source tree (`.victory-root`).
+- `VICTORY_INPUT_REPLAY=<file.jsonl>`: feeds the title from a recorded file or from range lines such as
+  `{"from":0,"to":120,"ly":1.0,"rt":0.8,"buttons":4,"keys":[87,"Enter"]}`; `tools/mac/input/world-neutral.txt`
+  (`{"from":0,"to":100000000}`) is the neutral input. While the world frame is 0 (menus, loading) the pad
+  stays neutral and the keyboard, `VICTORY_KEYS` included, passes through; from world frame 1 the replay is
+  exclusive. Same lines work on D3DMetal and on the Metal backend: the clock lives above the host.
+- `VICTORY_KEYS=<from>-<to>/<every>[+<hold>]:<key>` (e.g. `8-900/3:Enter`): presses the key again every
+  `<every>` seconds, each press `<hold>` long (0.2 s by default); times may use scientific notation. The old
+  forms parse to the same schedule (a test checks it against a copy of the old parser).
+- `VICTORY_WORLD_DRAWS=<n>`: the draws that make a presented frame the world's first (default 500).
+
+*World frame.* `victory_gpu::mac::world::world_frame()`: 0 until the first present with at least 500 draws
+recorded by the title since the previous present, then 1, 2, ... one per present. Counted from the title's
+own draw recordings, not from draws run on the host (which lag a present with async submits and differ
+between hosts), so both backends latch on the same frame. With a recorder or replay set, the log says at
+which present it latched (`world frame 1`), the number `VICTORY_CAPTURE_FRAMES` uses.
+
+*Files.* New: `victory-gpu/src/mac/world.rs`, `victory-hle/src/modules/gameinput_mac/{mod,keys,json}.rs`,
+`tools/mac/input/world-neutral.txt`. Hooks in the Windows line's files: `victory-gpu/src/queue.rs` (1 line, at
+the present), `list.rs` (1 line, `count_draw`), `mac/mod.rs` (1 line), `victory-hle/src/modules/gameinput.rs`
+(the `mod` declaration, 1 line in `Hub::start`, and the Windows host's `scripted()` now calls
+`gameinput_mac::keys::scripted()`), `victory-hle/Cargo.toml` (`victory-core`, for the repo-path check),
+`Cargo.lock`.
+
+*Differences from VIctory-macOS.* The world frame counts the title's recorded draws (above); no benchmark
+JSON (`VICTORY_BENCH_*`), so no `VICTORY_BENCH_EXIT_FRAMES`; `VICTORY_KEYS_FILE` is not ported; the stand-in pad
+is made from the keys by this line's hub, so there is no `Source::scripted_keys`; replay `keys` also take key
+names (`"Enter"`).
+
+*Why the Windows line does not need it.* It has no deterministic input; its runs are driven by a person or by
+`VICTORY_KEYS` in wall-clock seconds. *Remove when.* The Windows line has a replay of its own (then drop
+`gameinput_mac/` and the hooks, and keep `world.rs` only if a consumer is left), or `VICTORY_KEYS` takes the
+repeat form upstream (then `keys.rs` and the `scripted()` call go).
 
 ## Not ported this round (decided with the Windows line as the reference)
 

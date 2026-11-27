@@ -1862,6 +1862,7 @@ mod state {
 }
 
 fn count_draw() {
+    crate::mac::world::draw();
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
