@@ -402,3 +402,50 @@ fn the_state_commands_map_to_proto() {
     assert!(matches!(cmds[6], Command::DispatchMesh(m) if (m.x, m.y, m.z) == (4, 5, 6)));
     let _ = ResId::NULL;
 }
+
+#[test]
+fn an_indirect_draw_is_render_work_and_an_indirect_dispatch_ends_the_pass() {
+    use victory_metal_front::indirect::{ArgDesc, CommandSignature};
+    let (_l, dev) = setup();
+    let (_r, v) = tex(&dev, RGBA8, rt());
+    let args = dev
+        .create_committed_buffer(
+            resource::HEAP_DEFAULT,
+            &ResourceDesc::buffer(4096, 0),
+            state::INDIRECT_ARGUMENT,
+        )
+        .unwrap();
+    let sig = |ty| {
+        CommandSignature::new(
+            20,
+            &[ArgDesc {
+                ty,
+                index: 0,
+                dest_offset: 0,
+                count: 0,
+            }],
+            None,
+        )
+        .unwrap()
+    };
+    let (draw, dispatch) = (sig(0), sig(2));
+    let mut l = list(&dev);
+    l.set_render_targets(rts(v), None);
+    l.draw(3, 1, 0, 0);
+    l.execute_indirect(&draw, 4, &args, 0, None);
+    l.execute_indirect(&dispatch, 1, &args, 0, None);
+    // A draw after the dispatch begins a new pass.
+    l.execute_indirect(&draw, 1, &args, 0, None);
+    let items = l.close().unwrap();
+    assert_eq!(
+        names(&items),
+        [
+            "begin", "draw", "indirect", "end", "indirect", "begin", "indirect", "end"
+        ]
+    );
+    // An indirect draw alone begins the pass too.
+    let mut l = list(&dev);
+    l.set_render_targets(rts(v), None);
+    l.execute_indirect(&draw, 1, &args, 0, None);
+    assert_eq!(names(&l.close().unwrap()), ["begin", "indirect", "end"]);
+}

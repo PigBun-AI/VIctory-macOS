@@ -5,8 +5,6 @@
 //! what needs the object tables (a resource that is not a texture, a pipeline
 //! made for another root signature, an address outside a live buffer).
 
-use std::sync::Arc;
-
 use victory_metal_proto::render::{
     BeginRenderPass, CLEAR_DEPTH, CLEAR_STENCIL, ClearAttachment, Draw, DrawIndexed, EndRenderPass,
     IndexFormat, LoadAction, SetIndexBuffer, SetPrimitiveTopology, SetScissors, SetVertexBuffers,
@@ -219,7 +217,7 @@ impl Run<'_> {
         let PsoBody::Graphics(p) = &pso.body else {
             return Err(Status::INVALID_ARG);
         };
-        if !Arc::ptr_eq(&pso.root_sig, &sig) {
+        if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
         let pipeline = p.clone();

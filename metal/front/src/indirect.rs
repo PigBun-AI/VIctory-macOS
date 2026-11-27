@@ -177,6 +177,16 @@ impl CommandList {
         }
         let mut signature = Vec::new();
         ExecuteIndirect::encode_signature(&sig.args, &mut signature);
+        // A draw or mesh dispatch is render work (the pass begins as for a
+        // direct draw); a compute dispatch ends the pass.
+        let draws = sig.args.iter().any(|a| a.kind.is_graphics());
+        if draws {
+            if !self.ensure_render_pass() {
+                return;
+            }
+        } else {
+            self.leave_render();
+        }
         self.push_item(Item::Indirect(IndirectItem {
             args: args.res,
             args_offset,

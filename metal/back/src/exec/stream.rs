@@ -25,6 +25,7 @@ use victory_metal_proto::cmd::{
     SetRootSignature, SetRootTable,
 };
 use victory_metal_proto::ids::{HeapId, QueueId};
+use victory_metal_proto::indirect::IndirectArgKind;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::Decoder;
 use victory_metal_proto::types::{BarrierClass, BindPoint, RootParamKind, format};
@@ -35,6 +36,15 @@ use crate::queue::Queue;
 use crate::record::CommandList;
 
 /// Checks everything about a block that does not need the object tables.
+/// `VICTORY_METAL_LOG=1`: what the validation pass refused.
+fn refused(what: &str) {
+    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+        eprintln!(
+            "victory-metal back: a command of the stream is refused: {what} is not implemented"
+        );
+    }
+}
+
 /// Returns the stream's capability bits.
 pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status> {
     let decoder = Decoder::new(block).map_err(|e| e.status())?;
@@ -70,6 +80,7 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
             // Not implemented by this back (the status is the same wherever
             // they stand, so they are refused before anything runs).
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
+                refused("SyncRecord, BufferData or DispatchIndirect");
                 return Err(Status::UNSUPPORTED);
             }
             other => {
@@ -92,11 +103,19 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
                     // Draws, mesh dispatch, vertex and index buffers: waiting for the render encoder.
                     Command::ExecuteIndirect(c)
                         if c.arguments()
-                            .any(|a| !super::indirect::is_compute_arg(a.kind)) =>
+                            .any(|a| !super::indirect::is_supported_arg(a.kind)) =>
                     {
+                        let kinds: Vec<_> = c.arguments().map(|a| a.kind).collect();
+                        refused(&format!(
+                            "ExecuteIndirect with vertex or index buffer views, or rays (stride {}, max {}, count {}, arguments {kinds:?})",
+                            c.stride,
+                            c.max_count,
+                            !c.count.is_null()
+                        ));
                         return Err(Status::UNSUPPORTED);
                     }
                     Command::Barrier(b) if b.class == BarrierClass::LAYOUT => {
+                        refused("a layout barrier");
                         return Err(Status::UNSUPPORTED);
                     }
                     _ => {}
@@ -554,11 +573,22 @@ impl Run<'_> {
             Some((l, _, b)) => (l, b),
             None => return Err(Status::BAD_STREAM),
         };
-        let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
-        let sig = bound.compute.sig.clone().ok_or(Status::INVALID_ARG)?;
-        let PsoBody::Compute { pipeline, threads } = &pso.body else {
-            return Err(Status::INVALID_ARG);
-        };
+        // The record's last argument says which side runs it.
+        let graphics = c
+            .arguments()
+            .any(|a| a.kind.is_action() && a.kind != IndirectArgKind::DISPATCH);
+        let sig = if graphics {
+            bound.graphics.sig.clone()
+        } else {
+            bound.compute.sig.clone()
+        }
+        .ok_or(Status::INVALID_ARG)?;
+        let pso = if graphics {
+            bound.gpso.clone()
+        } else {
+            bound.pso.clone()
+        }
+        .ok_or(Status::INVALID_ARG)?;
         if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
@@ -570,9 +600,20 @@ impl Run<'_> {
             return Err(Status::INVALID_ARG);
         }
         let plan = super::indirect::plan(c, Some(&sig))?;
-        if plan.roots.is_empty() {
-            write_root_arguments(list, bound, false)?;
+        let (side_graphics, action) = (graphics, plan.action);
+        if side_graphics != (action != super::indirect::Action::Dispatch) {
+            return Err(Status::INVALID_ARG);
         }
+        if plan.roots.is_empty() {
+            write_root_arguments(list, bound, graphics)?;
+        }
+        let side = if graphics {
+            &bound.graphics
+        } else {
+            &bound.compute
+        };
+        use super::indirect::Action;
+        let draws = matches!(action, Action::Draw | Action::DrawIndexed);
         let spec = crate::indirect::IndirectDispatch {
             args: &args,
             args_offset: c.args_offset,
@@ -582,20 +623,53 @@ impl Run<'_> {
             dispatch_offset: plan.dispatch_offset,
             record_bytes: plan.record_bytes,
             roots: &plan.roots,
-            base: &bound.compute.shadow,
+            base: &side.shadow,
+            action_words: match action {
+                Action::Draw => 4,
+                Action::DrawIndexed => 5,
+                _ => 3,
+            },
+            draws,
+            index_type: list.index_ir_type(),
+            consumer: if graphics {
+                crate::stages::VERTEX
+                    | crate::stages::OBJECT
+                    | crate::stages::MESH
+                    | crate::stages::FRAGMENT
+            } else {
+                crate::stages::DISPATCH
+            },
         };
         // The kernel makes its own copies of the argument buffer; otherwise
-        // the dispatches read the one the list has, written as for a dispatch.
+        // the draws and dispatches read the one the list has, written as for
+        // a direct one.
         let replaced = spec.replaces_root_arguments();
-        let r = list
-            .execute_indirect(kernels, pipeline, *threads, &spec)
-            .map_err(|e| {
-                self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
-                status_of(&e)
-            });
-        // The argument table now points at a record's copy: the next dispatch writes its own.
+        let r = match (&pso.body, action) {
+            (PsoBody::Compute { pipeline, threads }, Action::Dispatch) => {
+                list.execute_indirect(kernels, pipeline, *threads, &spec)
+            }
+            (PsoBody::Graphics(g), a) if a != Action::Dispatch => {
+                let kind = match a {
+                    Action::Draw => crate::draw::IndirectDraw::Draw,
+                    Action::DrawIndexed => crate::draw::IndirectDraw::DrawIndexed,
+                    _ => crate::draw::IndirectDraw::Mesh,
+                };
+                list.execute_indirect_draws(kernels, g, kind, &spec)
+            }
+            _ => return Err(Status::INVALID_ARG),
+        }
+        .map_err(|e| {
+            self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
+            status_of(&e)
+        });
+        // The argument table now points at a record's copy: the next draw or
+        // dispatch writes its own.
         if replaced {
-            bound.compute.dirty = true;
+            if graphics {
+                bound.graphics.dirty = true;
+            } else {
+                bound.compute.dirty = true;
+            }
         }
         r
     }

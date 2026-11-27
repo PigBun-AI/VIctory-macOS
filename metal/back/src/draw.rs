@@ -52,6 +52,7 @@ use objc2_metal::{
 
 use crate::descriptors::{RingAlloc, bind_point};
 use crate::error::{Error, Result};
+use crate::indirect::{IndirectDispatch, Kernels};
 use crate::render::{GraphicsPipeline, Kind};
 use crate::stages::{FRAGMENT, MESH, OBJECT, VERTEX};
 use crate::texture::{TexDim, Texture, ViewDim, ViewSpec};
@@ -953,20 +954,19 @@ impl crate::record::CommandList {
         index: Option<(u64, bool)>,
         words: [u32; 5],
     ) -> Result<()> {
-        let g = p
-            .geometry()
-            .ok_or_else(|| Error::BadArgument("a geometry pipeline without geometry facts".into()))?;
+        let g = p.geometry().ok_or_else(|| {
+            Error::BadArgument("a geometry pipeline without geometry facts".into())
+        })?;
         let verts = prim.vertex_count();
         let overlap = prim.strip_overlap();
         let count = words[0];
         // The runtime's `IRRuntimeCalculateDrawInfoForGSEmulation`.
         const PAYLOAD_TOTAL: u32 = 16384;
         const PAYLOAD_METADATA: u32 = 32;
-        let by_payload = (((PAYLOAD_TOTAL - PAYLOAD_METADATA) / g.vertex_bytes.max(1)) / verts) * verts;
+        let by_payload =
+            (((PAYLOAD_TOTAL - PAYLOAD_METADATA) / g.vertex_bytes.max(1)) / verts) * verts;
         let by_amplification = 1024 * g.max_input_primitives;
-        let prims_per_object = (by_payload / verts)
-            .min(by_amplification)
-            .min(256 / verts);
+        let prims_per_object = (by_payload / verts).min(by_amplification).min(256 / verts);
         if prims_per_object == 0 {
             return Err(Error::BadArgument(format!(
                 "a geometry pipeline whose vertex is {} bytes does not fit the payload",
@@ -1075,6 +1075,138 @@ impl crate::record::CommandList {
         self.stats.mesh_draws += 1;
         Ok(())
     }
+
+    /// The converter runtime's index type of the bound index buffer
+    /// (`IRMetalIndexToIRIndex`: Metal's index type + 1), 0 without one.
+    pub(crate) fn index_ir_type(&self) -> u32 {
+        match self.rstate.index {
+            Some(ib) if ib.wide => 2,
+            Some(_) => 1,
+            None => 0,
+        }
+    }
+
+    /// `ExecuteIndirect` of draws or mesh dispatches (`kind`), the records
+    /// described by `spec` (see [`crate::indirect`]).
+    ///
+    /// A mesh dispatch with no count buffer and no root arguments reads the
+    /// application's records where they are. Everything else goes through
+    /// the expansion kernel: it clamps the records to the count, copies the
+    /// root arguments each record changes, and for a vertex draw writes the
+    /// converter's draw parameters (`IRRuntimeDrawParams` and the index
+    /// type), which a shader reads and an indirect draw has no way to give.
+    /// Then one indirect draw per record. Vertex and index buffer changes in
+    /// a record are not done (the argument table's vertex buffer addresses
+    /// are written by the CPU, and Metal's indirect indexed draw takes the
+    /// index buffer when it is encoded): the interpreter refuses those.
+    pub fn execute_indirect_draws(
+        &mut self,
+        kernels: &Kernels,
+        p: &GraphicsPipeline,
+        kind: IndirectDraw,
+        spec: &IndirectDispatch<'_>,
+    ) -> Result<()> {
+        self.live()?;
+        let mesh = p.kind() == Kind::Mesh;
+        match kind {
+            IndirectDraw::Mesh if !mesh => {
+                return Err(Error::BadArgument(
+                    "an indirect mesh dispatch with a vertex pipeline".into(),
+                ));
+            }
+            IndirectDraw::Draw | IndirectDraw::DrawIndexed => {
+                if p.kind() == Kind::Geometry {
+                    return Err(Error::Unsupported(
+                        "an indirect draw with a geometry shader".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
+        let size = |t: [u32; 3]| MTLSize {
+            width: t[0] as usize,
+            height: t[1] as usize,
+            depth: t[2] as usize,
+        };
+        match kind {
+            IndirectDraw::Mesh => {
+                let info = p.mesh().ok_or_else(|| {
+                    Error::BadArgument("a mesh pipeline without mesh facts".into())
+                })?;
+                let stages: &[u16] = if info.object_threads.is_some() {
+                    &[OBJECT, MESH, FRAGMENT]
+                } else {
+                    &[MESH, FRAGMENT]
+                };
+                let (object, mesh_threads) =
+                    (info.object_threads.unwrap_or([1, 1, 1]), info.mesh_threads);
+                self.execute_indirect_with(kernels, spec, |l, r| {
+                    if let Some(t) = r.tlab_va {
+                        l.set_root_arguments_va(t)?;
+                    }
+                    let enc = l.begin_draw(p, stages)?;
+                    enc.drawMeshThreadgroupsWithIndirectBuffer_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
+                        r.action_va,
+                        size(object),
+                        size(mesh_threads),
+                    );
+                    l.stats.mesh_draws += 1;
+                    Ok(())
+                })
+            }
+            IndirectDraw::Draw | IndirectDraw::DrawIndexed => {
+                let prim = self.vertex_pipeline_checks(p)?;
+                let ib = self.rstate.index;
+                if kind == IndirectDraw::DrawIndexed && ib.is_none() {
+                    return Err(Error::BadArgument(
+                        "an indexed draw without an index buffer".into(),
+                    ));
+                }
+                self.bind_vertex_buffers(p)?;
+                self.execute_indirect_with(kernels, spec, |l, r| {
+                    if let Some(t) = r.tlab_va {
+                        l.set_root_arguments_va(t)?;
+                    }
+                    l.table
+                        .set_address(bind_point::DRAW_ARGUMENTS as u32, r.action_va)?;
+                    l.table
+                        .set_address(bind_point::UNIFORMS as u32, r.action_va + UNIFORMS_AT)?;
+                    let enc = l.begin_draw(p, &[VERTEX, FRAGMENT])?;
+                    match ib {
+                        Some(ib) if kind == IndirectDraw::DrawIndexed => {
+                            let ty = if ib.wide {
+                                MTLIndexType::UInt32
+                            } else {
+                                MTLIndexType::UInt16
+                            };
+                            // SAFETY: the address is a live buffer's; Metal
+                            // reads the records the expansion wrote.
+                            unsafe {
+                                enc.drawIndexedPrimitives_indexType_indexBuffer_indexBufferLength_indirectBuffer(
+                                    prim.metal(),
+                                    ty,
+                                    ib.va,
+                                    ib.size as usize,
+                                    r.action_va,
+                                );
+                            }
+                        }
+                        _ => enc.drawPrimitives_indirectBuffer(prim.metal(), r.action_va),
+                    }
+                    l.stats.draws += 1;
+                    Ok(())
+                })
+            }
+        }
+    }
+}
+
+/// What the action of an indirect record is, for [`CommandList::execute_indirect_draws`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndirectDraw {
+    Draw,
+    DrawIndexed,
+    Mesh,
 }
 
 // ---------------------------------------------------------------------------

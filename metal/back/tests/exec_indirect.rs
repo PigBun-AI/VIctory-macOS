@@ -377,7 +377,8 @@ fn what_cannot_run_is_refused_with_a_status() {
         }
     };
     assert_eq!(r.run(&past, 1), Status::INVALID_ARG);
-    // Draws wait for the render encoder: UNSUPPORTED before anything runs.
+    // A draw or a mesh dispatch needs a graphics pipeline and root signature
+    // bound: this list has a compute one.
     let draw = encode(&[arg(IndirectArgKind::DRAW, 0, 0, 0)]);
     let c = Call {
         signature: &draw,
@@ -386,7 +387,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::UNSUPPORTED);
+    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
     let mesh = encode(&[arg(IndirectArgKind::DISPATCH_MESH, 0, 0, 0)]);
     let c = Call {
         signature: &mesh,
@@ -395,7 +396,8 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::UNSUPPORTED);
+    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    // Vertex and index buffer views in a record: UNSUPPORTED before anything runs.
     let vb = encode(&[
         arg(IndirectArgKind::VERTEX_BUFFER_VIEW, 0, 0, 0),
         arg(IndirectArgKind::DISPATCH, 0, 0, 0),

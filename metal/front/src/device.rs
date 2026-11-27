@@ -1167,10 +1167,6 @@ impl CommandList {
 
     pub(crate) fn push_item(&mut self, item: Item) {
         if self.state == ListState::Recording {
-            // An indirect dispatch is compute work: it ends the render pass.
-            if matches!(item, Item::Indirect(_)) {
-                self.leave_render();
-            }
             self.items.push(item);
         }
     }

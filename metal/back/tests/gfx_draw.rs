@@ -14,6 +14,7 @@ use common_msc::dxil_or_skip;
 use exec_support::*;
 use victory_metal_proto::cmd::*;
 use victory_metal_proto::ids::*;
+use victory_metal_proto::indirect::{ExecuteIndirect, IndirectArg, IndirectArgKind};
 use victory_metal_proto::pso::*;
 use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
@@ -1154,7 +1155,9 @@ Out main(VSOut i) { Out o; o.c = i.col; o.extra = float4(1, 0, 1, 1); return o; 
 /// first target is drawn as usual.
 #[test]
 fn outputs_beyond_the_pipelines_targets_are_dropped() {
-    let Some(ps) = dxil_or_skip("draw_ps2", "ps_6_6", PS_TWO_OUTPUTS) else { return };
+    let Some(ps) = dxil_or_skip("draw_ps2", "ps_6_6", PS_TWO_OUTPUTS) else {
+        return;
+    };
     let Some(mut g) = setup() else { return };
     g.ps = ps;
     let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
@@ -1198,7 +1201,9 @@ fn geometry_pso(g: &Gfx, gs: &[u8]) -> PsoId {
 
 #[test]
 fn a_geometry_shader_rewrites_the_triangles_it_is_given() {
-    let Some(gs) = dxil_or_skip("draw_gs_recolour", "gs_6_6", GS_RECOLOUR) else { return };
+    let Some(gs) = dxil_or_skip("draw_gs_recolour", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
     let Some(g) = setup() else { return };
     let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
     let (_vb, va) = g.vertex_buffer(&HALF.vertices());
@@ -1218,7 +1223,9 @@ fn a_geometry_shader_rewrites_the_triangles_it_is_given() {
 
 #[test]
 fn a_geometry_shader_can_make_more_primitives_than_it_reads() {
-    let Some(gs) = dxil_or_skip("draw_gs_strip", "gs_6_6", GS_STRIP) else { return };
+    let Some(gs) = dxil_or_skip("draw_gs_strip", "gs_6_6", GS_STRIP) else {
+        return;
+    };
     let Some(g) = setup() else { return };
     let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
     let c = [0.0, 1.0, 0.0, 1.0];
@@ -1245,7 +1252,9 @@ fn a_geometry_shader_can_make_more_primitives_than_it_reads() {
 
 #[test]
 fn indexed_draws_and_several_primitives_go_through_a_geometry_shader() {
-    let Some(gs) = dxil_or_skip("draw_gs_recolour2", "gs_6_6", GS_RECOLOUR) else { return };
+    let Some(gs) = dxil_or_skip("draw_gs_recolour2", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
     let Some(g) = setup() else { return };
     let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
     let c = [0.0, 1.0, 0.0, 1.0];
@@ -1298,4 +1307,192 @@ fn indexed_draws_and_several_primitives_go_through_a_geometry_shader() {
         c: red,
     };
     assert_image(&got, &reference(bg, &[t1, t2]), "gs indexed quad");
+}
+
+// ---------------------------------------------------------------------------
+// ExecuteIndirect of draws and mesh dispatches.
+
+const TRI_A: Tri = Tri {
+    p: [[-0.91, -0.87], [0.13, -0.79], [-0.83, 0.17]],
+    z: 0.5,
+    c: [1.0, 0.0, 0.0, 1.0],
+};
+const TRI_B: Tri = Tri {
+    p: [[0.89, 0.83], [-0.07, 0.77], [0.81, -0.11]],
+    z: 0.5,
+    c: [0.0, 0.0, 1.0, 1.0],
+};
+
+fn signature(kind: IndirectArgKind) -> Vec<u8> {
+    let mut v = Vec::new();
+    IndirectArg {
+        kind,
+        index: 0,
+        dest_offset: 0,
+        count: 0,
+    }
+    .put(&mut v);
+    v
+}
+
+impl Gfx {
+    fn execute_indirect(
+        &self,
+        kind: IndirectArgKind,
+        stride: u32,
+        max_count: u32,
+        args: ResId,
+        count: Option<ResId>,
+    ) -> Command<'static> {
+        // The signature bytes live as long as the test.
+        let sig: &'static [u8] = Box::leak(signature(kind).into_boxed_slice());
+        Command::ExecuteIndirect(ExecuteIndirect {
+            args,
+            args_offset: 0,
+            count: count.unwrap_or(ResId::NULL),
+            count_offset: 0,
+            max_count,
+            stride,
+            root_sig: RootSigId::NULL,
+            signature: sig,
+        })
+    }
+}
+
+#[test]
+fn indirect_draws_run_the_records_a_count_buffer_allows() {
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let mut v = TRI_A.vertices().to_vec();
+    v.extend(TRI_B.vertices());
+    let (_vb, va) = g.vertex_buffer(&v);
+    let pso = g.pso(g.desc());
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // {vertex count, instance count, start vertex, start instance}
+    cpu_write(args.cpu_addr, &[3, 1, 0, 0, 3, 1, 3, 0]);
+    let count = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    for (n, want) in [
+        (None, vec![TRI_A, TRI_B]),
+        (Some(1u32), vec![TRI_A]),
+        (Some(0), vec![]),
+    ] {
+        if let Some(n) = n {
+            cpu_write(count.cpu_addr, &[n]);
+        }
+        let mut cmds = g.state(pso, va, 6 * STRIDE);
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 2, args.res, n.map(|_| count.res)));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        assert_image(
+            &got,
+            &reference(bg, &want),
+            &format!("indirect draws, count {n:?}"),
+        );
+    }
+}
+
+#[test]
+fn indirect_indexed_draws_use_the_index_buffer_of_the_list() {
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let mut v = TRI_A.vertices().to_vec();
+    v.extend(TRI_B.vertices());
+    let (_vb, va) = g.vertex_buffer(&v);
+    let ib = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // 32-bit indices 0..5, so the second record starts at index 3.
+    cpu_write(ib.cpu_addr, &[0, 1, 2, 3, 4, 5]);
+    let pso = g.pso(g.desc());
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // {index count, instance count, start index, base vertex, start instance}
+    cpu_write(args.cpu_addr, &[3, 1, 0, 0, 0, 3, 1, 3, 0, 0]);
+    let mut cmds = g.state(pso, va, 6 * STRIDE);
+    cmds.push(Command::SetIndexBuffer(SetIndexBuffer {
+        va: ib.gpu_va,
+        size: 24,
+        format: IndexFormat::U32,
+    }));
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(g.execute_indirect(IndirectArgKind::DRAW_INDEXED, 20, 2, args.res, None));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    assert_image(
+        &got,
+        &reference(bg, &[TRI_A, TRI_B]),
+        "indirect indexed draws",
+    );
+}
+
+#[test]
+fn an_indirect_mesh_dispatch_reads_its_groups_and_the_count_buffer() {
+    let Some(ms) = dxil_or_skip("draw_ms", "ms_6_6", MS) else {
+        return;
+    };
+    let Some(ps) = dxil_or_skip("draw_ps_mesh", "ps_6_6", PS) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    if !has_mesh(&g.fx) {
+        eprintln!("SKIPPED: no mesh shaders on this device");
+        return;
+    }
+    g.ps = ps;
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let mut d = GraphicsPsoDesc::new();
+    d.ms = StageCode::of(&ms);
+    d.ps = StageCode::of(&g.ps);
+    d.rt_count = 1;
+    d.rt_formats[0] = format::R8G8B8A8_UNORM;
+    d.raster.cull = CullMode::NONE;
+    d.depth.depth_enable = 0;
+    d.depth.depth_write = 0;
+    let pso = g.pso(d);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // Two records of {x, y, z}: the first dispatches, the second is empty.
+    cpu_write(args.cpu_addr, &[1, 1, 1, 0, 1, 1]);
+    let count = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    let mut green = BIG;
+    green.c = [0.0, 1.0, 0.0, 1.0];
+    // (count buffer value, records, what is drawn): the plain form reads
+    // the application's buffer in place, the others go through the kernel.
+    for (n, max, want) in [
+        (None, 1, vec![green]),
+        (Some(1u32), 2, vec![green]),
+        (Some(0), 2, vec![]),
+    ] {
+        if let Some(n) = n {
+            cpu_write(count.cpu_addr, &[n]);
+        }
+        let mut cmds = vec![
+            Command::SetRootSignature(SetRootSignature {
+                bind_point: BindPoint::GRAPHICS,
+                root_sig: g.sig,
+            }),
+            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
+            Command::SetViewports(SetViewports::from_slice(&[Viewport::new(
+                0.0, 0.0, W as f32, H as f32,
+            )])),
+            Command::SetScissors(SetScissors::from_slice(&[Rect::new(
+                0, 0, W as i32, H as i32,
+            )])),
+        ];
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(g.execute_indirect(
+            IndirectArgKind::DISPATCH_MESH,
+            12,
+            max,
+            args.res,
+            n.map(|_| count.res),
+        ));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        assert_image(
+            &got,
+            &reference(bg, &want),
+            &format!("indirect mesh, count {n:?}"),
+        );
+    }
 }

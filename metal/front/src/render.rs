@@ -176,6 +176,11 @@ impl CommandList {
         });
     }
 
+    /// [`Self::ensure_pass`] for the indirect draws of `indirect.rs`.
+    pub(crate) fn ensure_render_pass(&mut self) -> bool {
+        self.ensure_pass()
+    }
+
     /// Begins the pass of the bound targets if none is open; false when
     /// there is nothing to render to.
     fn ensure_pass(&mut self) -> bool {
