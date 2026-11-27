@@ -627,7 +627,7 @@ pub fn emit(
             );
         // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
         let _ = scene_kernel; // mac S3
-        let wide_on = wide_option.as_ref().map_or(true, |v| v != "0"); // mac S3
+        let wide_on = wide_option.as_ref().is_none_or(|v| v != "0"); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
