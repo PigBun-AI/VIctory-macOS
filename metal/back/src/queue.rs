@@ -21,8 +21,8 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandQueue, MTL4CommandQueueError,
-    MTL4CommandQueueErrorDomain, MTL4CommitFeedback, MTL4CommitOptions, MTLDevice, MTLEvent,
-    MTLResidencySet, MTLSharedEvent,
+    MTL4CommandQueueErrorDomain, MTL4CommitFeedback, MTL4CommitOptions, MTLDevice, MTLDrawable,
+    MTLEvent, MTLResidencySet, MTLSharedEvent,
 };
 use std::ptr::NonNull;
 
@@ -544,6 +544,25 @@ impl Queue {
     /// Lists must be recorded one after the other and submitted in the order
     /// they were recorded (the constant ring is sealed per submission).
     pub fn submit(&self, lists: Vec<CommandList>) -> Result<u64> {
+        self.submit_with(lists, None)
+    }
+
+    /// [`Queue::submit`] for lists that write `drawable`: the queue waits
+    /// for the display to be done with the drawable before the lists run
+    /// and signals it after the commit (the caller then presents it).
+    pub fn submit_drawable(
+        &self,
+        lists: Vec<CommandList>,
+        drawable: &ProtocolObject<dyn MTLDrawable>,
+    ) -> Result<u64> {
+        self.submit_with(lists, Some(drawable))
+    }
+
+    fn submit_with(
+        &self,
+        lists: Vec<CommandList>,
+        drawable: Option<&ProtocolObject<dyn MTLDrawable>>,
+    ) -> Result<u64> {
         self.check()?;
         if lists.is_empty() {
             return Err(Error::BadArgument("no command lists".into()));
@@ -564,6 +583,9 @@ impl Queue {
         let value = self.inner.timeline.submitted.fetch_add(1, Ordering::AcqRel) + 1;
         let mut buffers: Vec<NonNull<ProtocolObject<dyn MTL4CommandBuffer>>> =
             lists.iter().map(CommandList::raw_command_buffer).collect();
+        if let Some(d) = drawable {
+            self.inner.raw.waitForDrawable(d);
+        }
         // SAFETY: `buffers` holds valid, ended command buffers for the call.
         unsafe {
             self.inner.raw.commit_count_options(
@@ -571,6 +593,9 @@ impl Queue {
                 buffers.len(),
                 &commit_options(&self.inner.sink),
             );
+        }
+        if let Some(d) = drawable {
+            self.inner.raw.signalDrawable(d);
         }
         let event: &ProtocolObject<dyn MTLEvent> =
             ProtocolObject::from_ref(&*self.inner.timeline.event);
