@@ -223,6 +223,66 @@ fn bc_formats_copy_in_blocks_including_odd_and_tiny_mips() {
     }
 }
 
+/// D3D12 gives the footprint of a mip smaller than a block as one whole
+/// block (a 2x2 or 1x1 mip of a BC texture is 4x4 in `GetCopyableFootprints`)
+/// and `CopyTextureRegion` takes it: the game's streaming of BC mips does.
+/// The region then reaches past the mip's texel size, up to its block-rounded
+/// size, and nothing is refused.
+#[test]
+fn a_bc_footprint_of_a_mip_smaller_than_a_block_is_one_whole_block() {
+    let (_g, d, q) = setup();
+    for (fmt, block) in [
+        (dxgi::BC1_UNORM, 8u32),
+        (dxgi::BC4_UNORM, 8),
+        (dxgi::BC5_SNORM, 16),
+        (dxgi::BC7_UNORM, 16),
+    ] {
+        // 16x16 with a full chain: mips 3 (2x2) and 4 (1x1) are inside one block.
+        let desc = TextureDesc {
+            dim: TexDim::D2,
+            format: fmt,
+            width: 16,
+            height: 16,
+            depth_or_array: 1,
+            mips: 5,
+            samples: 1,
+            usage: SRV,
+        };
+        let t = d.create_texture(&desc).unwrap();
+        for mip in 2..5 {
+            let img = pattern(block as usize, fmt * 13 + mip);
+            let src = d.create_buffer(BufferKind::Upload, u64::from(block)).unwrap();
+            src.write(0, &img).unwrap();
+            let mut l = q.begin_list().unwrap();
+            l.copy_buffer_to_texture(
+                &loc(&t, mip, 0),
+                &buf_loc(&src, fmt, block, 4),
+                [4, 4, 1],
+            )
+            .unwrap_or_else(|e| panic!("format {fmt} mip {mip}: upload of the 4x4 footprint: {e}"));
+            l.end().unwrap();
+            run(&q, l);
+            let dst = d.create_buffer(BufferKind::Readback, u64::from(block)).unwrap();
+            let mut l = q.begin_list().unwrap();
+            l.copy_texture_to_buffer(&buf_loc(&dst, fmt, block, 4), &loc(&t, mip, 0), [4, 4, 1])
+                .unwrap_or_else(|e| panic!("format {fmt} mip {mip}: download of the 4x4 footprint: {e}"));
+            l.end().unwrap();
+            run(&q, l);
+            let mut got = vec![0u8; block as usize];
+            dst.read(0, &mut got).unwrap();
+            assert_eq!(got, img, "format {fmt} mip {mip}");
+        }
+        // Past the rounded size is still an error.
+        let src = d.create_buffer(BufferKind::Upload, 256).unwrap();
+        let mut l = q.begin_list().unwrap();
+        assert!(
+            l.copy_buffer_to_texture(&loc(&t, 3, 0), &buf_loc(&src, fmt, 2 * block, 4), [8, 4, 1])
+                .is_err(),
+            "8 wide on a 2x2 mip"
+        );
+    }
+}
+
 #[test]
 fn one_d_and_three_d_textures_round_trip() {
     let (_g, d, q) = setup();

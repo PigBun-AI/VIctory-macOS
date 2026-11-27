@@ -7,7 +7,9 @@
 //! the original API would call an error is checked here and is an
 //! [`Error`], never a silent clamp or a wrong copy:
 //!
-//! * the region lies inside the mip level, and inside the buffer
+//! * the region lies inside the mip level (a compressed mip: inside its size
+//!   rounded up to whole blocks, as the original API's footprint of a 2x2 or
+//!   1x1 BC mip is one 4x4 block), and inside the buffer
 //!   (`offset + last row` reaches no further than its length);
 //! * the row pitch is at least one row of the region and a multiple of the
 //!   texel size (of the block size for compressed formats): what Metal needs
@@ -176,7 +178,12 @@ fn check_texture(
         let end = o
             .checked_add(s)
             .ok_or_else(|| Error::BadArgument(format!("{what}: region overflows")))?;
-        if end > mip[axis] {
+        // A compressed mip is stored in whole blocks: the footprint of a 2x2
+        // mip of a BC texture is one 4x4 block, and the original API copies
+        // it whole (`GetCopyableFootprints` says 4x4). The edge of the mip is
+        // therefore its size rounded up to the block.
+        let edge = mip[axis].next_multiple_of(block);
+        if end > edge {
             return Err(Error::BadArgument(format!(
                 "{what}: region {o}+{s} on axis {axis} is outside mip {} of {}",
                 loc.mip, mip[axis]
@@ -190,9 +197,7 @@ fn check_texture(
             }
             if s % block != 0 {
                 if end == mip[axis] {
-                    size[axis] = s
-                        .next_multiple_of(block)
-                        .min(mip[axis].next_multiple_of(block));
+                    size[axis] = s.next_multiple_of(block).min(edge);
                 } else {
                     return Err(Error::BadArgument(format!(
                         "{what}: size {s} on axis {axis} is not a whole number of {block}-texel blocks"
