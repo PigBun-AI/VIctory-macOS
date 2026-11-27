@@ -48,6 +48,8 @@ pub mod pages;
 #[cfg(target_vendor = "apple")]
 pub mod pipeline;
 #[cfg(target_vendor = "apple")]
+pub mod present;
+#[cfg(target_vendor = "apple")]
 pub mod queue;
 #[cfg(target_vendor = "apple")]
 pub mod record;

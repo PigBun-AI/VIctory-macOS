@@ -281,6 +281,12 @@ fn every_sync_block_round_trips() {
     check_block::<CreatePlacedBufferArgs>();
     check_block::<GetResourceAllocationInfoArgs>();
     check_block::<CreateGraphicsPipelineArgs>();
+    check_block::<CreateSwapchainArgs>();
+    check_block::<ResizeSwapchainArgs>();
+    check_block::<DestroySwapchainArgs>();
+    check_block::<PresentArgs>();
+    check_block::<SwapchainInfoArgs>();
+    check_block::<SetSwapchainLatencyArgs>();
     // Nothing was forgotten: one block type per registry row.
     assert_eq!(SYNC_OPS.len(), SyncOp::KNOWN.len());
 }

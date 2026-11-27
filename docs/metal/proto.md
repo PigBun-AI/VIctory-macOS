@@ -196,6 +196,12 @@ only in dumps.
 | 68 | `CREATE_PLACED_BUFFER` (`CreatePlacedBufferArgs`) | 1 | 56 | Implemented | head: CallHead @0, heap: MemHeapId @8, offset: u64 @16, size: u64 @24, res: ResId @32, gpu_va: u64 @40, cpu_addr: u64 @48 | in: heap, offset, size; out: res, gpu_va, cpu_addr (0 in a DEFAULT heap) |
 | 69 | `GET_RESOURCE_ALLOCATION_INFO` (`GetResourceAllocationInfoArgs`) | 1 | 72 | Implemented | head: CallHead @0, kind: ResKind @8, dimension: TexDim @12, format: u32 @16, width: u32 @20, height: u32 @24, depth_or_array: u32 @28, mips: u32 @32, samples: u32 @36, usage: u32 @40, heap_kind: MemKind @44, buffer_size: u64 @48, size: u64 @56, alignment: u64 @64 | in: kind (ResKind), the texture fields or buffer_size, heap_kind; out: size, alignment (what Metal's heap size-and-align says) |
 | 80 | `CREATE_GRAPHICS_PIPELINE` (`CreateGraphicsPipelineArgs`) | 1 | 2080 | Implemented | head: CallHead @0, root_sig: RootSigId @8, flags: u32 @12, pso: PsoId @16, desc: GraphicsPsoDesc @24 | in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make) |
+| 96 | `CREATE_SWAPCHAIN` (`CreateSwapchainArgs`) | 1 | 120 | Implemented | head: CallHead @0, window: u64 @8, width: u32 @16, height: u32 @20, format: u32 @24, buffer_count: u32 @28, usage: u32 @32, flags: u32 @36, max_latency: u32 @40, swapchain: SurfaceId @44, surface_format: u32 @48, buffers: [u32; 16] @56 | in: window (WindowRef), width, height, format (DXGI), buffer_count, usage, flags (swapchain_flags), max_latency; out: swapchain, surface_format, buffers (ResId numbers of the back buffers) |
+| 97 | `RESIZE_SWAPCHAIN` (`ResizeSwapchainArgs`) | 1 | 96 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, width: u32 @12, height: u32 @16, format: u32 @20, buffer_count: u32 @24, usage: u32 @28, buffers: [u32; 16] @32 | in: swapchain, width, height, format (0 = keep), buffer_count (0 = keep), usage (0 = keep); out: buffers (new ResId numbers) |
+| 98 | `DESTROY_SWAPCHAIN` (`DestroySwapchainArgs`) | 1 | 16 | Implemented | head: CallHead @0, swapchain: SurfaceId @8 | in: swapchain (the back buffers stay the caller's) |
+| 99 | `PRESENT` (`PresentArgs`) | 1 | 32 | Implemented | head: CallHead @0, queue: QueueId @8, swapchain: SurfaceId @12, buffer: ResId @16, sync_interval: u32 @20, flags: u32 @24 | in: queue, swapchain, buffer (ResId), sync_interval, flags (present_flags): shows the buffer after the queue's earlier work |
+| 100 | `SWAPCHAIN_INFO` (`SwapchainInfoArgs`) | 1 | 64 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, width: u32 @16, height: u32 @20, surface_format: u32 @24, probe_valid: u32 @28, presents: u64 @32, completed: u64 @40, probe_texel: u64 @48, probe_x: u32 @56, probe_y: u32 @60 | in: swapchain; out: drawable size, surface_format, presents, completed, probe_texel (swap chains made with PROBE) |
+| 101 | `SET_SWAPCHAIN_LATENCY` (`SetSwapchainLatencyArgs`) | 1 | 16 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, max_latency: u32 @12 | in: swapchain, max_latency (1 to 8) |
 
 ### Stream commands (`Link::submit`)
 
@@ -242,7 +248,7 @@ only in dumps.
 - 0x0403-0x04FF: textures: numbers not yet used
 - 0x0500-0x05FF: render state, draws, mesh dispatch, clears in a pass (m4-render; numbers not yet used)
 - 0x0602-0x06FF: render passes and render-encoder bindings (m4-render; numbers not yet used)
-- 0x0700-0x07FF: present (M3)
+- 0x0700-0x07FF: present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)
 - 0x0800-0x08FF: queries and timestamps (M2)
 - 0x0900-0x09FF: ExecuteIndirect (M2)
 <!-- END GENERATED: api_table -->

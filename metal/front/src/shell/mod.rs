@@ -32,6 +32,7 @@ mod list;
 mod objects;
 mod private;
 mod serialize;
+mod swapchain;
 #[rustfmt::skip]
 mod stubs;
 
@@ -61,6 +62,13 @@ pub(crate) fn note_notimpl(what: &str) {
     {
         let _ = writeln!(f, "{what}");
     }
+}
+
+/// `VICTORY_METAL_LENIENT=1`: see `ListObj::unsupported_call`.
+pub(crate) fn lenient() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_LENIENT").is_some_and(|v| v != "0"))
 }
 
 pub(crate) fn log_errors() -> bool {

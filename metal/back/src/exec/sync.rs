@@ -52,6 +52,7 @@ impl State {
             psos: Default::default(),
             fences: Default::default(),
             queues: Default::default(),
+            swapchains: Default::default(),
             note: None,
         }
     }
@@ -150,6 +151,10 @@ impl State {
             SyncOp::GET_SURFACE_LAYER => {
                 typed::<GetSurfaceLayerArgs>(args, len, |_| Err(Status::UNSUPPORTED))
             }
+            SyncOp::RESIZE_SWAPCHAIN
+            | SyncOp::PRESENT
+            | SyncOp::SWAPCHAIN_INFO
+            | SyncOp::SET_SWAPCHAIN_LATENCY => self.present_call(op, args, len),
             // HELLO, SHUTDOWN, NOP, FENCE_WAIT and DESTROY_QUEUE are handled
             // before the state is taken; anything else proto knows of is
             // not a sync call this version defines.

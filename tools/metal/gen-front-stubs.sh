@@ -43,6 +43,7 @@ VOID_HOOK = {"ListObj"}
 OBJECTS = {
     "FactoryObj": ("IDXGIFactory7", "dxgi.rs"),
     "AdapterObj": ("IDXGIAdapter4", "dxgi.rs"),
+    "SwapChainObj": ("IDXGISwapChain4", "swapchain.rs"),
     "DeviceObj": ("ID3D12Device14", "device.rs"),
     "QueueObj": ("ID3D12CommandQueue", "objects.rs"),
     "AllocatorObj": ("ID3D12CommandAllocator", "objects.rs"),
@@ -185,6 +186,7 @@ def emit():
     w("use super::list::*;")
     w("use super::objects::*;")
     w("use super::serialize::*;")
+    w("use super::swapchain::*;")
     for struct, (leaf, file) in OBJECTS.items():
         have = methods_of(hand_written(file), struct)
         used = set()
