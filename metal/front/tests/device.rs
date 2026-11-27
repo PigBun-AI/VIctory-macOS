@@ -2,6 +2,9 @@
 //! application does. Golden bytes: tests/golden/compute-block.vmps
 //! (`UPDATE_GOLDEN=1 cargo test -p victory-metal-front --test device`).
 
+#[path = "../../proto/tests/common/hexfile.rs"]
+mod hexfile;
+
 use std::sync::Arc;
 
 use victory_metal_front::descriptor::{self, HeapDesc};
@@ -367,14 +370,14 @@ fn link_va(link: &MockLink, res: ResId) -> u64 {
 fn golden_bytes() {
     let (link, dev) = setup();
     let (block, ..) = record_compute(&dev, &link);
-    let path = concat!(
+    let path = std::path::Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/golden/compute-block.vmps"
-    );
+        "/tests/golden/compute-block.vmps.txt"
+    ));
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(path, &block).unwrap();
+        hexfile::write(path, "compute-block.vmps", &block);
     }
-    let golden = std::fs::read(path).expect("golden missing: run with UPDATE_GOLDEN=1");
+    let golden = hexfile::read(path);
     assert_eq!(block, golden, "the stream the front writes changed");
 }
 

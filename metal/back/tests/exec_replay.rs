@@ -27,11 +27,16 @@ use victory_metal_proto::sync::*;
 use victory_metal_proto::types::*;
 use victory_metal_proto::wire::{Reader, Wire};
 
+#[path = "../../proto/tests/common/hexfile.rs"]
+mod hexfile;
+
+/// A golden of the proto crate (hex text, see `hexfile.rs`).
 fn golden(name: &str) -> Vec<u8> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../proto/tests/golden")
-        .join(name);
-    std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    hexfile::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../proto/tests/golden")
+            .join(format!("{name}.txt")),
+    )
 }
 
 #[derive(Default)]

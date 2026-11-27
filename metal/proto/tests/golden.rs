@@ -6,6 +6,8 @@
 //!   UPDATE_GOLDEN=1 cargo test -p victory-metal-proto --test golden
 
 mod common;
+#[path = "common/hexfile.rs"]
+mod hexfile;
 
 use common::*;
 use std::path::PathBuf;
@@ -23,22 +25,16 @@ use victory_metal_proto::{Caps, Command};
 fn path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
-        .join(name)
+        .join(format!("{name}.txt"))
 }
 
 /// Compares `actual` with the golden file; `UPDATE_GOLDEN=1` rewrites it.
 fn golden(name: &str, actual: &[u8]) -> Vec<u8> {
     let p = path(name);
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(&p, actual).unwrap();
+        hexfile::write(&p, name, actual);
     }
-    let want = std::fs::read(&p).unwrap_or_else(|e| {
-        panic!(
-            "{}: {e}; run with UPDATE_GOLDEN=1 to create it",
-            p.display()
-        )
-    });
+    let want = hexfile::read(&p);
     assert!(
         want == actual,
         "{name} differs from the golden file: the wire format changed. If intended, bump \

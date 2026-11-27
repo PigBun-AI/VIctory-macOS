@@ -1,0 +1,6 @@
+# golden bytes of create-buffer-args.vmsa (56 bytes), synthetic. Hex words, 16 per line.
+# Regenerate: UPDATE_GOLDEN=1 cargo test (see the test that reads this file).
+01 00 00 00 00 00 00 00 00 10 00 00 00 00 00 00
+01 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00
+00 00 00 00 01 00 00 00 00 00 00 00 02 00 00 00
+00 40 00 00 00 00 00 00
