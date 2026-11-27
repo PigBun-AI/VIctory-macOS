@@ -63,19 +63,50 @@ impl Link for InProcess {
 // ---- the proto entry points ------------------------------------------------
 
 /// Where the proto goes on the Mach-O side: the back's interpreter, as a
-/// proto `Link`. Nothing is installed at first; the back (or a test) calls
-/// [`set_executor`] once at load, and may replace it.
-static EXECUTOR: RwLock<Option<Arc<dyn Link>>> = RwLock::new(None);
-
-/// Installs the executor that `OP_PROTO_SUBMIT` / `OP_PROTO_CALL` (and
-/// [`InProcess`] as a proto `Link`) hand their blocks to. Returns the previous one.
-pub fn set_executor(executor: Arc<dyn Link>) -> Option<Arc<dyn Link>> {
-    EXECUTOR.write().unwrap().replace(executor)
+/// proto `Link`.
+enum Slot {
+    /// Nothing asked for yet: the first proto call installs the back's own
+    /// `Executor` (see [`executor`]).
+    Default,
+    /// [`set_executor`] put this one here.
+    Installed(Arc<dyn Link>),
+    /// [`clear_executor`]: no executor; the proto calls answer `NOT_INITIALIZED`.
+    Cleared,
 }
 
-/// Removes the executor: the proto calls answer `NOT_INITIALIZED` again.
+static EXECUTOR: RwLock<Slot> = RwLock::new(Slot::Default);
+
+/// Installs the executor that `OP_PROTO_SUBMIT` / `OP_PROTO_CALL` (and
+/// [`InProcess`] as a proto `Link`) hand their blocks to, in place of the
+/// back's own one. Returns the previous one, if one was installed.
+pub fn set_executor(executor: Arc<dyn Link>) -> Option<Arc<dyn Link>> {
+    match std::mem::replace(
+        &mut *EXECUTOR.write().unwrap(),
+        Slot::Installed(executor),
+    ) {
+        Slot::Installed(old) => Some(old),
+        _ => None,
+    }
+}
+
+/// Removes the executor: the proto calls answer `NOT_INITIALIZED` until
+/// [`set_executor`] or [`use_default_executor`].
 pub fn clear_executor() -> Option<Arc<dyn Link>> {
-    EXECUTOR.write().unwrap().take()
+    match std::mem::replace(&mut *EXECUTOR.write().unwrap(), Slot::Cleared) {
+        Slot::Installed(old) => Some(old),
+        _ => None,
+    }
+}
+
+/// Goes back to the back's own interpreter (a fresh `Executor`, made at the
+/// next proto call). This is the state at load time: the Wine unixlib needs
+/// no setup call; the first `OP_PROTO_CALL` (the front's `HELLO`) creates the
+/// `Executor`, which makes its Metal device only when `HELLO` arrives.
+pub fn use_default_executor() -> Option<Arc<dyn Link>> {
+    match std::mem::replace(&mut *EXECUTOR.write().unwrap(), Slot::Default) {
+        Slot::Installed(old) => Some(old),
+        _ => None,
+    }
 }
 
 /// What answers while no executor is installed: the transport works (`NOP`),
@@ -96,10 +127,23 @@ impl Link for NoExecutor {
     }
 }
 
+/// The bridge is the one place that knows both the Wine entry points and the
+/// back: the back never sees Wine, the front never sees the back.
 fn executor() -> Arc<dyn Link> {
     match &*EXECUTOR.read().unwrap() {
-        Some(e) => e.clone(),
-        None => Arc::new(NoExecutor),
+        Slot::Installed(e) => return e.clone(),
+        Slot::Cleared => return Arc::new(NoExecutor),
+        Slot::Default => {}
+    }
+    let mut slot = EXECUTOR.write().unwrap();
+    match &*slot {
+        Slot::Installed(e) => e.clone(),
+        Slot::Cleared => Arc::new(NoExecutor),
+        Slot::Default => {
+            let e: Arc<dyn Link> = Arc::new(victory_metal_back::exec::Executor::new());
+            *slot = Slot::Installed(e.clone());
+            e
+        }
     }
 }
 
