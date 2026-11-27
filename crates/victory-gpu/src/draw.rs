@@ -1191,6 +1191,7 @@ impl State {
         {
             return;
         }
+        list.pix.target(&list.list);
         self.host_targets = Some(now);
         let rtvs: Vec<_> = views.iter().map(|(texture, desc)| host.rtv(*texture, desc.as_ref())).collect();
         let dsv = dsv.map(|(texture, record)| host.dsv(texture, record.depth_desc().as_ref()));
@@ -3154,7 +3155,9 @@ impl State {
             }
         }
         // SAFETY: an open list with everything set.
-        unsafe { list.list.Dispatch(x, y, z) };
+        list.pix.dispatch(&list.list, || crate::pipeline::is_builder(self.pipeline as This), || unsafe {
+            list.list.Dispatch(x, y, z)
+        });
         self.buffers_written();
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
         if let Some(role) = p.stages.first().and_then(|s| s.shader.ambient)
