@@ -268,6 +268,25 @@ impl Device {
         })
     }
 
+    /// `CreateGraphicsPipelineState` / `ID3D12Device2::CreatePipelineState`
+    /// for a vertex or mesh pipeline. `desc` comes from
+    /// [`crate::pso::to_proto`]; the stages' DXIL it points at is only read
+    /// for the call.
+    pub fn create_graphics_pipeline(
+        self: &Arc<Self>,
+        rs: &RootSignature,
+        desc: &victory_metal_proto::pso::GraphicsPsoDesc,
+    ) -> Result<Pipeline> {
+        let mut a = CreateGraphicsPipelineArgs::new();
+        a.root_sig = rs.id;
+        a.desc = *desc;
+        self.gpu().call(&mut a)?;
+        Ok(Pipeline {
+            dev: self.clone(),
+            id: a.pso,
+        })
+    }
+
     // ---- descriptors ----------------------------------------------------
 
     pub fn create_descriptor_heap(self: &Arc<Self>, d: &HeapDesc) -> Result<DescriptorHeap> {

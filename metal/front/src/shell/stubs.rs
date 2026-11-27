@@ -242,8 +242,7 @@ impl ID3D12Device_Impl for DeviceObj_Impl {
         self.x_CreateCommandAllocator(r#type, riid, ppcommandallocator)
     }
     fn CreateGraphicsPipelineState(&self, pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device::CreateGraphicsPipelineState");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreateGraphicsPipelineState(pdesc, riid, pppipelinestate)
     }
     fn CreateComputePipelineState(&self, pdesc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
         self.x_CreateComputePipelineState(pdesc, riid, pppipelinestate)
@@ -373,8 +372,7 @@ impl ID3D12Device1_Impl for DeviceObj_Impl {
 
 impl ID3D12Device2_Impl for DeviceObj_Impl {
     fn CreatePipelineState(&self, pdesc: *const D3D12_PIPELINE_STATE_STREAM_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device2::CreatePipelineState");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreatePipelineState(pdesc, riid, pppipelinestate)
     }
 }
 
