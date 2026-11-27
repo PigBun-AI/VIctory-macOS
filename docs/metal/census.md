@@ -30,6 +30,8 @@ tells the translator: wave 32, view limit 2^21 - 1, raw views 2^21 (`victory-gpu
 `--archive`, `--archive-dir`, `--archive-name`, `--only LIST|FILE` (only these container hashes: a comma list, or a
 file with the hash first on each line; a failure sample or a program family can be rebuilt alone. With `--isolate`
 the row file is overwritten: always give a new `--tag`).
+`VICTORY_ATTRIBUTE_AT_VERTEX=0` makes `translate` emit the Metal form of `GetAttributeAtVertex` (mac S1,
+docs/metal/attribute-at-vertex.md; the default is the Windows form, which MSC refuses).
 
 `--isolate` runs the conversion in a child (one thread) and starts it again after the shader it died on: an
 `MscFatal` row when the child's stderr has Metal Shader Converter's `Fatal` line (`SIGABRT`), `ProcessAbort` for
@@ -51,21 +53,12 @@ counts only) to `--research` (default `research/census`, outside the repository)
 
 What each kind builds: `cs` the compute pipeline; `vs` and `ms` a render pipeline with a one-constant pixel
 shader; `ps` a render pipeline with a full-screen-triangle vertex shader DXC makes from the pixel shader's
-input signature (DXC front end of `tools/macos`, x86_64 under Rosetta); `gs` the translator's rectangle-list
-geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. A pipeline the back refuses
-(`Unsupported`, for example the 29 vertex shaders with `SV_ClipDistance`, which Metal cannot make a geometry-emulation
-mesh function for) is a failed row, not an abort. The title's own geometry
-
-`--archive`, `--archive-dir`, `--archive-name`, `--only FILE` (just the hashes listed in FILE, one per line).
-`VICTORY_ATTRIBUTE_AT_VERTEX=0` makes `translate` emit the Metal form of `GetAttributeAtVertex` (mac S1,
-docs/metal/attribute-at-vertex.md; the default is the Windows form, which MSC refuses).
-
-What each kind builds: `cs` the compute pipeline; `vs` and `ms` a render pipeline with a one-constant pixel
-shader; `ps` a render pipeline with a full-screen-triangle vertex shader DXC makes from the pixel shader's
 input signature (DXC front end of `tools/macos`, x86_64 under Rosetta; DXC refuses and aborts on a vertex shader
 with more than 31 non-system outputs, so such a pixel shader gets a one-triangle mesh shader (`ms_6_6`, unvalidated)
 instead, the row says `"partner":"ms"`); `gs` the translator's rectangle-list
-geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. The title's own geometry
+geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. A pipeline the back refuses
+(`Unsupported`, for example the 29 vertex shaders with `SV_ClipDistance`, which Metal cannot make a geometry-emulation
+mesh function for) is a failed row, not an abort. The title's own geometry
 programs have no host shader (the translator refuses them), so there is nothing to convert.
 
 ## The pipeline archive
