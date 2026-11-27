@@ -503,7 +503,12 @@ impl CommandList {
             row_pitch,
             rows: t[1],
         };
+        // Everything copied before is finished and visible first: a plane of
+        // a depth-stencil texture written just before read back wrong
+        // (Rosetta, 2026-11-27) with only the tracked hazards ordered.
+        self.order_blits();
         self.copy_texture_to_buffer(&loc_in(sx.0, src_texels), src, src_texels)?;
+        self.order_blits();
         self.copy_buffer_to_texture(dst, &loc_in(dx.0, dst_texels), dst_texels)?;
         self.keep_buffers.push(staging);
         Ok(())
