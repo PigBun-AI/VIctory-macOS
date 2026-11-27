@@ -522,6 +522,46 @@ there when the capture runs need it.
 *Remove when* frames are fast enough that the watchdog never fires (the Metal backend, or a measured run with a
 world frame under a second shows it quiet), or when the Windows line gets a switch of its own.
 
+### L6 — 16-bit `lock cmpxchg` check: `VICTORY_MAC_CMPXCHG16_CHECK=1`, off by default (`victory-loader/src/mac/cmpxchg16.rs`, 8 lines in `apps/victory/src/mac.rs`)
+
+*Question (Wine probe 2026-11-28, `lock_cmpxchg16_hit`).* Under Rosetta a `lock cmpxchg [m], r16` whose address is 15 mod 16
+loses the update when the compare **succeeds** (memory unchanged, ZF set); a miss, every other offset, the 32/64-bit forms and the
+unlocked form are right. The title has 2036 16-bit `cmpxchg`, all locked (`python3 tools/mac/census-cmpxchg.py.txt <out dir> < objdump text`, results in
+`research/census/title-cmpxchg-20261128/`): 1877 `[base+even disp]` (63 of them rsp/rbp), 26 `[base+2*index+even disp]`, 70
+RIP-relative whose targets are 0, 2, 4 or 8 mod 16 (none 15). A hit needs an **odd** address: a 16-bit atomic in a packed
+object, or a base pointer that is odd. Nothing static says so, and no compiler makes an atomic 16-bit field odd on its own.
+Not provable from the bytes: so a run decides.
+
+*The check.* With the variable set to `1`, every one of the 2036 sites (the scan is bytes, so it works on any build; the
+scan equals the census: `cargo run --release -p victory-loader --example cmpxchg16_census -- <image> <tsv>`) becomes a jump to
+a trampoline that saves rcx and the flags, counts the run in its own slot, computes `lea rcx,[operand]`, and if the low four bits
+are 1111 records the address and counts a hit; then it restores rcx and the flags and runs the original instruction (copied, its
+RIP-relative displacement redone), and jumps back. A thread prints every 5 s while the numbers change (and every minute):
+`cmpxchg16  N of 2036 sites ran, M met an address = 15 mod 16` plus the first 8 hits (RVA, hits of runs, last address). It does not
+change what the instruction does. Test: `the_checked_instruction_does_what_the_instruction_does` (Windows, run under Wine/Rosetta
+by `tools/mac/wine-tests.sh -p victory-loader --lib mac::`): three operand forms at nine offsets 0..4095 including 15, 31, 4095, hit
+and miss: AX, ZF and memory are the instruction's, and only the 15 mod 16 runs are counted as hits (in the test the
+instruction's own bug may also show at those: it compares patched with unpatched, both through Rosetta, so both are equally wrong;
+this is a *counter*, not a fix).
+
+*If it ever reports a hit.* Rewrite that site: take the address, and do the compare-and-swap with a 32-bit `lock cmpxchg` loop on the
+dword that holds the word (at `addr-2`, which is 13 mod 16, and 32-bit forms are right at every offset): load the dword, check the
+word in its upper half equals AX, build the new dword, `lock cmpxchg`, retry on a changed dword, set ZF and AX as the instruction does
+(AX = the old word on a miss). It needs rax/rdx/rcx/r8 saved and a RIP-relative redo, in the style of this module's trampoline: about
+half a day with the same random-form test against the instruction (on a Mac the instruction's result at 15 mod 16 is the wrong one,
+so the reference is a soft model of cmpxchg). Do it only when the check reports a hit; until then no behaviour is changed.
+*Remove when* Rosetta fixes it (re-run `lock_cmpxchg16_hit`) or after a few full sessions of the check with no hit.
+
+*The 32-bit form (`mac.isa.cmpxchg32_rax_hit`).* The probe also showed that after a **hit** of a 32-bit `lock cmpxchg` Rosetta **zeroes**
+the upper half of RAX, where x86 leaves RAX alone on a hit (only a miss writes EAX). Only code whose RAX has a non-zero upper half before
+the instruction and that reads all of RAX after a hit, before writing it, can notice.
+Of the title's 9665 sites (all locked), 834 do read RAX that way on the hit path; the upper half was provably zero before for 772
+(an earlier `mov eax,..`) and for 57 more across a branch; the one checked by hand in 117759 is safe (`mov eax,[rax]` in the loop);
+the others are false positives of the classifier (3-operand `imul`, `cdqe`, `nop [rax]`) or `ret` after a CAS loop that loaded EAX with
+a 32-bit load. Three remain which the linear analysis could not decide (RVAs `0x3e00a2`, `0x2bdb621`, `0x335a93d`; the first two are
+CAS loops whose eax comes from a 32-bit `mov eax,[..]`, the third `cmpxchg [rcx+0x14], edx` followed by `vmovd xmm1, eax`, which
+reads only EAX): no exposure found, no patch.
+
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 
 New `victory-hle/src/modules/mac.rs`, registered in `modules/mod.rs` **only when `rosetta()`**,

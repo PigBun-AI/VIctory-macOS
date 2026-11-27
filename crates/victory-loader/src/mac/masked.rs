@@ -295,7 +295,7 @@ impl Store {
 
 /// The memory operand whose ModRM byte is at `at`: ModRM, the SIB byte if
 /// any, the displacement, and where the operand ends.
-fn operand(code: &[u8], at: usize) -> Option<(u8, Option<u8>, i32, usize)> {
+pub(crate) fn operand(code: &[u8], at: usize) -> Option<(u8, Option<u8>, i32, usize)> {
     let modrm = *code.get(at)?;
     let mut end = at + 1;
     let (md, rm) = (modrm >> 6, modrm & 7);
@@ -400,38 +400,46 @@ pub(crate) fn decode_wide_move(code: &[u8], at: usize) -> Option<Store> {
 /// Bytes the stack moves before the trampoline's `lea`: rax, rcx, flags.
 const PUSHED: i32 = 24;
 
+/// `lea <reg>, [operand of s]` (`reg` 0-7, no REX.R) appended to `c`, for the
+/// instruction `s` at `site`, the code being placed at `at`; `pushed` is what the
+/// trampoline has pushed before it (an rsp-based operand moves by that much).
+pub(crate) fn lea_operand(c: &mut Vec<u8>, reg: u8, s: &Store, site: u64, at: u64, pushed: i32) -> Option<()> {
+    c.push(0x48 | u8::from(s.x) << 1 | u8::from(s.b));
+    c.push(0x8d);
+    let rm = s.modrm & 7;
+    let reg = (reg & 7) << 3;
+    if s.rip_relative() {
+        c.push(reg | rm); // mod 0, r/m 5
+        let target = (site as i64) + s.len as i64 + i64::from(s.disp);
+        let next = at as i64 + c.len() as i64 + 4;
+        c.extend_from_slice(&i32::try_from(target - next).ok()?.to_le_bytes());
+    } else if s.no_base() {
+        c.push(reg | rm);
+        c.push(s.sib?);
+        c.extend_from_slice(&s.disp.to_le_bytes());
+    } else {
+        // Always a disp32 form (mod 2), so rsp's shift always fits.
+        c.push(0x80 | reg | rm);
+        if let Some(sib) = s.sib {
+            c.push(sib);
+        }
+        let disp = if s.rsp_base() {
+            s.disp.checked_add(pushed)?
+        } else {
+            s.disp
+        };
+        c.extend_from_slice(&disp.to_le_bytes());
+    }
+    Some(())
+}
+
 /// The trampoline for `s`, placed at `at`, for the store at `site`: the
 /// same stores done one lane at a time with plain `mov`s (which Rosetta
 /// can resume after a fault), then a jump back past the store. Flags,
 /// rax, rcx and the vector registers are kept.
 pub(crate) fn trampoline(s: &Store, site: u64, at: u64) -> Option<Vec<u8>> {
     let mut c = vec![0x50, 0x51, 0x9c]; // push rax; push rcx; pushfq
-    // lea rax, [operand]
-    c.push(0x48 | u8::from(s.x) << 1 | u8::from(s.b));
-    c.push(0x8d);
-    let rm = s.modrm & 7;
-    if s.rip_relative() {
-        c.push(rm); // mod 0, reg 0 (rax), r/m 5
-        let target = (site as i64) + s.len as i64 + i64::from(s.disp);
-        let next = at as i64 + c.len() as i64 + 4;
-        c.extend_from_slice(&i32::try_from(target - next).ok()?.to_le_bytes());
-    } else if s.no_base() {
-        c.push(rm);
-        c.push(s.sib?);
-        c.extend_from_slice(&s.disp.to_le_bytes());
-    } else {
-        // Always a disp32 form (mod 2), so rsp's shift always fits.
-        c.push(0x80 | rm);
-        if let Some(sib) = s.sib {
-            c.push(sib);
-        }
-        let disp = if s.rsp_base() {
-            s.disp.checked_add(PUSHED)?
-        } else {
-            s.disp
-        };
-        c.extend_from_slice(&disp.to_le_bytes());
-    }
+    lea_operand(&mut c, 0, s, site, at, PUSHED)?; // lea rax, [operand]
     if let Some((b1, b2, opcode, imm, bytes)) = s.plain {
         // The same instruction into [rsp] (X and B cleared, ModRM.reg
         // kept), then the bytes copied out 8 at a time with plain moves.

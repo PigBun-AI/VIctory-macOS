@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Static look at the title's `cmpxchg` for two Rosetta-under-Wine findings (docs/mac/PATCHES.md L6).
+
+  1. 16-bit `lock cmpxchg` into memory: on a hit at an address = 15 (mod 16) Rosetta leaves memory
+     unwritten but sets ZF (a lost update). Only an odd address can be 15 mod 16, and a 16-bit
+     atomic field is odd only if the title packs it so. Every site is sorted by what its address
+     operand says: a RIP-relative one has a known address (checked exactly), `[reg + disp]`
+     is odd or even by its displacement (an odd displacement is where a misaligned field would
+     show), `[base + index*scale + disp]` with scale 1 can be odd whatever the displacement.
+  2. 32-bit `cmpxchg` into memory: on a hit Rosetta zeroes RAX's upper half (x86 leaves it alone:
+     only a *miss* writes EAX). That changes anything only if (a) RAX's upper half is not zero
+     before the instruction and (b) the code reads all of RAX on the hit path before it writes EAX
+     or RAX. (b) is checked by walking the hit path in the function (both sides of a branch that
+     do not test ZF, only the hit side of a `je`/`jne` right after the instruction), (a) by
+     the last write of RAX before the instruction in the same straight run.
+
+Input: `llvm-objdump -d --x86-asm-syntax=intel -j .text <image>` on stdin; output directory argv[1]
+(game-derived data stays out of the repository). Prints the counts and writes
+`cmpxchg16-sites.tsv` and `cmpxchg32-hit-reads-rax.tsv`.
+"""
+import sys, re, os, collections
+
+base = 0x140000000
+outdir = sys.argv[1]
+os.makedirs(outdir, exist_ok=True)
+
+pat = re.compile(r'^\s*([0-9a-f]+):\s+(?:[0-9a-f]{2} )+\s*\t(.*)$')
+fall_through_end = ('ret', 'retq', 'jmp', 'int3', 'ud2', 'hlt')
+
+# registers that are RAX in some width
+RAX64 = re.compile(r'\brax\b')
+EAX = re.compile(r'\beax\b')
+PARTIAL = re.compile(r'\b(ax|al|ah)\b')
+
+READ_ONLY_FIRST = {'cmp', 'test', 'bt', 'push', 'ucomiss', 'ucomisd', 'comiss', 'comisd', 'vucomiss', 'vucomisd',
+                   'vcomiss', 'vcomisd', 'cmpxchg', 'xchg', 'xadd', 'jmp', 'call'}
+WRITE_ONLY = {'mov', 'movzx', 'movsx', 'movsxd', 'lea', 'pop', 'movabs', 'setne', 'cvttss2si', 'cvttsd2si',
+              'cvtss2si', 'cvtsd2si', 'popcnt', 'lzcnt', 'tzcnt', 'bsf', 'bsr', 'movd', 'movq', 'vmovd',
+              'vmovq', 'rdtsc', 'cpuid', 'bzhi', 'bextr', 'andn', 'mulx', 'rorx', 'sarx', 'shlx', 'shrx',
+              'pext', 'pdep', 'blsr', 'blsi', 'blsmsk', 'cmovne', 'cmove', 'sbb', 'adc'}  # see classify()
+
+
+def parse(line):
+    m = pat.match(line)
+    if not m:
+        return None
+    addr = int(m.group(1), 16)
+    txt = m.group(2).split('#')[0].strip()
+    parts = txt.split(None, 1)
+    mn = parts[0]
+    ops = parts[1] if len(parts) > 1 else ''
+    return addr, mn, ops
+
+
+def split_ops(ops):
+    out, depth, cur = [], 0, ''
+    for ch in ops:
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+        if ch == ',' and depth == 0:
+            out.append(cur.strip())
+            cur = ''
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def classify(mn, ops):
+    """('read'|'clobber'|'partial'|'none'), for RAX as the walk meets an instruction."""
+    o = split_ops(ops)
+    first = o[0] if o else ''
+    rest = ','.join(o[1:])
+    # zeroing idiom
+    if mn in ('xor', 'sub') and len(o) == 2 and o[0] == o[1] and o[0] in ('eax', 'rax'):
+        return 'clobber'
+    reads = False
+    if RAX64.search(rest):
+        reads = True
+    # a memory operand in the first slot may use rax as an address
+    if '[' in first and RAX64.search(first):
+        reads = True
+    if mn in ('push', 'cmp', 'test', 'bt', 'call', 'jmp') and RAX64.search(ops):
+        reads = True
+    if mn.startswith(('cmov',)) and RAX64.search(rest):
+        reads = True
+    if mn in ('xchg', 'xadd', 'cmpxchg') and RAX64.search(ops):
+        reads = True
+    # read-modify-write of the full register
+    if RAX64.fullmatch(first) and mn not in WRITE_ONLY and mn not in READ_ONLY_FIRST:
+        reads = True
+    if mn in ('mul', 'imul', 'div', 'idiv', 'cdq', 'cqo', 'cwde', 'cdqe') and len(o) <= 1:
+        # implicit rax operand
+        reads = reads or mn in ('mul', 'div', 'idiv', 'cqo', 'cdqe') or (mn == 'imul' and len(o) == 1)
+    if reads:
+        return 'read'
+    if first == 'rax' and mn in WRITE_ONLY:
+        return 'clobber'
+    if first == 'eax' and mn not in READ_ONLY_FIRST:
+        return 'clobber'
+    if PARTIAL.fullmatch(first) and mn not in READ_ONLY_FIRST:
+        return 'partial'
+    if mn in ('cdqe',):
+        return 'read'
+    return 'none'
+
+
+def jump_target(mn, ops):
+    if mn.startswith('j') and re.fullmatch(r'0x[0-9a-f]+(?: <.*>)?', ops.strip()):
+        return int(ops.split()[0], 16)
+    return None
+
+
+zf_cond = {'je', 'jz', 'jne', 'jnz'}
+
+s16 = []          # (rva, text, kind)
+reads32 = []      # (rva, why, text)
+n32 = 0
+n32_lock = 0
+n32_reads = collections.Counter()
+lone_lock = False
+func = []
+
+
+def addr_kind(ops):
+    m = re.search(r'\[([^\]]*)\]', ops)
+    if not m:
+        return 'reg', None
+    e = m.group(1).replace(' ', '')
+    if e.startswith('rip'):
+        d = re.search(r'rip([+-]0x[0-9a-f]+)', e)
+        return 'rip', int(d.group(1), 16) if d else 0
+    d = re.search(r'([+-])0x([0-9a-f]+)$', e)
+    disp = (int(d.group(2), 16) * (-1 if d.group(1) == '-' else 1)) if d else 0
+    idx = re.search(r'(?:^|\+)(\d)\*([a-z0-9]+)', e) or re.search(r'\+([a-z0-9]+)\*(\d)', e)
+    if idx:
+        scale = idx.group(1) if idx.group(1).isdigit() else idx.group(2)
+        return 'index%s' % scale, disp
+    if e.startswith(('rsp', 'rbp')):
+        return 'stack', disp
+    return 'base', disp
+
+
+def analyse_function(ins):
+    """ins: list of (addr, mn, ops, locked). Looks at the cmpxchg sites in it."""
+    global n32, n32_lock
+    index = {a: i for i, (a, _, _, _) in enumerate(ins)}
+    for i, (a, mn, ops, locked) in enumerate(ins):
+        if mn != 'cmpxchg':
+            continue
+        o = split_ops(ops)
+        if not o or '[' not in o[0]:
+            continue
+        width = o[0].split()[0] if o[0].split() else ''
+        rva = a - base
+        if width == 'word':
+            kind, v = addr_kind(o[0])
+            if kind == 'rip':
+                # next instruction address is not known here: the objdump comment has the target
+                pass
+            s16.append((rva, locked, kind, v, f'{mn} {ops}'))
+        elif width == 'dword':
+            n32 += 1
+            n32_lock += locked
+            # walk the hit path
+            nxt = i + 1
+            seen = set()
+            stack = [nxt]
+            hit_only = nxt < len(ins) and ins[nxt][1] in zf_cond
+            found = None
+            first = True
+            steps = 0
+            while stack and not found and steps < 400:
+                k = stack.pop()
+                if k in seen or k >= len(ins):
+                    continue
+                seen.add(k)
+                steps += 1
+                ka, kmn, kops, _ = ins[k]
+                c = classify(kmn, kops)
+                if c == 'read':
+                    found = (ka - base, kmn + ' ' + kops)
+                    break
+                if c == 'clobber':
+                    continue
+                if kmn in ('ret', 'retq'):
+                    found = (ka - base, 'ret (RAX is the return value)')
+                    break
+                if kmn == 'call':
+                    continue
+                t = jump_target(kmn, kops)
+                if kmn == 'jmp':
+                    if t is not None and t in index:
+                        stack.append(index[t])
+                    continue
+                if t is not None and kmn.startswith('j'):
+                    if first and hit_only:
+                        # the hit path: ZF set
+                        if kmn in ('je', 'jz'):
+                            if t in index:
+                                stack.append(index[t])
+                        else:
+                            stack.append(k + 1)
+                        first = False
+                        continue
+                    if t in index:
+                        stack.append(index[t])
+                    stack.append(k + 1)
+                    first = False
+                    continue
+                first = False
+                if kmn in ('int3', 'ud2', 'hlt'):
+                    continue
+                stack.append(k + 1)
+            if found:
+                # was RAX's upper half zero before? last writer in the straight run before the site
+                before = 'unknown'
+                crossed = False
+                for j in range(i - 1, max(i - 60, -1), -1):
+                    bj = ins[j]
+                    cj = classify(bj[1], bj[2])
+                    if cj == 'clobber':
+                        before = ('zero (%s %s)' if (split_ops(bj[2]) or [''])[0] == 'eax' or bj[2] in ('eax, eax',) else 'full (%s %s)') % (bj[1], bj[2])
+                        break
+                    if cj == 'partial':
+                        before = 'partial write (%s %s)' % (bj[1], bj[2])
+                        break
+                    if bj[1] in ('call', 'ret', 'jmp'):
+                        before = 'unknown (%s)' % bj[1]
+                        break
+                    if jump_target(bj[1], bj[2]) is not None:
+                        crossed = True
+                if crossed and before.startswith(('zero', 'full', 'partial')):
+                    before = 'branch-' + before
+                n32_reads[before.split(' ')[0]] += 1
+                reads32.append((rva, locked, found[0], found[1], before, f'{mn} {ops}'))
+
+
+lines = 0
+for line in sys.stdin:
+    p = parse(line)
+    if p is None:
+        continue
+    lines += 1
+    addr, mn, ops = p
+    locked = False
+    if mn == 'lock':
+        if not ops:
+            lone_lock = True
+            continue
+        parts = ops.split(None, 1)
+        mn, ops = parts[0], parts[1] if len(parts) > 1 else ''
+        locked = True
+    if lone_lock:
+        locked = True
+        lone_lock = False
+    if mn in ('data16', 'rep', 'repz', 'repnz', 'repne', 'repe', 'bnd', 'notrack', 'xacquire', 'xrelease'):
+        parts = ops.split(None, 1)
+        if parts:
+            mn, ops = parts[0], parts[1] if len(parts) > 1 else ''
+    # function boundary: heuristics are not needed, the walk is bounded by the whole text run; split
+    # on `int3` padding runs so a function's walk cannot run into the next one
+    if mn == 'int3' and func and func[-1][1] == 'int3':
+        if func:
+            analyse_function(func)
+            func = []
+        continue
+    func.append((addr, mn, ops, locked))
+    if len(func) > 200000:
+        analyse_function(func)
+        func = []
+if func:
+    analyse_function(func)
+
+locked16 = [s for s in s16 if s[1]]
+print('instructions read', lines)
+print('16-bit cmpxchg to memory:', len(s16), ' of them locked:', len(locked16))
+by = collections.Counter()
+odd = []
+for rva, locked, kind, v, text in s16:
+    if not locked:
+        continue
+    if kind == 'rip':
+        by['rip'] += 1
+    elif kind.startswith('index'):
+        scale = int(kind[-1])
+        by['index scale %d' % scale + (' (disp odd)' if v and v % 2 else '')] += 1
+        if scale == 1 or (v and v % 2):
+            odd.append((rva, kind, v, text))
+    else:
+        tag = kind + (' disp odd' if v and v % 2 else ' disp even')
+        by[tag] += 1
+        if v and v % 2:
+            odd.append((rva, kind, v, text))
+for k, n in sorted(by.items()):
+    print('   %-28s %d' % (k, n))
+print('locked 16-bit sites that can be odd by their operand:', len(odd))
+with open(os.path.join(outdir, 'cmpxchg16-sites.tsv'), 'w') as f:
+    f.write('rva\tlocked\tkind\tdisp\ttext\n')
+    for rva, locked, kind, v, text in s16:
+        f.write('%x\t%d\t%s\t%s\t%s\n' % (rva, locked, kind, v, text))
+print('32-bit cmpxchg to memory:', n32, 'locked:', n32_lock)
+print('  hit path reads all of RAX before overwriting it:', len(reads32), dict(n32_reads))
+with open(os.path.join(outdir, 'cmpxchg32-hit-reads-rax.tsv'), 'w') as f:
+    f.write('rva\tlocked\tread_at\tread\tupper_before\ttext\n')
+    for r in reads32:
+        f.write('%x\t%d\t%x\t%s\t%s\t%s\n' % r)
