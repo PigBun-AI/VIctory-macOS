@@ -486,6 +486,47 @@ fn split_barriers_send_at_end_only() {
 }
 
 #[test]
+fn uav_aliasing_and_bad_subresource_barriers() {
+    // D3D12 spec (SDK 10.0.22621): a UAV barrier with a null resource covers
+    // every UAV access; an aliasing barrier with a null side covers every
+    // placed resource; a transition names an existing subresource, also at BEGIN.
+    let (_link, dev) = setup();
+    let b = buf(&dev, resource::HEAP_DEFAULT, 16, true, state::UNORDERED_ACCESS);
+    let mut l = CommandList::new(&dev, 0);
+    use ResourceBarrier::*;
+    l.resource_barrier(&[Uav { res: None }, Uav { res: Some(b.res) }]);
+    l.resource_barrier(&[Aliasing { before: None, after: Some(b.res) }, Aliasing { before: Some(b.res), after: None }]);
+    let items = l.close().unwrap();
+    let bars: Vec<Barrier> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Cmd(Command::Barrier(b)) => Some(*b),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bars.len(), 4);
+    assert_eq!((bars[0].before, bars[0].after), (state::stage::SHADERS, state::stage::SHADERS));
+    assert!(bars[0].res_before.is_null() && bars[1].res_before == b.res);
+    assert_eq!(bars[0].visibility & 2, 0, "a UAV barrier is not an aliasing one");
+    assert_eq!((bars[2].before, bars[2].after), (stage::ALL, stage::ALL));
+    assert_eq!(bars[2].visibility, 3);
+    assert!(bars[2].res_before.is_null() && bars[2].res_after == b.res);
+    assert!(bars[3].res_after.is_null() && bars[3].res_before == b.res);
+    // a subresource that does not exist fails the list, BEGIN_ONLY included
+    for flags in [0, state::BARRIER_FLAG_BEGIN_ONLY] {
+        let mut l = CommandList::new(&dev, 0);
+        l.resource_barrier(&[Transition {
+            res: b.res,
+            subresource: 1,
+            before: state::UNORDERED_ACCESS,
+            after: state::COPY_SOURCE,
+            flags,
+        }]);
+        assert!(l.close().is_err(), "flags {flags}");
+    }
+}
+
+#[test]
 fn descriptor_table_and_heaps_resolve_to_proto_slots() {
     let (_link, dev) = setup();
     let heap = dev

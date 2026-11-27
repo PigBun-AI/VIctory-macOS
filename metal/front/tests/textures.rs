@@ -336,6 +336,31 @@ fn allocation_info_adds_up_placements() {
     assert_eq!(dev.allocation_info(&[tex2d(8, 8, 1, 1, 0, 0)]), None);
 }
 
+#[test]
+fn allocation_info_aligns_each_placement_to_its_own_alignment() {
+    // D3D12 spec (SDK 10.0.22621) GetResourceAllocationInfo: resources are
+    // laid out in order, each at a multiple of its alignment; the result
+    // alignment is the largest one; any invalid description gives none.
+    let (_link, dev) = setup();
+    let t = tex2d(256, 256, 1, 1, RGBA8, 0);
+    let mut ms = t;
+    ms.sample_count = 4;
+    let (one, _) = dev.allocation_info(&[t]).unwrap();
+    let (ms_one, _) = dev.allocation_info(&[ms]).unwrap();
+    let (both, a) = dev.allocation_info(&[t, ms]).unwrap();
+    assert_eq!(a, 4 << 20);
+    // the MSAA texture starts at the next 4 MiB boundary after the first
+    assert_eq!(both, (4u64 << 20) + ms_one.div_ceil(4 << 20) * (4 << 20));
+    let (rev, _) = dev.allocation_info(&[ms, t]).unwrap();
+    assert!(rev >= ms_one + one && rev % (4 << 20) == 0);
+    // a buffer is placed at 64 KiB multiples, rounded up
+    let (b, ab) = dev.allocation_info(&[ResourceDesc::buffer(65537, 0)]).unwrap();
+    assert_eq!((b, ab), (131072, 65536));
+    // one bad description anywhere spoils the lot
+    assert_eq!(dev.allocation_info(&[t, tex2d(8, 8, 1, 1, 0, 0), t]), None);
+    assert_eq!(dev.allocation_info(&[]), Some((0, 65536)));
+}
+
 fn view_heap(dev: &Arc<Device>, ty: u32, count: u32, visible: bool) -> DescriptorHeap {
     dev.create_descriptor_heap(&HeapDesc {
         ty,

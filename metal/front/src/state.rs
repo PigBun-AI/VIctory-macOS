@@ -90,9 +90,17 @@ pub fn stages_of(state: u32) -> u16 {
         .fold(0, |m, (_, s)| m | s)
 }
 
-/// States that write the resource.
+/// States that write the resource. The acceleration-structure state is
+/// read-write in D3D12 (builds write it in that state), so it counts.
 pub fn is_write_state(state: u32) -> bool {
-    state & (RENDER_TARGET | UNORDERED_ACCESS | DEPTH_WRITE | STREAM_OUT | COPY_DEST | RESOLVE_DEST)
+    state
+        & (RENDER_TARGET
+            | UNORDERED_ACCESS
+            | DEPTH_WRITE
+            | STREAM_OUT
+            | COPY_DEST
+            | RESOLVE_DEST
+            | RAYTRACING_ACCELERATION_STRUCTURE)
         != 0
 }
 
@@ -278,9 +286,6 @@ impl StateTracker {
             .resources
             .get_mut(&resource)
             .ok_or(TransitionError::UnknownResource)?;
-        if flags & BARRIER_FLAG_BEGIN_ONLY != 0 {
-            return Ok(None);
-        }
         let range = if subresource == ALL_SUBRESOURCES {
             0..subs.len()
         } else if (subresource as usize) < subs.len() {
@@ -288,6 +293,11 @@ impl StateTracker {
         } else {
             return Err(TransitionError::SubresourceOutOfRange);
         };
+        // A split barrier's BEGIN is checked like any other but records
+        // nothing; the barrier is sent at END.
+        if flags & BARRIER_FLAG_BEGIN_ONLY != 0 {
+            return Ok(None);
+        }
         // One barrier for the whole range: the union of what each
         // subresource moves from.
         let mut merged: Option<StageBarrier> = None;
@@ -445,6 +455,137 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(read.before, SHADERS);
+    }
+
+    /// D3D12 spec (Resource States, SDK 10.0.22621): the states a resource
+    /// can be in. Single write states, and the legal read combinations.
+    const SPEC_STATES: [u32; 15] = [
+        COMMON,
+        VERTEX_AND_CONSTANT_BUFFER,
+        INDEX_BUFFER,
+        RENDER_TARGET,
+        UNORDERED_ACCESS,
+        DEPTH_WRITE,
+        DEPTH_READ,
+        NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE,
+        STREAM_OUT,
+        INDIRECT_ARGUMENT,
+        COPY_DEST,
+        COPY_SOURCE,
+        RESOLVE_DEST,
+        RESOLVE_SOURCE,
+        GENERIC_READ,
+    ];
+
+    #[test]
+    fn write_state_classification_follows_the_spec() {
+        // Spec: RENDER_TARGET, UNORDERED_ACCESS, DEPTH_WRITE, STREAM_OUT,
+        // COPY_DEST, RESOLVE_DEST are write states; ray tracing acceleration
+        // structures are read-write (builds write them in that state).
+        for w in [RENDER_TARGET, UNORDERED_ACCESS, DEPTH_WRITE, STREAM_OUT, COPY_DEST, RESOLVE_DEST, RAYTRACING_ACCELERATION_STRUCTURE] {
+            assert!(is_write_state(w), "{w:#x}");
+        }
+        for r in [VERTEX_AND_CONSTANT_BUFFER, INDEX_BUFFER, DEPTH_READ, NON_PIXEL_SHADER_RESOURCE,
+            PIXEL_SHADER_RESOURCE, INDIRECT_ARGUMENT, COPY_SOURCE, RESOLVE_SOURCE, GENERIC_READ, COMMON]
+        {
+            assert!(!is_write_state(r), "{r:#x}");
+        }
+    }
+
+    #[test]
+    fn stateless_transitions_agree_with_the_spec_over_every_state_pair() {
+        for &b in &SPEC_STATES {
+            for &a in &SPEC_STATES {
+                let r = transition_barrier(b, a);
+                let needed = b != a
+                    && b != COMMON
+                    && a != COMMON
+                    && (is_write_state(b) || is_write_state(a));
+                assert_eq!(r.is_some(), needed, "{b:#x}->{a:#x}");
+                if let Some(x) = r {
+                    assert_eq!((x.before, x.after), (stages_of(b), stages_of(a)));
+                }
+            }
+        }
+    }
+
+    /// Hazard oracle over random legal transition sequences: after every
+    /// transition, each stage the new state uses must have been synchronised
+    /// with every stage that wrote the subresource since (the tracker may
+    /// over-synchronise, never under-synchronise).
+    #[test]
+    fn random_transition_sequences_never_leave_a_hazard() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut rnd = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _round in 0..300 {
+            let mut t = StateTracker::default();
+            let mut cur = SPEC_STATES[rnd(SPEC_STATES.len())];
+            t.add(1, 1, cur);
+            // pending[w] = consumer stages writer stage w has not been synced to
+            let mut pending = [0u16; 8];
+            for _step in 0..40 {
+                let next = SPEC_STATES[rnd(SPEC_STATES.len())];
+                if next == cur {
+                    continue;
+                }
+                if is_write_state(cur) {
+                    for (w, p) in pending.iter_mut().enumerate() {
+                        if stages_of(cur) >> w & 1 == 1 {
+                            *p = ALL;
+                        }
+                    }
+                }
+                let b = t.transition(1, 0, cur, next, 0).unwrap();
+                if let Some(b) = b {
+                    for (w, p) in pending.iter_mut().enumerate() {
+                        if b.before >> w & 1 == 1 {
+                            *p &= !b.after;
+                        }
+                    }
+                }
+                let used = if next == COMMON { 0 } else { stages_of(next) };
+                for (w, p) in pending.iter().enumerate() {
+                    assert_eq!(p & used, 0, "writer stage {w} not synced: {cur:#x}->{next:#x}");
+                }
+                // a write into a state also waits for earlier readers: the
+                // barrier's before covers the old state's stages
+                if is_write_state(next) && cur != COMMON && stages_of(cur) != 0 {
+                    let b = b.expect("a transition into a write state is a barrier");
+                    assert_eq!(b.before & stages_of(cur), stages_of(cur), "{cur:#x}->{next:#x}");
+                }
+                // Entering a write state starts a new history: the barrier
+                // above is an execution + memory dependency chain through the
+                // new writers, so older writers need not reach later readers
+                // directly (barriers chain transitively).
+                if is_write_state(next) {
+                    pending = [0; 8];
+                }
+                cur = next;
+            }
+        }
+    }
+
+    #[test]
+    fn subresource_ranges_and_split_barriers_follow_the_spec() {
+        let mut t = StateTracker::default();
+        t.add(1, 6, COPY_DEST); // 3 mips x 2 slices, say
+        // Transitioning one subresource leaves the others in place.
+        t.transition(1, 4, COPY_DEST, PIXEL_SHADER_RESOURCE, 0).unwrap();
+        assert_eq!(
+            (0..6).map(|i| t.state(1, i).unwrap()).collect::<Vec<_>>(),
+            [COPY_DEST, COPY_DEST, COPY_DEST, COPY_DEST, PIXEL_SHADER_RESOURCE, COPY_DEST]
+        );
+        // ALL_SUBRESOURCES with agreeing states merges into one barrier.
+        let mut t2 = StateTracker::default();
+        t2.add(2, 4, COPY_DEST);
+        let b = t2.transition(2, ALL_SUBRESOURCES, COPY_DEST, COPY_SOURCE, 0).unwrap();
+        // a copy write seen by a copy read is still a barrier (BLIT -> BLIT)
+        assert_eq!(b.map(|b| (b.before, b.after)), Some((BLIT, BLIT)));
     }
 
     #[test]
