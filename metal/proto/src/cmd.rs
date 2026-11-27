@@ -60,7 +60,11 @@ open_enum! {
 /// Opcodes in them are refused with `Error::ReservedOpcode`.
 pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
     (0x0403, 0x047F, "textures: numbers not yet used"),
-    (0x0481, 0x04FF, "immediate writes and timestamps: numbers not yet used"),
+    (
+        0x0481,
+        0x04FF,
+        "immediate writes and timestamps: numbers not yet used",
+    ),
     (
         0x0500,
         0x05FF,

@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Dxgi::*;
 
 use super::device::*;
 use super::dxgi::*;
+use super::ext::*;
 use super::library::*;
 use super::list::*;
 use super::objects::*;
@@ -485,8 +486,7 @@ impl ID3D12Device_Impl for DeviceObj_Impl {
         self.x_GetCopyableFootprints(presourcedesc, firstsubresource, numsubresources, baseoffset, playouts, pnumrows, prowsizeinbytes, ptotalbytes)
     }
     fn CreateQueryHeap(&self, pdesc: *const D3D12_QUERY_HEAP_DESC, riid: *const windows::core::GUID, ppvheap: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device::CreateQueryHeap");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreateQueryHeap(pdesc, riid, ppvheap)
     }
     fn SetStablePowerState(&self, enable: windows::core::BOOL) -> windows::core::Result<()> {
         self.x_SetStablePowerState(enable)
@@ -533,8 +533,7 @@ impl ID3D12Device3_Impl for DeviceObj_Impl {
         Err(windows::core::Error::from(E_NOTIMPL))
     }
     fn EnqueueMakeResident(&self, flags: D3D12_RESIDENCY_FLAGS, numobjects: u32, ppobjects: *const Option<ID3D12Pageable>, pfencetosignal: windows::core::Ref<ID3D12Fence>, fencevaluetosignal: u64) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device3::EnqueueMakeResident");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_EnqueueMakeResident(flags, numobjects, ppobjects, pfencetosignal, fencevaluetosignal)
     }
 }
 
@@ -602,8 +601,7 @@ impl ID3D12Device5_Impl for DeviceObj_Impl {
 
 impl ID3D12Device6_Impl for DeviceObj_Impl {
     fn SetBackgroundProcessingMode(&self, mode: D3D12_BACKGROUND_PROCESSING_MODE, measurementsaction: D3D12_MEASUREMENTS_ACTION, heventtosignaluponcompletion: windows::Win32::Foundation::HANDLE, pbfurthermeasurementsdesired: *mut windows::core::BOOL) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device6::SetBackgroundProcessingMode");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_SetBackgroundProcessingMode(mode, measurementsaction, heventtosignaluponcompletion, pbfurthermeasurementsdesired)
     }
 }
 
@@ -734,16 +732,13 @@ impl ID3D12CommandQueue_Impl for QueueObj_Impl {
         self.x_ExecuteCommandLists(numcommandlists, ppcommandlists)
     }
     fn SetMarker(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
-        super::note_notimpl("ID3D12CommandQueue::SetMarker");
-        
+        self.x_SetMarker(metadata, pdata, size)
     }
     fn BeginEvent(&self, metadata: u32, pdata: *const core::ffi::c_void, size: u32) {
-        super::note_notimpl("ID3D12CommandQueue::BeginEvent");
-        
+        self.x_BeginEvent(metadata, pdata, size)
     }
     fn EndEvent(&self) {
-        super::note_notimpl("ID3D12CommandQueue::EndEvent");
-        
+        self.x_EndEvent()
     }
     fn Signal(&self, pfence: windows::core::Ref<ID3D12Fence>, value: u64) -> windows::core::Result<()> {
         self.x_Signal(pfence, value)
@@ -755,8 +750,7 @@ impl ID3D12CommandQueue_Impl for QueueObj_Impl {
         self.x_GetTimestampFrequency()
     }
     fn GetClockCalibration(&self, pgputimestamp: *mut u64, pcputimestamp: *mut u64) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12CommandQueue::GetClockCalibration");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_GetClockCalibration(pgputimestamp, pcputimestamp)
     }
     fn GetDesc(&self) -> D3D12_COMMAND_QUEUE_DESC {
         self.x_GetDesc()
@@ -971,20 +965,17 @@ impl ID3D12GraphicsCommandList_Impl for ListObj_Impl {
         self.x_ClearUnorderedAccessViewFloat(viewgpuhandleincurrentheap, viewcpuhandle, presource, values, numrects, prects)
     }
     fn DiscardResource(&self, presource: windows::core::Ref<ID3D12Resource>, pregion: *const D3D12_DISCARD_REGION) {
-        super::note_notimpl("ID3D12GraphicsCommandList::DiscardResource");
-        self.unsupported_call();
+        self.x_DiscardResource(presource, pregion)
     }
     fn BeginQuery(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, index: u32) {
         super::note_notimpl("ID3D12GraphicsCommandList::BeginQuery");
         self.unsupported_call();
     }
     fn EndQuery(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, index: u32) {
-        super::note_notimpl("ID3D12GraphicsCommandList::EndQuery");
-        self.unsupported_call();
+        self.x_EndQuery(pqueryheap, r#type, index)
     }
     fn ResolveQueryData(&self, pqueryheap: windows::core::Ref<ID3D12QueryHeap>, r#type: D3D12_QUERY_TYPE, startindex: u32, numqueries: u32, pdestinationbuffer: windows::core::Ref<ID3D12Resource>, aligneddestinationbufferoffset: u64) {
-        super::note_notimpl("ID3D12GraphicsCommandList::ResolveQueryData");
-        self.unsupported_call();
+        self.x_ResolveQueryData(pqueryheap, r#type, startindex, numqueries, pdestinationbuffer, aligneddestinationbufferoffset)
     }
     fn SetPredication(&self, pbuffer: windows::core::Ref<ID3D12Resource>, alignedbufferoffset: u64, operation: D3D12_PREDICATION_OP) {
         super::note_notimpl("ID3D12GraphicsCommandList::SetPredication");
@@ -1033,8 +1024,7 @@ impl ID3D12GraphicsCommandList1_Impl for ListObj_Impl {
 
 impl ID3D12GraphicsCommandList2_Impl for ListObj_Impl {
     fn WriteBufferImmediate(&self, count: u32, pparams: *const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER, pmodes: *const D3D12_WRITEBUFFERIMMEDIATE_MODE) {
-        super::note_notimpl("ID3D12GraphicsCommandList2::WriteBufferImmediate");
-        self.unsupported_call();
+        self.x_WriteBufferImmediate(count, pparams, pmodes)
     }
 }
 
@@ -1143,6 +1133,33 @@ impl ID3D12Fence1_Impl for FenceObj_Impl {
         super::note_notimpl("ID3D12Fence1::GetCreationFlags");
         unsafe { core::mem::zeroed() }
     }
+}
+
+impl ID3D12Object_Impl for QueryHeapObj_Impl {
+    fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
+    }
+    fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateData(guid, datasize, pdata)
+    }
+    fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateDataInterface(guid, pdata)
+    }
+    fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        self.private.d3d12_SetName(name)
+    }
+}
+
+impl ID3D12DeviceChild_Impl for QueryHeapObj_Impl {
+    fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        super::query_device(&self.device_obj, riid, ppvdevice)
+    }
+}
+
+impl ID3D12Pageable_Impl for QueryHeapObj_Impl {
+}
+
+impl ID3D12QueryHeap_Impl for QueryHeapObj_Impl {
 }
 
 impl ID3D12Object_Impl for ResourceObj_Impl {

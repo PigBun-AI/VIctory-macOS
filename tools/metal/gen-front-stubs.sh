@@ -44,11 +44,12 @@ OBJECTS = {
     "FactoryObj": ("IDXGIFactory7", "dxgi.rs"),
     "AdapterObj": ("IDXGIAdapter4", "dxgi.rs"),
     "SwapChainObj": ("IDXGISwapChain4", "swapchain.rs"),
-    "DeviceObj": ("ID3D12Device14", "device.rs"),
-    "QueueObj": ("ID3D12CommandQueue", "objects.rs"),
+    "DeviceObj": ("ID3D12Device14", "device.rs+ext.rs"),
+    "QueueObj": ("ID3D12CommandQueue", "objects.rs+ext.rs"),
     "AllocatorObj": ("ID3D12CommandAllocator", "objects.rs"),
-    "ListObj": ("ID3D12GraphicsCommandList6", "list.rs"),
+    "ListObj": ("ID3D12GraphicsCommandList6", "list.rs+ext.rs"),
     "FenceObj": ("ID3D12Fence1", "objects.rs"),
+    "QueryHeapObj": ("ID3D12QueryHeap", "ext.rs"),
     "ResourceObj": ("ID3D12Resource2", "objects.rs"),
     "HeapObj": ("ID3D12DescriptorHeap", "objects.rs"),
     "MemHeapObj": ("ID3D12Heap", "objects.rs"),
@@ -149,8 +150,8 @@ def chain(traits, leaf):
 
 
 def hand_written(file):
-    src = open(os.path.join(FRONT, file), encoding="utf-8").read()
-    return src
+    # "a.rs+b.rs": the object's x_ methods live in several files.
+    return "\n".join(open(os.path.join(FRONT, f), encoding="utf-8").read() for f in file.split("+"))
 
 
 def methods_of(src, struct):
@@ -183,6 +184,7 @@ def emit():
     w("")
     w("use super::device::*;")
     w("use super::dxgi::*;")
+    w("use super::ext::*;")
     w("use super::library::*;")
     w("use super::list::*;")
     w("use super::objects::*;")

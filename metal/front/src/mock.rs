@@ -715,6 +715,26 @@ impl State {
                         }
                     }
                 }
+                Command::WriteImmediate(w) => {
+                    let fits = self.buffers.get(&w.dst.0).is_some_and(|d| {
+                        w.offset
+                            .checked_add(u64::from(w.size))
+                            .is_some_and(|e| e <= d.size as u64)
+                    });
+                    if fits {
+                        let d = &self.buffers[&w.dst.0];
+                        // SAFETY: the range was checked against the live allocation above.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                w.value.to_le_bytes().as_ptr(),
+                                d.ptr.add(w.offset as usize),
+                                w.size as usize,
+                            )
+                        };
+                    } else {
+                        self.rejected.push(format!("{c:?}"));
+                    }
+                }
                 Command::ClearUavTexture(t) if !self.textures.contains_key(&t.res.0) => {
                     self.rejected.push(format!("{c:?}"));
                 }

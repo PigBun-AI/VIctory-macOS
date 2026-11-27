@@ -135,6 +135,8 @@ struct Descriptors {
 
 pub struct Device {
     pub sys: Arc<System>,
+    /// Buffers by GPU address ([`crate::vamap`]).
+    pub(crate) va: crate::vamap::VaMap,
     desc: Mutex<Descriptors>,
     tracker: Mutex<StateTracker>,
     next_list: AtomicU32,
@@ -144,6 +146,7 @@ impl Device {
     pub fn new(sys: Arc<System>) -> Arc<Device> {
         Arc::new(Device {
             sys,
+            va: Default::default(),
             desc: Mutex::new(Descriptors {
                 space: DescriptorSpace::new(),
                 ..Default::default()
@@ -376,6 +379,9 @@ impl Device {
             .lock()
             .unwrap()
             .add(res.0, desc.subresource_count(), initial_state);
+        if desc.is_buffer() {
+            self.va.insert(gpu_va, res.0, desc.width);
+        }
         Resource {
             dev: self.clone(),
             res,
@@ -846,6 +852,7 @@ impl Drop for Resource {
     fn drop(&mut self) {
         self.dev.tracker.lock().unwrap().remove(self.res.0);
         if self.desc.is_buffer() {
+            self.dev.va.remove(self.gpu_va, self.res.0);
             let mut a = DestroyBufferArgs::new();
             a.res = self.res;
             let _ = self.dev.gpu().call_status(&mut a);
@@ -1049,6 +1056,8 @@ pub enum Item {
     },
     /// `ExecuteIndirect` (the signature's bytes are owned: [`crate::indirect`]).
     Indirect(crate::indirect::IndirectItem),
+    /// A `DEBUG_LABEL` (PIX marker text; `Command` borrows, so it is held by value).
+    Label(Vec<u8>),
 }
 
 /// Lists → one block. `new_list_id` hands out ids unique within the block.
@@ -1081,6 +1090,7 @@ pub fn encode_block(
                     .set_root_constants(*bind_point, *root_index, *dest_offset, values)
                     .map_err(bad)?,
                 Item::Indirect(i) => e.push(&i.command()).map_err(bad)?,
+                Item::Label(l) => e.push(&Command::DebugLabel(l)).map_err(bad)?,
             }
         }
         e.push(&Command::EndList(EndList { list, _pad: 0 }))
@@ -1141,6 +1151,10 @@ impl CommandList {
         if self.state == ListState::Recording {
             self.items.push(Item::Cmd(c));
         }
+    }
+
+    pub(crate) fn device(&self) -> &Arc<Device> {
+        &self.dev
     }
 
     pub(crate) fn fail(&mut self, e: Hr) {

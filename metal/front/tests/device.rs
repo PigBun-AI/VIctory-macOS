@@ -548,3 +548,131 @@ fn a_submit_error_is_reported() {
     let ghost = dev.create_queue(0, 0).unwrap();
     drop(ghost);
 }
+
+#[test]
+fn immediate_writes_name_buffers_by_address_and_reach_the_back_as_write_immediate() {
+    let (link, dev) = setup();
+    let a = buf(&dev, resource::HEAP_DEFAULT, 64, true, 0);
+    let b = buf(&dev, resource::HEAP_DEFAULT, 64, true, 0);
+    let rb = buf(
+        &dev,
+        resource::HEAP_READBACK,
+        64,
+        false,
+        resource::STATE_COPY_DEST,
+    );
+    let q = dev.create_queue(0, 0).unwrap();
+    let mut l = CommandList::new(&dev, 0);
+    l.write_immediate(a.gpu_va + 8, 0xAABB_CCDD, 0);
+    l.write_immediate(b.gpu_va + 60, 7, 2);
+    l.copy_buffer_region(&rb, 0, &a, 0, 16);
+    let items = l.close().unwrap();
+    q.execute(&[items]).unwrap();
+    let blocks = link.blocks();
+    let cmds = Decoder::new(&blocks[0]).unwrap().collect_all().unwrap();
+    let writes: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            Command::WriteImmediate(w) => Some(*w),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(
+        (
+            writes[0].dst,
+            writes[0].offset,
+            writes[0].size,
+            writes[0].value
+        ),
+        (a.res, 8, 4, 0xAABB_CCDD)
+    );
+    assert_eq!(
+        (writes[1].dst, writes[1].offset, writes[1].mode),
+        (b.res, 60, WriteImmediate::MARKER_OUT)
+    );
+    assert!(link.rejected().is_empty());
+    assert_eq!(
+        &link.buffer_bytes(a.res).unwrap()[8..12],
+        &0xAABB_CCDDu32.to_le_bytes()
+    );
+    // An address no buffer holds, one not aligned, one past the end, a bad mode: the list fails at Close.
+    for (va, mode) in [
+        (a.gpu_va + 62, 0),
+        (a.gpu_va + 2, 0),
+        (a.gpu_va + 64 + 0x10_0000, 0),
+        (a.gpu_va, 3),
+    ] {
+        let mut l = CommandList::new(&dev, 0);
+        l.write_immediate(va, 1, mode);
+        assert_eq!(
+            l.close().err(),
+            Some(Hr::E_INVALIDARG),
+            "va {va:#x} mode {mode}"
+        );
+    }
+    // A dropped buffer's address no longer names anything.
+    let gone = b.gpu_va;
+    drop(b);
+    let mut l = CommandList::new(&dev, 0);
+    l.write_immediate(gone, 1, 0);
+    assert_eq!(l.close().err(), Some(Hr::E_INVALIDARG));
+}
+
+#[test]
+fn timestamps_rise_in_recording_order_and_resolve_into_the_buffer() {
+    use victory_metal_front::timestamps::{HEAP_TYPE_TIMESTAMP, QueryHeap};
+    let (link, dev) = setup();
+    let dst = buf(&dev, resource::HEAP_DEFAULT, 64, true, 0);
+    let rb = buf(
+        &dev,
+        resource::HEAP_READBACK,
+        64,
+        false,
+        resource::STATE_COPY_DEST,
+    );
+    let heap = QueryHeap::new(HEAP_TYPE_TIMESTAMP, 4).unwrap();
+    let q = dev.create_queue(0, 0).unwrap();
+    let mut l = CommandList::new(&dev, 0);
+    l.end_timestamp(&heap, 2);
+    l.end_timestamp(&heap, 0);
+    l.end_timestamp(&heap, 1);
+    l.resolve_timestamps(&heap, 0, 3, &dst, 16);
+    l.copy_buffer_region(&rb, 0, &dst, 0, 64);
+    q.execute(&[l.close().unwrap()]).unwrap();
+    let bytes = link.buffer_bytes(rb.res).unwrap();
+    let t = |i: usize| u64::from_le_bytes(bytes[16 + 8 * i..24 + 8 * i].try_into().unwrap());
+    assert!(t(2) < t(0) && t(0) < t(1), "{} {} {}", t(0), t(1), t(2));
+    assert!(t(2) > 0);
+    assert_eq!(&bytes[..16], &[0; 16], "nothing else is written");
+    // Out of range, misaligned and out-of-buffer resolves fail the list.
+    for (start, count, off) in [(2, 3, 0), (0, 1, 4), (0, 4, 40)] {
+        let mut l = CommandList::new(&dev, 0);
+        l.resolve_timestamps(&heap, start, count, &dst, off);
+        assert_eq!(l.close().err(), Some(Hr::E_INVALIDARG));
+    }
+    let mut l = CommandList::new(&dev, 0);
+    l.end_timestamp(&heap, 4);
+    assert_eq!(l.close().err(), Some(Hr::E_INVALIDARG));
+}
+
+#[test]
+fn pix_markers_become_debug_labels() {
+    let (link, dev) = setup();
+    let q = dev.create_queue(0, 0).unwrap();
+    let mut l = CommandList::new(&dev, 0);
+    l.marker('[', "Direct/Main #0");
+    l.marker('=', "here");
+    l.marker(']', "");
+    q.execute(&[l.close().unwrap()]).unwrap();
+    let blocks = link.blocks();
+    let cmds = Decoder::new(&blocks[0]).unwrap().collect_all().unwrap();
+    let labels: Vec<&[u8]> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            Command::DebugLabel(t) => Some(*t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, [&b"[Direct/Main #0"[..], b"=here", b"]"]);
+}

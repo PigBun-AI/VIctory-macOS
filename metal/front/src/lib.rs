@@ -33,6 +33,8 @@ pub mod resource;
 pub mod rootsig;
 pub mod state;
 pub mod swapchain;
+pub mod timestamps;
+pub mod vamap;
 pub mod view;
 
 #[cfg(windows)]

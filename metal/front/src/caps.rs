@@ -83,11 +83,20 @@ pub const F_OPTIONS19: u32 = 48;
 pub const F_OPTIONS20: u32 = 49;
 pub const F_OPTIONS21: u32 = 53;
 
-/// Fixed-size blocks, as D3DMetal answered them (hex of the structure).
+/// Fixed-size blocks, as D3DMetal answered them (hex of the structure), except
+/// two answers that say what this front does not build (docs/metal/m4-newbase.md):
+///
+/// * `F_OPTIONS`: `TiledResourcesTier` (word 3) is 0, not D3DMetal's 2: there are no
+///   reserved resources or tile mappings (`CreateReservedResource` /
+///   `UpdateTileMappings` are `E_NOTIMPL`), so a title asked "tiled resources?" must
+///   take its non-tiled path. `victory-gpu`'s tiles.rs `wanted()` is then false.
+/// * `F_OPTIONS12`: `EnhancedBarriersSupported` (word 1) is 0, not 1: lists are
+///   `ID3D12GraphicsCommandList6` and have no `Barrier` (List7), so legacy
+///   `ResourceBarrier` it is; `victory-gpu` falls back when the List7 cast fails.
 const BLOCKS: &[(u32, &str)] = &[
     (
         F_OPTIONS,
-        "000000000100000002000000020000000300000001000000010000000100000000000000400000000000000000000000000000000100000002000000",
+        "000000000100000002000000000000000300000001000000010000000100000000000000400000000000000000000000000000000100000002000000",
     ),
     (F_GPU_VIRTUAL_ADDRESS_SUPPORT, "4000000040000000"),
     (
@@ -108,7 +117,7 @@ const BLOCKS: &[(u32, &str)] = &[
     ),
     (F_OPTIONS10, "0000000000000000"),
     (F_OPTIONS11, "01000000"),
-    (F_OPTIONS12, "ffffffff0100000000000000"),
+    (F_OPTIONS12, "ffffffff0000000000000000"),
     (
         F_OPTIONS13,
         "010000000100000000000000000000000000000000000000",
@@ -345,6 +354,26 @@ mod tests {
         let mut b = input.to_vec();
         check_feature_support(&Caps::apple(), f, &mut b)?;
         Ok(b)
+    }
+
+    #[test]
+    fn what_the_front_does_not_build_is_not_advertised() {
+        // OPTIONS: TiledResourcesTier (word 3) is 0 (no reserved resources); the
+        // other words are D3DMetal's (ResourceBindingTier 3, ResourceHeapTier 2).
+        let o = q(F_OPTIONS, &[0; 60]).unwrap();
+        let w = |i: usize| u32::from_le_bytes(o[4 * i..4 * i + 4].try_into().unwrap());
+        assert_eq!(w(3), 0, "TiledResourcesTier");
+        assert_eq!((w(2), w(4)), (2, 3));
+        assert_eq!(w(14), 2, "ResourceHeapTier");
+        // OPTIONS12: EnhancedBarriersSupported (word 1) is 0 (no ID3D12GraphicsCommandList7).
+        let o12 = q(F_OPTIONS12, &[0; 12]).unwrap();
+        let w12 = |i: usize| u32::from_le_bytes(o12[4 * i..4 * i + 4].try_into().unwrap());
+        assert_eq!(
+            w12(0),
+            u32::MAX,
+            "MSPrimitivesPipelineStatisticIncludesCulledPrimitives"
+        );
+        assert_eq!(w12(1), 0, "EnhancedBarriersSupported");
     }
 
     #[test]

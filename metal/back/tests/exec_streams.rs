@@ -1096,7 +1096,13 @@ fn immediate_writes_land_in_command_order_with_both_sizes() {
         fill(w.a.res, 0xFFFF_FFFF, 0, 64),
         Command::Barrier(Barrier::memory(stage::BLIT, stage::BLIT)),
         write_imm(w.a.res, 0, 4, 0x1111_2222, WriteImmediate::DEFAULT),
-        write_imm(w.a.res, 8, 8, 0x0123_4567_89AB_CDEF, WriteImmediate::MARKER_IN),
+        write_imm(
+            w.a.res,
+            8,
+            8,
+            0x0123_4567_89AB_CDEF,
+            WriteImmediate::MARKER_IN,
+        ),
         // Overwrites the first write: later commands win.
         write_imm(w.a.res, 0, 4, 0x3333_4444, WriteImmediate::MARKER_OUT),
         end(1),

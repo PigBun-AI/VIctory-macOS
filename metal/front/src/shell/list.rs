@@ -425,7 +425,4 @@ impl ListObj_Impl {
     }
 
     // Debug markers: accepted, not recorded (queries and labels are M2).
-    pub(super) fn x_SetMarker(&self, _metadata: u32, _pdata: *const c_void, _size: u32) {}
-    pub(super) fn x_BeginEvent(&self, _metadata: u32, _pdata: *const c_void, _size: u32) {}
-    pub(super) fn x_EndEvent(&self) {}
 }

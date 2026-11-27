@@ -27,6 +27,7 @@ use crate::hresult::{Hr, Result};
 mod device;
 mod dxgi;
 pub mod exports;
+pub(crate) mod ext;
 mod library;
 mod list;
 mod objects;
