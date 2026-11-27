@@ -51,6 +51,13 @@ impl Drop for Buffer {
     }
 }
 
+/// A mock texture takes `w * h * d` texels of 4 bytes and a third more for mips,
+/// in whole pages.
+fn mock_texture_size(w: u32, h: u32, d: u32) -> u64 {
+    let bytes = w as u64 * h as u64 * d as u64 * 4 * 4 / 3;
+    bytes.div_ceil(PAGE) * PAGE
+}
+
 /// What a `WRITE_DESCRIPTOR` stored.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Descriptor {
@@ -62,6 +69,28 @@ pub enum Descriptor {
 struct Heap {
     kind: u32,
     slots: Vec<Descriptor>,
+}
+
+/// What `CREATE_TEXTURE` was asked for (a mock texture has no contents).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureRecord {
+    pub dimension: u32,
+    pub format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub depth_or_array: u32,
+    pub mips: u32,
+    pub samples: u32,
+    pub usage: u32,
+    /// Placement, if any: `(heap, offset)`.
+    pub placed: Option<(u32, u64)>,
+}
+
+/// A memory heap (`CREATE_HEAP`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemHeapRecord {
+    pub kind: u32,
+    pub size: u64,
 }
 
 /// One entry of the call log.
@@ -79,6 +108,8 @@ struct State {
     buffers: HashMap<u32, Buffer>,
     by_va: BTreeMap<u64, u32>,
     heaps: HashMap<u32, Heap>,
+    textures: HashMap<u32, TextureRecord>,
+    mem_heaps: HashMap<u32, MemHeapRecord>,
     root_sigs: HashMap<u32, RootSigDesc>,
     pipelines: HashMap<u32, (u32, usize)>,
     fences: HashMap<u32, u64>,
@@ -148,6 +179,22 @@ impl MockLink {
 
     pub fn live_heaps(&self) -> usize {
         self.st.lock().unwrap().heaps.len()
+    }
+
+    pub fn live_textures(&self) -> usize {
+        self.st.lock().unwrap().textures.len()
+    }
+
+    pub fn live_mem_heaps(&self) -> usize {
+        self.st.lock().unwrap().mem_heaps.len()
+    }
+
+    pub fn texture(&self, res: ResId) -> Option<TextureRecord> {
+        self.st.lock().unwrap().textures.get(&res.0).copied()
+    }
+
+    pub fn mem_heap(&self, id: victory_metal_proto::MemHeapId) -> Option<MemHeapRecord> {
+        self.st.lock().unwrap().mem_heaps.get(&id.0).copied()
     }
 
     pub fn live_pipelines(&self) -> usize {
@@ -263,6 +310,97 @@ impl State {
         a.gpu_va = gpu_va;
         a.cpu_addr = if cpu_visible { ptr as u64 } else { 0 };
         a.alloc_size = alloc;
+        Status::OK
+    }
+
+    fn create_texture(&mut self, a: &mut CreateTextureArgs) -> Status {
+        if a.width == 0 || a.height == 0 || a.depth_or_array == 0 || a.mips == 0 || a.samples == 0 {
+            return Status::INVALID_ARG;
+        }
+        let placed = if a.heap.0 == 0 {
+            None
+        } else if let Some(h) = self.mem_heaps.get(&a.heap.0) {
+            if h.kind != 0 || a.heap_offset >= h.size || !a.heap_offset.is_multiple_of(PAGE) {
+                return Status::INVALID_ARG;
+            }
+            Some((a.heap.0, a.heap_offset))
+        } else {
+            return Status::NOT_FOUND;
+        };
+        let id = self.new_id();
+        self.textures.insert(
+            id,
+            TextureRecord {
+                dimension: a.dimension.0,
+                format: a.format,
+                width: a.width,
+                height: a.height,
+                depth_or_array: a.depth_or_array,
+                mips: a.mips,
+                samples: a.samples,
+                usage: a.usage,
+                placed,
+            },
+        );
+        a.res = ResId(id);
+        a.alloc_size = mock_texture_size(a.width, a.height, a.depth_or_array);
+        Status::OK
+    }
+
+    fn create_mem_heap(&mut self, a: &mut CreateHeapArgs) -> Status {
+        if a.size == 0 || a.flags != 0 || !a.kind.is_known() {
+            return Status::INVALID_ARG;
+        }
+        let id = self.new_id();
+        let size = a.size.div_ceil(PAGE) * PAGE;
+        self.mem_heaps.insert(
+            id,
+            MemHeapRecord {
+                kind: a.kind.0,
+                size,
+            },
+        );
+        a.heap = victory_metal_proto::MemHeapId(id);
+        a.alloc_size = size;
+        Status::OK
+    }
+
+    fn create_placed_buffer(&mut self, a: &mut CreatePlacedBufferArgs) -> Status {
+        let Some(h) = self.mem_heaps.get(&a.heap.0).copied() else {
+            return Status::NOT_FOUND;
+        };
+        if a.size == 0
+            || !a.offset.is_multiple_of(PAGE)
+            || a.offset.checked_add(a.size).is_none_or(|e| e > h.size)
+        {
+            return Status::INVALID_ARG;
+        }
+        let kind = match h.kind {
+            1 => victory_metal_proto::types::BufferKind::UPLOAD,
+            2 => victory_metal_proto::types::BufferKind::READBACK,
+            3 => victory_metal_proto::types::BufferKind::SHARED,
+            _ => victory_metal_proto::types::BufferKind::DEFAULT,
+        };
+        let mut b = CreateBufferArgs::new();
+        b.size = a.size;
+        b.kind = kind.0;
+        let st = self.create_buffer(&mut b);
+        a.res = b.res;
+        a.gpu_va = b.gpu_va;
+        a.cpu_addr = b.cpu_addr;
+        st
+    }
+
+    fn allocation_info(&mut self, a: &mut GetResourceAllocationInfoArgs) -> Status {
+        use victory_metal_proto::types::ResKind;
+        a.alignment = PAGE;
+        a.size = match a.kind {
+            ResKind::BUFFER if a.buffer_size > 0 => a.buffer_size.div_ceil(PAGE) * PAGE,
+            ResKind::TEXTURE if a.width > 0 && a.height > 0 && a.depth_or_array > 0 => {
+                mock_texture_size(a.width, a.height, a.depth_or_array)
+            }
+            _ => return Status::INVALID_ARG,
+        };
         Status::OK
     }
 
@@ -392,6 +530,25 @@ impl State {
                 Command::CopyBufferRegion(c) => {
                     self.copy(c.dst, c.dst_offset, c.src, c.src_offset, c.size)
                 }
+                Command::CopyTextureRegion(t) => {
+                    for l in [&t.dst, &t.src] {
+                        if !self.textures.contains_key(&l.res.0)
+                            && !self.buffers.contains_key(&l.res.0)
+                        {
+                            self.rejected.push(format!("{c:?}"));
+                        }
+                    }
+                }
+                Command::CopyResource(r) => {
+                    for id in [r.dst, r.src] {
+                        if !self.textures.contains_key(&id.0) && !self.buffers.contains_key(&id.0) {
+                            self.rejected.push(format!("{c:?}"));
+                        }
+                    }
+                }
+                Command::ClearUavTexture(t) if !self.textures.contains_key(&t.res.0) => {
+                    self.rejected.push(format!("{c:?}"));
+                }
                 Command::QueueSignal(s) => match self.fences.get_mut(&s.fence.0) {
                     Some(v) => *v = (*v).max(s.value),
                     None => self.rejected.push(format!("{c:?}")),
@@ -503,6 +660,28 @@ impl Link for MockLink {
             }
             SyncOp::CREATE_BUFFER => s.create_buffer(args!(CreateBufferArgs)),
             SyncOp::DESTROY_BUFFER => s.destroy_buffer(args!(DestroyBufferArgs)),
+            SyncOp::CREATE_TEXTURE => s.create_texture(args!(CreateTextureArgs)),
+            SyncOp::DESTROY_TEXTURE => {
+                let a = args!(DestroyTextureArgs);
+                if s.textures.remove(&a.res.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
+            }
+            SyncOp::CREATE_HEAP => s.create_mem_heap(args!(CreateHeapArgs)),
+            SyncOp::DESTROY_HEAP => {
+                let a = args!(DestroyHeapArgs);
+                if s.mem_heaps.remove(&a.heap.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
+            }
+            SyncOp::CREATE_PLACED_BUFFER => s.create_placed_buffer(args!(CreatePlacedBufferArgs)),
+            SyncOp::GET_RESOURCE_ALLOCATION_INFO => {
+                s.allocation_info(args!(GetResourceAllocationInfoArgs))
+            }
             SyncOp::CREATE_DESC_HEAP => s.create_desc_heap(args!(CreateDescHeapArgs)),
             SyncOp::DESTROY_DESC_HEAP => {
                 let a = args!(DestroyDescHeapArgs);

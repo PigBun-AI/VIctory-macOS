@@ -16,9 +16,9 @@ use alloc::vec::Vec;
 
 open_enum! {
     /// Opcode of a command. Ranges: 0x0001 framing and queue ops, 0x0100 state,
-    /// 0x0200 compute/copy work, 0x0300 barriers; 0x0400-0x09FF reserved for
-    /// M2/M3 (see [`reserved_range`]); 0x0F00 replay-only records;
-    /// 0x8000 and up are never assigned.
+    /// 0x0200 compute/copy work, 0x0300 barriers, 0x0400-0x04FF texture work;
+    /// 0x0500-0x09FF reserved for M2/M3 (see [`reserved_range`]); 0x0F00
+    /// replay-only records; 0x8000 and up are never assigned.
     pub struct Opcode(u16) {
         BEGIN_LIST = 0x0001,
         END_LIST = 0x0002,
@@ -41,6 +41,10 @@ open_enum! {
 
         BARRIER = 0x0300,
 
+        COPY_TEXTURE_REGION = 0x0400,
+        COPY_RESOURCE = 0x0401,
+        CLEAR_UAV_TEXTURE = 0x0402,
+
         SYNC_RECORD = 0x0F00,
         BUFFER_DATA = 0x0F01,
     }
@@ -49,9 +53,9 @@ open_enum! {
 /// Opcode ranges reserved for later milestones: `(first, last, what)`.
 /// Opcodes in them are refused with `Error::ReservedOpcode`.
 pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
-    (0x0400, 0x04FF, "graphics state and draws (M3)"),
+    (0x0403, 0x04FF, "textures: numbers not yet used"),
     (0x0500, 0x05FF, "mesh shading (M3)"),
-    (0x0600, 0x06FF, "texture copy, clear, resolve (M3)"),
+    (0x0600, 0x06FF, "graphics state and draws (M3)"),
     (0x0700, 0x07FF, "present (M3)"),
     (0x0800, 0x08FF, "queries and timestamps (M2)"),
     (0x0900, 0x09FF, "ExecuteIndirect (M2)"),
@@ -78,6 +82,7 @@ pub const MAX_LABEL: usize = 1024;
 pub const fn opcode_version(op: Opcode) -> u8 {
     match op.0 {
         0x0001..=0x0005 | 0x0100..=0x0105 | 0x0200 | 0x0201 | 0x0210..=0x0212 | 0x0300 => 1,
+        0x0400..=0x0402 => 1,
         0x0F00 | 0x0F01 => 1,
         _ => 0,
     }
@@ -231,6 +236,99 @@ wire_struct! {
 }
 
 wire_struct! {
+    /// One side of a texture copy: a subresource of a texture, or a footprint
+    /// in a buffer. Fields of the other kind are zero.
+    pub struct TextureLocation {
+        /// A texture (`SUBRESOURCE`) or a buffer (`FOOTPRINT`).
+        res: ResId,
+        kind: LocKind,
+        /// `SUBRESOURCE`: plane of a depth-stencil texture (0 depth or colour, 1 stencil).
+        plane: u8,
+        /// `SUBRESOURCE`: mip level.
+        mip: u16,
+        /// `SUBRESOURCE`: array slice.
+        slice: u32,
+        /// `FOOTPRINT`: format of the texels in the buffer (DXGI number).
+        format: u32,
+        /// `FOOTPRINT`: byte offset of the first texel.
+        offset: u64,
+        /// `FOOTPRINT`: bytes between rows; the back checks it against the
+        /// format's row size and refuses (`INVALID_ARG`) a pitch Metal cannot use.
+        row_pitch: u32,
+        /// `FOOTPRINT`: texels per row.
+        width: u32,
+        /// `FOOTPRINT`
+        height: u32,
+        /// `FOOTPRINT`
+        depth: u32,
+    }
+}
+
+wire_struct! {
+    /// Copies a region between a texture and a buffer, or between two
+    /// textures. With `flags` bit 0 clear the source is the whole of its
+    /// subresource (or footprint). Coordinates are texels (a block compressed format: texels, a multiple of the block size).
+    pub struct CopyTextureRegion {
+        dst: TextureLocation,
+        src: TextureLocation,
+        dst_x: u32,
+        dst_y: u32,
+        dst_z: u32,
+        /// Bit 0: the source box below is given.
+        flags: u32,
+        box_left: u32,
+        box_top: u32,
+        box_front: u32,
+        box_right: u32,
+        box_bottom: u32,
+        box_back: u32,
+    }
+}
+
+impl CopyTextureRegion {
+    pub const HAS_BOX: u32 = 1;
+}
+
+wire_struct! {
+    /// Copies the whole of one resource to another of the same description
+    /// (two buffers of one size, or two textures with the same format,
+    /// dimensions, mips and array size): every subresource.
+    pub struct CopyResource {
+        dst: ResId,
+        src: ResId,
+    }
+}
+
+wire_struct! {
+    /// Clears a texture UAV: mip `mip`, slices `first_slice ..
+    /// first_slice + slice_count` (`slice_count` 0 = to the end), in `format`
+    /// (`UNKNOWN` = the texture's own). `float_values` says the four values
+    /// are `f32` bit patterns, else `u32`.
+    pub struct ClearUavTexture {
+        res: ResId,
+        format: u32,
+        dimension: TexViewDim,
+        float_values: u8,
+        /// Bit 0: the rectangle below is given, else the whole mip.
+        flags: u16,
+        mip: u32,
+        first_slice: u32,
+        slice_count: u32,
+        values: [u32; 4],
+        rect_left: u32,
+        rect_top: u32,
+        rect_right: u32,
+        rect_bottom: u32,
+        _pad: u32,
+        _pad2: u32,
+    }
+}
+
+impl ClearUavTexture {
+    pub const HAS_RECT: u16 = 1;
+}
+
+wire_struct! {
     /// A barrier: `before` stages finish what they were doing to memory before
     /// `after` stages start. Resources are informational for `MEMORY`
     /// barriers (the Metal barrier is stage to stage) and name the pair for `ALIASING`.
@@ -360,6 +458,9 @@ pub enum Command<'a> {
     FillBuffer(FillBuffer),
     ClearUav(ClearUav),
     Barrier(Barrier),
+    CopyTextureRegion(CopyTextureRegion),
+    CopyResource(CopyResource),
+    ClearUavTexture(ClearUavTexture),
     SyncRecord(SyncRecord<'a>),
     BufferData(BufferData<'a>),
 }
@@ -399,6 +500,9 @@ impl Command<'_> {
             Command::FillBuffer(_) => Opcode::FILL_BUFFER,
             Command::ClearUav(_) => Opcode::CLEAR_UAV,
             Command::Barrier(_) => Opcode::BARRIER,
+            Command::CopyTextureRegion(_) => Opcode::COPY_TEXTURE_REGION,
+            Command::CopyResource(_) => Opcode::COPY_RESOURCE,
+            Command::ClearUavTexture(_) => Opcode::CLEAR_UAV_TEXTURE,
             Command::SyncRecord(_) => Opcode::SYNC_RECORD,
             Command::BufferData(_) => Opcode::BUFFER_DATA,
         }
@@ -426,6 +530,26 @@ impl Command<'_> {
             }
             Command::SetRootTable(c) => check_bind_point(op, c.bind_point),
             Command::DebugLabel(l) if l.len() > MAX_LABEL => Err(bad(op, "label")),
+            Command::CopyTextureRegion(c) => {
+                for (l, name) in [(&c.dst, "dst"), (&c.src, "src")] {
+                    if !l.kind.is_known() {
+                        return Err(bad(op, name));
+                    }
+                }
+                if c.flags & !CopyTextureRegion::HAS_BOX != 0 {
+                    return Err(bad(op, "flags"));
+                }
+                Ok(())
+            }
+            Command::ClearUavTexture(c) => {
+                if !c.dimension.is_known() || c.dimension == TexViewDim::NONE {
+                    return Err(bad(op, "dimension"));
+                }
+                if c.float_values > 1 || c.flags & !ClearUavTexture::HAS_RECT != 0 {
+                    return Err(bad(op, "flags"));
+                }
+                Ok(())
+            }
             Command::Barrier(b) => {
                 if !b.class.is_known() {
                     return Err(bad(op, "class"));
@@ -494,6 +618,9 @@ impl Command<'_> {
             Command::FillBuffer(c) => c.put(out),
             Command::ClearUav(c) => c.put(out),
             Command::Barrier(c) => c.put(out),
+            Command::CopyTextureRegion(c) => c.put(out),
+            Command::CopyResource(c) => c.put(out),
+            Command::ClearUavTexture(c) => c.put(out),
             Command::SyncRecord(c) => {
                 SyncRecordHead {
                     op: c.op,
@@ -612,6 +739,9 @@ pub fn decode_one<'a>(buf: &'a [u8]) -> Result<(Command<'a>, usize), Error> {
         Opcode::FILL_BUFFER => fixed!(FillBuffer, FillBuffer),
         Opcode::CLEAR_UAV => fixed!(ClearUav, ClearUav),
         Opcode::BARRIER => fixed!(Barrier, Barrier),
+        Opcode::COPY_TEXTURE_REGION => fixed!(CopyTextureRegion, CopyTextureRegion),
+        Opcode::COPY_RESOURCE => fixed!(CopyResource, CopyResource),
+        Opcode::CLEAR_UAV_TEXTURE => fixed!(ClearUavTexture, ClearUavTexture),
         Opcode::SYNC_RECORD => {
             let head = SyncRecordHead::get(&mut r)?;
             let (a, b) = (head.args_len as usize, head.blob_len as usize);

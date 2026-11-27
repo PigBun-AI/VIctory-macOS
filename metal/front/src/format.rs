@@ -40,12 +40,12 @@ pub fn info(format: u32) -> Option<FormatInfo> {
         1..=4 => f(16, 1, 1, 1),
         5..=8 => f(12, 1, 1, 1),
         9..=18 => f(8, 1, 1, 1),
-        // R32G8X24 family: 8 bytes per texel for the typeless/color views,
-        // two planes (depth, stencil) for the depth format.
-        19 | 21 | 22 => f(8, 1, 1, 1),
-        20 => f(8, 1, 1, 2),
-        23..=44 | 46 | 47 => f(4, 1, 1, 1),
-        45 => f(4, 1, 1, 2),
+        // The R32G8X24 and R24G8 families (typeless, depth-stencil and the two
+        // views of each) have two planes, depth and stencil, as D3D12 counts
+        // them (a typeless depth texture has both planes: D3DMetal agrees).
+        19..=22 => f(8, 1, 1, 2),
+        23..=43 => f(4, 1, 1, 1),
+        44..=47 => f(4, 1, 1, 2),
         48..=59 => f(2, 1, 1, 1),
         60..=65 => f(1, 1, 1, 1),
         66 => f(1, 8, 1, 1),
@@ -94,8 +94,8 @@ pub fn plane(format: u32, plane: u32) -> Option<PlaneInfo> {
         })
     };
     match (format, plane) {
-        (D32_FLOAT_S8X24_UINT | D24_UNORM_S8_UINT, 0) => p(R32_TYPELESS, 4, 0, 0),
-        (D32_FLOAT_S8X24_UINT | D24_UNORM_S8_UINT, _) => p(R8_TYPELESS, 1, 0, 0),
+        (19..=22 | 44..=47, 0) => p(R32_TYPELESS, 4, 0, 0),
+        (19..=22 | 44..=47, _) => p(R8_TYPELESS, 1, 0, 0),
         (NV12, 0) => p(R8_TYPELESS, 1, 0, 0),
         (NV12, _) => p(R8G8_TYPELESS, 2, 1, 1),
         (P010 | P016, 0) => p(R16_TYPELESS, 2, 0, 0),

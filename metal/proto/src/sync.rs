@@ -10,15 +10,15 @@
 //!
 //! Ids and addresses in output fields are chosen by the back.
 
-use crate::ids::{FenceId, HeapId, PsoId, QueueId, ResId, RootSigId, SurfaceId};
+use crate::ids::{FenceId, HeapId, MemHeapId, PsoId, QueueId, ResId, RootSigId, SurfaceId};
 use crate::status::Status;
-use crate::types::{Caps, SamplerDesc, ViewDesc};
+use crate::types::{Caps, MemKind, ResKind, SamplerDesc, TexDim, ViewDesc};
 use crate::wire::{Layout, Wire, open_enum, wire_struct};
 
 open_enum! {
-    /// Number of a sync call. 0x40 and up are reserved for M2/M3 (placement
-    /// heaps, textures, graphics pipelines, queries, swap chains); 0x8000 and
-    /// up are never assigned.
+    /// Number of a sync call. 0x40-0x4F: textures and placement heaps; 0x50-0x5F:
+    /// graphics pipelines. 0x60 and up are reserved for M2/M3 (queries, swap
+    /// chains); 0x8000 and up are never assigned.
     pub struct SyncOp(u32) {
         NOP = 0,
         HELLO = 1,
@@ -44,6 +44,13 @@ open_enum! {
         FENCE_SIGNAL = 21,
         DEVICE_STATUS = 22,
         GET_SURFACE_LAYER = 23,
+
+        CREATE_TEXTURE = 0x40,
+        DESTROY_TEXTURE = 0x41,
+        CREATE_HEAP = 0x42,
+        DESTROY_HEAP = 0x43,
+        CREATE_PLACED_BUFFER = 0x44,
+        GET_RESOURCE_ALLOCATION_INFO = 0x45,
     }
 }
 
@@ -256,8 +263,8 @@ sync_block! {
 
 sync_block! {
     /// `WRITE_DESCRIPTOR`: writes `heap[index]` from `view` (or `sampler` when
-    /// `view.kind` is `SAMPLER`).
-    WriteDescriptorArgs, WRITE_DESCRIPTOR, 1, {
+    /// `view.kind` is `SAMPLER`). Version 2: `ViewDesc` has the texture fields.
+    WriteDescriptorArgs, WRITE_DESCRIPTOR, 2, {
         heap: HeapId,
         index: u32,
         view: ViewDesc,
@@ -396,6 +403,136 @@ sync_block! {
         _pad: u32,
         /// out: address of the layer object, valid while the surface lives.
         layer_addr: u64,
+    }
+}
+
+sync_block! {
+    /// `CREATE_TEXTURE`: a texture, committed (own memory) or placed in a
+    /// memory heap at `heap_offset`. `format` is a DXGI format number; a
+    /// typeless one can be viewed through any format of its family. The
+    /// back refuses a description Metal cannot make (`UNSUPPORTED`, the text
+    /// in `Executor::last_error`).
+    CreateTextureArgs, CREATE_TEXTURE, 1, {
+        /// in
+        dimension: TexDim,
+        /// in
+        format: u32,
+        /// in: texels.
+        width: u32,
+        /// in: texels; 1 for 1D.
+        height: u32,
+        /// in: depth of a 3D texture, array size of the others (1 = not an array).
+        depth_or_array: u32,
+        /// in: mip levels, at least 1.
+        mips: u32,
+        /// in: samples per texel (1, 2, 4, 8).
+        samples: u32,
+        /// in: `tex_usage` bits.
+        usage: u32,
+        /// in: reserved, 0.
+        flags: u32,
+        /// in: the heap to place it in; null = committed.
+        heap: MemHeapId,
+        /// in: byte offset in `heap`, a multiple of the alignment `GET_RESOURCE_ALLOCATION_INFO` gave.
+        heap_offset: u64,
+        /// out
+        res: ResId,
+        _pad: u32,
+        /// out: bytes the texture takes (the allocated size).
+        alloc_size: u64,
+    }
+}
+
+sync_block! {
+    /// `DESTROY_TEXTURE`: released once the GPU is done with it (the back waits).
+    DestroyTextureArgs, DESTROY_TEXTURE, 1, {
+        res: ResId,
+        _pad: u32,
+    }
+}
+
+sync_block! {
+    /// `CREATE_HEAP`: memory buffers and textures can be placed in
+    /// (`CREATE_PLACED_BUFFER`, `CREATE_TEXTURE` with a heap). The heap is
+    /// resident for as long as it lives; resources placed in it share its
+    /// memory, ordered against each other by `BARRIER{ALIASING}`.
+    CreateHeapArgs, CREATE_HEAP, 1, {
+        /// in: a `MemKind`.
+        kind: MemKind,
+        /// in: reserved, 0.
+        flags: u32,
+        /// in: bytes (the back rounds up to what Metal allocates).
+        size: u64,
+        /// out
+        heap: MemHeapId,
+        _pad: u32,
+        /// out: bytes the heap really has.
+        alloc_size: u64,
+    }
+}
+
+sync_block! {
+    /// `DESTROY_HEAP`: the memory goes when the GPU is done with it and every
+    /// resource placed in it is destroyed.
+    DestroyHeapArgs, DESTROY_HEAP, 1, {
+        heap: MemHeapId,
+        _pad: u32,
+    }
+}
+
+sync_block! {
+    /// `CREATE_PLACED_BUFFER`: a buffer of `size` bytes at `offset` of a heap.
+    /// `gpu_va` and `cpu_addr` are as for `CREATE_BUFFER` (a CPU address only
+    /// for upload and readback heaps).
+    CreatePlacedBufferArgs, CREATE_PLACED_BUFFER, 1, {
+        /// in
+        heap: MemHeapId,
+        _pad: u32,
+        /// in: a multiple of the alignment `GET_RESOURCE_ALLOCATION_INFO` gave.
+        offset: u64,
+        /// in
+        size: u64,
+        /// out
+        res: ResId,
+        _pad2: u32,
+        /// out
+        gpu_va: u64,
+        /// out
+        cpu_addr: u64,
+    }
+}
+
+sync_block! {
+    /// `GET_RESOURCE_ALLOCATION_INFO`: what a resource of this description
+    /// needs from a heap of `heap_kind`. For a buffer only `buffer_size`
+    /// counts; for a texture the fields of `CREATE_TEXTURE`.
+    GetResourceAllocationInfoArgs, GET_RESOURCE_ALLOCATION_INFO, 1, {
+        /// in
+        kind: ResKind,
+        /// in: a `TexDim` (texture).
+        dimension: TexDim,
+        /// in: DXGI format (texture).
+        format: u32,
+        /// in
+        width: u32,
+        /// in
+        height: u32,
+        /// in
+        depth_or_array: u32,
+        /// in
+        mips: u32,
+        /// in
+        samples: u32,
+        /// in: `tex_usage` bits (texture).
+        usage: u32,
+        /// in: a `MemKind`.
+        heap_kind: MemKind,
+        /// in: bytes (buffer).
+        buffer_size: u64,
+        /// out: bytes in a heap (Metal's `heapTextureSizeAndAlign` / `heapBufferSizeAndAlign`).
+        size: u64,
+        /// out: placement alignment in bytes.
+        alignment: u64,
     }
 }
 

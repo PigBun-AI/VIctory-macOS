@@ -135,6 +135,24 @@ pub static SYNC_OPS: &[SyncInfo] = &[
         P,
         "in: window (WindowRef); out: surface, layer_addr (M3; back may answer UNSUPPORTED)",
     ),
+    sync::<CreateTextureArgs>(
+        I,
+        "in: dimension (TexDim), format (DXGI), width, height, depth_or_array, mips, samples, usage (tex_usage bits), flags=0, heap (null = committed), heap_offset; out: res, alloc_size",
+    ),
+    sync::<DestroyTextureArgs>(I, "in: res (freed after the GPU is done)"),
+    sync::<CreateHeapArgs>(
+        I,
+        "in: kind (MemKind), flags=0, size; out: heap, alloc_size (placement memory for buffers and textures)",
+    ),
+    sync::<DestroyHeapArgs>(I, "in: heap"),
+    sync::<CreatePlacedBufferArgs>(
+        I,
+        "in: heap, offset, size; out: res, gpu_va, cpu_addr (0 in a DEFAULT heap)",
+    ),
+    sync::<GetResourceAllocationInfoArgs>(
+        I,
+        "in: kind (ResKind), the texture fields or buffer_size, heap_kind; out: size, alignment (what Metal's heap size-and-align says)",
+    ),
 ];
 
 /// Every command, in opcode order.
@@ -215,6 +233,24 @@ pub static COMMANDS: &[CommandInfo] = &[
         false,
         I,
         "stage-to-stage / aliasing barrier",
+    ),
+    command::<cmd::CopyTextureRegion>(
+        Opcode::COPY_TEXTURE_REGION,
+        false,
+        I,
+        "buffer footprint to texture, texture to buffer footprint, or texture to texture (optional source box)",
+    ),
+    command::<cmd::CopyResource>(
+        Opcode::COPY_RESOURCE,
+        false,
+        I,
+        "whole resource to a resource of the same description (buffer or texture)",
+    ),
+    command::<cmd::ClearUavTexture>(
+        Opcode::CLEAR_UAV_TEXTURE,
+        false,
+        I,
+        "clear a texture UAV (mip, slices, optional rectangle) with float or uint values",
     ),
     command::<cmd::SyncRecordHead>(
         Opcode::SYNC_RECORD,

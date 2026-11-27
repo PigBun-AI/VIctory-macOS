@@ -152,8 +152,9 @@ fn call_framing_errors_are_statuses() {
         "reserved range"
     );
     assert_eq!(
-        fx.link.call(SyncOp(SYNC_RESERVED_START), n, 0),
-        Status::UNSUPPORTED
+        fx.link.call(SyncOp(0x46), n, 0),
+        Status::UNSUPPORTED,
+        "first number after the texture calls"
     );
     assert_eq!(
         fx.link.call(SyncOp(SYNC_RESERVED_END), n, 0),
@@ -444,7 +445,10 @@ fn write_descriptor_encodes_views_and_refuses_what_it_cannot() {
     assert_eq!(write(heap.heap, 0, counter), Status::INVALID_ARG);
     let mut sampler = ViewDesc::null();
     sampler.kind = ViewKind::SAMPLER;
-    assert_eq!(write(smp.heap, 0, sampler), Status::UNSUPPORTED);
+    // Sampler states exist now: the slot gets the state's id. A sampler into
+    // a resource heap is a mistake.
+    assert_eq!(write(smp.heap, 0, sampler), Status::OK);
+    assert_eq!(write(heap.heap, 0, sampler), Status::INVALID_ARG);
     // A failed write leaves the slot as it was.
     assert_eq!(entry(&heap, 4)[0], b.gpu_va);
 }

@@ -138,7 +138,8 @@ pub struct ResourceObj {
     pub private: PrivateData,
     pub device_obj: ComObject<DeviceObj>,
     pub heap_props: D3D12_HEAP_PROPERTIES,
-    pub buffer: dv::Buffer,
+    pub heap_flags: D3D12_HEAP_FLAGS,
+    pub resource: dv::Resource,
 }
 
 impl ResourceObj_Impl {
@@ -148,7 +149,7 @@ impl ResourceObj_Impl {
         _preadrange: *const D3D12_RANGE,
         ppdata: *mut *mut c_void,
     ) -> WResult<()> {
-        let addr = wres(self.buffer.map(subresource))?;
+        let addr = wres(self.resource.map(subresource))?;
         if !ppdata.is_null() {
             // SAFETY: the caller's out pointer.
             unsafe { *ppdata = addr as usize as *mut c_void };
@@ -159,11 +160,29 @@ impl ResourceObj_Impl {
     pub(super) fn x_Unmap(&self, _subresource: u32, _pwrittenrange: *const D3D12_RANGE) {}
 
     pub(super) fn x_GetDesc(&self) -> D3D12_RESOURCE_DESC {
-        d3d_desc(&self.buffer.desc)
+        d3d_desc(&self.resource.desc)
     }
 
+    pub(super) fn x_GetDesc1(&self) -> D3D12_RESOURCE_DESC1 {
+        let d = d3d_desc(&self.resource.desc);
+        D3D12_RESOURCE_DESC1 {
+            Dimension: d.Dimension,
+            Alignment: d.Alignment,
+            Width: d.Width,
+            Height: d.Height,
+            DepthOrArraySize: d.DepthOrArraySize,
+            MipLevels: d.MipLevels,
+            Format: d.Format,
+            SampleDesc: d.SampleDesc,
+            Layout: d.Layout,
+            Flags: d.Flags,
+            SamplerFeedbackMipRegion: D3D12_MIP_REGION::default(),
+        }
+    }
+
+    /// Textures have no GPU virtual address.
     pub(super) fn x_GetGPUVirtualAddress(&self) -> u64 {
-        self.buffer.gpu_va
+        self.resource.gpu_va
     }
 
     pub(super) fn x_GetHeapProperties(
@@ -177,10 +196,32 @@ impl ResourceObj_Impl {
                 *pheapproperties = self.heap_props;
             }
             if !pheapflags.is_null() {
-                *pheapflags = D3D12_HEAP_FLAG_NONE;
+                *pheapflags = self.heap_flags;
             }
         }
         Ok(())
+    }
+}
+
+/// `ID3D12Heap`: memory resources are placed in.
+#[implement(ID3D12Heap)]
+pub struct MemHeapObj {
+    pub private: PrivateData,
+    pub device_obj: ComObject<DeviceObj>,
+    pub heap: Arc<dv::Heap>,
+    /// The properties as the application gave them.
+    pub props: D3D12_HEAP_PROPERTIES,
+    pub flags: D3D12_HEAP_FLAGS,
+}
+
+impl MemHeapObj_Impl {
+    pub(super) fn x_GetDesc(&self) -> D3D12_HEAP_DESC {
+        D3D12_HEAP_DESC {
+            SizeInBytes: self.heap.size,
+            Properties: self.props,
+            Alignment: self.heap.alignment,
+            Flags: self.flags,
+        }
     }
 }
 

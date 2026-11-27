@@ -107,7 +107,7 @@ fn a_broken_block_is_refused_whole() {
         ),
         (
             "reserved opcode",
-            with_tail(&prefix, &raw_cmd(0x0400, 1, 0, 0, &[]), 1),
+            with_tail(&prefix, &raw_cmd(0x0403, 1, 0, 0, &[]), 1),
             Status::UNSUPPORTED,
         ),
         (

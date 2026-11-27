@@ -114,6 +114,12 @@ pub(crate) struct Pso {
     pub(crate) threads: [u32; 3],
 }
 
+/// What a `ResId` names.
+pub(crate) enum Res {
+    Buffer(crate::memory::Buffer),
+    Texture(crate::texture::Texture),
+}
+
 /// A descriptor heap and what proto said about it.
 pub(crate) struct Heap {
     pub(crate) heap: crate::descriptors::DescriptorHeap,
@@ -125,7 +131,13 @@ pub(crate) struct Heap {
 pub(crate) struct State {
     pub(crate) device: Device,
     pub(crate) options: ExecOptions,
-    pub(crate) resources: Table<crate::memory::Buffer>,
+    pub(crate) resources: Table<Res>,
+    /// Placement heaps (`CREATE_HEAP`).
+    pub(crate) mem_heaps: Table<crate::heap::Heap>,
+    /// Sampler states by what they were made from; kept for the executor's life
+    /// because a descriptor holds only the state's id.
+    pub(crate) samplers: std::collections::HashMap<String, crate::sampler::Sampler>,
+    pub(crate) clear_kernels: crate::clear::ClearKernels,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,

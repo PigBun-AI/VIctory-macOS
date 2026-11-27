@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use victory_metal_proto::ResId;
 use victory_metal_proto::types::RootParamKind;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{ComObject, Interface, Ref, Result as WResult, implement};
 
@@ -14,7 +15,7 @@ use super::device::DeviceObj;
 use super::objects::*;
 use super::private::PrivateData;
 use super::{werr, wres};
-use crate::device::{CommandList, Item, ListState, ResourceBarrier};
+use crate::device::{CommandList, CopyLoc, Item, ListState, ResourceBarrier};
 use crate::hresult::Hr;
 
 #[implement(ID3D12GraphicsCommandList6)]
@@ -25,6 +26,33 @@ pub struct ListObj {
     pub list: Mutex<CommandList>,
 }
 
+fn location_resource(l: &D3D12_TEXTURE_COPY_LOCATION) -> Option<ComObject<ResourceObj>> {
+    l.pResource.as_ref()?.cast_object().ok()
+}
+
+fn copy_loc<'a>(l: &D3D12_TEXTURE_COPY_LOCATION, res: &'a crate::device::Resource) -> CopyLoc<'a> {
+    // SAFETY: `Type` says which union member is live.
+    unsafe {
+        if l.Type == D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT {
+            let p = l.Anonymous.PlacedFootprint;
+            CopyLoc::Footprint {
+                res,
+                offset: p.Offset,
+                format: p.Footprint.Format.0 as u32,
+                width: p.Footprint.Width,
+                height: p.Footprint.Height,
+                depth: p.Footprint.Depth,
+                row_pitch: p.Footprint.RowPitch,
+            }
+        } else {
+            CopyLoc::Subresource {
+                res,
+                index: l.Anonymous.SubresourceIndex,
+            }
+        }
+    }
+}
+
 fn resource<'a>(r: &'a Ref<ID3D12Resource>) -> Option<&'a ResourceObj_Impl> {
     r.as_ref()?.cast_object_ref::<ResourceObj>().ok()
 }
@@ -32,6 +60,37 @@ fn resource<'a>(r: &'a Ref<ID3D12Resource>) -> Option<&'a ResourceObj_Impl> {
 impl ListObj_Impl {
     pub fn unsupported_call(&self) {
         self.list.lock().unwrap().unsupported();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn clear_uav(
+        &self,
+        gpu: &D3D12_GPU_DESCRIPTOR_HANDLE,
+        cpu: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        res: &Ref<ID3D12Resource>,
+        values: [u32; 4],
+        float_values: bool,
+        numrects: u32,
+        prects: *const RECT,
+    ) {
+        let mut l = self.list.lock().unwrap();
+        let Some(r) = resource(res) else {
+            return l.unsupported();
+        };
+        // Buffer UAV clears are not built (the proto has a placeholder only).
+        let Some(view) = self.device_obj.dev.texture_uav(cpu.ptr as u64, gpu.ptr) else {
+            return l.unsupported();
+        };
+        let rects: Vec<[i32; 4]> = (0..if prects.is_null() {
+            0
+        } else {
+            numrects as usize
+        })
+            // SAFETY: the caller's array of `numrects` rectangles.
+            .map(|i| unsafe { *prects.add(i) })
+            .map(|r| [r.left, r.top, r.right, r.bottom])
+            .collect();
+        l.clear_uav_texture(&r.resource, &view, values, float_values, &rects);
     }
 
     /// The recorded commands of a closed, healthy list.
@@ -91,8 +150,8 @@ impl ListObj_Impl {
     ) {
         let mut l = self.list.lock().unwrap();
         match (resource(&dst), resource(&src)) {
-            (Some(d), Some(s)) => {
-                l.copy_buffer_region(&d.buffer, dstoffset, &s.buffer, srcoffset, numbytes)
+            (Some(d), Some(s)) if d.resource.desc.is_buffer() && s.resource.desc.is_buffer() => {
+                l.copy_buffer_region(&d.resource, dstoffset, &s.resource, srcoffset, numbytes)
             }
             _ => l.unsupported(),
         }
@@ -101,11 +160,83 @@ impl ListObj_Impl {
     pub(super) fn x_CopyResource(&self, dst: Ref<ID3D12Resource>, src: Ref<ID3D12Resource>) {
         let mut l = self.list.lock().unwrap();
         match (resource(&dst), resource(&src)) {
-            (Some(d), Some(s)) if d.buffer.desc.width == s.buffer.desc.width => {
-                l.copy_buffer_region(&d.buffer, 0, &s.buffer, 0, s.buffer.desc.width)
-            }
+            (Some(d), Some(s)) => l.copy_resource(&d.resource, &s.resource),
             _ => l.unsupported(),
         }
+    }
+
+    pub(super) fn x_CopyTextureRegion(
+        &self,
+        pdst: *const D3D12_TEXTURE_COPY_LOCATION,
+        dstx: u32,
+        dsty: u32,
+        dstz: u32,
+        psrc: *const D3D12_TEXTURE_COPY_LOCATION,
+        psrcbox: *const D3D12_BOX,
+    ) {
+        let mut l = self.list.lock().unwrap();
+        // SAFETY: the caller's pointers; null is a failed list, as in D3D12's validation.
+        let (Some(dst), Some(src)) = (unsafe { pdst.as_ref() }, unsafe { psrc.as_ref() }) else {
+            return l.unsupported();
+        };
+        let (Some(dr), Some(sr)) = (location_resource(dst), location_resource(src)) else {
+            return l.unsupported();
+        };
+        let src_box = unsafe { psrcbox.as_ref() }
+            .map(|b| [b.left, b.top, b.front, b.right, b.bottom, b.back]);
+        let (dl, sl) = (copy_loc(dst, &dr.resource), copy_loc(src, &sr.resource));
+        l.copy_texture_region(&dl, [dstx, dsty, dstz], &sl, src_box);
+    }
+
+    pub(super) fn x_ClearUnorderedAccessViewUint(
+        &self,
+        viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE,
+        viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        presource: Ref<ID3D12Resource>,
+        values: *const u32,
+        numrects: u32,
+        prects: *const RECT,
+    ) {
+        if values.is_null() {
+            return self.list.lock().unwrap().unsupported();
+        }
+        // SAFETY: four values, the D3D12 contract.
+        let v = unsafe { [*values, *values.add(1), *values.add(2), *values.add(3)] };
+        self.clear_uav(
+            viewgpuhandleincurrentheap,
+            viewcpuhandle,
+            &presource,
+            v,
+            false,
+            numrects,
+            prects,
+        );
+    }
+
+    pub(super) fn x_ClearUnorderedAccessViewFloat(
+        &self,
+        viewgpuhandleincurrentheap: &D3D12_GPU_DESCRIPTOR_HANDLE,
+        viewcpuhandle: &D3D12_CPU_DESCRIPTOR_HANDLE,
+        presource: Ref<ID3D12Resource>,
+        values: *const f32,
+        numrects: u32,
+        prects: *const RECT,
+    ) {
+        if values.is_null() {
+            return self.list.lock().unwrap().unsupported();
+        }
+        // SAFETY: four values, the D3D12 contract.
+        let v =
+            unsafe { [*values, *values.add(1), *values.add(2), *values.add(3)].map(f32::to_bits) };
+        self.clear_uav(
+            viewgpuhandleincurrentheap,
+            viewcpuhandle,
+            &presource,
+            v,
+            true,
+            numrects,
+            prects,
+        );
     }
 
     pub(super) fn x_ResourceBarrier(
@@ -122,7 +253,7 @@ impl ListObj_Impl {
                 r.as_ref()?
                     .cast_object_ref::<ResourceObj>()
                     .ok()?
-                    .buffer
+                    .resource
                     .res,
             )
         };

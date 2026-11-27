@@ -140,15 +140,17 @@ nothing else breaks. `EnumAdapters1` end-of-list is `DXGI_ERROR_NOT_FOUND`
 | `Unmap` | ID3D12Resource, IDXGISurface | 38 | gpu/resource.rs:4266, gpu/host.rs:2964, gpu/texback.rs:379 | done |
 
 ### M2
+(texture, heap and custom-heap work: see [m2-textures.md](m2-textures.md); `GetCustomHeapProperties` is done too.)
+
 | method | interface(s) | sites | first call sites (file:line) | status |
 |---|---|--:|---|---|
-| `ClearUnorderedAccessViewFloat` | ID3D12GraphicsCommandList | 1 | gpu/draw.rs:1498 | E_NOTIMPL/no-op |
-| `ClearUnorderedAccessViewUint` | ID3D12GraphicsCommandList | 2 | gpu/draw.rs:1501, gpu/draw.rs:4990 | E_NOTIMPL/no-op |
-| `CopyTextureRegion` | ID3D12GraphicsCommandList | 41 | gpu/resource.rs:3833, gpu/resource.rs:4182, gpu/resource.rs:4256 | E_NOTIMPL/no-op |
+| `ClearUnorderedAccessViewFloat` | ID3D12GraphicsCommandList | 1 | gpu/draw.rs:1498 | done |
+| `ClearUnorderedAccessViewUint` | ID3D12GraphicsCommandList | 2 | gpu/draw.rs:1501, gpu/draw.rs:4990 | done |
+| `CopyTextureRegion` | ID3D12GraphicsCommandList | 41 | gpu/resource.rs:3833, gpu/resource.rs:4182, gpu/resource.rs:4256 | done |
 | `CreateCommandSignature` | ID3D12Device | 3 | gpu/draw.rs:2777, gpu/indirect.rs:818, gpu/indirect.rs:1263 | E_NOTIMPL/no-op |
 | `CreateCommittedResource3` | ID3D12Device10 | 1 | gpu/resource.rs:1614 | E_NOTIMPL/no-op |
-| `CreateHeap` | ID3D12Device | 2 | gpu/alias.rs:389, gpu/placement.rs:141 | E_NOTIMPL/no-op |
-| `CreatePlacedResource` | ID3D12Device | 4 | gpu/resource.rs:1584, gpu/alias.rs:391, gpu/placement.rs:252 | E_NOTIMPL/no-op |
+| `CreateHeap` | ID3D12Device | 2 | gpu/alias.rs:389, gpu/placement.rs:141 | done |
+| `CreatePlacedResource` | ID3D12Device | 4 | gpu/resource.rs:1584, gpu/alias.rs:391, gpu/placement.rs:252 | done |
 | `CreatePlacedResource2` | ID3D12Device10 | 1 | gpu/resource.rs:1577 | E_NOTIMPL/no-op |
 | `CreateQueryHeap` | ID3D12Device | 1 | gpu/host.rs:2918 | E_NOTIMPL/no-op |
 | `CreateReservedResource` | ID3D12Device | 1 | gpu/inplace_probe.rs:790 | E_NOTIMPL/no-op |
@@ -308,7 +310,7 @@ crate, so each dll exports only its own names.
 * Real `Link`: the dlls use `MockLink` until the bridge installs a provider
   (`connect::set_provider`); `VICTORY_METAL_LINK=mock` forces the mock.
 * Textures, placed resources, heaps, queries, indirect, graphics: see M2 / M3.
-* `CreateRenderTargetView` / `CreateDepthStencilView` do nothing.
+* `CreateRenderTargetView` / `CreateDepthStencilView` write a CPU-side record `(resource, mip, slices, format)` (no proto call; the graphics work reads it with `Device::target_view`).
 * `ID3D12Fence::SetEventOnCompletion` with an event handle spawns a waiting thread
   per call.
 * D3D12 hull/domain/geometry visibility in root signatures → `E_NOTIMPL`.

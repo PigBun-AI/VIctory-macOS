@@ -207,8 +207,8 @@ pub fn format_support(fmt: u32) -> (u32, u32) {
             s2 |= UAV_TYPED_LOAD | UAV_TYPED_STORE;
         }
         // RGBA32 F/U/S, RGBA16 F/UNORM/U/SNORM/S, RGBA8 UNORM/U/SNORM/S,
-        // R16 F/UNORM/U/SNORM/S, R8 UNORM/U/SNORM/S.
-        2..=4 | 10..=14 | 28 | 30..=32 | 54 | 56..=59 | 61..=64 => {
+        // R16 F/UNORM/U/SNORM/S, R8 UNORM/U/SNORM/S, B8G8R8A8 UNORM.
+        2..=4 | 10..=14 | 28 | 30..=32 | 54 | 56..=59 | 61..=64 | 87 => {
             s1 |= TYPED_UNORDERED_ACCESS_VIEW;
             s2 |= UAV_TYPED_LOAD | UAV_TYPED_STORE | OUTPUT_MERGER_LOGIC_OP;
         }

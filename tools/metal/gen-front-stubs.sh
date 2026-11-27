@@ -50,6 +50,7 @@ OBJECTS = {
     "FenceObj": ("ID3D12Fence1", "objects.rs"),
     "ResourceObj": ("ID3D12Resource2", "objects.rs"),
     "HeapObj": ("ID3D12DescriptorHeap", "objects.rs"),
+    "MemHeapObj": ("ID3D12Heap", "objects.rs"),
     "RootSigObj": ("ID3D12RootSignature", "objects.rs"),
     "PsoObj": ("ID3D12PipelineState", "objects.rs"),
     "RootSigDeserializerObj": ("ID3D12RootSignatureDeserializer", "serialize.rs"),

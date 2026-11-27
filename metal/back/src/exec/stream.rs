@@ -20,9 +20,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use victory_metal_proto::cmd::{
-    BeginList, Command, CopyBufferRegion, Dispatch, FillBuffer, QueueSignal, QueueWait,
-    SetDescriptorHeaps, SetPipeline, SetRootConstants, SetRootDescriptor, SetRootSignature,
-    SetRootTable,
+    BeginList, Command, CopyBufferRegion, CopyTextureRegion, Dispatch, FillBuffer, QueueSignal,
+    QueueWait, SetDescriptorHeaps, SetPipeline, SetRootConstants, SetRootDescriptor,
+    SetRootSignature, SetRootTable,
 };
 use victory_metal_proto::ids::{HeapId, QueueId};
 use victory_metal_proto::status::Status;
@@ -175,6 +175,9 @@ impl Run<'_> {
             Command::ClearUav(c) => self.clear_uav(c),
             Command::Barrier(c) => self.barrier(c),
             // Refused by `validate`; kept as a status rather than a panic.
+            Command::CopyTextureRegion(c) => self.copy_texture_region(c),
+            Command::CopyResource(c) => self.copy_resource(c),
+            Command::ClearUavTexture(c) => self.clear_uav_texture(c),
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
                 Err(Status::UNSUPPORTED)
             }
@@ -490,6 +493,155 @@ impl Run<'_> {
             .map_err(|e| status_of(&e))
     }
 
+    fn copy_texture_region(&mut self, c: &CopyTextureRegion) -> R {
+        use crate::copy::{BufLoc, TexLoc};
+        use victory_metal_proto::types::LocKind;
+        let (dst, src) = (&c.dst, &c.src);
+        let boxed = c.flags & CopyTextureRegion::HAS_BOX != 0;
+        let [left, top, front] = if boxed {
+            [c.box_left, c.box_top, c.box_front]
+        } else {
+            [0; 3]
+        };
+        let box_size = [
+            c.box_right.saturating_sub(c.box_left),
+            c.box_bottom.saturating_sub(c.box_top),
+            c.box_back.saturating_sub(c.box_front),
+        ];
+        match (dst.kind, src.kind) {
+            (LocKind::SUBRESOURCE, LocKind::FOOTPRINT) => {
+                let t = self.st.texture(dst.res)?.clone();
+                let b = self.st.buffer(src.res)?.clone();
+                let size = if boxed {
+                    box_size
+                } else {
+                    [src.width, src.height, src.depth]
+                };
+                let offset = footprint_offset(src, [left, top, front])?;
+                let dl = TexLoc {
+                    texture: &t,
+                    mip: u32::from(dst.mip),
+                    slice: dst.slice,
+                    plane: u32::from(dst.plane),
+                    origin: [c.dst_x, c.dst_y, c.dst_z],
+                };
+                let bl = BufLoc {
+                    buffer: &b,
+                    offset,
+                    format: src.format,
+                    row_pitch: src.row_pitch,
+                    rows: src.height.saturating_sub(top),
+                };
+                let (list, _) = self.list()?;
+                list.copy_buffer_to_texture(&dl, &bl, size)
+            }
+            (LocKind::FOOTPRINT, LocKind::SUBRESOURCE) => {
+                let t = self.st.texture(src.res)?.clone();
+                let b = self.st.buffer(dst.res)?.clone();
+                let mip = u32::from(src.mip);
+                let whole = t.desc().mip_size(mip.min(t.desc().mips - 1));
+                let size = if boxed { box_size } else { whole };
+                let offset = footprint_offset(dst, [c.dst_x, c.dst_y, c.dst_z])?;
+                let sl = TexLoc {
+                    texture: &t,
+                    mip,
+                    slice: src.slice,
+                    plane: u32::from(src.plane),
+                    origin: [left, top, front],
+                };
+                let bl = BufLoc {
+                    buffer: &b,
+                    offset,
+                    format: dst.format,
+                    row_pitch: dst.row_pitch,
+                    rows: dst.height.saturating_sub(c.dst_y),
+                };
+                let (list, _) = self.list()?;
+                list.copy_texture_to_buffer(&bl, &sl, size)
+            }
+            (LocKind::SUBRESOURCE, LocKind::SUBRESOURCE) => {
+                let d = self.st.texture(dst.res)?.clone();
+                let s = self.st.texture(src.res)?.clone();
+                let mip = u32::from(src.mip);
+                let whole = s.desc().mip_size(mip.min(s.desc().mips - 1));
+                let size = if boxed { box_size } else { whole };
+                let dl = TexLoc {
+                    texture: &d,
+                    mip: u32::from(dst.mip),
+                    slice: dst.slice,
+                    plane: u32::from(dst.plane),
+                    origin: [c.dst_x, c.dst_y, c.dst_z],
+                };
+                let sl = TexLoc {
+                    texture: &s,
+                    mip,
+                    slice: src.slice,
+                    plane: u32::from(src.plane),
+                    origin: [left, top, front],
+                };
+                let (list, _) = self.list()?;
+                list.copy_texture(&dl, &sl, size)
+            }
+            // Buffer to buffer is `CopyBufferRegion`.
+            _ => return Err(Status::INVALID_ARG),
+        }
+        .map_err(|e| self.st.refuse("COPY_TEXTURE_REGION", &e))
+    }
+
+    fn copy_resource(&mut self, c: &victory_metal_proto::cmd::CopyResource) -> R {
+        use super::Res;
+        let both = match (
+            self.st.resources.get(c.dst.0).ok_or(Status::NOT_FOUND)?,
+            self.st.resources.get(c.src.0).ok_or(Status::NOT_FOUND)?,
+        ) {
+            (Res::Buffer(d), Res::Buffer(s)) => Ok((d.clone(), s.clone())),
+            (Res::Texture(d), Res::Texture(s)) => Err((d.clone(), s.clone())),
+            _ => return Err(Status::INVALID_ARG),
+        };
+        let r = match both {
+            Ok((d, s)) => {
+                if d.len() != s.len() {
+                    return Err(Status::INVALID_ARG);
+                }
+                let (list, _) = self.list()?;
+                list.copy_buffer(&d, 0, &s, 0, s.len())
+            }
+            Err((d, s)) => {
+                let (list, _) = self.list()?;
+                list.copy_texture_resource(&d, &s)
+            }
+        };
+        r.map_err(|e| self.st.refuse("COPY_RESOURCE", &e))
+    }
+
+    fn clear_uav_texture(&mut self, c: &victory_metal_proto::cmd::ClearUavTexture) -> R {
+        use victory_metal_proto::cmd::ClearUavTexture;
+        let t = self.st.texture(c.res)?.clone();
+        let req = crate::clear::ClearRequest {
+            format: c.format,
+            mip: c.mip,
+            first_slice: c.first_slice,
+            slice_count: c.slice_count,
+            values: c.values,
+            float_values: c.float_values != 0,
+            rect: (c.flags & ClearUavTexture::HAS_RECT != 0).then_some([
+                c.rect_left,
+                c.rect_top,
+                c.rect_right,
+                c.rect_bottom,
+            ]),
+        };
+        let kernels = &self.st.clear_kernels;
+        let (list, _) = match self.open.as_mut() {
+            Some((l, _, b)) => (l, b),
+            None => return Err(Status::BAD_STREAM),
+        };
+        list.clear_texture(kernels, &t, &req).map_err(|e| {
+            self.st.note = Some(format!("CLEAR_UAV_TEXTURE: {e}"));
+            status_of(&e)
+        })
+    }
+
     fn barrier(&mut self, c: &victory_metal_proto::cmd::Barrier) -> R {
         let (list, _) = self.list()?;
         let r = match c.class {
@@ -505,4 +657,24 @@ impl Run<'_> {
 fn repeated_byte(v: u32) -> Option<u8> {
     let b = (v & 0xff) as u8;
     (v == u32::from_ne_bytes([b; 4])).then_some(b)
+}
+
+/// Byte offset of texel `at` (`[x, y, z]` from the footprint's corner) in a
+/// buffer footprint: the footprint's offset plus whole images, rows and
+/// texels. A block compressed format moves in blocks, so `at` must be on one.
+fn footprint_offset(
+    loc: &victory_metal_proto::cmd::TextureLocation,
+    at: [u32; 3],
+) -> Result<u64, Status> {
+    let f = crate::format::lookup(loc.format).ok_or(Status::INVALID_ARG)?;
+    let (bw, bh) = (u32::from(f.block.0), u32::from(f.block.1));
+    if !at[0].is_multiple_of(bw) || !at[1].is_multiple_of(bh) {
+        return Err(Status::INVALID_ARG);
+    }
+    let rows_per_image = u64::from(f.block_rows(loc.height));
+    let image = u64::from(loc.row_pitch) * rows_per_image;
+    Ok(loc.offset
+        + u64::from(at[2]) * image
+        + u64::from(at[1] / bh) * u64::from(loc.row_pitch)
+        + u64::from(at[0] / bw) * u64::from(f.bytes))
 }

@@ -20,6 +20,10 @@
 #[cfg(target_vendor = "apple")]
 pub mod barrier;
 #[cfg(target_vendor = "apple")]
+pub mod clear;
+#[cfg(target_vendor = "apple")]
+pub mod copy;
+#[cfg(target_vendor = "apple")]
 pub mod descriptors;
 #[cfg(target_vendor = "apple")]
 pub mod device;
@@ -27,6 +31,10 @@ pub mod device;
 pub mod error;
 #[cfg(target_vendor = "apple")]
 pub mod exec;
+#[cfg(target_vendor = "apple")]
+pub mod format;
+#[cfg(target_vendor = "apple")]
+pub mod heap;
 #[cfg(target_vendor = "apple")]
 pub mod m0;
 #[cfg(target_vendor = "apple")]
@@ -47,6 +55,8 @@ pub mod residency;
 pub mod sampler;
 #[cfg(target_vendor = "apple")]
 pub mod stages;
+#[cfg(target_vendor = "apple")]
+pub mod texture;
 #[cfg(target_vendor = "apple")]
 pub mod typed;
 
