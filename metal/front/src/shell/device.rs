@@ -523,11 +523,23 @@ impl DeviceObj_Impl {
     ) -> WResult<()> {
         let hp = require(pheapproperties)?;
         let d = require(pdesc)?;
-        let buffer = wres(self.dev.create_committed_buffer(
+        let buffer = match self.dev.create_committed_buffer(
             hp.Type.0 as u32,
             &core_desc(d),
             initialresourcestate.0 as u32,
-        ))?;
+        ) {
+            Ok(b) => b,
+            Err(h) => {
+                if h == Hr::E_NOTIMPL {
+                    // Textures and custom heaps: not built yet (see `note_notimpl`).
+                    super::note_notimpl(&format!(
+                        "ID3D12Device::CreateCommittedResource(dimension {}, heap type {})",
+                        d.Dimension.0, hp.Type.0
+                    ));
+                }
+                return Err(werr(h));
+            }
+        };
         let r = ComObject::new(ResourceObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),

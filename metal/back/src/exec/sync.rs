@@ -20,8 +20,9 @@ use crate::queue::{DeviceStatus, Queue};
 /// Queues one executor makes. Each has a constant ring and command
 /// buffer pool; the number is a guard, not a measured limit.
 const MAX_QUEUES: u32 = 16;
-/// Largest descriptor heap (the original API's limit is 1,000,000 slots).
-const MAX_HEAP_SLOTS: u32 = 1 << 20;
+/// Largest descriptor heap: 2^21 slots (the API promises 1,000,000; D3DMetal takes 2^21, and
+/// victory-shader's `ResourceDescriptorHeap[]` tests use that size).
+const MAX_HEAP_SLOTS: u32 = 1 << 21;
 /// Largest root signature description accepted by `CREATE_ROOT_SIGNATURE`.
 const MAX_ROOT_SIG_BYTES: u64 = 1 << 20;
 /// How long `DESTROY_QUEUE` and `SHUTDOWN` wait for a queue to drain.

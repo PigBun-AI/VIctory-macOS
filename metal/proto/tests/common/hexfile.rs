@@ -44,8 +44,12 @@ pub fn parse(text: &str) -> Result<Vec<u8>, String> {
 
 /// Reads a text golden file.
 pub fn read(path: &Path) -> Vec<u8> {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("{}: {e}; run with UPDATE_GOLDEN=1 to create it", path.display()));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}; run with UPDATE_GOLDEN=1 to create it",
+            path.display()
+        )
+    });
     parse(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 

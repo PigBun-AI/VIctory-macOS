@@ -20,7 +20,9 @@ pub const TYPE_DSV: u32 = 3;
 pub const FLAG_SHADER_VISIBLE: u32 = 1;
 
 /// `D3D12_MAX_...`: bounds D3D12 documents for shader-visible heaps.
-pub const MAX_SHADER_VISIBLE_CBV_SRV_UAV: u32 = 1_000_000;
+/// 2^21: the shader-visible limit of tier 3 is "at least 1,000,000"; D3DMetal takes
+/// 2^21 (victory-shader's tests use a heap that size for `ResourceDescriptorHeap[]`).
+pub const MAX_SHADER_VISIBLE_CBV_SRV_UAV: u32 = 1 << 21;
 pub const MAX_SHADER_VISIBLE_SAMPLERS: u32 = 2048;
 
 /// A key into the space: the front's own number for a heap (not the back's `SlotHeap`).
