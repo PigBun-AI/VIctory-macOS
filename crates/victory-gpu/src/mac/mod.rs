@@ -7,6 +7,8 @@ pub mod adapter;
 pub mod hlsl;
 pub mod rosetta;
 pub mod world;
+#[cfg(windows)]
+pub(crate) mod safecopy;
 
 #[cfg(not(windows))]
 pub(crate) mod nonwindows;

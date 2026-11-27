@@ -218,7 +218,7 @@ pub(crate) unsafe fn merge(title: *mut u8, now: *const u8, held: *mut u8, len: u
             unsafe {
                 std::ptr::copy_nonoverlapping(now.add(at), new.as_mut_ptr().add(into), n);
                 std::ptr::copy_nonoverlapping(held.add(at), old.as_mut_ptr().add(into), n);
-                let stuck = victory_safe_merge(title.wrapping_add(at).wrapping_sub(into), new.as_ptr(), old.as_mut_ptr(), 1, &mut counts);
+                let stuck = crate::mac::safecopy::merge(title.wrapping_add(at).wrapping_sub(into), new.as_ptr(), old.as_mut_ptr(), 1, &mut counts, victory_safe_merge);
                 out.there &= stuck == 0;
                 let from = if stuck != 0 && take { new.as_ptr() } else { old.as_ptr() };
                 std::ptr::copy_nonoverlapping(from.add(into), held.add(at), n);
@@ -227,7 +227,7 @@ pub(crate) unsafe fn merge(title: *mut u8, now: *const u8, held: *mut u8, len: u
         } else {
             let blocks = left / 32;
             // SAFETY: whole blocks of the stretch.
-            let stuck = unsafe { victory_safe_merge(title.add(at), now.add(at), held.add(at), blocks, &mut counts) };
+            let stuck = unsafe { crate::mac::safecopy::merge(title.add(at), now.add(at), held.add(at), blocks, &mut counts, victory_safe_merge) };
             if stuck != 0 {
                 out.there = false;
                 if take {
@@ -297,7 +297,7 @@ pub(crate) unsafe fn put_changed(dst: *mut u8, was: &[u8], now: &[u8]) -> bool {
     if blocks > 0 {
         // SAFETY: the two slices hold the blocks; the destination's faults
         // leave through the failing exit.
-        all &= unsafe { victory_safe_put(dst.add(head), was[head..].as_ptr(), now[head..].as_ptr(), blocks) != 0 };
+        all &= unsafe { crate::mac::safecopy::put(dst.add(head), was[head..].as_ptr(), now[head..].as_ptr(), blocks, victory_safe_put) != 0 };
     }
     let single = |from: usize, to: usize| {
         let mut all = true;
@@ -355,7 +355,11 @@ pub(crate) fn failing_exit(at: usize) -> Option<usize> {
         return Some(victory_safe_put_failed as *const () as usize);
     }
     let (from, to) = (victory_safe_merge_at as *const () as usize, victory_safe_merge_after as *const () as usize);
-    (from..to).contains(&at).then_some(victory_safe_merge_failed as *const () as usize)
+    if (from..to).contains(&at) {
+        return Some(victory_safe_merge_failed as *const () as usize);
+    }
+    // Mac patch G4: the scalar twins of the two above.
+    crate::mac::safecopy::failing_exit(at)
 }
 
 #[cfg(test)]

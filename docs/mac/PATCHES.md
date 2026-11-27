@@ -156,8 +156,33 @@ Runs a `victory.exe` under CrossOver Wine + D3DMetal in this checkout's own pref
   synchronous exception` at `victory_safe_merge_at` of **`safecopy.rs`** (our own `vpmaskmovd` store into a
   title page the tracker guards, in `land.rs`' merge). The loader's masked-store patch covers the title's code, not
   this asm; `victory_safe_put` has the same store. Default (tracking off under Rosetta) does not guard pages
-  and does not reach it. A fix would be per-dword plain stores for `merge`/`put` when `stores_need_patching()`.
+  and does not reach it. Fixed by G6 (per-dword plain stores).
 - `titlewrite.rs`, `shadow.rs`, `inplace.rs`: no fault or hang seen with tracking off (default).
+
+### G6 — safe copies without the AVX masked store (`victory-gpu/src/mac/safecopy.rs`)
+
+*What.* `safecopy.rs` (the Windows line's) stores what the card changed with `vpmaskmovd` in two assembler
+routines, `victory_safe_put` (used by `shadow::put_changed`) and `victory_safe_merge` (used by `land`), and
+counts on a fault on a page that is missing or guarded being caught by `watch::on_write` and sent to the
+failing exit. Rosetta 2 cannot take a fault of an AVX masked store (`rosetta error: unexpectedly need to
+EmulateForward on a synchronous exception`, the process stops): it killed `safecopy::tests::a_merge_into_missing_memory_fails`
+and `host::refresh_tests::refreshed_ranges_hold_title_memory` (the second writes through a read-only guard of
+`watch`), whatever `VICTORY_FAULT_TRACKING` says. `loader/mac/masked.rs` (L1) rewrites only the *title's*
+masked stores, not ours. Not a compiler artefact (the build has no AVX by default; the AVX2 functions only
+load) and not the tests' own: it is production code, reached in the game by `land::merge` (every landing of
+shader writes into title memory, `VICTORY_LAND` default on) and `shadow::put_changed` (every put). Under
+Rosetta with tracking off nothing is guarded, so the fault only comes when the title unmaps or protects
+memory the card writes into; with `VICTORY_FAULT_TRACKING=1` it comes at every first write to a guarded block.
+
+*How.* `mac/safecopy.rs`: `victory_mac_put` and `victory_mac_merge`, the same routines with one plain 32-bit
+`mov` per changed dword (loads of title memory stay 256-bit: a load that faults changes nothing), the same
+arguments, results and failing exits. Hooks in `safecopy.rs`: the 3 call sites go through
+`mac::safecopy::{put, merge}` (which pick the twin when `scalar()`: Rosetta, or `VICTORY_SAFE_SCALAR=1`;
+`=0` never) and `failing_exit` asks `mac::safecopy::failing_exit` last. A test checks the twins against the
+masked routines; the existing safecopy tests run through whichever is active.
+
+*Not needed on Windows* (it resumes or takes the fault of a masked store). *Remove when* Rosetta handles
+faulting masked stores (retest with `VICTORY_SAFE_SCALAR=0`), or with G2.
 
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
