@@ -283,6 +283,79 @@ fn a_bc_footprint_of_a_mip_smaller_than_a_block_is_one_whole_block() {
     }
 }
 
+/// A BC texture and an uncompressed texture whose texel is a block
+/// (`R32G32B32A32_UINT` for BC2/3/5/6H/7, `R32G32_UINT` for BC1/4): the
+/// original API copies between them, the region counted in the source's
+/// texels. Both ways, whole and partial, to the byte.
+#[test]
+fn bc_and_block_sized_uncompressed_textures_copy_into_each_other() {
+    let (_g, d, q) = setup();
+    for (bc, raw, block) in [
+        (dxgi::BC3_UNORM_SRGB, dxgi::R32G32B32A32_UINT, 16u32),
+        (dxgi::BC7_UNORM, dxgi::R32G32B32A32_UINT, 16),
+        (dxgi::BC1_UNORM, dxgi::R32G32_UINT, 8),
+    ] {
+        let mk = |format, w, h| {
+            d.create_texture(&TextureDesc {
+                dim: TexDim::D2,
+                format,
+                width: w,
+                height: h,
+                depth_or_array: 1,
+                mips: 1,
+                samples: 1,
+                usage: SRV,
+            })
+            .unwrap()
+        };
+        let (blocks_w, blocks_h) = (4u32, 4u32);
+        let bc_tex = mk(bc, 4 * blocks_w, 4 * blocks_h);
+        let raw_tex = mk(raw, blocks_w, blocks_h);
+        let pitch = blocks_w * block;
+        let img = pattern((pitch * blocks_h) as usize, bc * 3 + 1);
+        upload(&d, &q, &raw_tex, 0, 0, &img, pitch);
+        // Uncompressed to compressed, whole (the size is in source texels).
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture(&loc(&bc_tex, 0, 0), &loc(&raw_tex, 0, 0), [blocks_w, blocks_h, 1])
+            .unwrap_or_else(|e| panic!("{bc} <- {raw}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        assert_eq!(download(&d, &q, &bc_tex, 0, 0, pitch), img, "{bc} <- {raw}");
+        // Compressed to uncompressed, whole (the size is in the BC texels).
+        let back = mk(raw, blocks_w, blocks_h);
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture(&loc(&back, 0, 0), &loc(&bc_tex, 0, 0), [4 * blocks_w, 4 * blocks_h, 1])
+            .unwrap_or_else(|e| panic!("{raw} <- {bc}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        assert_eq!(download(&d, &q, &back, 0, 0, pitch), img, "{raw} <- {bc}");
+        // A part: 2x2 texels of the uncompressed one from (1,1) to the block (2,2).
+        let other = mk(bc, 4 * blocks_w, 4 * blocks_h);
+        let zero = vec![0u8; (pitch * blocks_h) as usize];
+        upload_bc_zero(&d, &q, &other, &zero, pitch);
+        let mut l = q.begin_list().unwrap();
+        let src = TexLoc { origin: [1, 1, 0], ..loc(&raw_tex, 0, 0) };
+        let dst = TexLoc { origin: [8, 8, 0], ..loc(&other, 0, 0) };
+        l.copy_texture(&dst, &src, [2, 2, 1]).unwrap_or_else(|e| panic!("part {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        let got = download(&d, &q, &other, 0, 0, pitch);
+        let mut want = zero.clone();
+        for by in 0..2u32 {
+            for bx in 0..2u32 {
+                let from = ((1 + by) * pitch + (1 + bx) * block) as usize;
+                let to = ((2 + by) * pitch + (2 + bx) * block) as usize;
+                want[to..to + block as usize].copy_from_slice(&img[from..from + block as usize]);
+            }
+        }
+        assert_eq!(got, want, "part of {raw} into {bc}");
+    }
+}
+
+fn upload_bc_zero(d: &Device, q: &Queue, t: &Texture, data: &[u8], pitch: u32) {
+    upload(d, q, t, 0, 0, data, pitch);
+}
+
 #[test]
 fn one_d_and_three_d_textures_round_trip() {
     let (_g, d, q) = setup();

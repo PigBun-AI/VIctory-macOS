@@ -405,6 +405,9 @@ impl CommandList {
         size: [u32; 3],
     ) -> Result<()> {
         self.live()?;
+        if let Some(blocks) = block_copy_shape(src, dst, size)? {
+            return self.copy_texture_through_buffer(dst, src, blocks);
+        }
         let (sf, sl, size) = check_texture(self, src, size, "texture copy source")?;
         let (df, dl, _) = check_texture(self, dst, size, "texture copy destination")?;
         if size.contains(&0) {
@@ -463,6 +466,53 @@ impl CommandList {
         Ok(())
     }
 
+    /// A copy between a block-compressed texture and an uncompressed one
+    /// whose texel is as big as a block (`R32G32B32A32_UINT` and `BC3`, the
+    /// way a shader-made BC texture is put into the real one): the original
+    /// API allows it and counts the region in the source's texels, one block
+    /// of the compressed side being one texel of the other. Metal's texture
+    /// to texture blit wants equal pixel formats, so the region goes through
+    /// a private buffer laid out as `blocks` blocks: texture to buffer in the
+    /// source's format, then buffer to texture in the destination's.
+    fn copy_texture_through_buffer(
+        &mut self,
+        dst: &TexLoc<'_>,
+        src: &TexLoc<'_>,
+        blocks: [u32; 3],
+    ) -> Result<()> {
+        let (sf, df) = (
+            format::require(src.texture.desc().format)?,
+            format::require(dst.texture.desc().format)?,
+        );
+        let bytes = u32::from(sf.bytes);
+        let row_pitch = blocks[0]
+            .checked_mul(bytes)
+            .ok_or_else(|| Error::BadArgument("texture copy: region overflows".into()))?;
+        let total = u64::from(row_pitch) * u64::from(blocks[1]) * u64::from(blocks[2]);
+        let staging = self
+            .queue()
+            .device()
+            .create_buffer(crate::memory::BufferKind::Default, total.max(16))?;
+        // The region in the destination's texels: a compressed side counts
+        // four texels to a block.
+        let texels = |f: &Format| {
+            let (bw, bh) = (u32::from(f.block.0), u32::from(f.block.1));
+            [blocks[0] * bw, blocks[1] * bh, blocks[2]]
+        };
+        let (src_texels, dst_texels) = (texels(sf), texels(df));
+        let loc_in = |f: &Format, t: [u32; 3]| BufLoc {
+            buffer: &staging,
+            offset: 0,
+            format: f.dxgi,
+            row_pitch,
+            rows: t[1],
+        };
+        self.copy_texture_to_buffer(&loc_in(sf, src_texels), src, src_texels)?;
+        self.copy_buffer_to_texture(dst, &loc_in(df, dst_texels), dst_texels)?;
+        self.keep_buffers.push(staging);
+        Ok(())
+    }
+
     /// `CopyResource` of two textures: every subresource. They must have the
     /// same dimension, size, mips, array size, samples and Metal format.
     pub fn copy_texture_resource(&mut self, dst: &Texture, src: &Texture) -> Result<()> {
@@ -497,6 +547,35 @@ impl CommandList {
         self.copies.keep.push(d);
         Ok(())
     }
+}
+
+/// The region of a copy in blocks (`[x, y, z]`) when it is between a
+/// block-compressed texture and an uncompressed one of equal texel and block
+/// size, `None` for any other pair (the ordinary copy then applies).
+fn block_copy_shape(
+    src: &TexLoc<'_>,
+    dst: &TexLoc<'_>,
+    size: [u32; 3],
+) -> Result<Option<[u32; 3]>> {
+    let (sf, df) = (
+        format::require(src.texture.desc().format)?,
+        format::require(dst.texture.desc().format)?,
+    );
+    let one = (1, 1);
+    let mixed = sf.planes() == 1
+        && df.planes() == 1
+        && sf.bytes == df.bytes
+        && ((sf.block == one && df.block == (4, 4)) || (sf.block == (4, 4) && df.block == one));
+    Ok(mixed.then(|| blocks_of(sf, size)))
+}
+
+/// `size` texels of format `f` as blocks (rounded up).
+fn blocks_of(f: &Format, size: [u32; 3]) -> [u32; 3] {
+    [
+        size[0].div_ceil(u32::from(f.block.0)),
+        size[1].div_ceil(u32::from(f.block.1)),
+        size[2],
+    ]
 }
 
 /// `(slice, level)` of a location as Metal wants them: a 3D texture has
