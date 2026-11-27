@@ -131,6 +131,10 @@ Falls back to `D3DCompile` where the helper is not configured or fails (and logs
 `VICTORY_MAC_HLSL=0` turns it off. Same idea as VIctory-macOS #301 (precompile the clamp at build time),
 but at run time and for all helper shaders, so the Windows line's `build.rs` stays as it is (G3 stays open).
 
+*Fix (found by the Wine test run).* The command line sent to `/bin/sh` began with `exec`, so the shell was replaced by
+the helper and never ran the `: >…done` that `run_unix` waits for: every helper shader waited the full 120 s on its
+first compile (then found the result file and went on). Without `exec` a cold shader takes about 0.2 s.
+
 *Why not needed on Windows.* FXC compiles all of them. *Remove when.* Wine ships a `d3dcompiler_47` or
 `dxcompiler.dll` that takes them, or the Metal backend replaces the D3D12 path.
 

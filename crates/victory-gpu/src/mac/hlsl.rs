@@ -92,7 +92,7 @@ fn dxc(config: &Dxc, source: &[u8], entry: &str, target: &str) -> Result<Vec<u8>
     // file: a handle passed to it by Wine is refused). Its exit status does
     // not come back through Wine, so the result file is the answer.
     let line = format!(
-        "exec '{}' -T '{profile}' -E '{entry}' -Fo '{unix_dir}/{name}.dxil' '{unix_dir}/{name}.hlsl' 2>'{unix_dir}/{name}.err'; : >'{unix_dir}/{name}.done'",
+        "'{}' -T '{profile}' -E '{entry}' -Fo '{unix_dir}/{name}.dxil' '{unix_dir}/{name}.hlsl' 2>'{unix_dir}/{name}.err'; : >'{unix_dir}/{name}.done'",
         config.helper
     );
     let done = win_dir.join(format!("{name}.done"));
