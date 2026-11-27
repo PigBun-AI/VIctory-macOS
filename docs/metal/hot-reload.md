@@ -56,21 +56,29 @@ neutral one.
 
 Order: after indirect GS draws and a stable menu, together with layers 1-2.
 
-- Capture: one frame's proto stream + referenced memory + the title's own
-  shaders and textures, outside the repository (format = proto dump).
+- Capture format: **the base's own `victory replay` capture** (new base
+  mac/livetr: `docs/replay.md`, `crates/victory-gpu/src/replay`). It records
+  at the host D3D12 level, i.e. at seam A: what victory-gpu sends the GPU and
+  the memory it reads. So one capture replays on Windows (real D3D12), on the
+  Mac under D3DMetal, and on the Mac on our back (`victory replay` under
+  Wine with our `d3d12.dll`), with no conversion. Captures need a diagnostics
+  build (`cargo build --profile diag -p victory --features diagnostics`), are
+  ~9 GB per frame, live outside the repository; use the capture's own
+  `shaders/` so both sides run the same DXIL; `notes.txt` lists what was not
+  recorded. `victory replay` already compares with the presented image
+  (`--compare`) and times each command.
+- Two stages: replaying a capture on our back with the proto recorder on
+  gives a proto stream of that frame; the native workbench works on that
+  stream. The proto recording stays as the back's own regression format.
 - Workbench (native arm64, no game, no Wine): step by draw / pass; view any
   intermediate target (RT, depth, G-buffer, shadow map, UAV); disable a pass
   or draw; hot-swap a shader and replay at once; GPU time per pass
   (Metal 4 counter heaps). First UI: a Metal window with keys, plus an HTML
   report per frame (thumbnails of every pass, timings, diffs) for batch runs.
-- Reference: the Windows line (feat/live-translator) has its own frame replay
-  (`victory replay`) and per-pass GPU timing on real D3D12. To investigate
-  first: whether its capture sits above seam A (console D3D12.X level). If so
-  the same capture replays on the Mac through victory-gpu + our back, and the
-  two runs can be compared pass by pass with no format bridge; if not, a
-  converter from its intermediate images to ours. D3DMetal (same capture
-  under Wine) is the secondary reference. The comparison names the first draw
-  whose output departs beyond a tolerance.
+- Reference: the same capture replayed on Windows (real D3D12, per-pass GPU
+  timing there) is the answer; D3DMetal is the secondary one. Pass-by-pass
+  images are compared and the first draw departing beyond a tolerance is
+  named. Captures made on the Mac with our back are readable on Windows too.
 - Resource viewer: textures (Xbox tiling, BC formats) and vertex streams as
   decoded, to check resource decoding apart from rendering.
 
