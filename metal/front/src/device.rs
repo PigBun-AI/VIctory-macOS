@@ -1161,7 +1161,15 @@ impl CommandList {
         }
     }
 
+    #[track_caller]
     pub(crate) fn fail(&mut self, e: Hr) {
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") && self.error.is_none() {
+            eprintln!(
+                "victory-metal front: a list call failed the list with {:#010x} at {}",
+                e.0 as u32,
+                std::panic::Location::caller()
+            );
+        }
         self.error.get_or_insert(e);
     }
 
@@ -1470,6 +1478,7 @@ impl CommandList {
     }
 
     /// A call outside this milestone: remembered, reported at `close`.
+    #[track_caller]
     pub fn unsupported(&mut self) {
         self.fail(Hr::E_NOTIMPL);
     }

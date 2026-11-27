@@ -1114,12 +1114,10 @@ impl crate::record::CommandList {
                     "an indirect mesh dispatch with a vertex pipeline".into(),
                 ));
             }
-            IndirectDraw::Draw | IndirectDraw::DrawIndexed => {
-                if p.kind() == Kind::Geometry {
-                    return Err(Error::Unsupported(
-                        "an indirect draw with a geometry shader".into(),
-                    ));
-                }
+            IndirectDraw::Draw | IndirectDraw::DrawIndexed if p.kind() == Kind::Geometry => {
+                return Err(Error::Unsupported(
+                    "an indirect draw with a geometry shader".into(),
+                ));
             }
             _ => {}
         }

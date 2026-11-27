@@ -36,6 +36,14 @@ use crate::queue::Queue;
 use crate::record::CommandList;
 
 /// Checks everything about a block that does not need the object tables.
+/// `VICTORY_METAL_LOG=1`: an error that is about to become a bare status.
+pub(super) fn logged(what: &str, e: &crate::error::Error) -> Status {
+    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+        eprintln!("victory-metal back: {what}: {e}");
+    }
+    status_of(e)
+}
+
 /// `VICTORY_METAL_LOG=1`: what the validation pass refused.
 fn refused(what: &str) {
     if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
@@ -192,10 +200,18 @@ impl State {
             open: None,
         };
         let mut failed: Option<(Status, String)> = None;
+        // `VICTORY_METAL_TRACE_CMDS=1`: each command, before it runs (finds a
+        // command that crashes the process).
+        let trace_cmds = std::env::var_os("VICTORY_METAL_TRACE_CMDS").is_some_and(|v| v != "0");
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
+            if trace_cmds {
+                let mut d = format!("{c:?}");
+                d.truncate(300);
+                eprintln!("victory-metal exec: {d}");
+            }
             if let Err(s) = run.command(&c) {
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
                     eprintln!("victory-metal back: {:?} failed: {s:?}", c.opcode());
@@ -293,7 +309,7 @@ impl Run<'_> {
                 .queue
                 .submit(batch.lists)
                 .map(|_| ())
-                .map_err(|e| status_of(&e))
+                .map_err(|e| logged("commit of a batch of lists", &e))
         };
         // Every submit ends with maintain.
         self.st.device.maintain();
@@ -333,7 +349,9 @@ impl Run<'_> {
         {
             self.flush(c.queue.0)?;
         }
-        let mut list = queue.begin_list().map_err(|e| status_of(&e))?;
+        let mut list = queue
+            .begin_list()
+            .map_err(|e| logged("begin of a list", &e))?;
         // Argument-table slots keep the addresses of the list that used them
         // last: clear the three binding points the stream sets.
         for point in [
@@ -350,7 +368,7 @@ impl Run<'_> {
 
     fn end_list(&mut self) -> R {
         let (mut list, queue_id, _) = self.open.take().ok_or(Status::BAD_STREAM)?;
-        list.end().map_err(|e| status_of(&e))?;
+        list.end().map_err(|e| logged("end of a list", &e))?;
         let queue = self
             .st
             .queues

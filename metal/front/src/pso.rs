@@ -809,7 +809,11 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
         out.enable = u8::from(r.enable);
         out.logic_enable = u8::from(r.logic_enable);
         out.write_mask = r.write_mask & 0xF;
-        out.logic_op = logic_op(if r.logic_enable { r.logic_op } else { d0.logic_op })?;
+        out.logic_op = logic_op(if r.logic_enable {
+            r.logic_op
+        } else {
+            d0.logic_op
+        })?;
         let q = if r.enable { r } else { d0 };
         out.src = blend_factor(q.src)?;
         out.dst = blend_factor(q.dst)?;

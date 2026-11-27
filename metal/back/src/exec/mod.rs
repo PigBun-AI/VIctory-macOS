@@ -307,10 +307,22 @@ impl Executor {
     /// One block of commands (`Link::submit`): one `ExecuteCommandLists`.
     pub fn submit(&self, block: &[u8]) -> Status {
         trace::block(block);
+        let log = std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0");
+        if log && block.len() > 200_000 {
+            eprintln!(
+                "victory-metal back: a block of {} bytes begins",
+                block.len()
+            );
+        }
         // The whole block is checked before anything runs.
         let header = match stream::validate(block) {
             Ok(caps) => caps,
-            Err(s) => return s,
+            Err(s) => {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    eprintln!("victory-metal back: a block was refused by validation: {s:?}");
+                }
+                return s;
+            }
         };
         let mut g = lock(&self.state);
         let Some(st) = g.as_mut() else {
@@ -326,6 +338,19 @@ impl Executor {
         st.device.maintain();
         let note = st.note.take();
         drop(g);
+        if log && block.len() > 200_000 {
+            eprintln!(
+                "victory-metal back: the block of {} bytes ends with {status:?}",
+                block.len()
+            );
+        }
+        if status != Status::OK && log {
+            eprintln!(
+                "victory-metal back: a block of {} bytes answered {status:?}: {}",
+                block.len(),
+                note.as_deref().unwrap_or("(no note)")
+            );
+        }
         if let Some(n) = note {
             self.note_error(n);
         }

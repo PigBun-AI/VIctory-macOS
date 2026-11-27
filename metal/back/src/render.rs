@@ -60,13 +60,12 @@ use objc2_metal::{
     MTL4AlphaToCoverageState, MTL4BlendState, MTL4Compiler, MTL4FunctionDescriptor,
     MTL4LibraryFunctionDescriptor, MTL4MeshRenderPipelineDescriptor, MTL4PipelineDescriptor,
     MTL4RenderPipelineDescriptor, MTL4SpecializedFunctionDescriptor, MTL4StaticLinkingDescriptor,
-    MTLDataType, MTLFunctionConstantValues,
     MTLAllocation, MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCompareFunction,
-    MTLCullMode, MTLDepthClipMode, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice,
-    MTLLibrary, MTLPixelFormat, MTLPrimitiveTopologyClass, MTLRenderPipelineState, MTLSize,
-    MTLStencilDescriptor, MTLStencilOperation, MTLTriangleFillMode,
-    MTLVertexBufferLayoutDescriptor, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
-    MTLWinding,
+    MTLCullMode, MTLDataType, MTLDepthClipMode, MTLDepthStencilDescriptor, MTLDepthStencilState,
+    MTLDevice, MTLFunctionConstantValues, MTLLibrary, MTLPixelFormat, MTLPrimitiveTopologyClass,
+    MTLRenderPipelineState, MTLSize, MTLStencilDescriptor, MTLStencilOperation,
+    MTLTriangleFillMode, MTLVertexBufferLayoutDescriptor, MTLVertexDescriptor, MTLVertexFormat,
+    MTLVertexStepFunction, MTLWinding,
 };
 
 use crate::device::{Device, DeviceInner};
@@ -368,12 +367,12 @@ fn convert(
     dxil: &[u8],
     desc: &GraphicsDesc<'_>,
 ) -> Result<Converted, MscError> {
-    let options = if desc.gs.is_some() && matches!(want, ShaderStage::Vertex | ShaderStage::Geometry)
-    {
-        desc.msc_options_geometry(want == ShaderStage::Vertex)
-    } else {
-        desc.msc_options()
-    };
+    let options =
+        if desc.gs.is_some() && matches!(want, ShaderStage::Vertex | ShaderStage::Geometry) {
+            desc.msc_options_geometry(want == ShaderStage::Vertex)
+        } else {
+            desc.msc_options()
+        };
     let c = msc.compile(dxil, Some(desc.root), &options)?;
     if c.reflection.stage != want {
         return Err(MscError::BadInput(format!(
@@ -435,7 +434,8 @@ pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, Msc
         .ok_or_else(|| MscError::BadInput("no stage".into()))?;
     for (name, c) in ["vertex", "amplification", "mesh", "geometry", "pixel"]
         .iter()
-        .zip(all) {
+        .zip(all)
+    {
         if let Some(c) = c
             && !same_layout(&c.reflection.layout, &first.reflection.layout)
         {
@@ -937,14 +937,16 @@ impl Device {
                     // mesh function, the stage-in function linked to the
                     // object stage.
                     let tess_off = constants(&[("tessellationEnabled", Constant::Bool(false))]);
-                    let object_name = format!(
-                        "{}.dxil_irconverter_object_shader",
-                        vs_c.reflection.entry
-                    );
-                    let object_fn = specialized(vs.0.raw(), &object_name, &tess_off).map_err(MscError::Metal)?;
+                    let object_name =
+                        format!("{}.dxil_irconverter_object_shader", vs_c.reflection.entry);
+                    let object_fn = specialized(vs.0.raw(), &object_name, &tess_off)
+                        .map_err(MscError::Metal)?;
                     let mesh_consts = constants(&[
                         ("tessellationEnabled", Constant::Bool(false)),
-                        ("vertex_shader_output_size_fc", Constant::Int(g.vertex_bytes as i32)),
+                        (
+                            "vertex_shader_output_size_fc",
+                            Constant::Int(g.vertex_bytes as i32),
+                        ),
                     ]);
                     let mesh_fn = specialized(gs.0.raw(), &gs_c.reflection.entry, &mesh_consts)
                         .map_err(MscError::Metal)?;
@@ -955,8 +957,8 @@ impl Device {
                         .next()
                         .map(|n| n.to_string())
                         .ok_or_else(|| MscError::NoOutput("an empty stage-in library".into()))?;
-                    let stage_in_fn =
-                        function_descriptor(stage_in_lib.raw(), &stage_in_name).map_err(MscError::Metal)?;
+                    let stage_in_fn = function_descriptor(stage_in_lib.raw(), &stage_in_name)
+                        .map_err(MscError::Metal)?;
                     let d = MTL4MeshRenderPipelineDescriptor::new();
                     d.setObjectFunctionDescriptor(Some(&object_fn));
                     d.setMeshFunctionDescriptor(Some(&mesh_fn));
@@ -964,12 +966,11 @@ impl Device {
                         d.setFragmentFunctionDescriptor(Some(f));
                     }
                     let linking = MTL4StaticLinkingDescriptor::new();
-                    let linked: Retained<MTL4FunctionDescriptor> = Retained::into_super(stage_in_fn);
+                    let linked: Retained<MTL4FunctionDescriptor> =
+                        Retained::into_super(stage_in_fn);
                     linking.setFunctionDescriptors(Some(&NSArray::from_retained_slice(&[linked])));
                     d.setObjectStaticLinkingDescriptor(Some(&linking));
-                    d.setMaxTotalThreadsPerMeshThreadgroup(
-                        g.max_input_primitives.max(1) as usize,
-                    );
+                    d.setMaxTotalThreadsPerMeshThreadgroup(g.max_input_primitives.max(1) as usize);
                     d.setMaxTotalThreadsPerObjectThreadgroup(256);
                     d.setPayloadMemoryLength(g.payload_bytes.max(16384) as usize);
                     // SAFETY: a sample count Metal checks at compile.

@@ -125,7 +125,7 @@ wire_struct! {
 }
 
 wire_struct! {
-    /// `D3D12_VIEWPORT`.
+    /// the D3D viewport.
     pub struct Viewport {
         x: f32,
         y: f32,
@@ -137,7 +137,7 @@ wire_struct! {
 }
 
 wire_struct! {
-    /// A rectangle as edges (`D3D12_RECT`): Metal wants origin and size, the
+    /// A rectangle as edges (a D3D rect): Metal wants origin and size, the
     /// back converts and clamps to the attachments.
     pub struct Rect {
         left: i32,
@@ -148,7 +148,7 @@ wire_struct! {
 }
 
 wire_struct! {
-    /// One vertex buffer binding (`D3D12_VERTEX_BUFFER_VIEW`, address resolved).
+    /// One vertex buffer binding (a D3D vertex buffer view, address resolved).
     pub struct VertexBufferView {
         va: u64,
         size: u32,
