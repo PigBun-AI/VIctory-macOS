@@ -1095,7 +1095,10 @@ fn compile_render(
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, MscError> {
     let base: &MTL4PipelineDescriptor = d;
     compiler
-        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(base, None)
+        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
+            base,
+            crate::archive::task_options().as_deref(),
+        )
         .map_err(|e| metal_refusal(what, &e.localizedDescription().to_string()))
 }
 
@@ -1106,7 +1109,10 @@ fn compile_mesh(
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, MscError> {
     let base: &MTL4PipelineDescriptor = d;
     compiler
-        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(base, None)
+        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
+            base,
+            crate::archive::task_options().as_deref(),
+        )
         .map_err(|e| metal_refusal("mesh pipeline", &e.localizedDescription().to_string()))
 }
 

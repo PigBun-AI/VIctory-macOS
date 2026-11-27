@@ -18,6 +18,8 @@
 //! streams on them.
 
 #[cfg(target_vendor = "apple")]
+pub mod archive;
+#[cfg(target_vendor = "apple")]
 pub mod barrier;
 #[cfg(target_vendor = "apple")]
 pub mod clear;
@@ -52,6 +54,8 @@ pub mod msc;
 pub mod pages;
 #[cfg(target_vendor = "apple")]
 pub mod pipeline;
+#[cfg(target_vendor = "apple")]
+pub mod pipeline_defaults;
 #[cfg(target_vendor = "apple")]
 pub mod present;
 #[cfg(target_vendor = "apple")]

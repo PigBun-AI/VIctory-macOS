@@ -7,8 +7,7 @@ use std::sync::{Arc, Mutex, Weak};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTL4Compiler, MTL4CompilerDescriptor, MTLArgumentBuffersTier, MTLCreateSystemDefaultDevice,
-    MTLDevice, MTLGPUFamily,
+    MTL4Compiler, MTLArgumentBuffersTier, MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily,
 };
 
 use crate::error::{Error, Result};
@@ -134,7 +133,7 @@ impl Device {
             )));
         }
         let compiler = raw
-            .newCompilerWithDescriptor_error(&MTL4CompilerDescriptor::new())
+            .newCompilerWithDescriptor_error(&crate::archive::compiler_descriptor(&raw))
             .map_err(|e| Error::Metal(format!("MTL4Compiler: {}", e.localizedDescription())))?;
         let page_size = process_page_size();
         let residency = Residency::new(&raw)?;
