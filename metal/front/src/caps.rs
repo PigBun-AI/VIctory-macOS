@@ -206,9 +206,23 @@ pub fn format_support(fmt: u32) -> (u32, u32) {
             s1 |= TYPED_UNORDERED_ACCESS_VIEW;
             s2 |= UAV_TYPED_LOAD | UAV_TYPED_STORE;
         }
-        // RGBA32 F/U/S, RGBA16 F/UNORM/U/SNORM/S, RGBA8 UNORM/U/SNORM/S,
-        // R16 F/UNORM/U/SNORM/S, R8 UNORM/U/SNORM/S, B8G8R8A8 UNORM.
-        2..=4 | 10..=14 | 28 | 30..=32 | 54 | 56..=59 | 61..=64 | 87 => {
+        // RGBA32 F/U/S, RG32 F/U/S, RGBA16 F/UNORM/U/SNORM/S, RGB10A2
+        // UNORM/UINT, R11G11B10, RGBA8 UNORM/U/SNORM/S, RG16 F/UNORM/U/SNORM/S,
+        // RG8 UNORM/U/SNORM/S, R16 F/UNORM/U/SNORM/S, R8 UNORM/U/SNORM/S,
+        // B8G8R8A8 UNORM. (Apple GPUs write them all; the castable views of
+        // one texel size on a shared texture need the whole row of a size.)
+        2..=4
+        | 16..=18
+        | 10..=14
+        | 24..=26
+        | 28
+        | 30..=32
+        | 34..=38
+        | 49..=52
+        | 54
+        | 56..=59
+        | 61..=64
+        | 87 => {
             s1 |= TYPED_UNORDERED_ACCESS_VIEW;
             s2 |= UAV_TYPED_LOAD | UAV_TYPED_STORE | OUTPUT_MERGER_LOGIC_OP;
         }

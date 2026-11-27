@@ -560,6 +560,7 @@ struct EC { ulong va; texturecube<float> tex; ulong md; };\n\
 struct EW { ulong va; texture2d<float, access::read_write> tex; ulong md; };\n\
 struct EWU { ulong va; texture2d<uint, access::read_write> tex; ulong md; };\n\
 struct ED { ulong va; depth2d<float> tex; ulong md; };\n\
+struct E1 { ulong va; texture1d<float, access::read_write> tex; ulong md; };\n\
 struct ES { sampler s; ulong tex; ulong md; };\n\
 struct P { uint index; uint x; uint y; uint z; };\n\
 kernel void read_f(device const EF* heap [[buffer(0)]], device float4* out [[buffer(1)]], \
@@ -579,6 +580,8 @@ device float4* out [[buffer(1)]], constant float4& uv [[buffer(2)]]) {\n\
   out[0] = float4(heap[0].tex.sample_compare(sheap[0].s, uv.xy, uv.z, level(0)), 0, 0, 0); }\n\
 kernel void write_f(device const EW* heap [[buffer(0)]], uint2 t [[thread_position_in_grid]]) {\n\
   heap[0].tex.write(float4(float(t.x), float(t.y), 7.0, 1.0), t); }\n\
+kernel void write_1d(device const E1* heap [[buffer(0)]], uint t [[thread_position_in_grid]]) {\n\
+  heap[0].tex.write(float4(float(t) * 0.25, 0, 0, 1), t); }\n\
 kernel void write_u(device const EWU* heap [[buffer(0)]], uint2 t [[thread_position_in_grid]]) {\n\
   heap[0].tex.write(uint4(t.x + 1u, t.y + 1u, 3u, 4u), t); }\n";
 
@@ -1514,4 +1517,42 @@ fn clears_that_cannot_be_done_exactly_are_refused() {
         do_clear(&q, &d, &no_uav, &clear_req([0; 4], false)),
         Err(Error::BadArgument(_))
     ));
+}
+
+/// A 1D texture written through a shader view and read back through another:
+/// the view of a 1D texture is a `texture1d`, whole-texture views included.
+#[test]
+fn a_1d_texture_is_written_and_read_through_views() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc {
+            dim: TexDim::D1,
+            format: dxgi::R32_FLOAT,
+            width: 4096,
+            height: 1,
+            depth_or_array: 1,
+            mips: 1,
+            samples: 1,
+            usage: SRV | UAV,
+        })
+        .unwrap();
+    let id = t.view(&ViewSpec::whole(ViewDim::D1)).unwrap();
+    rig.heap
+        .write(0, IrDescriptorTableEntry::texture(id, 0.0, 0))
+        .unwrap();
+    rig.run_kernel("write_1d", &[0, 0, 0, 0], [512, 1, 1], [8, 1, 1]);
+    let out = d.create_buffer(BufferKind::Readback, 4096 * 4).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&out, dxgi::R32_FLOAT, 4096 * 4, 1),
+        &loc(&t, 0, 0),
+        [4096, 1, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let w = out.read_u32s(0, 4096).unwrap();
+    assert_eq!(f32::from_bits(w[135]), 135.0 * 0.25);
+    assert_eq!(f32::from_bits(w[4095]), 4095.0 * 0.25);
 }
