@@ -960,6 +960,109 @@ mod patch_tests {
         }
     }
 
+    /// The 70 `vcvtps2ph [mem]` of the title (L1 patches them with the masked
+    /// stores): the unpatched store into a read-only page is fatal under
+    /// Rosetta whatever the lane (Wine probe 2026-11-27, 60 of 60), so the
+    /// patched one must fault as plain `mov`s do, resume after the handler
+    /// opens the page, and leave the half-floats in memory: ymm (16 bytes)
+    /// and xmm (8 bytes), inside the read-only page and across the
+    /// boundary into it at several offsets, imm8 0 (nearest) and 3 (towards zero).
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn a_patched_vcvtps2ph_resumes_after_a_write_fault() {
+        use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
+        use windows_sys::Win32::System::Diagnostics::Debug::*;
+        use windows_sys::Win32::System::Memory::*;
+        static PAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static FAULTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        unsafe extern "system" fn unguard(info: *mut EXCEPTION_POINTERS) -> i32 {
+            // SAFETY: the system passes valid pointers.
+            unsafe {
+                let r = &*(*info).ExceptionRecord;
+                let page = PAGE.load(std::sync::atomic::Ordering::Relaxed);
+                let at = r.ExceptionInformation[1];
+                if r.ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+                    && at.wrapping_sub(page - 0x1000) < 0x2000
+                {
+                    FAULTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let mut old = 0;
+                    VirtualProtect(page as *const _, 0x1000, PAGE_READWRITE, &mut old);
+                    return -1; // EXCEPTION_CONTINUE_EXECUTION
+                }
+            }
+            0
+        }
+        let floats: [f32; 8] = [1.0, -2.5, 65504.0, 0.5, 2.0, 3.0, -1.0, 4.0];
+        let halves: [u16; 8] = [0x3c00, 0xc100, 0x7bff, 0x3800, 0x4000, 0x4200, 0xbc00, 0x4400];
+        // (ymm, imm8, bytes before the boundary; 0: the store lies in the read-only page)
+        let mut cases = Vec::new();
+        for ymm in [true, false] {
+            for imm in [0u8, 3] {
+                for back in [0usize, 1, 2, 7, 8, 15] {
+                    if back < if ymm { 16 } else { 8 } || back == 0 {
+                        cases.push((ymm, imm, back));
+                    }
+                }
+            }
+        }
+        for (ymm, imm, back) in cases {
+            // f(dst rcx, _, src r8): vmovups ymm1, [r8]; <store>; vzeroupper; ret.
+            let mut code = vec![0xc4, 0xc1, 0x7c, 0x10, 0x08];
+            let site_at = code.len();
+            // vcvtps2ph [rcx], ymm1/xmm1, imm
+            code.extend_from_slice(&[0xc4, 0xe3, if ymm { 0x7d } else { 0x79 }, 0x1d, 0x09, imm]);
+            code.extend_from_slice(&[0xc5, 0xf8, 0x77, 0xc3]);
+            // SAFETY: our own pages and handler.
+            unsafe {
+                let exec = VirtualAlloc(
+                    std::ptr::null(),
+                    1 << 16,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_EXECUTE_READWRITE,
+                ) as *mut u8;
+                std::ptr::copy_nonoverlapping(code.as_ptr(), exec, code.len());
+                let s = decode_store(&code, site_at).unwrap();
+                assert_eq!(s.plain.map(|p| p.4), Some(if ymm { 16 } else { 8 }));
+                let site = exec as u64 + site_at as u64;
+                let at = exec as u64 + 0x1000;
+                let t = trampoline(&s, site, at).unwrap();
+                std::ptr::copy_nonoverlapping(t.as_ptr(), at as *mut u8, t.len());
+                let j = jump(site, s.len, at).unwrap();
+                std::ptr::copy_nonoverlapping(j.as_ptr(), site as *mut u8, j.len());
+                let data = VirtualAlloc(
+                    std::ptr::null(),
+                    0x2000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE,
+                ) as *mut u8;
+                let guarded = data.add(0x1000);
+                let mut old = 0;
+                VirtualProtect(guarded.cast(), 0x1000, PAGE_READONLY, &mut old);
+                PAGE.store(guarded as usize, std::sync::atomic::Ordering::Relaxed);
+                FAULTS.store(0, std::sync::atomic::Ordering::Relaxed);
+                let handler = AddVectoredExceptionHandler(1, Some(unguard));
+                let f: extern "win64" fn(*mut u8, *const u32, *const f32) =
+                    std::mem::transmute(exec);
+                let dst = guarded.sub(back);
+                f(dst, std::ptr::null(), floats.as_ptr());
+                RemoveVectoredExceptionHandler(handler);
+                let n = if ymm { 8 } else { 4 };
+                let bytes = std::slice::from_raw_parts(dst, 2 * n);
+                let got: Vec<u16> = bytes
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                assert_eq!(got, halves[..n].to_vec(), "ymm {ymm} imm {imm} back {back}");
+                assert!(
+                    FAULTS.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+                    "ymm {ymm} imm {imm} back {back}: the page was read-only, a plain store faults"
+                );
+                VirtualFree(data.cast(), 0, MEM_RELEASE);
+                VirtualFree(exec.cast(), 0, MEM_RELEASE);
+            }
+        }
+    }
+
     /// A patched `vmovups` like the one in #144, 32 bytes that start in a
     /// writable page and end in a read-only one. A plain `mov` faults
     /// instead, a handler makes the page writable, and the store resumes

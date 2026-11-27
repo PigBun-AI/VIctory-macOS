@@ -403,6 +403,18 @@ and the `mov ecx, 0xae64642c` after it. A real `vextract*128`/`vcvtps2ph` has VE
 (test `the_unmasked_stores_need_vvvv_1111`), so the count is 1233 and 1241 with the 8 plain stores. `vcvtps2ph [mem]` is in this
 patch since the start (the 70 sites above); there is no separate patch for it (see "L1 and vcvtps2ph" below).
 
+*L1 and `vcvtps2ph`.* The Wine probe (2026-11-27, `docs/mac/translation-map-mac.md`) found `vcvtps2ph [mem], ymm/xmm, imm`
+fatal under Rosetta (EmulateForward, the VEH never runs) on **any** write fault of the store, 60 of 60 runs; the title has 70.
+They are not missing a patch: L1's scan has had them from the start (`MaskedKind::Vcvtps2ph`; the trampoline runs the same
+`vcvtps2ph` into `[rsp]` with the same imm8 and the same MXCSR, then moves the 8 or 16 bytes out with plain `mov`s, which
+Rosetta resumes), and the census above has all 70 of the census's 70 in it. What was missing was the proof for them:
+`a_patched_vcvtps2ph_resumes_after_a_write_fault` (Windows test, run under Wine/Rosetta by `tools/mac/wine-tests.sh -p victory-loader
+--lib mac::masked`) stores ymm and xmm half-floats (imm8 0 and 3) inside a read-only page and across the boundary into it at five
+offsets, with a handler that makes the page writable, and every one resumes with the right bytes (the same cases unpatched
+are the probe's fatal ones); `patched_stores_match_the_stores_in_every_form` already compares the patched store with the
+real one (memory, registers, flags) over 4000 random operand forms, vcvtps2ph with random imm8 among them. So no L6
+for it. *Remove with L1.*
+
 ### L2 — 256-bit stores split into two 128-bit stores (`mac/wide.rs`, `xtask/src/wide_stores.rs`)
 
 `VICTORY_PATCH_WIDE=<list>` (exe) and `VICTORY_PATCH_WIDE_DIR` (title DLLs; hook in `windows.rs`);
