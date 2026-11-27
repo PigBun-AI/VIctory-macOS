@@ -9,6 +9,8 @@ pub mod rosetta;
 pub mod world;
 #[cfg(windows)]
 pub(crate) mod safecopy;
+#[cfg(windows)]
+pub(crate) mod pso_grave;
 
 #[cfg(not(windows))]
 pub(crate) mod nonwindows;

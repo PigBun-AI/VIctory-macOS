@@ -235,6 +235,32 @@ masked routines; the existing safecopy tests run through whichever is active.
 *Not needed on Windows* (it resumes or takes the fault of a masked store). *Remove when* Rosetta handles
 faulting masked stores (retest with `VICTORY_SAFE_SCALAR=0`), or with G2.
 
+### G7 — host pipeline release diagnostic (`victory-gpu/src/mac/pso_grave.rs`, 4 lines in `pipeline/host.rs`)
+
+*What.* `VICTORY_MAC_PSO_GRAVE=log` logs every host pipeline that is dropped ("host pipeline released", with
+the frame and shaders); `=1` also keeps a reference to each, forever. Off (default): nothing. Written to settle
+whether the D3DMetal crash in `SetRenderVertexBuffers` (below) is a pipeline released while a list still uses it.
+
+*Result (2026-11-27).* It is not. Over runs that went into the world and crashed, no host pipeline was dropped
+before the crash (0 "released" lines), and `draw.rs` already keeps each bound pipeline in its list
+(`list.bind_pipeline`). Setting the pipeline again before every draw, and a single pipeline worker, change nothing.
+
+*Known issue (not fixed): D3DMetal 4.0b3 crash in the first scene of the world.* About 75% of the runs that
+latch `world frame 1` (I1) fault ~10 frames later at `D3DMetal+0xf545f`
+(`D3D12GraphicsCommandListMPL::SetRenderVertexBuffers`, reads the vertex buffer count at pipeline object +0x28c
+and walks it in 40-byte steps). It comes in a frame with hundreds of first binds of pipelines made a moment
+before. Excluded: pipeline lifetime (above), pipeline library, input layout in the stream, depth bounds,
+fault tracking (on or off), worker count. Open: D3DMetal's own handling of the pipelines made by
+`CreatePipelineState` (stream), which every mesh pipeline and every depth-bounds pipeline use. *Remove when* D3DMetal
+or the Metal backend replaces the D3D12 path.
+
+*Title crash at 0x2215c35 (previously taken for an out-of-memory path): it is the title's own hang watchdog.*
+A thread of the title sleeps 1 s at a time and writes `[0]` on purpose when the frame loop has not called its
+heartbeat (`title+0x22149f0`) for 30 s. It fired because the title waited for a helper shader (G4) whose `.done`
+marker never came (`exec` in the command line: fixed by `465a121a`, "each helper shader waited 120 s"). Cold
+helper cache with the `exec` build: crash 37 s after the start, every time; the fixed build with a cold cache goes
+on to the world. No allocation failed (xmem logs no refusal).
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores

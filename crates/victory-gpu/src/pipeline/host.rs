@@ -401,6 +401,13 @@ pub(crate) struct HostPipeline {
     pub(crate) state: String,
 }
 
+impl Drop for HostPipeline {
+    fn drop(&mut self) {
+        // Mac patch G7 (diagnostic; does nothing unless VICTORY_MAC_PSO_GRAVE is set).
+        crate::mac::pso_grave::dropped(&self.pso, &self.name);
+    }
+}
+
 /// Logs a pipeline that gets no host pipeline, once per reason.
 fn refuse(reason: &'static str, shaders: &[Arc<Shader>]) -> Option<HostPipeline> {
     static SEEN: std::sync::Mutex<Vec<&str>> = std::sync::Mutex::new(Vec::new());
