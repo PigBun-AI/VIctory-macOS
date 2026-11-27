@@ -196,6 +196,14 @@ when it is unset the container test returns with a "skipped" message instead of 
 the old behaviour on the Windows machine, set `VICTORY_LIVE_CORPUS` to the two folders. Remove this
 patch if the Windows line makes the same change.
 
+### M5 — `tools/mac/push-check.sh`, `docs/mac/PUSH.md`
+
+The check before a push to the public `fork`: policy, credential scan, privacy scan (internal
+addresses, home-directory and drive paths, `*.local` e-mail addresses, the author of `mac:`
+commits, a private word list kept outside the repository), binaries and game files. Also
+`.gitignore` entries for `tools/mac/privacy.local.txt`. Usage in `docs/mac/PUSH.md`. Pure Mac
+tooling, nothing to recycle; delete it if pushes to the fork stop.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

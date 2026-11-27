@@ -79,3 +79,6 @@ Thumbs.db
 
 # local settings, never committed
 tools/mac/sync.local.env
+
+# private word list and local settings, never committed
+tools/mac/privacy.local.txt
