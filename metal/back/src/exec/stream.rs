@@ -173,13 +173,17 @@ impl State {
             open: None,
         };
         let mut failed: Option<(Status, String)> = None;
+        run.st.note = None;
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
             if let Err(s) = run.command(&c) {
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
-                    eprintln!("victory-metal back: {:?} failed: {s:?}", c.opcode());
+                    // `note` still holds the reason a refusal recorded (the
+                    // block's own note below replaces it).
+                    let why = run.st.note.as_deref().unwrap_or("no reason recorded");
+                    eprintln!("victory-metal back: {:?} failed: {s:?}: {why}", c.opcode());
                 }
                 // Dropping `run` drops the open list and the unflushed ones.
                 failed = Some((s, format!("{c:?}")));
