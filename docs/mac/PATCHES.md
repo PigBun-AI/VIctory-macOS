@@ -154,6 +154,53 @@ Runs a `victory.exe` under CrossOver Wine + D3DMetal in this checkout's own pref
 `VICTORY_KEYS` takes `<s>:<key>,...`, `<from>-<to>:<key>` (held) and, with patch I1, `<from>-<to>/<every>[+<hold>]:<key>`
 (`run.sh` itself still writes one `<s>:Enter` per 3 s, which also runs an exe built before I1). `VICTORY_INPUT_RECORD` and `VICTORY_INPUT_REPLAY` (I1) pass through from the environment.
 
+### M5 — `tools/mac/wine-tests.sh` (tests under Wine, with the DXC front end)
+
+`tools/mac/wine-tests.sh [cargo test args]` runs `tools/macos/test-wine.sh` with its own prefix
+(`target/wineprefix-tests`; it refuses `wineprefix-play`, and stops only the wineserver of the prefix it used,
+since `tools/macos/victory.sh` without `WINEPREFIX` uses `wineprefix-play` and runs `wineserver -k`, which
+kills a game running there) and with `VICTORY_DXC_HELPER`, `DXC_LIB`, `VICTORY_DXC_DIR` set (front end built
+once by `tools/macos/dxc-d3dmetal.sh` into `target/dxc-d3dmetal`), so that G4 compiles the runtime's helper
+shaders in the tests too. Without it 8 tests of `victory-gpu` fail on `d3dcompiler_47` (indirect clamp,
+worker shaders, `ambient::the_passes_build`, the depth-plane drawing). This is the whole port of the Mac
+fork's `VICTORY_HELPER_DXC` for tests: that variable is read by the fork's `victory-gpu/build.rs` to
+precompile the clamp at build time; this line compiles at run time (G4), so `build.rs` stays untouched (G3
+is closed by G4 + this script). Remove with G4.
+
+### Test results under Wine on Rosetta (2026-11-27, CrossOver Wine 26.3, D3DMetal 4.0 beta 3, not fixed)
+
+Run with `tools/mac/wine-tests.sh -p victory-gpu` / `-p victory-shader`. The adapter is D3DMetal's single
+"AMD Compatibility Mode" (G5), there is no software adapter (`EnumWarpAdapter` gives the same card, flags 0,
+which `warp_adapter()` refuses), so tests that need a WARP reference print `no SM 6.6 warp device` and
+return: they pass without comparing anything.
+
+`victory-gpu` (9 fail of 384; 35 ignored):
+- Wine: `watch::{holes_are_known_until_the_runtime_tells, no_mapping_is_lost_between_askers,
+  what_is_left_alone_is_no_known_hole}`: Wine's `NtQueryVirtualMemory` has no class 7
+  (`MemoryRegionInformationEx`), so `watch::placeholder()` is never true (only matters with
+  `VICTORY_FAULT_TRACKING=1`).
+- Rosetta: `titlewrite::decode::stores_do_what_the_processor_does` compares the flags of `lock cmpxchg [r11], dl`
+  with the decoder's (0x881 against Rosetta's 0x80): Rosetta does not compute them alike.
+- D3DMetal: `root::malformed_blobs_are_rejected_by_the_host` and
+  `pipeline::library::a_rejected_blob_gives_an_empty_library` (it accepts malformed blobs),
+  `descriptor::host::{views_are_made_beside_the_heap_and_copied_in, a_raw_view_is_moved_only_where_its_descriptor_says_where_it_is}`
+  (a CPU descriptor handle is not readable memory there).
+- Not explained: `indirect::host_list_budget_starts_empty_at_each_submission` (the small record runs after the
+  budget was spent: 1 hit, want 0).
+
+`victory-shader` (255 pass, 36 fail, 6 ignored of 297): the same 36 with or without the DXC front end, so
+none is the missing helper. They are results of the shader on the hardware device that differ from what the
+test wants (zeros or wrong values), with no WARP reference to compare: f16 and min-precision forms (11),
+wave/permlane/wave64 (9), unorm and typed buffer formats (5), f64/i64 (4), float edge cases of v_fract, v_med3,
+v_min3, v_sin/v_cos, v_cvt_off, ds_min/max (7), pixel shader tests that draw (barycentric, edge flags, quad
+neighbours: 3), the rest accepting an unsigned DXIL (`stub_pipeline_is_created`; there is no `dxil.dll`),
+raw twins / counter texture / waterfall / page cache (4). D3DMetal's DXIL-to-Metal compiler, not the Mac layer.
+`whole_wave_f64_sum_and_cvt_f32_f64` is the one that ends the Metal backend's MSC (skipped there).
+
+The victory-shader count (297) is not a skip: the Windows line's crate is another code base from the
+Mac fork's (458 tests): per-file counts differ everywhere (`emit/lower/tests.rs` 93 and `halves_tests.rs` 45 are
+the fork's, `bvh.rs`, `bitcode/opt.rs`, `wave64_tests.rs` are the line's) and no test is gated on `VICTORY_HELPER_DXC`.
+
 ### Findings of the first run under Rosetta (2026-11-27, not fixed)
 
 - `VICTORY_FAULT_TRACKING=1`: the process stops with `rosetta error: unexpectedly need to EmulateForward on a
