@@ -3,6 +3,8 @@
 //! there is decided at run time in [`rosetta`] and hooked into the Windows
 //! line's files in as few places as possible.
 
+pub mod adapter;
+pub mod hlsl;
 pub mod rosetta;
 
 #[cfg(not(windows))]

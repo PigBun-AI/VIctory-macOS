@@ -1010,6 +1010,7 @@ fn create() -> windows::core::Result<Host> {
         let adapter = CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter3>(device.GetAdapterLuid()))
             .ok();
+        crate::mac::adapter::log(&device); // mac G5
         tracing::info!("host D3D12 device ready");
         Ok(Host {
             device,
@@ -1405,7 +1406,7 @@ pub(crate) fn compile(
     entry: windows::core::PCSTR,
     target: windows::core::PCSTR,
 ) -> windows::core::Result<Vec<u8>> {
-    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    use crate::mac::hlsl::d3d_compile as D3DCompile; // mac G4
     use windows::Win32::Graphics::Direct3D::ID3DBlob;
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
@@ -4234,7 +4235,7 @@ impl Host {
     }
 
     fn make_card_work(&self) -> windows::core::Result<CardWork> {
-        use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+        use crate::mac::hlsl::d3d_compile as D3DCompile; // mac G4
         use windows::Win32::Graphics::Direct3D::ID3DBlob;
         let mut code: Option<ID3DBlob> = None;
         // SAFETY: the source and names live through the call; the out

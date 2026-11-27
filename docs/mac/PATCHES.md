@@ -103,6 +103,53 @@ read, not run. **First thing to check on a run under Rosetta.**
 *Remove when.* A macOS/Rosetta release resumes such stores (retest with `VICTORY_FAULT_TRACKING=1`
 and without the patches), or the Metal backend replaces the D3D12 path on the Mac.
 
+### G4 — helper shaders compiled by D3DMetal's DXC (`victory-gpu/src/mac/hlsl.rs`)
+
+*What.* Wine's `d3dcompiler_47` (vkd3d-shader) cannot compile the runtime's helper shaders: no methods on
+`RWByteAddressBuffer` (`E5005 Method 'InterlockedOr'/'Load'/... is not defined`), no stores to indexed
+`groupshared` arrays, no `[RootSignature]` attribute (so no root signature in the blob), no
+`[allow_uav_condition]`. The indirect argument clamp is one of them: **without it every indirect
+execution is dropped and the title waits for the result for good** (run 2026-11-27: the world load hung
+at frame ~1150, every time). New `mac/hlsl.rs` has `d3d_compile`, same signature as `D3DCompile`; the
+six files that compile such shaders (`indirect.rs`, `inplace.rs`, `compose.rs`, `frame_thumb.rs`,
+`host.rs` x2, `replay/play/merge.rs`) import it in place of `D3DCompile` (one line each, marked `mac G4`).
+Under Wine on a Mac it sends the source to the DXC that D3DMetal ships (`libdxcompiler.dylib`, x86_64,
+via `tools/macos/dxc-d3dmetal.sh`'s front end, started from Wine as a Unix program through `/bin/sh`
+and waited for by a `.done` file: Wine's handle for a Unix process never signals), raising `cs_5_x` to
+`cs_6_0`; the DXIL is kept by hash in `VICTORY_DXC_DIR`, so each shader is compiled once per machine.
+Falls back to `D3DCompile` where the helper is not configured or fails (and logs why).
+`tools/mac/run.sh` builds the front end and sets `VICTORY_DXC_HELPER`, `VICTORY_DXC_DIR`, `DXC_LIB`.
+`VICTORY_MAC_HLSL=0` turns it off. Same idea as VIctory-macOS #301 (precompile the clamp at build time),
+but at run time and for all helper shaders, so the Windows line's `build.rs` stays as it is (G3 stays open).
+
+*Why not needed on Windows.* FXC compiles all of them. *Remove when.* Wine ships a `d3dcompiler_47` or
+`dxcompiler.dll` that takes them, or the Metal backend replaces the D3D12 path.
+
+### G5 — which adapter the host device is on (`mac/adapter.rs`)
+
+One log line per DXGI adapter at device creation (`host.rs`, one line). Result on this Mac: a single adapter,
+`"AMD Compatibility Mode"`, vendor 0x1002, device 0x66af, 110,100 MB, flags 0 (a hardware adapter): that is
+D3DMetal's default presentation of the Apple GPU (it has `D3DM_VENDOR_ID`, `D3DM_DEVICE_ID`,
+`D3DM_DEVICE_DESCRIPTION` to change it); wave lanes 32/32, so `victory_shader::emit::set_host_rdna` stays
+off while `indirect::amd()` is true. Nothing is selected wrongly: there is no other adapter.
+
+### M4 — `tools/mac/run.sh`
+
+Runs a `victory.exe` under CrossOver Wine + D3DMetal in this checkout's own prefix
+(`target/wineprefix-livetr`: only that prefix's wineserver is ever stopped), outside-the-repo cache and data
+(`$VICTORY_DATA_DIR`, default `victory-data-livetr/data` next to the checkout), scripted keys, logs in `target/mac-runs/<time>`. Keys: this line's
+`VICTORY_KEYS` takes `<s>:<key>,...` or `<from>-<to>:<key>` (held); the `a-b/3:Enter` form of the Metal
+branch is not parsed here (the entry is dropped silently), so `run.sh` writes one `<s>:Enter` per 3 s.
+
+### Findings of the first run under Rosetta (2026-11-27, not fixed)
+
+- `VICTORY_FAULT_TRACKING=1`: the process stops with `rosetta error: unexpectedly need to EmulateForward on a
+  synchronous exception` at `victory_safe_merge_at` of **`safecopy.rs`** (our own `vpmaskmovd` store into a
+  title page the tracker guards, in `land.rs`' merge). The loader's masked-store patch covers the title's code, not
+  this asm; `victory_safe_put` has the same store. Default (tracking off under Rosetta) does not guard pages
+  and does not reach it. A fix would be per-dword plain stores for `merge`/`put` when `stores_need_patching()`.
+- `titlewrite.rs`, `shadow.rs`, `inplace.rs`: no fault or hang seen with tracking off (default).
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores

@@ -12,9 +12,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use crate::mac::hlsl::d3d_compile as D3DCompile; // mac G4
 use windows::{
     Win32::Graphics::{
-        Direct3D::{Fxc::D3DCompile, ID3DBlob},
+        Direct3D::ID3DBlob,
         Direct3D12::*,
     },
     core::{Error, Result, s},
