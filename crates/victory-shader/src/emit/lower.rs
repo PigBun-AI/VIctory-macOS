@@ -453,6 +453,12 @@ fn all_lane_blocks(st: &Structured) -> Option<Vec<bool>> {
 /// not post-dominate it, which only some lanes run. Not the branches the wave takes together
 /// ([`Structured::wide`]), nor those on scalar conditions. None with an indirect exit.
 fn lane_regions(st: &Structured) -> Option<Vec<(usize, Vec<bool>)>> {
+    lane_regions_of(st, false) // mac S3
+}
+
+/// [`lane_regions`], or with `wide_only` the regions of the branches the wave takes together
+/// instead (mac S3: where a group barrier would wait for waves that decided otherwise).
+fn lane_regions_of(st: &Structured, wide_only: bool) -> Option<Vec<(usize, Vec<bool>)>> { // mac S3
     let n = st.exits.len();
     let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (b, e) in st.exits.iter().enumerate() {
@@ -493,7 +499,10 @@ fn lane_regions(st: &Structured) -> Option<Vec<(usize, Vec<bool>)>> {
     let mut regions = Vec::new();
     for (d, e) in st.exits.iter().enumerate() {
         let LaneExit::Branch { when, .. } = *e else { continue };
-        if st.wide.contains(&d) || st.bools.support(when).iter().all(|a| matches!(a, Atom::Uniform(_))) {
+        if wide_only && !st.wide.contains(&d) { // mac S3
+            continue; // mac S3
+        }
+        if !wide_only && (st.wide.contains(&d) || st.bools.support(when).iter().all(|a| matches!(a, Atom::Uniform(_)))) { // mac S3
             continue; // a wave-wide or uniform branch: all lanes go the same way
         }
         // blocks reachable from the lane branch that do not post-dominate it
@@ -536,6 +545,14 @@ pub(super) fn needs_every_lane(what: &str) -> bool {
 /// (its "... where not every lane runs" refusals), which it forgets.
 pub(super) fn take_needs() -> Vec<usize> {
     NEEDS.take()
+}
+
+/// Whether the last lowering on this thread put a group barrier (its own or the title's) in a
+/// block that lies in the region of a branch the wave takes together, which it forgets (mac S3).
+/// With several console waves in the group those decide apart, and a barrier there waits for
+/// waves that do not come.
+pub(super) fn barrier_in_wide() -> bool { // mac S3
+    WIDE_BARRIER.replace(false) // mac S3
 }
 
 fn need(block: usize) {
@@ -1055,6 +1072,8 @@ pub fn set_host_max_wave(lanes: u32) {
 thread_local! {
     /// See [`take_needs`].
     static NEEDS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// See [`barrier_in_wide`] (mac S3).
+    static WIDE_BARRIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// See [`with_local_waves`].
     static LOCAL_WAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// See [`with_local_waves_any`].
@@ -4310,8 +4329,24 @@ impl<'a> Lower<'a> {
         cl
     }
 
+    /// Records a barrier in the block being lowered if it lies in a wide branch's region (mac S3).
+    fn note_barrier(&mut self) {
+        if self.x.st.wide.is_empty() {
+            return;
+        }
+        let at = self.cur_ir;
+        let inside = lane_regions_of(self.x.st, true).is_some_and(|r| r.iter().any(|(_, b)| b.get(at).copied().unwrap_or(false)));
+        if inside {
+            if std::env::var_os("VICTORY_WAVE_WHY").is_some() {
+                eprintln!("WAVE64-WIDE barrier in a wide region at IR block {at}");
+            }
+            WIDE_BARRIER.set(true);
+        }
+    }
+
     /// A group barrier with an LDS fence in `block`.
     fn group_sync(&mut self, block: usize) {
+        self.note_barrier(); // mac S3
         let mode = self.s.m.i32(meeting_mode());
         let void = self.s.t.void;
         self.s.op(block, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
@@ -5490,6 +5525,7 @@ impl<'a> Lower<'a> {
         {
             // the two host waves of a console wave meet before each LDS access: what the other
             // half wrote is visible, and what it still reads is not overwritten
+            self.note_barrier(); // mac S3
             let mode = self.s.m.i32(meeting_mode());
             let void = self.s.t.void;
             self.s.op(self.cur, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
@@ -5522,6 +5558,9 @@ impl<'a> Lower<'a> {
                 };
                 if !waits {
                     mode &= !1;
+                }
+                if waits {
+                    self.note_barrier(); // mac S3
                 }
                 let mode = self.s.m.i32(mode);
                 let void = self.s.t.void;
@@ -5574,6 +5613,7 @@ impl<'a> Lower<'a> {
     /// The two host waves of a console wave meet (a group barrier with a shared-memory
     /// fence): LDS writes before are seen by reads after.
     fn lds_meeting(&mut self) {
+        self.note_barrier(); // mac S3
         let mode = self.s.m.i32(meeting_mode());
         let void = self.s.t.void;
         self.s.op(self.cur, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
@@ -9016,8 +9056,15 @@ impl<'a> Lower<'a> {
                         // has. No half needs to ask the other whether it has
                         // a lane (an exchange of the constant 1: two group
                         // barriers), and the lower half's value is the answer.
-                        let (lo, _) = self.exchange_halves(c, mine);
-                        lo
+                        let (lo, hi) = self.exchange_halves(c, mine); // mac S3
+                        // mac S3: the upper half's dword is read too and ORed in under a mask of zero (a lane index is below 2^31), so the
+                        // exchange keeps both of its loads: with the one load alone the optimised module read zeros on the hardware
+                        // device (D3DMetal under Wine; the same module with the second load kept, or the clean-up off, was right)
+                        let li = self.s.op(c, "waveGetLaneIndex", Attr::ReadOnly, self.s.t.i32, 111, &[]); // mac S3
+                        let k31 = self.s.m.i32(31); // mac S3
+                        let zero = self.s.m.bin(c, Bin::LShr, li, k31); // mac S3
+                        let keep = self.s.m.bin(c, Bin::And, hi, zero); // mac S3
+                        self.s.m.bin(c, Bin::Or, lo, keep) // mac S3
                     } else {
                         let i32t = self.s.t.i32;
                         let has = self.s.m.cast(c, Cast::ZExt, any, i32t);

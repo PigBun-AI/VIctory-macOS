@@ -114,6 +114,8 @@ mod valu_tests;
 mod waterfall_tests;
 #[cfg(all(test, windows))]
 mod wave64_tests;
+#[cfg(test)]
+mod s3_tests; // mac S3
 mod wave;
 
 use crate::dxbc::{Container, FourCC};
@@ -224,13 +226,14 @@ pub fn rt_pagecache() -> bool {
     switch(crate::emit::live::var_os("VICTORY_RT_PAGECACHE").as_deref(), true)
 }
 
-/// `VICTORY_VIEWADDR_TABLE=1` (default off): the address of a buffer view picked from a heap by an
+/// `VICTORY_VIEWADDR_TABLE=1` (default on in this tree, `=0` turns it off: mac S3): the address of a buffer view picked from a heap by an
 /// index the code computes (the shadow-mask ray programs) is read from the host's address table
 /// (`SLOT_VIEW_ADDRESSES` / `SLOT_TABLE_VIEW_ADDRESSES`), and such programs translate. Off: they are
 /// refused as before. The host keeps the table always, so the switch can change while the title
 /// runs. Part of the translation: the shader cache keys on the effective value.
 pub fn viewaddr_table() -> bool {
-    switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), false)
+    // mac S3: on unless `VICTORY_VIEWADDR_TABLE=0` (the shadow-mask ray programs are refused otherwise)
+    switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), true) // mac S3
 }
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
@@ -622,7 +625,9 @@ pub fn emit(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        let wide_on = wide_option.as_ref().map_or(scene_kernel, |v| v == "1");
+        // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
+        let _ = scene_kernel; // mac S3
+        let wide_on = wide_option.as_ref().is_none_or(|v| v != "0"); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
@@ -779,14 +784,13 @@ fn widen(
         // (a program whose waves are the host's meets no one: no barrier, any group)
         crate::native::StageIo::Cs(_) if !(native.wave64 && lower::host_max_wave() == 32) => {}
         crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64 => {}
-        crate::native::StageIo::Cs(cs) => {
-            if why {
-                eprintln!("WAVE64-WIDE not tried: thread groups of {:?}", cs.threads);
-            }
-            return Err(NOT);
-        }
+        // mac S3: groups of several console waves are tried too; a group barrier in a wide
+        // branch's region refuses the result below (the waves decide apart)
+        crate::native::StageIo::Cs(_) => {} // mac S3
         _ => return Err(NOT),
     }
+    // mac S3: several console waves in the group
+    let multi_wave = matches!(native.io, crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() > 64); // mac S3
     let mut wide = std::collections::HashSet::new();
     loop {
         let st = structure::structure_wide(p, &wide)?;
@@ -795,6 +799,7 @@ fn widen(
         lower::take_needs();
         let r = emit_program(c, native, p, &st, &io, &res);
         let needs = lower::take_needs();
+        let barrier = lower::barrier_in_wide(); // mac S3
         // (or translated for 64-lane waves still: shared memory read and written where not
         // every lane runs, whose blocks the lowering names too)
         let stuck = matches!(&r, Err(ShaderError::Unsupported { what, .. })
@@ -819,6 +824,15 @@ fn widen(
                     .collect();
                 eprintln!("WAVE64-WIDE {} branches taken wave-wide: [{}]", wide.len(), desc.join(", "));
             }
+            // mac S3: with several console waves in the group, a group barrier (the title's, or
+            // the two halves' meeting) inside a branch the waves took apart waits for waves that
+            // never come: not translated (`NOT`), as it was before groups over 64 were tried
+            if barrier && r.is_ok() && !wide.is_empty() && multi_wave { // mac S3
+                if why { // mac S3
+                    eprintln!("WAVE64-WIDE refused: a group barrier inside a wave-wide branch, in a group of several console waves"); // mac S3
+                } // mac S3
+                return Err(NOT); // mac S3
+            } // mac S3
             return r;
         }
         let more: Vec<usize> = lower::branches_around(&st, &needs)

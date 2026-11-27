@@ -755,6 +755,49 @@ refused for the total size **520 -> 143**, builds 8,245 -> 8,622, 0 shaders that
 saves 0 bytes for them. Frame-capture replay (`tools/metal/replay.sh`, `rec-a-f300`) with S2 on the metal line's back:
 `replay.png` byte-identical to the replay without S2 (md5 458e2f66...).
 
+### S3 — the shared translator: wave64 compute programs on 32-lane host waves, the shadow-mask ray programs (`victory-shader`, 5 hooks)
+
+Census of the 31 compute programs the translator refused (2026-11-27, host wave 32): 26 "no wave32 lowering for this wave64 program",
+5 "a descriptor read only as data". After S3, 24 translate (20 wave64, 4 of the 5 shadow-mask programs); 7 stay refused (below).
+
+*What (all in `crates/victory-shader/src/emit/`, every changed line marked `mac S3`).*
+1. `mod.rs` `viewaddr_table()`: `VICTORY_VIEWADDR_TABLE` is on unless `=0` (was off). The shadow-mask ray programs
+   `CS_TraceShadowRays_{Full,Half,Quarter,Eighth}` (`07c93bfb77fecebb`, `002e93a6cc2aa355`, `0e64f14fae060d04`, `96ccb14ef981fd85`)
+   pick a buffer view from the heap at a computed index and only walk the memory behind it: the address comes from the host's
+   address table (`t251`/`t250`, which the host keeps always). They were refused as "a descriptor read only as data"; the code was
+   upstream's, switched off. Only programs that were refused change.
+2. `mod.rs` `emit()`: `VICTORY_WAVE_WIDE` is on unless `=0` (was on for two digests, off otherwise). It acts only after every other form
+   failed (the retry ladder), so every program that translated before is byte-identical (census: 25 756 containers, same code hash).
+   Wave-wide branches give 20 of the 26 wave64 programs (LDS read and written inside a lane branch, a 64-bit ballot, `v_readlane`/`v_mbcnt`
+   across the halves), groups of 64 threads.
+3. `mod.rs` `widen()` and `lower.rs` `note_barrier`/`barrier_in_wide`/`lane_regions_of`: groups of several console waves are tried too;
+   a group barrier (the title's, or the halves' meeting) lying in a wave-wide branch's region refuses the result as before: the console
+   waves of a group can decide apart, and the barrier would wait for waves that never come. No hang is ever produced.
+4. `lower.rs` first-lane exchange (`v_readfirstlane_b32`, every lane running): both of the exchange's LDS loads stay (the
+   upper half's is ORed in under a mask of zero). With the one load alone the optimised module read zeros on D3DMetal (found by the
+   S3 hardware test; with the second load kept, or `VICTORY_SHADER_OPT=31`, it was right).
+5. Tests: `s3_tests.rs`.
+
+*Why not needed on Windows.* The Windows line has hosts whose waves are 64 (AMD) and takes these programs as they are; the 32-lane
+forms are NVIDIA/Apple only. `VICTORY_WAVE_WIDE` was kept off after runs 121-124 lost an NVIDIA card with wide-lowered
+`ptfx_CS_lightAtlas_*` (cause unknown; not Metal).
+
+*Not done (the 7).* `DefragHeap_ComputeRelocations` x2 (`22338086ea4c5364`, `02384a60fda6f2d0`, group 128), two 512-thread programs
+(`1d434307d981352a`, `3b02415f67c6b0d8`) and `CollectTriangles` x2 (`6832a9da15c2e584`, `6b82bc7d22016cb5`, 1024): their wide branches
+hold group barriers, and a branch taken by the group as a whole (a flag in LDS ORed over all waves, with the region's scalar results selected by
+the wave's own decision) is not built. `CS_TraceShadowRays_FullAdaptive` (`dbdbf36298727135`): "a lane mask holding lanes elsewhere read
+as data" at 0xae80 (a mask built as `s_or` of two masks, one a join of a descriptor dword and a mask from a stack of lane masks/numbers).
+`CS_TransmissionVolumetrics*` x5 translate but Metal Shader Converter 4.0.3 aborts on their `double` ("Unhandled LLVM type for
+getMinMaxConstants"): 19 of the 24 build a pipeline.
+
+*Fidelity.* Exact: wide branches, the exchange, the barriers, the table addresses. Not exact: none of the 24 uses a local-wave
+(per half) form, which is the only approximate rung of the ladder. `VICTORY_FIRSTLANE_OWN` stays off (it is exact only when the value
+is the same across the console wave; the three BVH-builder first-lane programs `dc78c5de69c7c155`, `322ed4ad832bdea6`,
+`d441b097704ab616` translate without it, and with it the DXIL is byte-identical).
+
+*Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
+are upstream's).
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
