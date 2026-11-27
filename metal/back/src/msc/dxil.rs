@@ -126,6 +126,24 @@ pub fn inspect(bytes: &[u8]) -> Option<Info> {
     Some(info)
 }
 
+/// Whether the container holds DXBC bytecode (a `SHDR` or `SHEX` part and no
+/// `DXIL` part), that is the output of the old compiler, which MSC cannot
+/// read: it has to go through the DXBC converter first.
+pub fn is_dxbc(bytes: &[u8]) -> bool {
+    let Some(info) = inspect(bytes) else {
+        return false;
+    };
+    if info.kind.is_some() {
+        return false;
+    }
+    let count = u32_at(bytes, 28).unwrap_or(0) as usize;
+    (0..count.min(64)).any(|i| {
+        u32_at(bytes, 32 + 4 * i)
+            .and_then(|off| bytes.get(off as usize..off as usize + 4))
+            .is_some_and(|f| f == b"SHDR" || f == b"SHEX")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

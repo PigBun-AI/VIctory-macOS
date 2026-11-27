@@ -328,7 +328,10 @@ impl Drop for Refl {
 }
 
 impl Msc {
-    /// Converts one DXIL container to a `metallib`.
+    /// Converts one DXIL container to a `metallib`. A DXBC container (the
+    /// output of `D3DCompile`, shader model 5.x) goes through the DXBC→DXIL
+    /// converter first ([`dxbc::DxbcConverter`](super::dxbc)); without that
+    /// library the answer is [`MscError::Library`].
     ///
     /// `root` is the global root signature (the shader's own, embedded one is
     /// used when it is `None`; a shader without either is refused with
@@ -344,6 +347,13 @@ impl Msc {
         if dxil_bytes.is_empty() {
             return Err(MscError::BadInput("empty DXIL".into()));
         }
+        let converted_dxbc;
+        let dxil_bytes = if dxil::is_dxbc(dxil_bytes) {
+            converted_dxbc = super::dxbc::DxbcConverter::get()?.convert(dxil_bytes)?;
+            converted_dxbc.as_slice()
+        } else {
+            dxil_bytes
+        };
         let info = dxil::inspect(dxil_bytes);
         let api = self.api;
         let c_root = root.map(CRootSignature::new);

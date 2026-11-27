@@ -35,6 +35,7 @@
 //! in [`descriptors`](crate::descriptors).
 
 mod compile;
+pub mod dxbc;
 pub mod dxil;
 mod ffi;
 mod pipeline;
