@@ -10,6 +10,8 @@
 #   --out DIR         where the logs go (default research/game-runs/<time>-metal,
 #                     outside the repository: game-derived data never goes in it)
 #   --lenient         set VICTORY_METAL_LENIENT=1 (see below)
+#   --keys SPEC       VICTORY_KEYS for this run (default below; `none` = no scripted keys)
+#   --input FILE      VICTORY_INPUT_REPLAY for this run (default below; `none` = off)
 #   --exec            no timer, no log files, no summary: `exec` victory.sh as it is
 #                     (what the first version of this script did)
 #
@@ -28,6 +30,10 @@
 #   VICTORY_METAL_NOTIMPL_LOG=<file>        one line per call of an unimplemented method
 #   VICTORY_METAL_LENIENT=1 (--lenient)     survey mode: a list command without an encoding is skipped
 #                    instead of failing the list, so the game runs on and the gap list is complete
+#   VICTORY_KEYS=8-900/3:Enter              presses Enter (= pad A through the keyboard's stand-in pad)
+#                    every 3 s from 8 s on, so the intro and account screens go on by themselves
+#   VICTORY_INPUT_REPLAY=tools/metal/input/world-neutral.txt   once in the world (world_frame >= 1)
+#                    the replay owns the pad: neutral, the same input every run (fixed-scene benchmarks)
 #   VICTORY_PATCH_MASKED=all VICTORY_FAULT_TRACKING=1   the game flags NOTES-victory-macos.md used
 #                    (a value already in the environment wins)
 # victory.toml (git-ignored, repository root) is written if missing: game dir, cache and data under
@@ -45,15 +51,18 @@ ROOT=$(cd "$here/../.." && pwd)
 . "$here/env.sh"
 
 build=1; timeout=600; out=""; plain=0; lenient=0
+keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-$here/input/world-neutral.txt}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
         --timeout) timeout=${2:?--timeout SEC}; shift ;;
         --out) out=${2:?--out DIR}; shift ;;
         --lenient) lenient=1 ;;
+        --keys) keys=${2:?--keys SPEC|none}; shift ;;
+        --input) input=${2:?--input FILE|none}; shift ;;
         --exec) plain=1 ;;
         --) shift; break ;;
-        *) echo "usage: $0 [--no-build] [--timeout SEC] [--out DIR] [--lenient] [--exec] [-- victory.exe args]" >&2; exit 2 ;;
+        *) echo "usage: $0 [--no-build] [--timeout SEC] [--out DIR] [--lenient] [--keys SPEC|none] [--input FILE|none] [--exec] [-- victory.exe args]" >&2; exit 2 ;;
     esac
     shift
 done
@@ -104,6 +113,8 @@ export WINEDLLPATH="$STAGE${WINEDLLPATH:+:$WINEDLLPATH}"
 export WINEDLLOVERRIDES="d3d12,dxgi=n,b"
 export VICTORY_METAL_LOG=1
 [ "$lenient" = 1 ] && export VICTORY_METAL_LENIENT=1
+if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$keys"; fi
+if [ "$input" = none ]; then unset VICTORY_INPUT_REPLAY; else export VICTORY_INPUT_REPLAY="$input"; fi
 export VICTORY_PATCH_MASKED="${VICTORY_PATCH_MASKED:-all}"
 export VICTORY_FAULT_TRACKING="${VICTORY_FAULT_TRACKING:-1}"
 # upstream's script, untouched; it enters its own checkout (this worktree) and builds victory.exe there
