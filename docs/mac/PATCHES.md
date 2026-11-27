@@ -68,6 +68,11 @@ Wine ships the two patches. Checked 2026-11-27: CrossOver Wine 26.3 (wine-11.0),
 D3DMetal 4.0 beta 3 (GPTK 4.0 beta 3), llvm-mingw 20261117, Rust 1.98.1, Homebrew 7.0.16,
 macOS 27.2.1 on an M5 Max, Rosetta 2 installed (macOS 28 drops Intel apps: the Wine route ends with it).
 
+*Fix, 2026-11-27 (first Wine test run).* `tests/fixtures/hle-probe/build.rs`, which `tools/macos/test-wine.sh`
+builds first, passed MSVC's `/DELAYLOAD:` to clang (`no such file or directory`) on `x86_64-pc-windows-gnullvm`.
+The file is now the Mac fork's (`-Wl,--delayload=` for gnullvm, a dlltool import library for plain gnu, MSVC
+unchanged). Remove when the Windows line's `build.rs` picks the right form for gnullvm itself.
+
 ### M3 — `tools/mac/env.sh`, `tools/mac/check.sh`, this document
 
 *Fix, 2026-11-27 (first run on Wine).* llvm-mingw's clang linked `libunwind.dll`, which Wine does not have
