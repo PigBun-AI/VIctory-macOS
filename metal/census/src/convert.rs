@@ -351,6 +351,29 @@ fn items(
         .collect()
 }
 
+/// `--hashes FILE` keeps only the listed shaders (one hash per line, or the
+/// first column of a TSV with a header row); `--dxil-dir DIR` converts
+/// `DIR/<hash>.dxil` in place of a shader's own container where there is
+/// one (a rewrite of it, e.g. `meshfit`).
+fn select(all: &mut Vec<(String, HostShader)>, args: &[String]) {
+    if let Some(list) = arg(args, "--hashes") {
+        let text = std::fs::read_to_string(&list).unwrap_or_default();
+        let want: std::collections::HashSet<&str> = text
+            .lines()
+            .filter_map(|l| l.split('\t').next())
+            .filter(|h| h.len() == 16)
+            .collect();
+        all.retain(|(h, _)| want.contains(h.as_str()));
+    }
+    if let Some(dir) = arg(args, "--dxil-dir") {
+        for (h, s) in all.iter_mut() {
+            if let Ok(d) = std::fs::read(PathBuf::from(&dir).join(format!("{h}.dxil"))) {
+                s.dxil = d;
+            }
+        }
+    }
+}
+
 /// Runs the conversion in a child process (one thread), and when Metal
 /// aborts the child on an assertion (it does not return an error), records
 /// the shader it was on as a failure and starts again after it.
@@ -497,6 +520,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     );
     for kind in &kinds {
         let mut all = items(&out, kind, limit, every, only.as_ref());
+        select(&mut all, args);
         let rows_path = out.join(format!("convert-{kind}{tag}.jsonl"));
         if resume {
             let done = jsonl::seen(&rows_path, "hash");

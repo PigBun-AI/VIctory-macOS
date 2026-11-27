@@ -26,6 +26,10 @@ mod dxc;
 #[cfg(target_vendor = "apple")]
 mod jsonl;
 #[cfg(target_vendor = "apple")]
+mod meshfit;
+#[cfg(target_vendor = "apple")]
+mod meshstat;
+#[cfg(target_vendor = "apple")]
 mod opcodes;
 #[cfg(target_vendor = "apple")]
 mod report;
@@ -95,6 +99,8 @@ fn main() {
         "translate" => translate::run(rest),
         "convert" => convert::run(rest),
         "report" => report::run(rest),
+        "meshstat" => meshstat::run(rest),
+        "meshfit" => meshfit::run(rest),
         "opcodes" => opcodes::run(rest),
         other => Err(format!("unknown command `{other}`")),
     };
