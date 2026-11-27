@@ -16,7 +16,7 @@ use super::device::DeviceObj_Impl;
 use super::list::ListObj_Impl;
 use super::objects::*;
 use super::private::PrivateData;
-use super::{return_object, werr, wres};
+use super::{OrWerr, return_object, werr, wres};
 use crate::hresult::Hr;
 use crate::timestamps::{self, QueryHeap};
 
@@ -210,9 +210,7 @@ impl DeviceObj_Impl {
         pfencetosignal: Ref<ID3D12Fence>,
         fencevaluetosignal: u64,
     ) -> WResult<()> {
-        let f = pfencetosignal
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let f = pfencetosignal.as_ref().or_werr(Hr::E_INVALIDARG)?;
         wres(
             f.cast_object_ref::<FenceObj>()?
                 .fence

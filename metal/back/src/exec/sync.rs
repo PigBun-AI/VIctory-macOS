@@ -26,9 +26,9 @@ use crate::typed::{ViewAccess, typed_format};
 /// Queues one executor makes. Each has a constant ring and command
 /// buffer pool; the number is a guard, not a measured limit.
 const MAX_QUEUES: u32 = 16;
-/// Largest descriptor heap: 2^21 slots (the API promises 1,000,000; D3DMetal takes 2^21, and
-/// victory-shader's `ResourceDescriptorHeap[]` tests use that size).
-const MAX_HEAP_SLOTS: u32 = 1 << 21;
+/// Largest descriptor heap: 2^22 slots (the API promises 1,000,000; the title's host layer asks for
+/// 2^22 to keep raw twins of buffer views behind a 2^21 heap).
+const MAX_HEAP_SLOTS: u32 = 1 << 22;
 /// Largest root signature description accepted by `CREATE_ROOT_SIGNATURE`.
 const MAX_ROOT_SIG_BYTES: u64 = 1 << 20;
 /// How long `DESTROY_QUEUE` and `SHUTDOWN` wait for a queue to drain.

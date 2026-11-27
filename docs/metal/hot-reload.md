@@ -41,16 +41,22 @@ through a sync op whose arguments are recordable.
 
 ### No hands in the loop
 
-Every game run is scripted (`tools/metal/run.sh`, defaults since 1134d03):
-`VICTORY_KEYS=8-900/3:Enter` walks the intro and the account screen (Enter is
-pad A through the keyboard's stand-in pad), and
-`VICTORY_INPUT_REPLAY=tools/metal/input/world-neutral.txt` owns the pad from
-world frame 1 on. The pair is part of the fixed scene: a recording names the
-key spec and input file it was made with (and `input_script_sha256` from the
-bench JSON), the recording window is counted in world frames, and the same
-pair under D3DMetal gives the reference frames. A scene that needs movement
-gets its own input file (declarative ranges by world frame) next to the
-neutral one.
+Every game run is scripted (`tools/metal/run.sh`). `VICTORY_KEYS` walks the
+intro and the account screen (Enter is pad A through the keyboard's stand-in
+pad). The base's parser (`crates/victory-hle/src/modules/gameinput.rs`,
+`scripted()`) knows `SECONDS:Key` (held 0.2 s) and `FROM-TO:Key` (held), comma
+separated; it drops an entry it cannot read, which is why the old
+`8-900/3:Enter` did nothing there. `run.sh` keeps writing the period form
+`8-900/3:Enter` as its default and expands it to `8:Enter,11:Enter,14:Enter,...`
+(every 3 s from the 8th second to the 900th).
+
+On the new base (mac/livetr) there is no `VICTORY_INPUT_REPLAY`: nothing owns
+the pad once the world is reached, so there is **no fixed input in the world
+yet** and `run.sh` does not set the variable. Fixed-scene recordings and
+benchmarks need that mechanism first (the old base has it in
+`gameinput_script.rs`); until then a recording names its key spec only and the
+scene is whatever the title does by itself. `tools/metal/input/world-neutral.txt`
+stays for bases that read it.
 
 ### Frame workbench (extends layer 1; same milestone)
 

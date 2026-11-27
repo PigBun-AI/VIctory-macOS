@@ -11,7 +11,7 @@
 #                     outside the repository: game-derived data never goes in it)
 #   --lenient         set VICTORY_METAL_LENIENT=1 (see below)
 #   --keys SPEC       VICTORY_KEYS for this run (default below; `none` = no scripted keys)
-#   --input FILE      VICTORY_INPUT_REPLAY for this run (default below; `none` = off)
+#   --input FILE      VICTORY_INPUT_REPLAY for this run (default: unset; the new base does not read it, see below)
 #   --exec            no timer, no log files, no summary: `exec` victory.sh as it is
 #                     (what the first version of this script did)
 #
@@ -32,8 +32,9 @@
 #                    instead of failing the list, so the game runs on and the gap list is complete
 #   VICTORY_KEYS=8-900/3:Enter              presses Enter (= pad A through the keyboard's stand-in pad)
 #                    every 3 s from 8 s on, so the intro and account screens go on by themselves
-#   VICTORY_INPUT_REPLAY=tools/metal/input/world-neutral.txt   once in the world (world_frame >= 1)
-#                    the replay owns the pad: neutral, the same input every run (fixed-scene benchmarks)
+#                    (expanded to an explicit list, see expand_keys)
+#   VICTORY_INPUT_REPLAY   not set by default: this base (mac/livetr) has no input replay, so there is no
+#                    fixed input in the world yet (tools/metal/input/world-neutral.txt is for bases that have it)
 #   VICTORY_PATCH_MASKED=all VICTORY_FAULT_TRACKING=1   the game flags NOTES-victory-macos.md used
 #                    (a value already in the environment wins)
 # victory.toml (git-ignored, repository root) is written if missing: game dir, cache and data under
@@ -51,7 +52,7 @@ ROOT=$(cd "$here/../.." && pwd)
 . "$here/env.sh"
 
 build=1; timeout=600; out=""; plain=0; lenient=0
-keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-$here/input/world-neutral.txt}"
+keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-none}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
@@ -113,7 +114,21 @@ export WINEDLLPATH="$STAGE${WINEDLLPATH:+:$WINEDLLPATH}"
 export WINEDLLOVERRIDES="d3d12,dxgi=n,b"
 export VICTORY_METAL_LOG=1
 [ "$lenient" = 1 ] && export VICTORY_METAL_LENIENT=1
-if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$keys"; fi
+# The periodic form FROM-TO/PERIOD:Key (the default) is expanded here into explicit
+# SECONDS:Key,... entries: the base's scripted keys (victory-hle gameinput.rs `scripted()`)
+# know only SECONDS:Key (held 0.2 s) and FROM-TO:Key (held), and drop an entry they cannot read (the account screen
+# then never gets its Enter).
+expand_keys() {
+    echo "$1" | awk -F, '{
+        for (i = 1; i <= NF; i++) {
+            if (match($i, /^[0-9.]+-[0-9.]+\/[0-9.]+:/)) {
+                split($i, kv, ":"); split(kv[1], r, "/"); split(r[1], ft, "-")
+                for (t = ft[1]; t <= ft[2]; t += r[2]) out = out (out == "" ? "" : ",") t ":" kv[2]
+            } else out = out (out == "" ? "" : ",") $i
+        }
+        print out }'
+}
+if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$(expand_keys "$keys")"; fi
 if [ "$input" = none ]; then unset VICTORY_INPUT_REPLAY; else export VICTORY_INPUT_REPLAY="$input"; fi
 export VICTORY_PATCH_MASKED="${VICTORY_PATCH_MASKED:-all}"
 export VICTORY_FAULT_TRACKING="${VICTORY_FAULT_TRACKING:-1}"

@@ -319,7 +319,7 @@ fn descriptor_heaps_and_their_limits() {
     assert_eq!(make(0, 0, 0).0, Status::INVALID_ARG, "no slots");
     assert_eq!(make(0, 4, 2).0, Status::INVALID_ARG, "unknown flag");
     assert_eq!(
-        make(0, (1 << 21) + 1, 0).0,
+        make(0, (1 << 22) + 1, 0).0,
         Status::INVALID_ARG,
         "too many slots"
     );

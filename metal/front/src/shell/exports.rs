@@ -13,7 +13,7 @@ use super::device::DeviceObj;
 use super::dxgi::{AdapterObj, FactoryObj};
 use super::private::PrivateData;
 use super::serialize::{self, RootSigDeserializerObj, Versioned, VersionedDeserializerObj};
-use super::{return_object, werr, wres};
+use super::{OrWerr, return_object, werr, wres};
 use crate::caps;
 use crate::hresult::Hr;
 use crate::rootsig;
@@ -42,8 +42,7 @@ pub unsafe fn d3d12_create_device(
         if !adapter.is_null() {
             // Any COM object will do as the adapter the application got from us.
             // SAFETY: a COM pointer the caller owns; borrowed, not released.
-            let unk = unsafe { IUnknown::from_raw_borrowed(&adapter) }
-                .ok_or_else(|| werr(Hr::E_POINTER))?;
+            let unk = unsafe { IUnknown::from_raw_borrowed(&adapter) }.or_werr(Hr::E_POINTER)?;
             if unk.cast_object_ref::<AdapterObj>().is_err() {
                 // An adapter from another implementation: refuse like DXGI would.
                 return Err(werr(Hr::E_INVALIDARG));

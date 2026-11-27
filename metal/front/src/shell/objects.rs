@@ -12,7 +12,7 @@ use windows::core::{ComObject, Interface, Ref, Result as WResult, implement};
 use super::device::{DeviceObj, d3d_desc};
 use super::list::ListObj;
 use super::private::PrivateData;
-use super::{werr, wres};
+use super::{OrWerr, wres};
 use crate::device as dv;
 use crate::hresult::Hr;
 
@@ -59,7 +59,7 @@ impl QueueObj_Impl {
     }
 
     pub(super) fn x_Signal(&self, pfence: Ref<ID3D12Fence>, value: u64) -> WResult<()> {
-        let f = pfence.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let f = pfence.as_ref().or_werr(Hr::E_INVALIDARG)?;
         wres(
             self.queue
                 .signal(&f.cast_object_ref::<FenceObj>()?.fence, value),
@@ -67,7 +67,7 @@ impl QueueObj_Impl {
     }
 
     pub(super) fn x_Wait(&self, pfence: Ref<ID3D12Fence>, value: u64) -> WResult<()> {
-        let f = pfence.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let f = pfence.as_ref().or_werr(Hr::E_INVALIDARG)?;
         wres(
             self.queue
                 .wait(&f.cast_object_ref::<FenceObj>()?.fence, value),

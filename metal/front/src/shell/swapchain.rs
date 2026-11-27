@@ -24,7 +24,7 @@ use windows::core::{
 use super::dxgi::FactoryObj;
 use super::objects::{QueueObj, ResourceObj};
 use super::private::PrivateData;
-use super::{return_object, werr, wres};
+use super::{OrWerr, return_object, werr, wres};
 use crate::hresult::Hr;
 use crate::resource;
 use crate::swapchain::{FLAG_FRAME_LATENCY_WAITABLE_OBJECT, SwapChain, SwapChainDesc};
@@ -85,7 +85,7 @@ impl SwapChainObj {
             return Err(werr(Hr::E_INVALIDARG));
         }
         if desc.width == 0 || desc.height == 0 {
-            let (w, h) = client_size(hwnd).ok_or_else(|| werr(Hr::DXGI_ERROR_INVALID_CALL))?;
+            let (w, h) = client_size(hwnd).or_werr(Hr::DXGI_ERROR_INVALID_CALL)?;
             if desc.width == 0 {
                 desc.width = w;
             }
@@ -187,7 +187,7 @@ impl SwapChainObj_Impl {
         }
         let slot = cache
             .get_mut(buffer as usize)
-            .ok_or_else(|| werr(Hr::DXGI_ERROR_INVALID_CALL))?;
+            .or_werr(Hr::DXGI_ERROR_INVALID_CALL)?;
         if slot.is_none() {
             let resource = wres(self.chain.take_buffer(buffer))?;
             *slot = Some(ComObject::new(ResourceObj {

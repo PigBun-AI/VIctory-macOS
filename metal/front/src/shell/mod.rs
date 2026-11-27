@@ -92,6 +92,22 @@ pub(crate) fn werr(h: Hr) -> Error {
     Error::from(HRESULT(h.0))
 }
 
+/// `Option` → COM result with the caller's location in the log line
+/// (a closure in `ok_or_else` would report `core`'s own).
+pub(crate) trait OrWerr<T> {
+    fn or_werr(self, h: Hr) -> WResult<T>;
+}
+
+impl<T> OrWerr<T> for Option<T> {
+    #[track_caller]
+    fn or_werr(self, h: Hr) -> WResult<T> {
+        match self {
+            Some(v) => Ok(v),
+            None => Err(werr(h)),
+        }
+    }
+}
+
 /// Core result → COM result.
 #[track_caller]
 pub(crate) fn wres<T>(r: Result<T>) -> WResult<T> {

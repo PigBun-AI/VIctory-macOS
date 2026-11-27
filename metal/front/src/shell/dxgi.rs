@@ -10,7 +10,7 @@ use windows::core::{BOOL, ComObject, GUID, IUnknownImpl, Interface, Result as WR
 use super::objects::QueueObj;
 use super::private::PrivateData;
 use super::swapchain::SwapChainObj;
-use super::{return_object, werr, wres};
+use super::{OrWerr, return_object, werr, wres};
 use crate::device::System;
 use crate::hresult::Hr;
 use crate::swapchain::SwapChainDesc;
@@ -67,7 +67,7 @@ impl FactoryObj_Impl {
         &self,
         pdevice: &windows::core::Ref<windows::core::IUnknown>,
     ) -> WResult<ComObject<QueueObj>> {
-        let unk = pdevice.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let unk = pdevice.as_ref().or_werr(Hr::E_INVALIDARG)?;
         unk.cast_object::<QueueObj>()
             .map_err(|_| werr(Hr::DXGI_ERROR_INVALID_CALL))
     }
@@ -81,7 +81,7 @@ impl FactoryObj_Impl {
         _prestricttooutput: windows::core::Ref<IDXGIOutput>,
     ) -> WResult<IDXGISwapChain1> {
         // SAFETY: the caller's description.
-        let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_POINTER))?;
+        let d = unsafe { pdesc.as_ref() }.or_werr(Hr::E_POINTER)?;
         let queue = self.swap_queue(&pdevice)?;
         let desc = SwapChainDesc {
             width: d.Width,
@@ -108,7 +108,7 @@ impl FactoryObj_Impl {
     ) -> windows::core::HRESULT {
         let make = || -> WResult<IDXGISwapChain> {
             // SAFETY: the caller's description.
-            let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_POINTER))?;
+            let d = unsafe { pdesc.as_ref() }.or_werr(Hr::E_POINTER)?;
             let queue = self.swap_queue(&pdevice)?;
             let desc = SwapChainDesc {
                 width: d.BufferDesc.Width,

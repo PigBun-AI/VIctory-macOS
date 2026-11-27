@@ -14,7 +14,7 @@ use windows::core::{
 use super::list::ListObj;
 use super::objects::*;
 use super::private::PrivateData;
-use super::{return_object, werr, wres};
+use super::{OrWerr, return_object, werr, wres};
 use crate::caps;
 use crate::convert::SamplerParams;
 use crate::descriptor::HeapDesc;
@@ -93,9 +93,10 @@ pub(crate) fn d3d_desc(d: &ResourceDesc) -> D3D12_RESOURCE_DESC {
     }
 }
 
+#[track_caller]
 fn require<'a, T>(p: *const T) -> WResult<&'a T> {
     // SAFETY: a pointer argument of a D3D12 call; null is refused, validity is the caller's contract.
-    unsafe { p.as_ref() }.ok_or_else(|| werr(Hr::E_INVALIDARG))
+    unsafe { p.as_ref() }.or_werr(Hr::E_INVALIDARG)
 }
 
 impl DeviceObj_Impl {
@@ -179,9 +180,7 @@ impl DeviceObj_Impl {
             D3D12_COMMAND_LIST_TYPE_COPY => 2,
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
-        let alloc = pcommandallocator
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let alloc = pcommandallocator.as_ref().or_werr(Hr::E_INVALIDARG)?;
         if alloc.cast_object_ref::<AllocatorObj>()?.ty != r#type {
             return Err(werr(Hr::E_INVALIDARG));
         }
@@ -205,10 +204,7 @@ impl DeviceObj_Impl {
         pppipelinestate: *mut *mut c_void,
     ) -> WResult<()> {
         let d = require(pdesc)?;
-        let rs = d
-            .pRootSignature
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let rs = d.pRootSignature.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let rs = rs.cast_object_ref::<RootSigObj>()?;
         if d.CS.pShaderBytecode.is_null() || d.CS.BytecodeLength == 0 {
             return Err(werr(Hr::E_INVALIDARG));
@@ -234,10 +230,7 @@ impl DeviceObj_Impl {
         pppipelinestate: *mut *mut c_void,
     ) -> WResult<()> {
         let d = require(pdesc)?;
-        let rs = d
-            .pRootSignature
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let rs = d.pRootSignature.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let state = state_of_desc(d);
         self.make_graphics_pso(rs, &state, riid, pppipelinestate)
     }
@@ -260,8 +253,8 @@ impl DeviceObj_Impl {
         let raw = state.root_sig as *mut c_void;
         // SAFETY: the root signature interface pointer the application put in
         // the stream; borrowed for the call.
-        let rs = unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let rs =
+            unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }.or_werr(Hr::E_INVALIDARG)?;
         self.make_graphics_pso(rs, &state, riid, pppipelinestate)
     }
 
@@ -333,7 +326,15 @@ impl DeviceObj_Impl {
             flags: d.Flags.0 as u32,
             node_mask: d.NodeMask,
         };
-        let heap = wres(self.dev.create_descriptor_heap(&hd))?;
+        let heap = self.dev.create_descriptor_heap(&hd).map_err(|e| {
+            if super::log_errors() {
+                eprintln!(
+                    "victory-metal front: CreateDescriptorHeap refused: type {} count {} flags {:#x} node mask {:#x}",
+                    hd.ty, hd.count, hd.flags, hd.node_mask
+                );
+            }
+            werr(e)
+        })?;
         let h = ComObject::new(HeapObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),
@@ -810,7 +811,7 @@ impl DeviceObj_Impl {
         ppvresource: *mut *mut c_void,
     ) -> WResult<()> {
         let d = require(pdesc)?;
-        let heap = pheap.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let heap = pheap.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let heap = heap.cast_object_ref::<MemHeapObj>()?;
         let resource = match self.dev.create_placed(
             &heap.heap,
@@ -945,7 +946,7 @@ impl DeviceObj_Impl {
     ) -> WResult<()> {
         const WHAT: &str = "ID3D12Device10::CreatePlacedResource2";
         let d1 = require(pdesc)?;
-        let heap = pheap.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let heap = pheap.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let heap = heap.cast_object_ref::<MemHeapObj>()?;
         let d = core_desc1(d1);
         let state =

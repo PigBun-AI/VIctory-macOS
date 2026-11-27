@@ -14,7 +14,7 @@ use windows::core::{
 use super::device::{DeviceObj, refuse, state_of_desc};
 use super::objects::{PsoObj, RootSigObj};
 use super::private::PrivateData;
-use super::{return_object, werr};
+use super::{OrWerr, return_object, werr};
 use crate::device::RootSignature;
 use crate::hresult::Hr;
 use crate::library::{Fingerprint, Library};
@@ -123,11 +123,8 @@ impl LibraryObj_Impl {
     ) -> WResult<()> {
         let name = name_of(name)?;
         // SAFETY: the caller's description.
-        let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_INVALIDARG))?;
-        let rs = d
-            .pRootSignature
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let d = unsafe { pdesc.as_ref() }.or_werr(Hr::E_INVALIDARG)?;
+        let rs = d.pRootSignature.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let state = state_of_desc(d);
         self.library()
             .load(&name, graphics_of_state(rs, &state)?)
@@ -146,11 +143,8 @@ impl LibraryObj_Impl {
     ) -> WResult<()> {
         let name = name_of(name)?;
         // SAFETY: the caller's description.
-        let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_INVALIDARG))?;
-        let rs = d
-            .pRootSignature
-            .as_ref()
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let d = unsafe { pdesc.as_ref() }.or_werr(Hr::E_INVALIDARG)?;
+        let rs = d.pRootSignature.as_ref().or_werr(Hr::E_INVALIDARG)?;
         let rs = rs.cast_object_ref::<RootSigObj>()?;
         if d.CS.pShaderBytecode.is_null() || d.CS.BytecodeLength == 0 {
             return Err(werr(Hr::E_INVALIDARG));
@@ -176,7 +170,7 @@ impl LibraryObj_Impl {
     ) -> WResult<()> {
         let name = name_of(name)?;
         // SAFETY: the caller's description.
-        let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let d = unsafe { pdesc.as_ref() }.or_werr(Hr::E_INVALIDARG)?;
         if d.pPipelineStateSubobjectStream.is_null() || d.SizeInBytes == 0 {
             return Err(werr(Hr::E_INVALIDARG));
         }
@@ -188,8 +182,8 @@ impl LibraryObj_Impl {
         let raw = state.root_sig as *mut c_void;
         // SAFETY: the root signature the application put in the stream,
         // borrowed for the call.
-        let rs = unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }
-            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let rs =
+            unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }.or_werr(Hr::E_INVALIDARG)?;
         self.library()
             .load(&name, graphics_of_state(rs, &state)?)
             .map_err(werr)?;
