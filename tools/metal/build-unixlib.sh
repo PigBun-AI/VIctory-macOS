@@ -1,14 +1,18 @@
 #!/bin/sh
-# Builds the M0 pieces and lays them out the way Wine finds a dll with a
-# unixlib:
+# Builds the Metal backend pieces and lays them out the way Wine finds a dll
+# with a unixlib:
 #
-#   $OUT/x86_64-windows/victory_metal_bridge.dll   PE, marked "Wine builtin DLL"
-#   $OUT/x86_64-unix/victory_metal_bridge.so       x86_64 Mach-O unixlib
-#   $OUT/m0-probe.exe                              the PE that calls it
+#   $OUT/x86_64-windows/victory_metal_bridge.dll   bridge PE, marked "Wine builtin DLL"
+#   $OUT/x86_64-unix/victory_metal_bridge.so       bridge unixlib: x86_64 Mach-O with the
+#                                                  Metal back inside (Wine runs under Rosetta)
+#   $OUT/front/d3d12.dll, $OUT/front/dxgi.dll      our front, plain PE: copy into a prefix's
+#                                                  system32 and set WINEDLLOVERRIDES=d3d12,dxgi=n,b
+#                                                  (tools/metal/test-wine.sh, test-front-smoke.sh do)
+#   $OUT/m0-probe.exe, front-smoke.exe, front-e2e.exe   the PEs that call them
 #
-# Run it with WINEDLLPATH=$OUT (tools/metal/run-m0.sh does). No C and no
-# winegcc are needed: both halves are Rust, and winebuild only sets the
-# builtin mark on the PE.
+# Run with WINEDLLPATH=$OUT: the front finds victory_metal_bridge.dll (and
+# through it the unixlib) there. No C and no winegcc are needed: both halves
+# are Rust, and winebuild only sets the builtin mark on the PE.
 #
 # Usage: tools/metal/build-unixlib.sh [OUT]       (default metal/target/wine-stage)
 set -eu
@@ -26,17 +30,21 @@ MACHO=target/x86_64-apple-darwin/release
 
 # PE half and the probe, with the repository's gnullvm linker (.cargo/config.toml).
 cargo build --release --locked --target x86_64-pc-windows-gnullvm \
-    -p victory-metal-bridge -p victory-metal-probe
+    -p victory-metal-bridge -p victory-metal-probe \
+    -p victory-metal-front-d3d12 -p victory-metal-front-dxgi \
+    -p victory-metal-front-smoke -p victory-metal-front-e2e
 # Unixlib: x86_64, because Wine runs under Rosetta and loads x86_64 code.
 cargo build --release --locked --target x86_64-apple-darwin -p victory-metal-bridge
 
-mkdir -p "$OUT/x86_64-windows" "$OUT/x86_64-unix"
+mkdir -p "$OUT/x86_64-windows" "$OUT/x86_64-unix" "$OUT/front"
 cp "$PE/victory_metal_bridge.dll" "$OUT/x86_64-windows/victory_metal_bridge.dll"
 # Unmarked copy: used as a native stand-in for d3d12/dxgi in the override test.
 cp "$PE/victory_metal_bridge.dll" "$OUT/standin.dll"
 "$WINEBUILD" --builtin "$OUT/x86_64-windows/victory_metal_bridge.dll"
 cp "$MACHO/libvictory_metal_bridge.dylib" "$OUT/x86_64-unix/victory_metal_bridge.so"
 cp "$PE/m0-probe.exe" "$OUT/m0-probe.exe"
+cp "$PE/d3d12.dll" "$PE/dxgi.dll" "$OUT/front/"
+cp "$PE/front-smoke.exe" "$PE/front-e2e.exe" "$OUT/"
 
 # Checks: the mark is there, and the table Wine looks up is exported.
 if ! dd if="$OUT/x86_64-windows/victory_metal_bridge.dll" bs=1 skip=64 count=16 2>/dev/null | grep -q 'Wine builtin DLL'; then
@@ -48,4 +56,11 @@ if ! nm -gU "$OUT/x86_64-unix/victory_metal_bridge.so" | grep -q '___wine_unix_c
     exit 1
 fi
 lipo -archs "$OUT/x86_64-unix/victory_metal_bridge.so" | grep -qx x86_64 || { echo "unixlib is not x86_64" >&2; exit 1; }
+# The front must export what victory-gpu loads by name.
+for sym in D3D12CreateDevice D3D12SerializeRootSignature D3D12SerializeVersionedRootSignature; do
+    strings -a "$OUT/front/d3d12.dll" | grep -qx "$sym" || { echo "front d3d12.dll does not export $sym" >&2; exit 1; }
+done
+for sym in CreateDXGIFactory CreateDXGIFactory1 CreateDXGIFactory2; do
+    strings -a "$OUT/front/dxgi.dll" | grep -qx "$sym" || { echo "front dxgi.dll does not export $sym" >&2; exit 1; }
+done
 echo "staged in $OUT"

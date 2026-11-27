@@ -1,0 +1,22 @@
+[package]
+name = "victory-metal-front-e2e"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "End-to-end test of d3d12.dll/dxgi.dll under Wine with real GPU work (buffers, copies, barriers, fences) and the ExecuteCommandLists round-trip timing; runs on D3DMetal (=b) and on our dlls over the Metal back (=n,b)"
+
+[[bin]]
+name = "front-e2e"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
