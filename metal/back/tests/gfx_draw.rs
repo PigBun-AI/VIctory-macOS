@@ -1840,3 +1840,264 @@ fn a_pass_without_attachments_runs_pixel_shaders_that_only_write_through_views()
     g.settle();
     assert_eq!(cpu_read(rb.cpu_addr, 1)[0], 0x4321);
 }
+
+// ---- rasterizer and colour write state (C-F-028, C-F-025) -------------------------
+// D3D12 spec (SDK 10.0.22621): D3D12_RASTERIZER_DESC / D3D12_RENDER_TARGET_BLEND_DESC.
+
+/// The big triangle is counter-clockwise on the target (and in NDC with y up).
+fn drawn(g: &Gfx, d: GraphicsPsoDesc, tri: Tri) -> Vec<u32> {
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let (_vb, va) = g.vertex_buffer(&tri.vertices());
+    let pso = g.pso(d);
+    let mut cmds = g.state(pso, va, 3 * STRIDE);
+    cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0, 0.0, 0.25, 1.0]));
+    cmds.push(draw(3));
+    cmds.push(end_pass());
+    g.read(t, cmds)
+}
+
+#[test]
+fn cull_mode_and_front_face_pick_the_triangles_the_spec_says() {
+    let Some(g) = setup() else { return };
+    let bg = [0.0, 0.0, 0.25, 1.0];
+    let solid = reference(bg, &[BIG]);
+    let empty = reference(bg, &[]);
+    // (cull, front_ccw, drawn?) for a counter-clockwise triangle
+    let cases = [
+        (CullMode::NONE, 0, true),
+        (CullMode::NONE, 1, true),
+        (CullMode::BACK, 0, false), // CCW is the back face unless FrontCounterClockwise
+        (CullMode::BACK, 1, true),
+        (CullMode::FRONT, 0, true),
+        (CullMode::FRONT, 1, false),
+    ];
+    for (cull, ccw, shown) in cases {
+        let mut d = g.desc();
+        d.raster.cull = cull;
+        d.raster.front_ccw = ccw;
+        let got = drawn(&g, d, BIG);
+        assert_image(
+            &got,
+            if shown { &solid } else { &empty },
+            &format!("cull {cull:?} front_ccw {ccw}"),
+        );
+    }
+    // the same triangle wound the other way flips every answer
+    let mut cw = BIG;
+    cw.p.swap(1, 2);
+    let mut d = g.desc();
+    d.raster.cull = CullMode::BACK;
+    d.raster.front_ccw = 0;
+    assert_image(&drawn(&g, d, cw), &solid, "clockwise, cull back");
+}
+
+#[test]
+fn wireframe_draws_the_edges_only_and_depth_clip_decides_beyond_the_far_plane() {
+    let Some(g) = setup() else { return };
+    let bg = [0.0, 0.0, 0.25, 1.0];
+    let mut d = g.desc();
+    d.raster.fill = FillMode::WIREFRAME;
+    let wire = drawn(&g, d, BIG);
+    let solid = reference(bg, &[BIG]);
+    let lit = |v: &[u32]| v.iter().filter(|p| **p == pack(BIG.c)).count();
+    assert!(lit(&wire) > 8, "edges are drawn");
+    assert!(
+        lit(&wire) < lit(&solid) / 2,
+        "{} wire vs {} solid pixels",
+        lit(&wire),
+        lit(&solid)
+    );
+    // deep inside the triangle: not an edge
+    assert_eq!(wire[(12 * W + 3) as usize], pack(bg));
+
+    // z = 1.5 is beyond the far plane: clipped with DepthClipEnable, clamped without
+    let mut far = BIG;
+    far.z = 1.5;
+    let mut d = g.desc();
+    d.raster.depth_clip = 1;
+    assert_image(&drawn(&g, d, far), &reference(bg, &[]), "depth clip on");
+    let mut d = g.desc();
+    d.raster.depth_clip = 0;
+    assert_image(&drawn(&g, d, far), &solid, "depth clip off");
+}
+
+#[test]
+fn the_colour_write_mask_keeps_the_channels_it_does_not_name() {
+    let Some(g) = setup() else { return };
+    // D3D12_COLOR_WRITE_ENABLE: RED 1, GREEN 2, BLUE 4, ALPHA 8
+    let bg = [0.0, 0.0, 0.25, 0.5];
+    for mask in [0x1u8, 0x2, 0x4, 0x8, 0x5, 0xA, 0xF, 0x0] {
+        let mut d = g.desc();
+        d.blend.rt[0].write_mask = mask;
+        let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+        let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+        let pso = g.pso(d);
+        let mut cmds = g.state(pso, va, 3 * STRIDE);
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(draw(3));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        let (old, new) = (pack(bg), pack(BIG.c));
+        let want = (0..4).fold(0u32, |acc, c| {
+            let src = if mask >> c & 1 == 1 { new } else { old };
+            acc | (src & (0xff << (8 * c)))
+        });
+        let i = (15 * W) as usize; // inside the triangle
+        assert!(
+            close(got[i], want, 1),
+            "mask {mask:#x}: {:#010x} wanted {want:#010x}",
+            got[i]
+        );
+        assert_eq!(got[15], pack(bg), "outside is untouched");
+    }
+}
+
+#[test]
+fn a_negative_depth_bias_moves_a_coplanar_triangle_in_front() {
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let dep = g.texture(format::D32_FLOAT, tex_usage::DEPTH_STENCIL);
+    let mut green = BIG;
+    green.c = [0.0, 1.0, 0.0, 1.0];
+    let mut red = BIG;
+    red.c = [1.0, 0.0, 0.0, 1.0];
+    let both: Vec<Vtx> = [green, red].iter().flat_map(|t| t.vertices()).collect();
+    let (_vb, va) = g.vertex_buffer(&both);
+    let mk = |bias: i32| {
+        let mut d = g.desc();
+        d.ds_format = format::D32_FLOAT;
+        d.depth.depth_enable = 1;
+        d.depth.depth_write = 1;
+        d.depth.depth_func = CompareFunc::LESS;
+        d.raster.depth_bias = bias;
+        g.pso(d)
+    };
+    let (flat, toward, away) = (mk(0), mk(-1_000_000), mk(1_000_000));
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let run = |second: PsoId| {
+        let mut cmds = g.state(flat, va, 6 * STRIDE);
+        cmds.push(begin_pass_depth(t, dep, format::D32_FLOAT, bg));
+        cmds.push(draw(3)); // green, no bias
+        cmds.push(Command::SetPipeline(SetPipeline {
+            pso: second,
+            _pad: 0,
+        }));
+        cmds.push(Command::Draw(Draw {
+            vertex_count: 3,
+            instance_count: 1,
+            start_vertex: 3,
+            start_instance: 0,
+        }));
+        cmds.push(end_pass());
+        g.read(t, cmds)
+    };
+    let i = (15 * W) as usize;
+    // same depth, LESS: the second triangle loses; pulled forward it wins; pushed back it loses
+    assert!(close(run(flat)[i], pack(green.c), 1), "no bias");
+    assert!(close(run(toward)[i], pack(red.c), 1), "negative bias");
+    assert!(close(run(away)[i], pack(green.c), 1), "positive bias");
+}
+
+/// D3D12 blend equations (spec, "Output Merger"): colour = op(src * sf, dst * df);
+/// MIN and MAX ignore the factors. Every factor on its own against ZERO, and
+/// every operation, one pixel each, read back and compared with the CPU.
+#[test]
+fn every_blend_factor_and_operation_gives_the_spec_result() {
+    let Some(g) = setup() else { return };
+    let src = [0.8f32, 0.4, 0.2, 0.6];
+    let dst = [0.3f32, 0.6, 0.9, 0.5];
+    let k = [0.25f32, 0.5, 0.75, 0.4];
+    let mut tri = BIG;
+    tri.c = src;
+    let (_vb, va) = g.vertex_buffer(&tri.vertices());
+    let factor = |f: BlendFactor| -> [f32; 3] {
+        let c3 = |v: [f32; 4]| [v[0], v[1], v[2]];
+        let inv = |v: [f32; 3]| [1.0 - v[0], 1.0 - v[1], 1.0 - v[2]];
+        match f {
+            BlendFactor::ZERO => [0.0; 3],
+            BlendFactor::ONE => [1.0; 3],
+            BlendFactor::SRC_COLOR => c3(src),
+            BlendFactor::INV_SRC_COLOR => inv(c3(src)),
+            BlendFactor::SRC_ALPHA => [src[3]; 3],
+            BlendFactor::INV_SRC_ALPHA => [1.0 - src[3]; 3],
+            BlendFactor::DST_ALPHA => [dst[3]; 3],
+            BlendFactor::INV_DST_ALPHA => [1.0 - dst[3]; 3],
+            BlendFactor::DST_COLOR => c3(dst),
+            BlendFactor::INV_DST_COLOR => inv(c3(dst)),
+            BlendFactor::SRC_ALPHA_SAT => [src[3].min(1.0 - dst[3]); 3],
+            BlendFactor::CONSTANT_COLOR => c3(k),
+            BlendFactor::INV_CONSTANT_COLOR => inv(c3(k)),
+            BlendFactor::CONSTANT_ALPHA => [k[3]; 3],
+            BlendFactor::INV_CONSTANT_ALPHA => [1.0 - k[3]; 3],
+            _ => unreachable!(),
+        }
+    };
+    let all = [
+        BlendFactor::ZERO,
+        BlendFactor::ONE,
+        BlendFactor::SRC_COLOR,
+        BlendFactor::INV_SRC_COLOR,
+        BlendFactor::SRC_ALPHA,
+        BlendFactor::INV_SRC_ALPHA,
+        BlendFactor::DST_ALPHA,
+        BlendFactor::INV_DST_ALPHA,
+        BlendFactor::DST_COLOR,
+        BlendFactor::INV_DST_COLOR,
+        BlendFactor::SRC_ALPHA_SAT,
+        BlendFactor::CONSTANT_COLOR,
+        BlendFactor::INV_CONSTANT_COLOR,
+        BlendFactor::CONSTANT_ALPHA,
+        BlendFactor::INV_CONSTANT_ALPHA,
+    ];
+    let mut cases = Vec::new();
+    for f in all {
+        cases.push((f, BlendFactor::ZERO, BlendOp::ADD));
+        cases.push((BlendFactor::ZERO, f, BlendOp::ADD));
+    }
+    for op in [
+        BlendOp::ADD,
+        BlendOp::SUBTRACT,
+        BlendOp::REV_SUBTRACT,
+        BlendOp::MIN,
+        BlendOp::MAX,
+    ] {
+        cases.push((BlendFactor::SRC_ALPHA, BlendFactor::INV_SRC_ALPHA, op));
+        cases.push((BlendFactor::ONE, BlendFactor::ONE, op));
+    }
+    for (sf, df, op) in cases {
+        let mut d = g.desc();
+        d.blend.rt[0].enable = 1;
+        d.blend.rt[0].src = sf;
+        d.blend.rt[0].dst = df;
+        d.blend.rt[0].op = op;
+        d.blend.rt[0].src_alpha = BlendFactor::ONE;
+        d.blend.rt[0].dst_alpha = BlendFactor::ZERO;
+        d.blend.rt[0].op_alpha = BlendOp::ADD;
+        let pso = g.pso(d);
+        let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+        let mut cmds = g.state(pso, va, 3 * STRIDE);
+        cmds.push(Command::SetBlendFactor(SetBlendFactor { color: k }));
+        cmds.push(begin_pass(t, LoadAction::CLEAR, dst));
+        cmds.push(draw(3));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds)[(15 * W) as usize];
+        let (a, b) = (factor(sf), factor(df));
+        let mut want = [0.0f32; 4];
+        for c in 0..3 {
+            let (s, d) = (src[c] * a[c], dst[c] * b[c]);
+            want[c] = match op {
+                BlendOp::ADD => s + d,
+                BlendOp::SUBTRACT => s - d,
+                BlendOp::REV_SUBTRACT => d - s,
+                BlendOp::MIN => src[c].min(dst[c]),
+                _ => src[c].max(dst[c]),
+            };
+        }
+        want[3] = src[3]; // alpha: ONE, ZERO, ADD
+        assert!(
+            close(got, pack(want), 2),
+            "{sf:?} {df:?} {op:?}: {got:#010x} wanted {:#010x}",
+            pack(want)
+        );
+    }
+}
