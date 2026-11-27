@@ -16,9 +16,11 @@
 #                                scenes it draws correctly (pixel reference) and the final performance comparison; it
 #                                is installed and selectable, never the default (its world is ~750 no-op pipelines)
 #   --profile fidelity|perf      (VICTORY_MAC_PROFILE, default perf; --fidelity / --perf)
-#       fidelity  Series X, the title's own output size from its settings (2560x1440, written into the DATA
-#                 directory's copy of settings.xml before the run), VICTORY_OUTPUT=0: no resolution patch;
-#                 internal size, dynamic resolution and TAA upscaling are the title's. Own data directory.
+#       fidelity  Series X, VICTORY_OUTPUT=0: no resolution patch. The title outputs 4K by itself (neither its settings.xml
+#                 nor the reported display mode change that; docs/mac/PATCHES.md P5), as on a Series X, where the system scales
+#                 it: the host shows it at most 2560x1440 (VICTORY_PRESENT_MAX and VICTORY_WINDOW_MAX default to it; --present-max
+#                 none for the whole picture). settings.xml's resolutionFullscreen is still written (2560x1440), not read for the
+#                 output. Internal size, dynamic resolution and TAA upscaling are the title's. Own data directory.
 #       perf      the output patched to 1280x720 (VICTORY_OUTPUT=1280x720; patch L3), logs
 #                 `non-fidelity: output patched to 1280x720`. Not a fidelity result.
 #   --present-max WxH|none       VICTORY_PRESENT_MAX: smaller host window and swap chain, same title output (P1)
@@ -263,6 +265,12 @@ if [ "$profile" = fidelity ]; then
 else
     export VICTORY_OUTPUT="${VICTORY_OUTPUT:-1280x720}"
 fi
+# fidelity: the title outputs 4K by itself, whatever its settings or the reported display mode say (ui-scale experiments
+# 2026-11-28, docs/mac/PATCHES.md P5); on a Series X the system scales that to the television. Here the host does: the picture is
+# shown at most 2560x1440 (P1 cap on the swap chain; VICTORY_WINDOW_MAX on the title's window). `--present-max none` shows it whole.
+fidelity_show="2560x1440"
+if [ "$profile" = fidelity ] && [ -z "$present_max" ] && [ -z "${VICTORY_PRESENT_MAX:-}" ]; then present_max="$fidelity_show"; fi
+if [ "$profile" = fidelity ] && [ "$present_max" != none ] && [ -z "${VICTORY_WINDOW_MAX:-}" ]; then export VICTORY_WINDOW_MAX="${present_max:-$fidelity_show}"; fi
 case "$present_max" in none) UNSET+=(VICTORY_PRESENT_MAX); unset VICTORY_PRESENT_MAX ;; '') ;; *) export VICTORY_PRESENT_MAX="$present_max" ;; esac
 case "$pool_check" in skip) export VICTORY_POOL_CHECK=skip ;; keep) UNSET+=(VICTORY_POOL_CHECK); unset VICTORY_POOL_CHECK ;; esac
 [ "$render_size" = 0 ] || export VICTORY_LOG_RENDER_SIZE=1
@@ -285,7 +293,9 @@ describe() {
     [ "$execmode" = 0 ] || echo "# --exec: victory.exe is run with these arguments instead of the title (no keys, no time limit, no log folder)"
     echo "# prefix: $prefix"
     if [ "$profile" = fidelity ]; then
-        echo "# fidelity: Series X; settings.xml in the data directory is set to $settings_output (video/resolutionFullscreen) before the run; no resolution patch (VICTORY_OUTPUT=0)"
+        echo "# fidelity: Series X; no resolution patch (VICTORY_OUTPUT=0): the title outputs 4K (3840x2160) by itself, as on a Series X, where the system scales it"
+        echo "# fidelity: shown at most ${VICTORY_PRESENT_MAX:-unlimited} (VICTORY_PRESENT_MAX, P1) in a window of at most ${VICTORY_WINDOW_MAX:-the work area}; the title's output is not 1440p"
+        echo "# fidelity: settings.xml video/resolutionFullscreen is set to $settings_output, but the title does not take its output size from it (P5); kept for the title's own menus"
     else
         echo "# perf: non-fidelity: output patched to ${VICTORY_OUTPUT} (the title's code, patch L3)"
     fi
