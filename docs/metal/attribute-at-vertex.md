@@ -274,6 +274,8 @@ DXC_LIB=<D3DMetal.framework>/Versions/A/Resources/libdxcompiler.dylib VICTORY_HE
    through MSC and a Metal pipeline, 21 fail: 20 on Metal's 124 varying scalars (126-127 with the added elements), 1 the
    unrelated `atomicBinOp.i64`**. Rejected for attributeAtVertex: **4852 -> 0**; not buildable: 20 (the scalar limit).
    Before (this branch's research): 4852 refused by MSC.
+   Rerun 2026-11-28 on `mac/attr-vertex` 46ea96c1 (base `fork/mac/livetr` 744fa74b) + this branch (`fork/metal-livetr` 8f5b05e9): the same: 4853 translated, 0 attributeAtVertex,
+   4832 build, 21 fail (18 + 2 on Metal's varying limits, 1 `atomicBinOp.i64`).
 3. Mesh newly over 32 KiB. There is no pairing of the title's pixel and mesh programs (names do not tell), so the count is
    by assumption: `meshstat.tsv` (8765 mesh programs, all 128 vertices and 128 primitives, 520 already over 32 KiB:
    Metal refuses them) plus `4 x D x 128` bytes for D scalars read at vertices 1 and 2 (D = the pixel shader's
