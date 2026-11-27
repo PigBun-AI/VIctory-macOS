@@ -189,18 +189,23 @@ branch (shared layer); this branch keeps the tests, the census and this document
   *before* `mesh_prologue` (4767) so its `mesh_output_bytes` check (`container.rs:119-133`, `lower.rs` ~4899) counts them.
 * `export()` (12279-12565): the vertex store loop (`storeVertexOutput`, 171, at 12454): when the output element and
   channel are demanded, the exact bits are also stored to `lds[base + lane * stride + read]` inside the same guard
-  (`vtx_store`). 16-bit vertex outputs read per vertex are refused.
+  (`vtx_store`). A 16-bit vertex output (`legacyF16ToF32` of a half, declared a 32-bit float on the host) is exchanged as
+  its **raw half** (low 16 bits, after the shift for the high half) and converted after the read by integer arithmetic
+  (`half_to_f32_bits`, normal / subnormal / zero / inf-NaN): a conversion result shared between the output store and the
+  group-memory store crashes Apple's GPU compiler (see "Compiler crash" below). The first version refused them.
 * `emit_indices` (12516): the packed indices (10 bits each) go to `lds[corners + lane]` (`vtx_corners`); `vtx_prologue`
   zeroes it for every lane first (a primitive nothing exports is culled with indices 0).
 * Barrier placement under non-uniform control flow: lanes leave the program at `LaneExit::End` (12663, `Term::Ret`) and at
   `abort_block` (12727): both now branch to one lazily made epilogue block (`leave`, `vtx_epilogue`), which every lane reaches
   after the body's divergence has ended, runs `group_sync` (`meeting_mode()` 931) and then lane n reads `lds[corners+n]`,
-  loads vertices 1 and 2 of its primitive from the vertex area and writes `storePrimitiveOutput` (172). So the barrier is
+  loads vertices 1 and 2 of its primitive from the vertex area (**all loads first**, then the `storePrimitiveOutput` (172)
+  in element and column order: alternating loads and stores crashes Apple's GPU compiler). So the barrier is
   outside any divergent branch, and no body barrier is moved (the body's own `s_barrier`s keep `no_barrier`, 1635).
   The epilogue is filled at the end of `run()` before `fill_phis` (2330).
 * 32 KiB mesh budget: `mesh_output_bytes` = 4 B x scalars x (maximum rounded to 32); the added per-primitive scalars
   cost 4 B x D x 128 per mesh (all 8765 mesh programs of the title have 128 primitives): +512 B per scalar read. Failure
-  behaviour is the existing one at 4899: when the outputs do not fit, the maxima come down to the lanes (no change here:
+  behaviour is the existing one at 4899 (S2 `mesh_order.rs` orders the vertex and primitive outputs by alignment after S1 has
+  added its elements, hook in `emit/mod.rs` `emit_program`; the exchange finds each element by name through `VtxExchange.ids`): when the outputs do not fit, the maxima come down to the lanes (no change here:
   they are already 128), and with `VICTORY_MESH_OUTPUT_STRICT` the translation is refused; Metal refuses a pipeline
   over 32 KiB at pipeline build (the 520 already over). That line is the subject of the mesh 32 KiB work (S2),
   not S1; the numbers are below.
@@ -297,3 +302,14 @@ DXC_LIB=<D3DMetal.framework>/Versions/A/Resources/libdxcompiler.dylib VICTORY_HE
   against a CPU reference, 2026-11-27): translator lowering as above, shared layer. Highest fidelity and no extra output on
   Apple10 (M5+): `vertex_value<T>` (MSL 4.1, Feature Set Tables 2026-10-23), 待验证: MSC does not emit it and AIR patching
   needs a bitcode writer AGX accepts. Cost is recorded, not a criterion."
+
+## Pipeline builds with real (mesh, pixel) pairs (2026-11-28)
+
+The title's pipeline book (`victory-data-drops-warm/cache/pipelines/known-pipelines.bin`) names the pairs: **4834 (mesh, pixel)
+pairs, 3031 mesh programs** involve the 4852 pixel programs. `victory-census s1pair` (scratch subcommand; the rows are in
+`victory-data/census-s1pair-*`) translates the pair's mesh program with and without the pixel shader's reads, and builds the pipeline
+through the back (`graphics_pipeline_from_dxil`, no game, no Wine) in both forms:
+
+* S2 alone (no S1 elements): every pair that reaches the pixel stage fails "Fragment input(s) texcoord64.. not written by
+  mesh shader", as expected; that is the state of the game today (before S1 these pixel programs were refused by MSC anyway).
+* S1+S2: see the table below.

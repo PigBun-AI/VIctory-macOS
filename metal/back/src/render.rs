@@ -891,6 +891,22 @@ impl Device {
                 desc.sample_count
             )));
         }
+        // A mesh pipeline a compiler build already crashed (this process) or a census found to
+        // crash (`VICTORY_METAL_MSC_DENYLIST`, `kind=pair` lines) is refused without asking Apple's
+        // compiler service again (a crash costs 0.3-2.5 s and the service restarts).
+        let pair = match (desc.ms, desc.ps) {
+            (Some(m), Some(p)) => Some((crate::msc::guard::stage_hash(m), crate::msc::guard::stage_hash(p))),
+            _ => None,
+        };
+        if let (Some(k), Some(ms), Some(ps)) = (pair, desc.ms, desc.ps) {
+            if CRASHED_PAIRS.lock().unwrap_or_else(|e| e.into_inner()).contains(&k)
+                || crate::msc::guard::denied_pair(ms, ps)
+            {
+                return Err(MscError::Unsupported(
+                    "mesh pipeline: this mesh and pixel shader crash Apple's GPU compiler".into(),
+                ));
+            }
+        }
         let library = |c: &Option<Converted>| -> Result<Option<(Library, String)>, MscError> {
             c.as_ref()
                 .map(|c| {
@@ -1058,6 +1074,15 @@ impl Device {
                     compile_mesh(compiler, &d)
                 }
             };
+        if let (Some(k), Err(MscError::Metal(e))) = (pair, &compiled) {
+            let text = format!("{e:?}");
+            if text.contains("XPC_ERROR_CONNECTION_INTERRUPTED") || text.contains("interrupted connection") {
+                CRASHED_PAIRS.lock().unwrap_or_else(|e| e.into_inner()).insert(k);
+                return Err(MscError::Unsupported(
+                    "mesh pipeline: Apple's GPU compiler crashed on this mesh and pixel shader".into(),
+                ));
+            }
+        }
         let raw = compiled?;
         for (stage, c) in [
             (ShaderStage::Vertex, &prepared.vs),
@@ -1121,6 +1146,11 @@ impl Device {
         self.graphics_pipeline(&prepared, desc)
     }
 }
+
+/// The (mesh, pixel) stage hashes whose pipeline build crashed Apple's compiler
+/// service in this process: asked once (see `graphics_pipeline`).
+static CRASHED_PAIRS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<(u64, u64)>>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// The compiler call of vertex pipelines: the one place to make asynchronous
 /// or to look an archive up.

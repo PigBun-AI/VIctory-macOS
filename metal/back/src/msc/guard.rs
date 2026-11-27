@@ -84,6 +84,25 @@ struct Loaded {
     path: OsString,
     mtime: Option<SystemTime>,
     hashes: Arc<HashSet<u64>>,
+    pairs: Arc<HashSet<(u64, u64)>>,
+}
+
+/// Pairs from a denylist file's text: a line whose first token is
+/// `<mesh hash, 16 hex>:<pixel hash, 16 hex>` (the `kind=pair` lines of
+/// `victory-census s1pair --denylist`): a mesh pipeline whose compiler build
+/// crashed Apple's GPU compiler service. A line that is no pair is left to
+/// [`parse_denylist`].
+pub fn parse_pair_denylist(text: &str) -> HashSet<(u64, u64)> {
+    text.lines()
+        .filter_map(|l| {
+            let tok = l.split('#').next()?.split_whitespace().next()?;
+            let (m, p) = tok.split_once(':')?;
+            Some((
+                u64::from_str_radix(m, 16).ok()?,
+                u64::from_str_radix(p, 16).ok()?,
+            ))
+        })
+        .collect()
 }
 
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
@@ -92,6 +111,17 @@ static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 /// path or the file's modification time changes; none if unset). An
 /// unreadable file is reported once on stderr and counts as empty.
 fn denylist() -> Option<Arc<HashSet<u64>>> {
+    loaded().map(|l| l.0)
+}
+
+/// The pairs of the same file (see [`parse_pair_denylist`]).
+pub fn denied_pair(ms: &[u8], ps: &[u8]) -> bool {
+    loaded().is_some_and(|l| l.1.contains(&(stage_hash(ms), stage_hash(ps))))
+}
+
+type Lists = (Arc<HashSet<u64>>, Arc<HashSet<(u64, u64)>>);
+
+fn loaded() -> Option<Lists> {
     let path = std::env::var_os(DENYLIST_ENV).filter(|p| !p.is_empty())?;
     let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     let mut cur = LOADED.lock().unwrap_or_else(|e| e.into_inner());
@@ -99,28 +129,30 @@ fn denylist() -> Option<Arc<HashSet<u64>>> {
         && l.path == path
         && l.mtime == mtime
     {
-        return Some(l.hashes.clone());
+        return Some((l.hashes.clone(), l.pairs.clone()));
     }
-    let hashes = match std::fs::read_to_string(Path::new(&path)) {
-        Ok(t) => parse_denylist(&t),
+    let (hashes, pairs) = match std::fs::read_to_string(Path::new(&path)) {
+        Ok(t) => (parse_denylist(&t), parse_pair_denylist(&t)),
         Err(e) => {
             eprintln!("victory-metal back: {DENYLIST_ENV} {path:?}: {e}");
-            HashSet::new()
+            (HashSet::new(), HashSet::new())
         }
     };
     if log_on() {
         eprintln!(
-            "victory-metal back: MSC denylist {path:?}: {} hashes",
-            hashes.len()
+            "victory-metal back: MSC denylist {path:?}: {} hashes, {} pairs",
+            hashes.len(),
+            pairs.len()
         );
     }
-    let hashes = Arc::new(hashes);
+    let (hashes, pairs) = (Arc::new(hashes), Arc::new(pairs));
     *cur = Some(Loaded {
         path,
         mtime,
         hashes: hashes.clone(),
+        pairs: pairs.clone(),
     });
-    Some(hashes)
+    Some((hashes, pairs))
 }
 
 // ---- doubles ---------------------------------------------------------------
@@ -210,6 +242,17 @@ pub(super) fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pair_lines_are_read_and_stage_lines_are_not_pairs() {
+        let text = "# pairs\n00000000000000aa:00000000000000bb\tkind=pair\tcrash\n00000000000000cc\tcs\tAbort\nzz:yy\n";
+        let pairs = parse_pair_denylist(text);
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs.contains(&(0xaa, 0xbb)));
+        let stages = parse_denylist(text);
+        assert_eq!(stages.len(), 1);
+        assert!(stages.contains(&0xcc));
+    }
 
     /// A container with an `SFI0` part of `flags` (or none) and a DXIL part
     /// of `dxil_part` (program header and bitcode, as the container holds it).
