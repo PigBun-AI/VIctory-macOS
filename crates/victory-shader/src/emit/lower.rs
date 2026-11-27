@@ -88,7 +88,7 @@ pub(crate) struct Parts<'a> {
 /// mac S1: a mesh stage's exchange of per-vertex values through group memory (`vertex_flat`). Lane m
 /// writes the values of its vertex's read channels at `base + m * stride`, and the packed corners of its
 /// primitive at `corners + m`; after the lanes meet, lane n writes primitive n's vertices 1 and 2.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct VtxExchange {
     /// First dword of the vertex values in group memory.
     base: u32,
@@ -98,8 +98,8 @@ struct VtxExchange {
     corners: u32,
     /// Lanes that write a primitive.
     primitives: u32,
-    /// The index in `prims` of the first added element.
-    first: usize,
+    /// The index in `prims` of each added element (S2 numbers the primitive outputs, so not in a row).
+    ids: Vec<usize>,
 }
 
 enum Stop {
@@ -1711,10 +1711,17 @@ impl<'a> Lower<'a> {
                 if s.lds_dwords * 4 > 32 * 1024 {
                     vtx_fail = Some("a mesh shader whose per-vertex exchange passes group memory");
                 }
-                let row = vertex_flat::first_row(&x.prims);
-                let first = s.prims.len();
-                s.prims.extend(vertex_flat::elements(&vreads, Some(row)));
-                vtx = Some(VtxExchange { base, stride, corners, primitives, first });
+                // The elements were added to the signature by `emit_program`.
+                let ids: Vec<usize> = (0..vertex_flat::elements(&vreads, None).len() as u32)
+                    .map(|n| {
+                        s.prims.iter().position(|e| e.name == vertex_flat::FLAT_NAME && e.index == vertex_flat::FLAT_BASE + n)
+                    })
+                    .collect::<Option<_>>()
+                    .unwrap_or_default();
+                if ids.len() != vertex_flat::elements(&vreads, None).len() {
+                    vtx_fail = Some("a mesh shader without the added per-vertex outputs");
+                }
+                vtx = Some(VtxExchange { base, stride, corners, primitives, ids });
             }
             s.mesh = Some(super::shader::Mesh {
                 max_vertices: ms.max_vertices,
@@ -12780,7 +12787,7 @@ impl<'a> Lower<'a> {
         if let Some(w) = self.vtx_fail {
             return Err(w);
         }
-        let Some(x) = self.vtx else {
+        let Some(x) = self.vtx.clone() else {
             return Ok(());
         };
         let flat = self.mesh_thread();
@@ -12798,7 +12805,7 @@ impl<'a> Lower<'a> {
 
     /// mac S1, mesh: this lane's primitive corners, packed 10 bits each, into group memory.
     fn vtx_corners(&mut self, flat: V, corners: [V; 3]) {
-        let Some(x) = self.vtx else {
+        let Some(x) = self.vtx.clone() else {
             return;
         };
         let c = self.cur;
@@ -12818,7 +12825,7 @@ impl<'a> Lower<'a> {
     /// mac S1, mesh: the vertex output channel (`id`, `col`) the pixel stage reads of other vertices,
     /// written to the exchange for this lane's vertex.
     fn vtx_store(&mut self, id: usize, col: u8, bits: V, half: bool) -> Result<(), Why> {
-        let Some(x) = self.vtx else {
+        let Some(x) = self.vtx.clone() else {
             return Ok(());
         };
         let o = &self.s.outputs[id];
@@ -12844,7 +12851,7 @@ impl<'a> Lower<'a> {
     /// vertex's values), then lane n writes primitive n's vertices 1 and 2 as the added primitive
     /// outputs.
     fn vtx_epilogue(&mut self) {
-        let (Some(x), Some(b)) = (self.vtx, self.epilogue) else {
+        let (Some(x), Some(b)) = (self.vtx.clone(), self.epilogue) else {
             return;
         };
         self.cur = b;
@@ -12878,7 +12885,7 @@ impl<'a> Lower<'a> {
                 let at = self.s.m.bin(c, Bin::Add, row, at);
                 let ptr = self.s.m.element(c, lds, at);
                 let value = self.s.m.load(c, ptr);
-                let id = x.first + n;
+                let id = x.ids[n];
                 self.s.prims[id].usage |= 1 << comp;
                 let args = [
                     self.s.m.i32(id as u32),

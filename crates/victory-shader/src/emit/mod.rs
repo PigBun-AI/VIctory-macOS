@@ -947,6 +947,13 @@ fn emit_program(
     for e in &mut prims {
         e.interp = 1;
     }
+    // mac S1: a mesh shader's per-primitive outputs for the pixel shader's reads of vertices 1 and 2,
+    // added before S2 numbers them, so they are ordered with the others.
+    if matches!(native.io, crate::native::StageIo::Ms(_)) {
+        let reads = vertex_flat::current(); // mac S1
+        let row = vertex_flat::first_row(&prims); // mac S1
+        prims.extend(vertex_flat::elements(&reads, Some(row))); // mac S1
+    }
     // mac S2: a mesh shader's outputs numbered for the least padding in Metal's struct.
     if matches!(native.io, crate::native::StageIo::Ms(_)) {
         mesh_order::vertex(&mut outputs); // mac S2
