@@ -270,5 +270,16 @@ pub struct PsoObj {
     pub pipeline: dv::Pipeline,
 }
 
+/// `ID3D12CommandSignature`: the checked signature and the root signature it
+/// was made with (kept alive: the back knows it by id).
+#[implement(ID3D12CommandSignature)]
+pub struct CmdSigObj {
+    pub private: PrivateData,
+    pub device_obj: ComObject<DeviceObj>,
+    pub signature: crate::indirect::CommandSignature,
+    pub _root_sig: Option<ComObject<RootSigObj>>,
+}
+
+impl CmdSigObj_Impl {}
 impl PsoObj_Impl {}
 impl RootSigObj_Impl {}

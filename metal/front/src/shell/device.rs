@@ -370,6 +370,75 @@ impl DeviceObj_Impl {
         return_object(&r.to_interface::<IUnknown>(), riid, ppvrootsignature)
     }
 
+    pub(super) fn x_CreateCommandSignature(
+        &self,
+        pdesc: *const D3D12_COMMAND_SIGNATURE_DESC,
+        prootsignature: Ref<ID3D12RootSignature>,
+        riid: *const GUID,
+        ppvcommandsignature: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        if d.NumArgumentDescs == 0 || d.pArgumentDescs.is_null() {
+            return Err(werr(Hr::E_INVALIDARG));
+        }
+        // SAFETY: `NumArgumentDescs` descriptions at `pArgumentDescs`.
+        let raw =
+            unsafe { std::slice::from_raw_parts(d.pArgumentDescs, d.NumArgumentDescs as usize) };
+        let descs: Vec<crate::indirect::ArgDesc> = raw
+            .iter()
+            .map(|a| {
+                // SAFETY: `Type` says which member of the union is live.
+                let (index, dest_offset, count) = unsafe {
+                    match a.Type {
+                        D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW => {
+                            (a.Anonymous.VertexBuffer.Slot, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT => {
+                            let c = a.Anonymous.Constant;
+                            (
+                                c.RootParameterIndex,
+                                c.DestOffsetIn32BitValues,
+                                c.Num32BitValuesToSet,
+                            )
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW => {
+                            (a.Anonymous.ConstantBufferView.RootParameterIndex, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW => {
+                            (a.Anonymous.ShaderResourceView.RootParameterIndex, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW => {
+                            (a.Anonymous.UnorderedAccessView.RootParameterIndex, 0, 0)
+                        }
+                        _ => (0, 0, 0),
+                    }
+                };
+                crate::indirect::ArgDesc {
+                    ty: a.Type.0 as u32,
+                    index,
+                    dest_offset,
+                    count,
+                }
+            })
+            .collect();
+        let root = prootsignature
+            .as_ref()
+            .map(|r| r.cast_object::<RootSigObj>())
+            .transpose()?;
+        let signature = wres(crate::indirect::CommandSignature::new(
+            d.ByteStride,
+            &descs,
+            root.as_ref().map(|r| &r.root_sig),
+        ))?;
+        let s = ComObject::new(CmdSigObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            signature,
+            _root_sig: root,
+        });
+        return_object(&s.to_interface::<IUnknown>(), riid, ppvcommandsignature)
+    }
+
     pub(super) fn x_CreateConstantBufferView(
         &self,
         pdesc: *const D3D12_CONSTANT_BUFFER_VIEW_DESC,

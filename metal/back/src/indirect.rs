@@ -116,6 +116,7 @@ pub struct RootCopy {
 }
 
 /// An `ExecuteIndirect` of dispatches.
+#[derive(Clone, Copy)]
 pub struct IndirectDispatch<'a> {
     pub args: &'a Buffer,
     pub args_offset: u64,
@@ -169,12 +170,36 @@ impl CommandList {
         if spec.max_count == 0 {
             return Ok(());
         }
-        if spec.max_count > MAX_RECORDS {
+        // Records that lie inside the buffer. With a count buffer the count
+        // decides how many are read and a `MaxCommandCount` larger than the
+        // buffer is a bound, not a promise: only records that fit are run.
+        // Without one, every record must fit.
+        let room = spec.args.len().saturating_sub(spec.args_offset);
+        let fit = match room.checked_sub(u64::from(spec.record_bytes)) {
+            Some(rest) => rest / u64::from(spec.stride.max(1)) + 1,
+            None => 0,
+        };
+        let max_count = if spec.count.is_some() {
+            u64::from(spec.max_count).min(fit)
+        } else {
+            u64::from(spec.max_count)
+        };
+        if max_count == 0 {
+            // Nothing can be read; say so if the arguments are not even there.
+            return self.check_buffer(
+                spec.args,
+                spec.args_offset,
+                u64::from(spec.record_bytes),
+                "ExecuteIndirect arguments",
+            );
+        }
+        if max_count > u64::from(MAX_RECORDS) {
             return Err(Error::Unsupported(format!(
-                "ExecuteIndirect with MaxCommandCount {} (more than {MAX_RECORDS})",
-                spec.max_count
+                "ExecuteIndirect with MaxCommandCount {max_count} (more than {MAX_RECORDS})"
             )));
         }
+        let max_count = max_count as u32;
+        let spec = &IndirectDispatch { max_count, ..*spec };
         let n = u64::from(spec.max_count);
         let span = (n - 1) * u64::from(spec.stride) + u64::from(spec.record_bytes);
         self.check_buffer(

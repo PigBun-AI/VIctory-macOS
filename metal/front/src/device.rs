@@ -991,6 +991,8 @@ pub enum Item {
         dest_offset: u32,
         values: Vec<u32>,
     },
+    /// `ExecuteIndirect` (the signature's bytes are owned: [`crate::indirect`]).
+    Indirect(crate::indirect::IndirectItem),
 }
 
 /// Lists → one block. `new_list_id` hands out ids unique within the block.
@@ -1022,6 +1024,7 @@ pub fn encode_block(
                 } => e
                     .set_root_constants(*bind_point, *root_index, *dest_offset, values)
                     .map_err(bad)?,
+                Item::Indirect(i) => e.push(&i.command()).map_err(bad)?,
             }
         }
         e.push(&Command::EndList(EndList { list, _pad: 0 }))
@@ -1084,8 +1087,14 @@ impl CommandList {
         }
     }
 
-    fn fail(&mut self, e: Hr) {
+    pub(crate) fn fail(&mut self, e: Hr) {
         self.error.get_or_insert(e);
+    }
+
+    pub(crate) fn push_item(&mut self, item: Item) {
+        if self.state == ListState::Recording {
+            self.items.push(item);
+        }
     }
 
     /// `Close`. A second `Close` returns S_OK, as D3DMetal does.

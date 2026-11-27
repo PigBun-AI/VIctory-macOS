@@ -24,6 +24,7 @@ pub mod footprint;
 pub mod format;
 pub mod gpu;
 pub mod hresult;
+pub mod indirect;
 pub mod library;
 pub mod mock;
 pub mod pso;

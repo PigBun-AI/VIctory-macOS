@@ -290,6 +290,38 @@ fn a_record_changes_root_constants_and_root_descriptors() {
 }
 
 #[test]
+fn a_maximum_beyond_the_buffer_is_a_bound_when_a_count_buffer_decides() {
+    let mut r = rig();
+    // Room for two 16-byte records; the application says 64 at most and counts 2.
+    let small = r.fx.buffer(BufferKind::SHARED, 32);
+    cpu_write(small.cpu_addr, &[0, 1, 1, 1, 1, 2, 1, 1]);
+    r.args = small;
+    cpu_write(r.count.cpu_addr, &[2]);
+    let sig = encode(&[
+        arg(IndirectArgKind::CONSTANT, 1, 0, 1),
+        arg(IndirectArgKind::DISPATCH, 0, 0, 0),
+    ]);
+    let call = Call {
+        signature: &sig,
+        stride: 16,
+        max_count: 64,
+        count: Some(0),
+        args_offset: 0,
+        root_sig: r.sig,
+    };
+    assert_eq!(r.run(&call, 7), Status::OK);
+    let out = r.out();
+    assert_eq!(row(&out, 0), [1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(row(&out, 1), [2, 2, 0, 0, 0, 0, 0, 0]);
+    // Without a count buffer the same call is refused: every record is read.
+    let without = Call {
+        count: None,
+        ..call
+    };
+    assert_eq!(r.run(&without, 7), Status::INVALID_ARG);
+}
+
+#[test]
 fn many_records_are_expanded_in_chunks() {
     let mut r = rig();
     // 700 records (3 chunks) of {tag, x, y, z} with a count of 650: each of

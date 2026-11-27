@@ -53,6 +53,7 @@ OBJECTS = {
     "MemHeapObj": ("ID3D12Heap", "objects.rs"),
     "RootSigObj": ("ID3D12RootSignature", "objects.rs"),
     "PsoObj": ("ID3D12PipelineState", "objects.rs"),
+    "CmdSigObj": ("ID3D12CommandSignature", "objects.rs"),
     "LibraryObj": ("ID3D12PipelineLibrary1", "library.rs"),
     "RootSigDeserializerObj": ("ID3D12RootSignatureDeserializer", "serialize.rs"),
     "VersionedDeserializerObj": ("ID3D12VersionedRootSignatureDeserializer", "serialize.rs"),
