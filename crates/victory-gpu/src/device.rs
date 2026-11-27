@@ -363,6 +363,7 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
     out: *mut This,
 ) -> HRESULT {
     use std::sync::atomic::{AtomicU32, Ordering};
+    crate::mac::pso_x::dump(SLOT, desc); // mac G9
     static CALLS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
     let calls = CALLS[usize::from(SLOT == 0x218)].fetch_add(1, Ordering::Relaxed) + 1;
     crate::mac::drop_stats::notimpl(SLOT);
@@ -398,6 +399,25 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
         );
     }
     E_NOTIMPL
+}
+
+/// Device method 0x218 (`VICTORY_MAC_PSO_X=1`, mac G9): a compute pipeline from the title's
+/// pipeline cache record, which `mac::pso_x` reads; any record it does not take, and the
+/// switch off, are [`unknown_pipeline`] as before (the title then makes the pipeline from its
+/// container through 0x1f0).
+extern "system" fn precompiled_compute(
+    this: This,
+    desc: *const u8,
+    iid: *const Iid,
+    out: *mut This,
+) -> HRESULT {
+    match crate::mac::pso_x::create_compute(desc, iid, out) {
+        Some(hr) => {
+            crate::mac::pso_x::dump(0x218, desc);
+            hr
+        }
+        None => unknown_pipeline::<0x218>(this, desc, iid, out),
+    }
 }
 
 /// The host device's state: the console's device is removed when the host's is
@@ -453,7 +473,7 @@ static FUNCTIONS: Table<160> = {
     f[57] = unknown_pipeline::<0x1c8> as *const (); // 0x1c8
     f[61] = descriptor::create_sampler_x as *const (); // 0x1e8
     f[62] = pipeline::create_compute_x as *const (); // 0x1f0
-    f[67] = unknown_pipeline::<0x218> as *const (); // 0x218
+    f[67] = precompiled_compute as *const (); // 0x218 (mac G9; unknown_pipeline when it declines)
     f[69] = object::ignore as *const (); // 0x228 debug error filter
     f[70] = descriptor::create_placed_srv as *const (); // 0x230
     f[71] = descriptor::create_placed_uav as *const (); // 0x238

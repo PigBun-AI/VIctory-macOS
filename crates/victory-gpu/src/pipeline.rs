@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use crate::object::{self, E_INVALIDARG, HRESULT, Iid, Object, PIPELINE, Table, This, guid};
 use crate::resource::PAGEABLE_IIDS;
 
-const PIPELINE_IIDS: [Iid; 4] = [
+pub(crate) const PIPELINE_IIDS: [Iid; 4] = [ // mac G9 (pub(crate): mac::pso_x's test)
     guid(
         0x765a30f3,
         0xf624,
@@ -767,6 +767,18 @@ fn hand_out(
     });
     crate::mac::drop_stats::created((&raw const *pipeline).cast::<()>() as usize);
     object::hand_out(PIPELINE, pipeline, iid, &PIPELINE_IIDS, out)
+}
+
+/// A compute pipeline whose shader container the Mac layer made from the
+/// console's precompiled record (slot 0x218, `mac::pso_x`). // mac G9
+pub(crate) fn compute_from_container(container: &[u8], iid: *const Iid, out: *mut This) -> HRESULT {
+    hand_out(
+        vec![shader("compute", container)],
+        #[cfg(windows)]
+        None,
+        iid,
+        out,
+    )
 }
 
 /// Device method.

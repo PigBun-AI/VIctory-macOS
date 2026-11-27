@@ -331,6 +331,37 @@ if so it gives the draws that ran on no-op pipelines (`psoran`), else only the l
 input script and Enter keys as `run.sh` has them; both through `run.sh --backend d3dmetal --perf|--fidelity --data --cache --out`,
 and `victory warm` through `run.sh --exec -- warm`, so the prefix and the environment are `run.sh`'s) and prints the share of each class over the first N world frames. *Remove when* the Metal backend replaces the D3DMetal path.
 
+### G9 — the console device's pipeline cache methods, slots 0x1c8 and 0x218 (`victory-gpu/src/mac/pso_x.rs`)
+
+*What the two slots are* (decoded from the title, 1.0.2.1; call sites title+0x2477578 and title+0x24800d5; the
+Windows line has them as `E_NOTIMPL` too, `device.rs` `unknown_pipeline`). Both are **hits of the title's own pipeline
+cache** for a pipeline it can also make from the shader containers it loads, so a `E_NOTIMPL` is a cache miss, not a lost
+draw. The cache object (global at title+0x75ddb90) is filled from a file at start. 0x1c8: a loop over the graphics
+entries calls it once each and keeps the pipelines in a table by the first shader's key; the title asks that table
+before it builds a stream (title+0x2479f40) and calls slot 0x2b0 (title+0x2479a87) only on a miss. 0x218: one call per
+compute pipeline job (title+0x24800d5, key = the job's); on failure the job calls slot 0x1f0 with the compute container
+it has loaded (title+0x247fe66). Both descriptions start as 0x50/0x58 do (root signature, then (pointer, size) pairs),
+but the pairs are the compiler's `FSPX` entries and code in GPU memory, not bytecode. The compute record (12 qwords: root,
+packet 0x1c, hash 0x14, code, metadata 0x18+32n, two pointers, a 64-bit hash) is read from sizes and the log of one run, not
+from a whole sample; the graphics record (root, at least six pairs: 0x184 and 0xbc-ish blocks around code, then per-stage
+blocks) is not decoded.
+
+*What is done.* `VICTORY_MAC_PSO_X=1` (off by default until a batch run has compared it): slot 0x218 builds an `FSPX`
+part from the record, wraps it in a container with one `ACCC` part (where the shared layer already keeps compute programs of
+that form), checks that `victory_shader::native_programs` finds one compute program in it, and hands out the pipeline
+(`pipeline::compute_from_container`, creation method `compute@0x218` in the G8 tables). Anything that does not read or
+parse is `E_NOTIMPL` as before, counted (`mac G9: slot 0x218 record not taken`, once per reason; the G8 `notimpl[... 0x218=n]`
+counts those only), and the title makes the pipeline from its container. Slot 0x1c8 stays `E_NOTIMPL` on purpose: a record
+has no signature parts (`ISG1`/`OSG1`/`PSV0`) that the graphics translation reads, and the title's stream path is complete.
+`VICTORY_MAC_DUMP_NOTIMPL_PSO=<dir>` writes every different call of either slot: `0x1c8|0x218/<id>.txt` (qwords, what each
+was taken for, our root signature object's bytes and blobs) and `blobs/<hash>.bin` (the memory each (pointer, size) pair
+names, once per content; `_BYTES`=256, `_FOLLOW`=262144, `_MAX`=60000 tune it). The id hashes the non-pointer words and the
+memory behind the pointers, so the same pipeline in another run or place is the same file.
+
+*Hooks in upstream files:* `device.rs` (`precompiled_compute` for slot 0x218, one dump line in `unknown_pipeline`),
+`pipeline.rs` (`compute_from_container`, `PIPELINE_IIDS` made `pub(crate)`). *Remove when* the Windows line implements the
+slots (the records' format is then theirs), or when a batch run shows the title's own fallback is as good and the patch is of no use.
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
