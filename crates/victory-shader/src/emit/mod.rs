@@ -128,7 +128,7 @@ use crate::{ShaderError, io, ir, resource, structure};
 pub use bitcode::census;
 pub use sampler::StaticSampler;
 pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
-pub use vertex_flat::VertexRead; // mac S1
+pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
 pub use lower::sunclamp::export_sat;
 pub use rect::rect_list_gs;
 pub use shader::{

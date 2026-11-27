@@ -229,3 +229,27 @@ fn an_exchange_past_group_memory_is_refused() {
         "{r:?}"
     );
 }
+
+#[test]
+fn a_vertex_pipeline_gets_a_geometry_stage_that_carries_the_other_vertices() {
+    let position = SigElement { kind: 3, usage: 0xF, ..element("SV_Position", 3, 0) };
+    let uv = element("TEXCOORD", 0, 1);
+    let vs = crate::dxbc::build(&[(FourCC::OSG1, &container::signature(&[position, uv.clone()], false))]);
+    let flat = SigElement { interp: 1, ..uv };
+    let ps = crate::dxbc::build(&[(FourCC::ISG1, &container::signature(&[flat], true))]);
+    let reads = [read("TEXCOORD", 0, 0, 3), read("TEXCOORD", 0, 2, 2)];
+    let gs = vertex_flat::vertex_pipeline_gs(&vs, &ps, &reads).unwrap();
+    let c = Container::parse(&gs).unwrap();
+    // Geometry (2), shader model 6.6.
+    assert_eq!(c.part(FourCC::DXIL).unwrap().data[..4], [0x66, 0, 2, 0]);
+    let ins = signature(c.part(FourCC::ISG1).unwrap().data).unwrap();
+    let outs = signature(c.part(FourCC::OSG1).unwrap().data).unwrap();
+    assert_eq!(ins.len(), 2);
+    // The vertex's own outputs, then the added element: v1.x, v2.x, v1.z.
+    assert_eq!(outs.len(), 3);
+    let added = outs.iter().find(|e| e.index == vertex_flat::FLAT_BASE).unwrap();
+    assert_eq!((added.cols, added.comp), (3, 5));
+    // A read of a channel no vertex output has is refused.
+    let r = vertex_flat::vertex_pipeline_gs(&vs, &ps, &[read("COLOR", 0, 0, 3)]);
+    assert!(r.is_err());
+}

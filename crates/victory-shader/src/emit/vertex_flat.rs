@@ -15,7 +15,11 @@
 
 use std::cell::RefCell;
 
+use super::bitcode::{Attr, Cast, Term, V};
 use super::container::SigElement;
+use super::shader::{Geometry, Shader};
+use crate::ShaderError;
+use crate::dxbc::{Container, FourCC};
 use crate::io::{Interp, Io};
 
 /// The semantic of the added elements; the index counts up from [`FLAT_BASE`].
@@ -186,6 +190,106 @@ pub(crate) fn pixel_reads(io: &Io, inputs: &[SigElement]) -> Vec<VertexRead> {
         });
     }
     canonical(reads)
+}
+
+/// The geometry shader (a DXIL container) of a vertex pipeline whose pixel shader reads other vertices of
+/// a triangle: `vs` and `ps` are the translated stages ([`super::HostShader::dxil`]), `reads` what the pixel
+/// shader reports. Triangles in, the same triangle out (vertices in the order the API's primitive has them:
+/// that of a list, and the strip or fan order of the host's own geometry input), every vertex carrying the
+/// vertex shader's outputs and, as constant elements, the values of the read channels at vertices 1 and 2.
+pub fn vertex_pipeline_gs(vs: &[u8], ps: &[u8], reads: &[VertexRead]) -> Result<Vec<u8>, ShaderError> {
+    let unsupported = |what| ShaderError::Unsupported { offset: 0, what };
+    let sig = |dxil: &[u8], fourcc| -> Result<Vec<SigElement>, ShaderError> {
+        let c = Container::parse(dxil)?;
+        match c.part(fourcc) {
+            Some(part) => super::signature(part.data),
+            None => Ok(Vec::new()),
+        }
+    };
+    let mut outputs = sig(vs, FourCC::OSG1)?;
+    let wanted = sig(ps, FourCC::ISG1)?;
+    if outputs.iter().any(|e| e.row.is_none()) {
+        return Err(unsupported("a vertex output without a register"));
+    }
+    let reads = canonical(reads.to_vec());
+    for e in &mut outputs {
+        // As the vertex shader's outputs are declared, except where the pixel shader says constant.
+        e.interp = match (e.kind, e.comp) {
+            (3, _) => 4,
+            (0 | 6 | 7, 9) => 2,
+            (0, _) => 1,
+            _ => 0,
+        };
+        if wanted.iter().any(|w| w.name == e.name && w.index == e.index && w.interp == 1) {
+            e.interp = 1;
+        }
+        e.usage = (1 << e.cols) - 1;
+    }
+    let mut s = Shader::new(false);
+    s.geometry = Some(Geometry { max_vertices: 3 });
+    s.inputs = outputs.clone();
+    let row = first_row(&outputs);
+    let added = elements(&reads, Some(row));
+    let own = outputs.len();
+    outputs.extend(added.iter().cloned().map(|e| SigElement { usage: (1 << e.cols) - 1, ..e }));
+    let scalars: u32 = outputs.iter().map(|e| u32::from(e.cols)).sum();
+    if scalars * 3 > 1024 {
+        return Err(unsupported("a vertex pipeline with more output components than a geometry shader emits"));
+    }
+    s.outputs = outputs;
+    let b = s.entry;
+    let load = |s: &mut Shader, id: usize, col: u8, vertex: u32| -> V {
+        let (name, ty) = if s.inputs[id].comp == 9 {
+            ("loadInput.f32", s.t.f32)
+        } else {
+            ("loadInput.i32", s.t.i32)
+        };
+        let args = [s.m.i32(id as u32), s.m.i32(0), s.m.i8(col), s.m.i32(vertex)];
+        s.op(b, name, Attr::ReadNone, ty, 4, &args)
+    };
+    let store = |s: &mut Shader, id: usize, col: u8, v: V, float: bool| {
+        let name = if float { "storeOutput.f32" } else { "storeOutput.i32" };
+        let args = [s.m.i32(id as u32), s.m.i32(0), s.m.i8(col), v];
+        let void = s.t.void;
+        s.op(b, name, Attr::NoUnwind, void, 5, &args);
+    };
+    // The added elements' values: the same for the three emitted vertices.
+    let mut extra: Vec<(usize, u8, V)> = Vec::new();
+    for (n, r) in reads.iter().enumerate() {
+        let id = s
+            .inputs
+            .iter()
+            .position(|e| {
+                e.name == r.name && e.index == r.index && r.channel >= e.col && r.channel < e.col + e.cols
+            })
+            .ok_or_else(|| unsupported("a per-vertex read of a channel the vertex shader does not write"))?;
+        let col = r.channel - s.inputs[id].col;
+        for k in 1..=2u8 {
+            let Some((el, comp)) = slot(&reads, n, k) else { continue };
+            let v = load(&mut s, id, col, u32::from(k));
+            let v = if s.inputs[id].comp == 9 { s.m.cast(b, Cast::Bitcast, v, s.t.i32) } else { v };
+            extra.push((own + el, comp, v));
+        }
+    }
+    let stream = s.m.i8(0);
+    for vertex in 0..3u32 {
+        for id in 0..own {
+            let float = s.inputs[id].comp == 9;
+            for col in 0..s.inputs[id].cols {
+                let v = load(&mut s, id, col, vertex);
+                store(&mut s, id, col, v, float);
+            }
+        }
+        for &(id, comp, v) in &extra {
+            store(&mut s, id, comp, v, false);
+        }
+        let void = s.t.void;
+        s.op(b, "emitStream", Attr::NoUnwind, void, 97, &[stream]);
+    }
+    let void = s.t.void;
+    s.op(b, "cutStream", Attr::NoUnwind, void, 98, &[stream]);
+    s.m.terminate(b, Term::Ret);
+    Ok(s.finish())
 }
 
 thread_local! {
