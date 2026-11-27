@@ -23,6 +23,8 @@ pub mod device;
 #[cfg(target_vendor = "apple")]
 pub mod error;
 #[cfg(target_vendor = "apple")]
+pub mod exec;
+#[cfg(target_vendor = "apple")]
 pub mod m0;
 #[cfg(target_vendor = "apple")]
 pub mod memory;
