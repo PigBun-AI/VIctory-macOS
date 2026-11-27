@@ -303,3 +303,88 @@ fn a_shader_without_a_root_signature_gets_inline_descriptor_entries() {
     assert_eq!(e.len(), 1);
     assert_eq!((e[0].kind, e[0].offset, e[0].size), (ArgKind::Uav, 0, 24));
 }
+
+const SAMPLER_HEAP: &str = "cbuffer c : register(b0) { uint si; uint di; uint k; uint pad; }\n\
+[numthreads(32,1,1)] void main(uint3 t : SV_DispatchThreadID) {\n\
+  Texture2D<float4> tx = ResourceDescriptorHeap[si];\n\
+  SamplerState s = SamplerDescriptorHeap[k];\n\
+  RWByteAddressBuffer dst = ResourceDescriptorHeap[di];\n\
+  dst.Store(t.x*4, asuint(tx.SampleLevel(s, float2(0.5, 0.5), 0).x)); }\n";
+
+#[test]
+fn reflection_reports_the_sampler_heap() {
+    let Some(dxil) = dxil_or_skip("sampler_heap", "cs_6_6", SAMPLER_HEAP) else {
+        return;
+    };
+    let (_g, d) = setup();
+    let root = RootSignatureDesc {
+        flags: flags::HEAP_INDEXED | flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants(4)],
+        ..Default::default()
+    };
+    let sp = d
+        .compute_pipeline_from_dxil(&dxil, Some(&root), &CompileOptions::default())
+        .unwrap();
+    assert!(sp.reflection.uses_resource_heap);
+    assert!(sp.reflection.uses_sampler_heap);
+}
+
+const TABLE_AND_STATIC_SAMPLER: &str = "Texture2D<float4> tx : register(t0);\n\
+SamplerState s : register(s0);\n\
+RWByteAddressBuffer o : register(u0);\n\
+[numthreads(32,1,1)] void main(uint3 t : SV_DispatchThreadID) {\n\
+  o.Store(t.x*4, asuint(tx.SampleLevel(s, float2(0.5, 0.5), 0).x)); }\n";
+
+/// A descriptor table, a root UAV and a static sampler: the table is a
+/// pointer in the TLAB, and the static sampler is one more pointer, to a
+/// table of sampler descriptors the host fills in.
+#[test]
+fn a_table_a_root_uav_and_a_static_sampler() {
+    use victory_metal_back::msc::{OFFSET_APPEND, Range, RangeKind, StaticSampler};
+    let Some(dxil) = dxil_or_skip("table_sampler", "cs_6_6", TABLE_AND_STATIC_SAMPLER) else {
+        return;
+    };
+    let (_g, d) = setup();
+    let root = RootSignatureDesc {
+        flags: 0,
+        params: vec![
+            Param {
+                kind: ParamKind::Table(vec![Range {
+                    kind: RangeKind::Srv,
+                    count: 1,
+                    base_register: 0,
+                    space: 0,
+                    offset: OFFSET_APPEND,
+                    flags: 0,
+                }]),
+                visibility: Visibility::All,
+            },
+            root_uav(0),
+        ],
+        static_samplers: vec![StaticSampler {
+            filter: 0x15, // D3D12_FILTER_MIN_MAG_MIP_LINEAR
+            address: [1, 1, 1],
+            mip_lod_bias: 0.0,
+            max_anisotropy: 0,
+            comparison: 1, // never
+            border: 0,
+            min_lod: 0.0,
+            max_lod: f32::MAX,
+            register: 0,
+            space: 0,
+            visibility: Visibility::All,
+        }],
+    };
+    let sp = d
+        .compute_pipeline_from_dxil(&dxil, Some(&root), &CompileOptions::default())
+        .unwrap();
+    let e = &sp.reflection.layout.entries;
+    eprintln!("{e:?}");
+    // Table, root UAV, then the table of the static samplers.
+    assert_eq!(e.len(), 3);
+    assert_eq!((e[0].kind, e[0].offset, e[0].size), (ArgKind::Table, 0, 8));
+    assert_eq!((e[1].kind, e[1].offset, e[1].size), (ArgKind::Uav, 8, 8));
+    assert_eq!((e[2].kind, e[2].offset, e[2].size), (ArgKind::Table, 16, 8));
+    assert_eq!(sp.reflection.layout.static_sampler_table, Some(2));
+    assert!(!sp.reflection.uses_resource_heap && !sp.reflection.uses_sampler_heap);
+}

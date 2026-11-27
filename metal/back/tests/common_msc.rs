@@ -15,25 +15,41 @@ use std::process::Command;
 /// DXIL of `hlsl` for `profile` (e.g. `cs_6_6`), or `None` when no DXC is
 /// configured.
 pub fn dxil(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
+    match dxil_result(name, profile, hlsl)? {
+        Ok(b) => Some(b),
+        Err(e) => panic!("DXC refused {name}: {e}"),
+    }
+}
+
+/// As [`dxil`], with DXC's refusal as a value (`Err(its message)`).
+pub fn dxil_result(name: &str, profile: &str, hlsl: &str) -> Option<Result<Vec<u8>, String>> {
     let helper = std::env::var_os("VICTORY_HELPER_DXC")?;
     std::env::var_os("DXC_LIB")?;
-    let dir: PathBuf = std::env::temp_dir().join(format!("victory-msc-{}", std::process::id()));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("victory-msc-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join(format!("{name}.hlsl"));
     let out = dir.join(format!("{name}.dxil"));
     std::fs::write(&src, hlsl).unwrap();
-    let status = Command::new("/usr/bin/arch")
+    let run = Command::new("/usr/bin/arch")
         .arg("-x86_64")
         .arg(helper)
         .args(["-T", profile, "-E", "main", "-Fo"])
         .arg(&out)
         .arg(&src)
-        .status()
+        .output()
         .expect("run the DXC front end");
-    assert!(status.success(), "DXC refused {name}");
-    let bytes = std::fs::read(&out).unwrap();
+    let result = if run.status.success() {
+        Ok(std::fs::read(&out).unwrap())
+    } else {
+        Err(String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .find(|l| l.contains("error"))
+            .unwrap_or("compilation failed")
+            .to_owned())
+    };
     let _ = std::fs::remove_dir_all(&dir);
-    Some(bytes)
+    Some(result)
 }
 
 /// The DXIL, or a `SKIPPED` line and `None`.
