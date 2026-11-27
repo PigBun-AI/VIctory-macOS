@@ -9,7 +9,11 @@
 use victory_metal_proto::PROTO_VERSION;
 use victory_metal_proto::registry::layout_fingerprint;
 
-const PINNED: &[(u32, u64)] = &[(1, 0xa028_6369_07f7_87a9), (2, 0x8de9_d9a2_a9f0_459a)];
+const PINNED: &[(u32, u64)] = &[
+    (1, 0xa028_6369_07f7_87a9),
+    (2, 0x8de9_d9a2_a9f0_459a),
+    (3, 0x80fe_3b15_5a4b_498c),
+];
 
 #[test]
 fn fingerprint_matches_the_pinned_one_for_this_version() {

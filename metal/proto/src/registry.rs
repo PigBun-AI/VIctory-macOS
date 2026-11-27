@@ -256,6 +256,12 @@ pub static COMMANDS: &[CommandInfo] = &[
         I,
         "clear a texture UAV (mip, slices, optional rectangle) with float or uint values",
     ),
+    command::<crate::indirect::ExecuteIndirectHead>(
+        Opcode::EXECUTE_INDIRECT,
+        true,
+        I,
+        "ExecuteIndirect: a signature (num_args IndirectArg of 16 bytes follow) and the buffers it reads",
+    ),
     command::<cmd::SyncRecordHead>(
         Opcode::SYNC_RECORD,
         true,
