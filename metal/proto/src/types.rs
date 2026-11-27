@@ -114,7 +114,7 @@ open_enum! {
 }
 
 open_enum! {
-    /// What a [`TextureLocation`] names.
+    /// What a `TextureLocation` names.
     pub struct LocKind(u8) {
         /// One subresource of a texture: `res`, `plane`, `mip`, `slice`.
         SUBRESOURCE = 0,
