@@ -560,6 +560,7 @@ struct EC { ulong va; texturecube<float> tex; ulong md; };\n\
 struct EW { ulong va; texture2d<float, access::read_write> tex; ulong md; };\n\
 struct EWU { ulong va; texture2d<uint, access::read_write> tex; ulong md; };\n\
 struct ED { ulong va; depth2d<float> tex; ulong md; };\n\
+struct E1 { ulong va; texture1d<float, access::read_write> tex; ulong md; };\n\
 struct ES { sampler s; ulong tex; ulong md; };\n\
 struct P { uint index; uint x; uint y; uint z; };\n\
 kernel void read_f(device const EF* heap [[buffer(0)]], device float4* out [[buffer(1)]], \
@@ -579,6 +580,8 @@ device float4* out [[buffer(1)]], constant float4& uv [[buffer(2)]]) {\n\
   out[0] = float4(heap[0].tex.sample_compare(sheap[0].s, uv.xy, uv.z, level(0)), 0, 0, 0); }\n\
 kernel void write_f(device const EW* heap [[buffer(0)]], uint2 t [[thread_position_in_grid]]) {\n\
   heap[0].tex.write(float4(float(t.x), float(t.y), 7.0, 1.0), t); }\n\
+kernel void write_1d(device const E1* heap [[buffer(0)]], uint t [[thread_position_in_grid]]) {\n\
+  heap[0].tex.write(float4(float(t) * 0.25, 0, 0, 1), t); }\n\
 kernel void write_u(device const EWU* heap [[buffer(0)]], uint2 t [[thread_position_in_grid]]) {\n\
   heap[0].tex.write(uint4(t.x + 1u, t.y + 1u, 3u, 4u), t); }\n";
 
@@ -716,6 +719,140 @@ fn typeless_textures_are_viewed_in_other_formats() {
     rig.srv(1, t.view(&s).unwrap());
     assert_eq!(rig.read_f("read_f", &[0, 0, 0, 0])[0], 1.5);
     assert_eq!(rig.read_u("read_u", &[1, 0, 0, 0])[0], 1.5f32.to_bits());
+}
+
+/// Regression (victory-gpu `a_depth_texture_written_through_unordered_views_reads_as_depth`):
+/// a shader reads the stencil plane as D3D12 shows it, in the green channel
+/// (`X32_TYPELESS_G8X24_UINT`). Metal's stencil view has it in red; without the
+/// mapping the shader read 0 and nothing failed.
+#[test]
+fn the_stencil_plane_reads_in_the_green_channel() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc::tex2d(
+            dxgi::D32_FLOAT_S8X24_UINT,
+            8,
+            8,
+            DS | SRV,
+        ))
+        .unwrap();
+    let stencil = pattern(64, 5);
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &stencil).unwrap();
+    let mut l = q.begin_list().unwrap();
+    let mut p1 = loc(&t, 0, 0);
+    p1.plane = 1;
+    l.copy_buffer_to_texture(&p1, &buf_loc(&up, dxgi::R8_TYPELESS, 8, 8), [8, 8, 1])
+        .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    // The view the executor makes for a plane-1 SRV of the identity mapping.
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.format = dxgi::X32_TYPELESS_G8X24_UINT;
+    spec.plane = 1;
+    spec.swizzle = victory_metal_back::texture::stencil_plane_swizzle(SWIZZLE_IDENTITY);
+    assert_eq!(spec.swizzle, [4, 0, 4, 5]);
+    rig.srv(0, t.view(&spec).unwrap());
+    for (x, y) in [(0u32, 0u32), (5, 0), (3, 4), (7, 7)] {
+        let v = rig.read_u("read_u", &[0, x, y, 0]);
+        assert_eq!(
+            v,
+            [0, u32::from(stencil[(y * 8 + x) as usize]), 0, 1],
+            "texel {x},{y}"
+        );
+    }
+    // Without the mapping Metal's own view has the stencil in red (the bug).
+    spec.swizzle = SWIZZLE_IDENTITY;
+    rig.srv(1, t.view(&spec).unwrap());
+    let raw = rig.read_u("read_u", &[1, 5, 0, 0]);
+    assert_eq!(raw[0], u32::from(stencil[5]));
+    assert_eq!(raw[1], 0);
+    // The application's own mapping chooses from D3D12's channels: .rrrr is
+    // the red channel, which the stencil format leaves at 0.
+    assert_eq!(
+        victory_metal_back::texture::stencil_plane_swizzle([0; 4]),
+        [4, 4, 4, 4]
+    );
+    assert_eq!(
+        victory_metal_back::texture::stencil_plane_swizzle([1, 1, 1, 5]),
+        [0, 0, 0, 5]
+    );
+}
+
+/// `B8G8R8X8` is BGRA in Metal: the bytes are the same, the channel order is
+/// right, and a shader view reads the unused byte as 1 (D3D12 never shows it).
+#[test]
+fn the_unused_channel_of_a_bgrx_texture_reads_as_one() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc::tex2d(dxgi::B8G8R8X8_UNORM, 4, 4, SRV))
+        .unwrap();
+    // Every texel B=0x40 G=0x80 R=0xC0 and the unused byte 0.
+    let mut bytes = Vec::new();
+    for _ in 0..16 {
+        bytes.extend_from_slice(&[0x40, 0x80, 0xC0, 0x00]);
+    }
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &bytes).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &loc(&t, 0, 0),
+        &buf_loc(&up, dxgi::B8G8R8X8_UNORM, 16, 4),
+        [4, 4, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.swizzle = victory_metal_back::texture::unused_alpha_swizzle(SWIZZLE_IDENTITY);
+    assert_eq!(spec.swizzle, [0, 1, 2, 5]);
+    rig.srv(0, t.view(&spec).unwrap());
+    let v = rig.read_f("read_f", &[0, 1, 1, 0]);
+    assert!((v[0] - 192.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert!((v[1] - 128.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert!((v[2] - 64.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert_eq!(v[3], 1.0);
+    // The application's mapping still chooses: alpha everywhere.
+    assert_eq!(
+        victory_metal_back::texture::unused_alpha_swizzle([3, 3, 3, 3]),
+        [5, 5, 5, 5]
+    );
+}
+
+/// A texture made castable (`CreateCommittedResource3`'s list) shows its
+/// texels in another format family of the same size: one memory, no copy.
+#[test]
+fn a_castable_texture_is_read_in_another_format_family() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    // R32_UINT holding the bits of 1.5f.
+    let t = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, SRV | 16))
+        .unwrap();
+    let bytes: Vec<u8> = (0..16).flat_map(|_| 1.5f32.to_le_bytes()).collect();
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &bytes).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &loc(&t, 0, 0),
+        &buf_loc(&up, dxgi::R32_UINT, 16, 4),
+        [4, 4, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.format = dxgi::R32_FLOAT;
+    rig.srv(0, t.view(&spec).unwrap());
+    assert_eq!(rig.read_f("read_f", &[0, 1, 1, 0])[0], 1.5);
+    // The same texture made without the flag refuses the view.
+    let plain = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, SRV))
+        .unwrap();
+    spec.format = dxgi::R9G9B9E5_SHAREDEXP;
+    assert!(plain.view(&spec).is_err());
 }
 
 #[test]
@@ -1380,4 +1517,42 @@ fn clears_that_cannot_be_done_exactly_are_refused() {
         do_clear(&q, &d, &no_uav, &clear_req([0; 4], false)),
         Err(Error::BadArgument(_))
     ));
+}
+
+/// A 1D texture written through a shader view and read back through another:
+/// the view of a 1D texture is a `texture1d`, whole-texture views included.
+#[test]
+fn a_1d_texture_is_written_and_read_through_views() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc {
+            dim: TexDim::D1,
+            format: dxgi::R32_FLOAT,
+            width: 4096,
+            height: 1,
+            depth_or_array: 1,
+            mips: 1,
+            samples: 1,
+            usage: SRV | UAV,
+        })
+        .unwrap();
+    let id = t.view(&ViewSpec::whole(ViewDim::D1)).unwrap();
+    rig.heap
+        .write(0, IrDescriptorTableEntry::texture(id, 0.0, 0))
+        .unwrap();
+    rig.run_kernel("write_1d", &[0, 0, 0, 0], [512, 1, 1], [8, 1, 1]);
+    let out = d.create_buffer(BufferKind::Readback, 4096 * 4).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&out, dxgi::R32_FLOAT, 4096 * 4, 1),
+        &loc(&t, 0, 0),
+        [4096, 1, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let w = out.read_u32s(0, 4096).unwrap();
+    assert_eq!(f32::from_bits(w[135]), 135.0 * 0.25);
+    assert_eq!(f32::from_bits(w[4095]), 4095.0 * 0.25);
 }

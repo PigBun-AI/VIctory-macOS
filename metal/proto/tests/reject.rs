@@ -302,6 +302,75 @@ fn bad_values_inside_a_good_frame() {
 }
 
 #[test]
+fn execute_indirect_rules_are_enforced() {
+    use victory_metal_proto::ids::*;
+    use victory_metal_proto::indirect::*;
+    use victory_metal_proto::wire::Wire;
+    let sig = |args: &[IndirectArg]| {
+        let mut v = Vec::new();
+        for a in args {
+            Wire::put(a, &mut v);
+        }
+        v
+    };
+    let arg = |kind, index, dest_offset, count| IndirectArg {
+        kind,
+        index,
+        dest_offset,
+        count,
+    };
+    let dispatch = arg(IndirectArgKind::DISPATCH, 0, 0, 0);
+    let constants = arg(IndirectArgKind::CONSTANT, 1, 0, 2);
+    let cmd = |signature: &[u8], stride, root_sig| {
+        let c = Command::ExecuteIndirect(ExecuteIndirect {
+            args: ResId(1),
+            args_offset: 0,
+            count: ResId::NULL,
+            count_offset: 0,
+            max_count: 4,
+            stride,
+            root_sig,
+            signature,
+        });
+        victory_metal_proto::Encoder::new(Caps::NONE).push(&c)
+    };
+    // Good: the root signature is there when a root argument is.
+    assert!(cmd(&sig(&[dispatch]), 12, RootSigId::NULL).is_ok());
+    assert!(cmd(&sig(&[constants, dispatch]), 20, RootSigId(1)).is_ok());
+    // Root arguments without a root signature, and the other way round.
+    assert!(cmd(&sig(&[constants, dispatch]), 20, RootSigId::NULL).is_err());
+    assert!(cmd(&sig(&[dispatch]), 12, RootSigId(1)).is_err());
+    // The action is last and alone; there is one.
+    assert!(cmd(&sig(&[dispatch, constants]), 20, RootSigId(1)).is_err());
+    assert!(cmd(&sig(&[dispatch, dispatch]), 24, RootSigId::NULL).is_err());
+    assert!(cmd(&sig(&[constants]), 8, RootSigId(1)).is_err());
+    assert!(cmd(&[], 12, RootSigId::NULL).is_err());
+    // A stride that does not hold the record, or is not whole words.
+    assert!(cmd(&sig(&[constants, dispatch]), 16, RootSigId(1)).is_err());
+    assert!(cmd(&sig(&[dispatch]), 14, RootSigId::NULL).is_err());
+    // Kinds this proto does not know; the graphics ones are known.
+    assert!(
+        cmd(
+            &sig(&[arg(IndirectArgKind(77), 0, 0, 0)]),
+            16,
+            RootSigId::NULL
+        )
+        .is_err()
+    );
+    assert!(
+        cmd(
+            &sig(&[arg(IndirectArgKind::DRAW, 0, 0, 0)]),
+            16,
+            RootSigId::NULL
+        )
+        .is_ok()
+    );
+    // Too many constants for the root.
+    let big = arg(IndirectArgKind::CONSTANT, 0, 0, 65);
+    assert!(cmd(&sig(&[big, dispatch]), 300, RootSigId(1)).is_err());
+}
+
+#[test]
 fn header_checks() {
     let good = synthetic_compute();
     assert!(Decoder::new(&good).is_ok());

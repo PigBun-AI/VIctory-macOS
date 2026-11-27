@@ -164,7 +164,7 @@ impl TextureDesc {
                 return bad("multisampling a compressed format".into());
             }
         }
-        if self.usage & !0xF != 0 {
+        if self.usage & !0x1F != 0 {
             return bad("unknown usage bits".into());
         }
         if self.usage & 0b1100 != 0 && self.dim == TexDim::D3 && f.has_depth_stencil() {
@@ -233,6 +233,27 @@ impl ViewDim {
 
 /// Component sources of a swizzle: 0-3 = R, G, B, A, 4 = zero, 5 = one.
 pub const SWIZZLE_IDENTITY: [u8; 4] = [0, 1, 2, 3];
+
+/// The component sources of a swizzle (`[R, G, B, A]` as in [`ViewSpec::swizzle`]) after the
+/// stencil plane's own mapping has been applied underneath it.
+///
+/// D3D12 shows the stencil of a depth-stencil texture through
+/// `X32_TYPELESS_G8X24_UINT` / `X24_TYPELESS_G8_UINT` in the **green** channel
+/// (red, blue read 0, alpha 1); Metal's stencil-only view (`X32_Stencil8`) has
+/// it in **red**. A view of plane 1 therefore starts from `[Zero, R, Zero, One]`
+/// and the application's component mapping selects from that.
+pub fn stencil_plane_swizzle(app: [u8; 4]) -> [u8; 4] {
+    // What each D3D12 channel of the stencil format holds, as Metal sources.
+    const BASE: [u8; 4] = [4, 0, 4, 5];
+    app.map(|c| if c < 4 { BASE[c as usize] } else { c })
+}
+
+/// The component sources of a shader view of an `B8G8R8X8` format after the
+/// unused channel reads 1 underneath the application's mapping.
+pub fn unused_alpha_swizzle(app: [u8; 4]) -> [u8; 4] {
+    const BASE: [u8; 4] = [0, 1, 2, 5];
+    app.map(|c| if c < 4 { BASE[c as usize] } else { c })
+}
 
 /// Which part of a texture a descriptor shows and how.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

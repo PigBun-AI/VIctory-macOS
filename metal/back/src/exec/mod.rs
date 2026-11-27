@@ -46,9 +46,11 @@
 mod dxil;
 mod gfx;
 mod handles;
+mod indirect;
 mod stream;
 mod sync;
 pub mod tlab;
+mod trace;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -106,6 +108,17 @@ pub(crate) struct RootSig {
     pub(crate) static_samplers: Vec<crate::sampler::Sampler>,
 }
 
+impl RootSig {
+    /// D3D12's rule for a pipeline and a bound root signature: the same
+    /// object, or one with an identical description (two `CreateRootSignature`
+    /// calls on the same bytes give two objects, and a pipeline made with one
+    /// runs under the other). The argument buffer layout must agree too: it
+    /// is what the compiled shader reads.
+    pub(crate) fn compatible_with(self: &Arc<Self>, other: &Arc<RootSig>) -> bool {
+        Arc::ptr_eq(self, other) || (self.desc == other.desc && self.layout == other.layout)
+    }
+}
+
 /// A pipeline state: compute or graphics (vertex or mesh), made for one
 /// root signature.
 pub(crate) struct Pso {
@@ -149,6 +162,7 @@ pub(crate) struct State {
     /// because a descriptor holds only the state's id.
     pub(crate) samplers: std::collections::HashMap<String, crate::sampler::Sampler>,
     pub(crate) clear_kernels: crate::clear::ClearKernels,
+    pub(crate) indirect_kernels: crate::indirect::Kernels,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,
@@ -283,6 +297,7 @@ impl Executor {
 
     /// One block of commands (`Link::submit`): one `ExecuteCommandLists`.
     pub fn submit(&self, block: &[u8]) -> Status {
+        trace::block(block);
         // The whole block is checked before anything runs.
         let header = match stream::validate(block) {
             Ok(caps) => caps,
@@ -300,6 +315,11 @@ impl Executor {
             st.run_block(block)
         };
         st.device.maintain();
+        let note = st.note.take();
+        drop(g);
+        if let Some(n) = note {
+            self.note_error(n);
+        }
         status
     }
 

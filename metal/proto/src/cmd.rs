@@ -45,6 +45,9 @@ open_enum! {
         COPY_RESOURCE = 0x0401,
         CLEAR_UAV_TEXTURE = 0x0402,
 
+        /// `ExecuteIndirect` ([`crate::indirect`]).
+        EXECUTE_INDIRECT = 0x0800,
+
         SYNC_RECORD = 0x0F00,
         BUFFER_DATA = 0x0F01,
     }
@@ -65,7 +68,11 @@ pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
         "render passes and render-encoder bindings (M3, m3-gfx)",
     ),
     (0x0700, 0x07FF, "present (M3)"),
-    (0x0800, 0x08FF, "queries and timestamps (M2)"),
+    (
+        0x0801,
+        0x08FF,
+        "queries, timestamps, other compute-side commands (m4-compute)",
+    ),
     (0x0900, 0x09FF, "ExecuteIndirect (M2)"),
 ];
 
@@ -90,7 +97,7 @@ pub const MAX_LABEL: usize = 1024;
 pub const fn opcode_version(op: Opcode) -> u8 {
     match op.0 {
         0x0001..=0x0005 | 0x0100..=0x0105 | 0x0200 | 0x0201 | 0x0210..=0x0212 | 0x0300 => 1,
-        0x0400..=0x0402 => 1,
+        0x0400..=0x0402 | 0x0800 => 1,
         0x0F00 | 0x0F01 => 1,
         _ => 0,
     }
@@ -469,6 +476,7 @@ pub enum Command<'a> {
     CopyTextureRegion(CopyTextureRegion),
     CopyResource(CopyResource),
     ClearUavTexture(ClearUavTexture),
+    ExecuteIndirect(crate::indirect::ExecuteIndirect<'a>),
     SyncRecord(SyncRecord<'a>),
     BufferData(BufferData<'a>),
 }
@@ -511,6 +519,7 @@ impl Command<'_> {
             Command::CopyTextureRegion(_) => Opcode::COPY_TEXTURE_REGION,
             Command::CopyResource(_) => Opcode::COPY_RESOURCE,
             Command::ClearUavTexture(_) => Opcode::CLEAR_UAV_TEXTURE,
+            Command::ExecuteIndirect(_) => Opcode::EXECUTE_INDIRECT,
             Command::SyncRecord(_) => Opcode::SYNC_RECORD,
             Command::BufferData(_) => Opcode::BUFFER_DATA,
         }
@@ -573,6 +582,7 @@ impl Command<'_> {
                 }
                 Ok(())
             }
+            Command::ExecuteIndirect(c) => c.check(),
             Command::SyncRecord(r) if r.args.len() > MAX_PAYLOAD || r.blob.len() > MAX_PAYLOAD => {
                 Err(Error::TooLarge)
             }
@@ -629,6 +639,10 @@ impl Command<'_> {
             Command::CopyTextureRegion(c) => c.put(out),
             Command::CopyResource(c) => c.put(out),
             Command::ClearUavTexture(c) => c.put(out),
+            Command::ExecuteIndirect(c) => {
+                c.head().put(out);
+                out.extend_from_slice(c.signature);
+            }
             Command::SyncRecord(c) => {
                 SyncRecordHead {
                     op: c.op,
@@ -750,6 +764,27 @@ pub fn decode_one<'a>(buf: &'a [u8]) -> Result<(Command<'a>, usize), Error> {
         Opcode::COPY_TEXTURE_REGION => fixed!(CopyTextureRegion, CopyTextureRegion),
         Opcode::COPY_RESOURCE => fixed!(CopyResource, CopyResource),
         Opcode::CLEAR_UAV_TEXTURE => fixed!(ClearUavTexture, ClearUavTexture),
+        Opcode::EXECUTE_INDIRECT => {
+            use crate::indirect::{
+                ExecuteIndirect, ExecuteIndirectHead, IndirectArg, MAX_INDIRECT_ARGS,
+            };
+            let head = ExecuteIndirectHead::get(&mut r)?;
+            let n = head.num_args as usize;
+            if n > MAX_INDIRECT_ARGS {
+                return Err(bad_len);
+            }
+            let bytes = n * IndirectArg::SIZE;
+            Command::ExecuteIndirect(ExecuteIndirect::from_head(
+                head,
+                tail(
+                    &mut r,
+                    ExecuteIndirectHead::SIZE,
+                    bytes,
+                    payload_len,
+                    bad_len,
+                )?,
+            ))
+        }
         Opcode::SYNC_RECORD => {
             let head = SyncRecordHead::get(&mut r)?;
             let (a, b) = (head.args_len as usize, head.blob_len as usize);
