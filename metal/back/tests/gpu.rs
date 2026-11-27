@@ -427,6 +427,36 @@ fn run_chain(
     )
 }
 
+/// A new encoder has no pipeline set: the same pipeline dispatched again
+/// after the encoder was ended (a split, or a render pass in between) must
+/// be set on it again. Without that the driver dereferences a nil pipeline
+/// state and the process faults (the game's `INTERNAL` submit, a compute
+/// dispatch after a render pass, 2026-11-27).
+#[test]
+fn the_same_pipeline_is_set_again_on_a_new_encoder() {
+    let (_g, d) = setup();
+    let q = Queue::new(&d).unwrap();
+    let p = d.compute_pipeline_from_msl(SLOW_A, "plus_one").unwrap();
+    let bufs: Vec<_> = (0..3)
+        .map(|_| d.create_buffer(BufferKind::Shared, 256).unwrap())
+        .collect();
+    bufs[0].write_u32s(0, &[41]).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.set_address(0, bufs[0].gpu_va()).unwrap();
+    l.set_address(1, bufs[1].gpu_va()).unwrap();
+    l.dispatch(&p, [1, 1, 1], [1, 1, 1]).unwrap();
+    l.barrier(DISPATCH, DISPATCH, VIS_DEVICE).unwrap();
+    l.split_encoder().unwrap();
+    l.set_address(0, bufs[1].gpu_va()).unwrap();
+    l.set_address(1, bufs[2].gpu_va()).unwrap();
+    l.dispatch(&p, [1, 1, 1], [1, 1, 1]).unwrap();
+    l.end().unwrap();
+    assert_eq!(l.stats().encoders, 2);
+    submit_wait(&q, l);
+    assert_eq!(bufs[1].read_u32s(0, 1).unwrap()[0], 42);
+    assert_eq!(bufs[2].read_u32s(0, 1).unwrap()[0], 43);
+}
+
 #[test]
 fn barrier_between_dependent_dispatches_orders_them() {
     let (_g, d) = setup();

@@ -223,6 +223,302 @@ fn bc_formats_copy_in_blocks_including_odd_and_tiny_mips() {
     }
 }
 
+/// D3D12 gives the footprint of a mip smaller than a block as one whole
+/// block (a 2x2 or 1x1 mip of a BC texture is 4x4 in `GetCopyableFootprints`)
+/// and `CopyTextureRegion` takes it: the game's streaming of BC mips does.
+/// The region then reaches past the mip's texel size, up to its block-rounded
+/// size, and nothing is refused.
+#[test]
+fn a_bc_footprint_of_a_mip_smaller_than_a_block_is_one_whole_block() {
+    let (_g, d, q) = setup();
+    for (fmt, block) in [
+        (dxgi::BC1_UNORM, 8u32),
+        (dxgi::BC4_UNORM, 8),
+        (dxgi::BC5_SNORM, 16),
+        (dxgi::BC7_UNORM, 16),
+    ] {
+        // 16x16 with a full chain: mips 3 (2x2) and 4 (1x1) are inside one block.
+        let desc = TextureDesc {
+            dim: TexDim::D2,
+            format: fmt,
+            width: 16,
+            height: 16,
+            depth_or_array: 1,
+            mips: 5,
+            samples: 1,
+            usage: SRV,
+        };
+        let t = d.create_texture(&desc).unwrap();
+        for mip in 2..5 {
+            let img = pattern(block as usize, fmt * 13 + mip);
+            let src = d
+                .create_buffer(BufferKind::Upload, u64::from(block))
+                .unwrap();
+            src.write(0, &img).unwrap();
+            let mut l = q.begin_list().unwrap();
+            l.copy_buffer_to_texture(&loc(&t, mip, 0), &buf_loc(&src, fmt, block, 4), [4, 4, 1])
+                .unwrap_or_else(|e| {
+                    panic!("format {fmt} mip {mip}: upload of the 4x4 footprint: {e}")
+                });
+            l.end().unwrap();
+            run(&q, l);
+            let dst = d
+                .create_buffer(BufferKind::Readback, u64::from(block))
+                .unwrap();
+            let mut l = q.begin_list().unwrap();
+            l.copy_texture_to_buffer(&buf_loc(&dst, fmt, block, 4), &loc(&t, mip, 0), [4, 4, 1])
+                .unwrap_or_else(|e| {
+                    panic!("format {fmt} mip {mip}: download of the 4x4 footprint: {e}")
+                });
+            l.end().unwrap();
+            run(&q, l);
+            let mut got = vec![0u8; block as usize];
+            dst.read(0, &mut got).unwrap();
+            assert_eq!(got, img, "format {fmt} mip {mip}");
+        }
+        // Past the rounded size is still an error.
+        let src = d.create_buffer(BufferKind::Upload, 256).unwrap();
+        let mut l = q.begin_list().unwrap();
+        assert!(
+            l.copy_buffer_to_texture(&loc(&t, 3, 0), &buf_loc(&src, fmt, 2 * block, 4), [8, 4, 1])
+                .is_err(),
+            "8 wide on a 2x2 mip"
+        );
+    }
+}
+
+/// A BC texture and an uncompressed texture whose texel is a block
+/// (`R32G32B32A32_UINT` for BC2/3/5/6H/7, `R32G32_UINT` for BC1/4): the
+/// original API copies between them, the region counted in the source's
+/// texels. Both ways, whole and partial, to the byte.
+#[test]
+fn bc_and_block_sized_uncompressed_textures_copy_into_each_other() {
+    let (_g, d, q) = setup();
+    for (bc, raw, block) in [
+        (dxgi::BC3_UNORM_SRGB, dxgi::R32G32B32A32_UINT, 16u32),
+        (dxgi::BC7_UNORM, dxgi::R32G32B32A32_UINT, 16),
+        (dxgi::BC1_UNORM, dxgi::R32G32_UINT, 8),
+    ] {
+        let mk = |format, w, h| {
+            d.create_texture(&TextureDesc {
+                dim: TexDim::D2,
+                format,
+                width: w,
+                height: h,
+                depth_or_array: 1,
+                mips: 1,
+                samples: 1,
+                usage: SRV,
+            })
+            .unwrap()
+        };
+        let (blocks_w, blocks_h) = (4u32, 4u32);
+        let bc_tex = mk(bc, 4 * blocks_w, 4 * blocks_h);
+        let raw_tex = mk(raw, blocks_w, blocks_h);
+        let pitch = blocks_w * block;
+        let img = pattern((pitch * blocks_h) as usize, bc * 3 + 1);
+        upload(&d, &q, &raw_tex, 0, 0, &img, pitch);
+        // Uncompressed to compressed, whole (the size is in source texels).
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture(
+            &loc(&bc_tex, 0, 0),
+            &loc(&raw_tex, 0, 0),
+            [blocks_w, blocks_h, 1],
+        )
+        .unwrap_or_else(|e| panic!("{bc} <- {raw}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        assert_eq!(download(&d, &q, &bc_tex, 0, 0, pitch), img, "{bc} <- {raw}");
+        // Compressed to uncompressed, whole (the size is in the BC texels).
+        let back = mk(raw, blocks_w, blocks_h);
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture(
+            &loc(&back, 0, 0),
+            &loc(&bc_tex, 0, 0),
+            [4 * blocks_w, 4 * blocks_h, 1],
+        )
+        .unwrap_or_else(|e| panic!("{raw} <- {bc}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        assert_eq!(download(&d, &q, &back, 0, 0, pitch), img, "{raw} <- {bc}");
+        // A part: 2x2 texels of the uncompressed one from (1,1) to the block (2,2).
+        let other = mk(bc, 4 * blocks_w, 4 * blocks_h);
+        let zero = vec![0u8; (pitch * blocks_h) as usize];
+        upload_bc_zero(&d, &q, &other, &zero, pitch);
+        let mut l = q.begin_list().unwrap();
+        let src = TexLoc {
+            origin: [1, 1, 0],
+            ..loc(&raw_tex, 0, 0)
+        };
+        let dst = TexLoc {
+            origin: [8, 8, 0],
+            ..loc(&other, 0, 0)
+        };
+        l.copy_texture(&dst, &src, [2, 2, 1])
+            .unwrap_or_else(|e| panic!("part {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        let got = download(&d, &q, &other, 0, 0, pitch);
+        let mut want = zero.clone();
+        for by in 0..2u32 {
+            for bx in 0..2u32 {
+                let from = ((1 + by) * pitch + (1 + bx) * block) as usize;
+                let to = ((2 + by) * pitch + (2 + bx) * block) as usize;
+                want[to..to + block as usize].copy_from_slice(&img[from..from + block as usize]);
+            }
+        }
+        assert_eq!(got, want, "part of {raw} into {bc}");
+    }
+}
+
+fn upload_bc_zero(d: &Device, q: &Queue, t: &Texture, data: &[u8], pitch: u32) {
+    upload(d, q, t, 0, 0, data, pitch);
+}
+
+/// `CopyResource` between a typeless texture and a view-format sibling of its
+/// family (`R8G8B8A8_TYPELESS` and `R8G8B8A8_UNORM_SRGB`, the game's
+/// 853x480 copy): the bytes move as they are, every mip and slice, both ways.
+#[test]
+fn copy_resource_between_formats_of_one_family_moves_the_bytes() {
+    let (_g, d, q) = setup();
+    for (a, b) in [
+        (dxgi::R8G8B8A8_TYPELESS, dxgi::R8G8B8A8_UNORM_SRGB),
+        (dxgi::R8G8B8A8_UNORM_SRGB, dxgi::R8G8B8A8_TYPELESS),
+    ] {
+        let mk = |format| {
+            d.create_texture(&TextureDesc {
+                dim: TexDim::D2,
+                format,
+                width: 37,
+                height: 21,
+                depth_or_array: 2,
+                mips: 3,
+                samples: 1,
+                usage: SRV,
+            })
+            .unwrap()
+        };
+        let (src, dst) = (mk(a), mk(b));
+        let mut imgs = Vec::new();
+        for slice in 0..2 {
+            for mip in 0..3 {
+                let [w, h, _] = src.desc().mip_size(mip);
+                let img = pattern((w * h * 4) as usize, a * 5 + slice * 3 + mip);
+                upload(&d, &q, &src, mip, slice, &img, w * 4);
+                imgs.push((mip, slice, w, img));
+            }
+        }
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture_resource(&dst, &src)
+            .unwrap_or_else(|e| panic!("{a} -> {b}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        for (mip, slice, w, img) in imgs {
+            assert_eq!(
+                download(&d, &q, &dst, mip, slice, w * 4),
+                img,
+                "{a} -> {b} mip {mip} slice {slice}"
+            );
+        }
+    }
+}
+
+/// One plane of a depth-stencil texture copies to the same plane of another,
+/// or its depth plane to a depth-only texture (the game's copy of plane 0 of an
+/// `R32G8X24_TYPELESS` texture into an `R32_TYPELESS` one); the other plane
+/// stays as it was.
+#[test]
+fn one_depth_stencil_plane_copies_to_a_plane_or_a_depth_only_texture() {
+    let (_g, d, q) = setup();
+    let mk = |format| {
+        d.create_texture(&TextureDesc::tex2d(format, 8, 8, DS | SRV))
+            .unwrap()
+    };
+    let (src, dst, only) = (
+        mk(dxgi::D32_FLOAT_S8X24_UINT),
+        mk(dxgi::D32_FLOAT_S8X24_UINT),
+        mk(dxgi::D32_FLOAT),
+    );
+    let depth: Vec<u8> = (0..64u32)
+        .flat_map(|i| (i as f32 / 64.0).to_le_bytes())
+        .collect();
+    let (stencil, old_stencil) = (pattern(64, 11), pattern(64, 12));
+    let up = |bytes: &[u8]| {
+        let b = d
+            .create_buffer(BufferKind::Upload, bytes.len().max(256) as u64)
+            .unwrap();
+        b.write(0, bytes).unwrap();
+        b
+    };
+    let (up_d, up_s, up_o) = (up(&depth), up(&stencil), up(&old_stencil));
+    let plane = |t, plane| TexLoc {
+        plane,
+        ..loc(t, 0, 0)
+    };
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&src, 0),
+        &buf_loc(&up_d, dxgi::R32_TYPELESS, 32, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&src, 1),
+        &buf_loc(&up_s, dxgi::R8_TYPELESS, 8, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&dst, 1),
+        &buf_loc(&up_o, dxgi::R8_TYPELESS, 8, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    // The depth plane only: the destination's stencil is not touched.
+    l.copy_texture(&plane(&dst, 0), &plane(&src, 0), [8, 8, 1])
+        .unwrap_or_else(|e| panic!("depth plane: {e}"));
+    // The depth plane into a depth-only texture.
+    l.copy_texture(&loc(&only, 0, 0), &plane(&src, 0), [8, 8, 1])
+        .unwrap_or_else(|e| panic!("depth plane to D32: {e}"));
+    let (rd, ro, rs) = (
+        d.create_buffer(BufferKind::Readback, 256).unwrap(),
+        d.create_buffer(BufferKind::Readback, 256).unwrap(),
+        d.create_buffer(BufferKind::Readback, 64).unwrap(),
+    );
+    l.copy_texture_to_buffer(
+        &buf_loc(&rd, dxgi::R32_TYPELESS, 32, 8),
+        &plane(&dst, 0),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&ro, dxgi::R32_TYPELESS, 32, 8),
+        &loc(&only, 0, 0),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&rs, dxgi::R8_TYPELESS, 8, 8),
+        &plane(&dst, 1),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let read = |b: &Buffer, n| {
+        let mut got = vec![0u8; n];
+        b.read(0, &mut got).unwrap();
+        got
+    };
+    assert_eq!(read(&rd, 256), depth, "depth plane");
+    assert_eq!(read(&ro, 256), depth, "depth-only texture");
+    assert_eq!(
+        read(&rs, 64),
+        old_stencil,
+        "the stencil plane was not touched"
+    );
+}
+
 #[test]
 fn one_d_and_three_d_textures_round_trip() {
     let (_g, d, q) = setup();

@@ -48,6 +48,7 @@ mod gfx;
 mod handles;
 mod indirect;
 mod present;
+mod render_cmds;
 mod stream;
 mod sync;
 pub mod tlab;
@@ -309,7 +310,15 @@ impl Executor {
         // The whole block is checked before anything runs.
         let header = match stream::validate(block) {
             Ok(caps) => caps,
-            Err(s) => return s,
+            Err(s) => {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    eprintln!(
+                        "victory-metal back: a block of {} bytes was refused before it ran: {s:?}",
+                        block.len()
+                    );
+                }
+                return s;
+            }
         };
         let mut g = lock(&self.state);
         let Some(st) = g.as_mut() else {
@@ -327,6 +336,13 @@ impl Executor {
         drop(g);
         if let Some(n) = note {
             self.note_error(n);
+        } else if status != Status::OK
+            && std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0")
+        {
+            eprintln!(
+                "victory-metal back: a block of {} bytes answered {status:?} with no reason recorded",
+                block.len()
+            );
         }
         status
     }

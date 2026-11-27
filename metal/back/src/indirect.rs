@@ -56,15 +56,19 @@ pub const MAX_RECORDS: u32 = 1 << 16;
 const SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
 struct P { ulong args_va; ulong count_va; ulong base_va; ulong out_tlab_va; ulong out_disp_va; ulong desc_va;\n\
   uint n; uint first; uint stride; uint tlab_words; uint tlab_stride_words; uint ndesc; uint disp_word; uint max_count;\n\
-  uint has_count; uint pad0; uint pad1; uint pad2; };\n\
+  uint has_count; uint act_words; uint out_words; uint index_type; };\n\
 struct D { uint rec_word; uint tlab_word; uint words; uint pad; };\n\
 kernel void expand(constant P& p [[buffer(30)]], uint i [[thread_position_in_grid]]) {\n\
   if (i >= p.n) return;\n\
   uint idx = p.first + i;\n\
-  device uint* disp = ((device uint*)p.out_disp_va) + i * 4;\n\
+  uint ow = p.out_words;\n\
+  uint aw = p.act_words;\n\
+  device uint* disp = ((device uint*)p.out_disp_va) + (ulong)i * (ulong)ow;\n\
   bool live = idx < p.max_count;\n\
   if (p.has_count != 0) { live = live && idx < *(device const uint*)p.count_va; }\n\
-  if (!live) { disp[0] = 0; disp[1] = 0; disp[2] = 0; disp[3] = 0; return; }\n\
+  for (uint k = 0; k < ow; k++) { disp[k] = 0; }\n\
+  if (ow >= 16) { disp[8] = p.index_type; }\n\
+  if (!live) { return; }\n\
   device const uint* rec = (device const uint*)(p.args_va + (ulong)idx * (ulong)p.stride);\n\
   if (p.ndesc != 0) {\n\
     device uint* t = ((device uint*)p.out_tlab_va) + (ulong)i * (ulong)p.tlab_stride_words;\n\
@@ -75,7 +79,7 @@ kernel void expand(constant P& p [[buffer(30)]], uint i [[thread_position_in_gri
       for (uint w = 0; w < d[k].words; w++) { t[d[k].tlab_word + w] = rec[d[k].rec_word + w]; }\n\
     }\n\
   }\n\
-  disp[0] = rec[p.disp_word]; disp[1] = rec[p.disp_word + 1]; disp[2] = rec[p.disp_word + 2]; disp[3] = 0;\n\
+  for (uint k = 0; k < aw; k++) { disp[k] = rec[p.disp_word + k]; }\n\
 }\n";
 
 /// The expansion kernel of a device, compiled on first use.
@@ -132,12 +136,35 @@ pub struct IndirectDispatch<'a> {
     pub roots: &'a [RootCopy],
     /// The list's argument buffer as set so far (what a record starts from).
     pub base: &'a [u8],
+    /// 32-bit words of the action in a record: 3 for a dispatch or a mesh
+    /// dispatch, 4 for a draw, 5 for an indexed draw.
+    pub action_words: u32,
+    /// The action is a vertex-pipeline draw: the expansion also writes the
+    /// converter's draw parameters (a copy of the draw's words, then the
+    /// index type at +32 bytes), so the kernel is always used.
+    pub draws: bool,
+    /// The converter runtime's index type (`IRMetalIndexToIRIndex`) of the
+    /// bound index buffer, for an indexed draw.
+    pub index_type: u32,
+    /// Stages that read what the expansion wrote.
+    pub consumer: u16,
+}
+
+/// One record as the encoder of the action sees it.
+#[derive(Clone, Copy, Debug)]
+pub struct Record {
+    /// Where the action's arguments are: the application's record itself,
+    /// or, after an expansion, the expanded copy (for a draw, its first
+    /// 32 bytes are the arguments, the next the converter's uniforms).
+    pub action_va: u64,
+    /// The argument buffer to bind for this record, when its own copy was made.
+    pub tlab_va: Option<u64>,
 }
 
 impl IndirectDispatch<'_> {
     /// Whether the kernel is needed (otherwise the buffer is dispatched from as it is).
     pub fn needs_kernel(&self) -> bool {
-        self.count.is_some() || !self.roots.is_empty()
+        self.count.is_some() || !self.roots.is_empty() || self.draws
     }
 
     /// Whether the list's argument buffer is replaced by a copy per record.
@@ -165,6 +192,22 @@ impl CommandList {
         pipeline: &ComputePipeline,
         threads: [u32; 3],
         spec: &IndirectDispatch<'_>,
+    ) -> Result<()> {
+        self.execute_indirect_with(kernels, spec, |l, r| {
+            if let Some(t) = r.tlab_va {
+                l.set_root_arguments_va(t)?;
+            }
+            l.encode_dispatch_indirect(pipeline, r.action_va, threads)
+        })
+    }
+
+    /// The records of `spec`, each handed to `encode` after the list's
+    /// argument table has been pointed at what the record needs.
+    pub(crate) fn execute_indirect_with(
+        &mut self,
+        kernels: &Kernels,
+        spec: &IndirectDispatch<'_>,
+        mut encode: impl FnMut(&mut CommandList, Record) -> Result<()>,
     ) -> Result<()> {
         self.live()?;
         if spec.max_count == 0 {
@@ -214,10 +257,12 @@ impl CommandList {
         if !spec.needs_kernel() {
             let base = spec.args.gpu_va() + spec.args_offset + u64::from(spec.dispatch_offset);
             for i in 0..u64::from(spec.max_count) {
-                self.encode_dispatch_indirect(
-                    pipeline,
-                    base + i * u64::from(spec.stride),
-                    threads,
+                encode(
+                    self,
+                    Record {
+                        action_va: base + i * u64::from(spec.stride),
+                        tlab_va: None,
+                    },
                 )?;
             }
             self.keep_buffers.push(spec.args.clone());
@@ -234,7 +279,8 @@ impl CommandList {
         let descs = spec.roots.len() as u64;
         // Ring bytes of a chunk of `k` records.
         let fixed = 96 + (16 * descs).next_multiple_of(16) + tlab_bytes;
-        let per_record = tlab_bytes + 16;
+        let out_bytes: u64 = if spec.draws { 64 } else { 16 };
+        let per_record = tlab_bytes + out_bytes;
         let room = self.queue().constant_segment_bytes();
         let chunk = ((room.saturating_sub(fixed)) / per_record).min(u64::from(CHUNK));
         if chunk == 0 {
@@ -274,9 +320,9 @@ impl CommandList {
                 spec.dispatch_offset / 4,
                 spec.max_count,
                 u32::from(spec.count.is_some()),
-                0,
-                0,
-                0,
+                spec.action_words,
+                (out_bytes / 4) as u32,
+                spec.index_type,
             ] {
                 p.extend_from_slice(&v.to_le_bytes());
             }
@@ -293,12 +339,15 @@ impl CommandList {
             self.set_address(PARAM_SLOT, ring.gpu_va)?;
             self.dispatch(&expand, [k.div_ceil(64) as u32, 1, 1], [64, 1, 1])?;
             // The records' dispatch arguments and argument buffers are read next.
-            self.barrier(DISPATCH, DISPATCH, VIS_DEVICE)?;
+            self.barrier(DISPATCH, spec.consumer, VIS_DEVICE)?;
             for i in 0..k {
-                if replaces {
-                    self.set_root_arguments_va(va(tlabs_at + i * tlab_bytes))?;
-                }
-                self.encode_dispatch_indirect(pipeline, va(disps_at + i * 16), threads)?;
+                encode(
+                    self,
+                    Record {
+                        action_va: va(disps_at + i * out_bytes),
+                        tlab_va: replaces.then(|| va(tlabs_at + i * tlab_bytes)),
+                    },
+                )?;
             }
             first += k;
         }

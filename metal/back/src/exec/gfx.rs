@@ -313,6 +313,7 @@ fn vertex_elements(d: &GraphicsPsoDesc) -> Result<Vec<VertexElement>, Refusal> {
             semantic: e.name().to_owned(),
             semantic_index: e.semantic_index,
             format,
+            dxgi_format: e.format,
             slot: e.slot,
             offset,
             per_instance: e.class == InputClass::PER_INSTANCE,
@@ -323,20 +324,18 @@ fn vertex_elements(d: &GraphicsPsoDesc) -> Result<Vec<VertexElement>, Refusal> {
 }
 
 /// The core's description from the wire's. `code` holds the stages' DXIL (in
-/// the order vs, ps, amp, ms). Everything proto cannot say is checked here.
+/// the order vs, ps, amp, ms, gs). Everything proto cannot say is checked here.
 pub(crate) fn describe<'a>(
     d: &GraphicsPsoDesc,
     root: &'a RootSignatureDesc,
-    code: [Option<&'a [u8]>; 4],
+    code: [Option<&'a [u8]>; 5],
     compat: crate::msc::Compat,
 ) -> Result<GraphicsDesc<'a>, Refusal> {
-    let [vs, ps, amp, ms] = code;
+    let [vs, ps, amp, ms, gs] = code;
     let raster = &d.raster;
-    if raster.conservative != 0 {
-        return Err(Refusal::Unsupported(
-            "conservative rasterization (Metal has none)".into(),
-        ));
-    }
+    // Conservative rasterization: Metal has none. The pipeline is made
+    // without it (a known difference, docs/metal/m4-render.md): the games
+    // ask for it on a few passes where the plain rule only loses edge pixels.
     let blend = &d.blend;
     let mut targets = Vec::new();
     for i in 0..d.rt_count as usize {
@@ -379,6 +378,7 @@ pub(crate) fn describe<'a>(
         ps,
         amp,
         ms,
+        gs,
         root,
         inputs: vertex_elements(d)?,
         targets,
@@ -463,6 +463,7 @@ impl Executor {
             stage_bytes(&d.ps)?,
             stage_bytes(&d.amp)?,
             stage_bytes(&d.ms)?,
+            stage_bytes(&d.gs)?,
         ];
         let desc = describe(d, &sig.msc_desc, code, self.options.compat).map_err(|r| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
@@ -712,7 +713,7 @@ mod tests {
             ..RtBlend::opaque()
         };
         // Not independent: target 0's state for both.
-        let g = describe(&d, &root, [None; 4], crate::msc::Compat::NONE).unwrap();
+        let g = describe(&d, &root, [None; 5], crate::msc::Compat::NONE).unwrap();
         assert!(g.targets[0].blend.enabled);
         assert_eq!(g.targets[0].blend.src_rgb, MTLBlendFactor::SourceAlpha);
         assert!(
@@ -722,7 +723,7 @@ mod tests {
         assert!(g.targets[1].integer);
         d.blend.independent = 1;
         d.blend.rt[0].enable = 0;
-        let g = describe(&d, &root, [None; 4], crate::msc::Compat::NONE).unwrap();
+        let g = describe(&d, &root, [None; 5], crate::msc::Compat::NONE).unwrap();
         assert!(!g.targets[0].blend.enabled);
         assert_eq!(g.targets[1].format, MTLPixelFormat::R32Uint);
     }
@@ -730,30 +731,28 @@ mod tests {
     #[test]
     fn what_metal_lacks_is_refused_by_name() {
         let root = RootSignatureDesc::default();
+        // Conservative rasterization is accepted and ignored.
         let mut d = base();
         d.raster.conservative = 1;
-        assert!(matches!(
-            describe(&d, &root, [None; 4], crate::msc::Compat::NONE),
-            Err(Refusal::Unsupported(t)) if t.contains("conservative")
-        ));
+        assert!(describe(&d, &root, [None; 5], crate::msc::Compat::NONE).is_ok());
         let mut d = base();
         d.rt_count = 1;
         d.rt_formats[0] = dx::R8G8B8A8_UNORM;
         d.blend.rt[0].logic_enable = 1;
         d.blend.rt[0].logic_op = LogicOp::XOR;
         assert!(matches!(
-            describe(&d, &root, [None; 4], crate::msc::Compat::NONE),
+            describe(&d, &root, [None; 5], crate::msc::Compat::NONE),
             Err(Refusal::Unsupported(t)) if t.contains("logic")
         ));
         let mut d = base();
         d.rt_count = 1;
         d.rt_formats[0] = 9999;
-        let r = describe(&d, &root, [None; 4], crate::msc::Compat::NONE);
+        let r = describe(&d, &root, [None; 5], crate::msc::Compat::NONE);
         assert!(matches!(&r, Err(Refusal::Unsupported(t)) if t.contains("9999")));
         assert_eq!(r.err().unwrap().status(), Status::UNSUPPORTED);
         let mut d = base();
         d.ds_format = 9999;
-        assert!(describe(&d, &root, [None; 4], crate::msc::Compat::NONE).is_err());
+        assert!(describe(&d, &root, [None; 5], crate::msc::Compat::NONE).is_err());
     }
 
     #[test]
@@ -770,7 +769,7 @@ mod tests {
         d.topology = TopologyType::LINE;
         d.sample_count = 4;
         d.blend.alpha_to_coverage = 1;
-        let g = describe(&d, &root, [None; 4], crate::msc::Compat::NONE).unwrap();
+        let g = describe(&d, &root, [None; 5], crate::msc::Compat::NONE).unwrap();
         assert_eq!(g.raster.fill, MTLTriangleFillMode::Lines);
         assert_eq!(g.raster.cull, MTLCullMode::Front);
         assert_eq!(g.raster.front_winding, MTLWinding::CounterClockwise);
@@ -787,7 +786,7 @@ mod tests {
         assert_eq!(g.sample_count, 4);
         assert!(g.alpha_to_coverage);
         // The defaults: clockwise front faces, clip, back-face culling.
-        let g = describe(&base(), &root, [None; 4], crate::msc::Compat::NONE).unwrap();
+        let g = describe(&base(), &root, [None; 5], crate::msc::Compat::NONE).unwrap();
         assert_eq!(g.raster.front_winding, MTLWinding::Clockwise);
         assert_eq!(g.raster.depth_clip, MTLDepthClipMode::Clip);
         assert_eq!(g.raster.cull, MTLCullMode::Back);

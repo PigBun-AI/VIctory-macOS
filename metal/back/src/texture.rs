@@ -441,6 +441,15 @@ impl Texture {
     /// The `gpuResourceID` a descriptor names for `spec`. The same request
     /// gives the same id; a view equal to the whole texture is the texture.
     pub fn view(&self, spec: &ViewSpec) -> Result<u64> {
+        self.view_texture(spec).map(|(_, id)| id)
+    }
+
+    /// As [`view`](Self::view), with the view's Metal texture too (what a
+    /// render pass attaches).
+    pub(crate) fn view_texture(
+        &self,
+        spec: &ViewSpec,
+    ) -> Result<(Retained<ProtocolObject<dyn MTLTexture>>, u64)> {
         let d = &self.inner.desc;
         let bad = |m: String| Err(Error::BadArgument(format!("view {spec:?} of {d:?}: {m}")));
         let f = format::require(d.format)?;
@@ -510,7 +519,7 @@ impl Texture {
             && slice_count == if d.dim == TexDim::D3 { 1 } else { total }
             && spec.swizzle == SWIZZLE_IDENTITY;
         if natural {
-            return Ok(self.inner.resource_id);
+            return Ok((self.inner.raw.clone(), self.inner.resource_id));
         }
         let key = ViewKey {
             pixel: pixel.0,
@@ -521,7 +530,7 @@ impl Texture {
         };
         let mut views = self.inner.views.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(v) = views.get(&key) {
-            return Ok(v.resource_id);
+            return Ok((v.texture.clone(), v.resource_id));
         }
         let swizzle = swizzle_channels(spec.swizzle)?;
         // SAFETY: the ranges were checked against the texture above.
@@ -552,11 +561,11 @@ impl Texture {
         views.insert(
             key,
             ViewObject {
-                texture: view,
+                texture: view.clone(),
                 resource_id,
             },
         );
-        Ok(resource_id)
+        Ok((view, resource_id))
     }
 
     fn slice_range(&self, spec: &ViewSpec, total: u32) -> Result<(u32, u32)> {

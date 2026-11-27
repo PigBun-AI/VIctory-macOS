@@ -65,6 +65,7 @@ fn state<'a>(
         ps,
         amp: None,
         ms,
+        gs: None,
         root,
         inputs,
         targets: vec![ColorTarget {
@@ -114,6 +115,7 @@ fn elements(names: &[String], format: MTLVertexFormat) -> Vec<VertexElement> {
                 semantic: n[..split].to_owned(),
                 semantic_index: n[split..].parse().unwrap_or(0),
                 format,
+                dxgi_format: 0,
                 slot: 0,
                 offset: 16 * i as u32,
                 per_instance: false,

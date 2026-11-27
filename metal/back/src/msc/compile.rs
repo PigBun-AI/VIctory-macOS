@@ -52,6 +52,24 @@ pub struct CompileOptions {
     /// What a vertex, fragment, mesh or amplification shader needs told about
     /// the pipeline it joins (`None` for compute: nothing is set).
     pub graphics: Option<GraphicsCompile>,
+    /// A vertex shader of a geometry pipeline: the input layout its separate
+    /// stage-in function is made for (the emulation's object stage cannot
+    /// use Metal vertex fetch). Only read with
+    /// [`GraphicsCompile::geometry_emulation`].
+    pub stage_in: Option<Vec<StageInElement>>,
+}
+
+/// One element of the input layout of a stage-in function (D3D's input
+/// element, `format` a DXGI number: the converter's `IRFormat` has the same).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StageInElement {
+    pub semantic: String,
+    pub semantic_index: u32,
+    pub format: u32,
+    pub slot: u32,
+    pub offset: u32,
+    pub per_instance: bool,
+    pub step_rate: u32,
 }
 
 /// The primitive class a vertex shader is converted for
@@ -85,6 +103,11 @@ pub struct GraphicsCompile {
     /// The pipeline has a depth target the fragment shader may write
     /// (`SV_Depth`): the converter emits the depth output.
     pub depth_feedback: bool,
+    /// The shader is a stage of a geometry-shader pipeline made with the
+    /// converter's emulation (`IRCompilerEnableGeometryAndTessellationEmulation`):
+    /// the vertex shader becomes an object function, the geometry shader a
+    /// mesh function.
+    pub geometry_emulation: bool,
 }
 
 impl Default for GraphicsCompile {
@@ -95,6 +118,7 @@ impl Default for GraphicsCompile {
             sample_mask: u32::MAX,
             dual_source: false,
             depth_feedback: false,
+            geometry_emulation: false,
         }
     }
 }
@@ -180,6 +204,18 @@ pub struct FragmentInfo {
     pub discards: bool,
 }
 
+/// Geometry shader facts (`IRGSInfo_1_0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeometryInfo {
+    /// `IRInputPrimitive`: point 1, line 2, triangle 3, line-adj 6, triangle-adj 7.
+    pub input_primitive: u32,
+    /// Input primitives one mesh threadgroup handles.
+    pub max_input_primitives_per_mesh_threadgroup: u32,
+    pub max_payload_bytes: u32,
+    pub instance_count: u32,
+    pub is_passthrough: bool,
+}
+
 /// What a converted shader needs from the host, from MSC's reflection and
 /// the DXIL container.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -195,6 +231,8 @@ pub struct Reflection {
     pub vertex: Option<VertexInfo>,
     /// Fragment stage only.
     pub fragment: Option<FragmentInfo>,
+    /// Geometry stage only.
+    pub geometry: Option<GeometryInfo>,
     /// The top-level argument buffer: one entry per root parameter with its
     /// byte offset and size (from the root signature when one was given,
     /// otherwise from the shader's own).
@@ -214,6 +252,9 @@ pub struct Reflection {
 pub struct Converted {
     /// A `metallib` image.
     pub metallib: Vec<u8>,
+    /// The separate stage-in function's `metallib` (a vertex shader made
+    /// with [`CompileOptions::stage_in`]).
+    pub stage_in: Option<Vec<u8>>,
     pub reflection: Reflection,
 }
 
@@ -383,10 +424,18 @@ impl Msc {
             }
             if let Some(g) = &options.graphics {
                 use ffi::{feature_config as fc, input_topology as it};
+                let separate = g.geometry_emulation && options.stage_in.is_some();
                 (api.IRCompilerSetStageInGenerationMode)(
                     compiler.raw,
-                    ffi::STAGE_IN_METAL_VERTEX_FETCH,
+                    if separate {
+                        ffi::STAGE_IN_SEPARATE_FUNCTION
+                    } else {
+                        ffi::STAGE_IN_METAL_VERTEX_FETCH
+                    },
                 );
+                if g.geometry_emulation {
+                    (api.IRCompilerEnableGeometryAndTessellationEmulation)(compiler.raw, true);
+                }
                 (api.IRCompilerSetInputTopology)(
                     compiler.raw,
                     match g.input_topology {
@@ -494,6 +543,7 @@ impl Msc {
         let mut mesh = None;
         let mut vertex = None;
         let mut fragment = None;
+        let mut geometry = None;
         // SAFETY: each Copy*Info fills a struct this function owns; Release*
         // frees what the library attached.
         unsafe {
@@ -584,8 +634,38 @@ impl Msc {
                         (api.IRShaderReflectionReleaseFragmentInfo)(&mut fs);
                     }
                 }
+                ShaderStage::Geometry => {
+                    let mut gs = ffi::IRVersionedGSInfo::default();
+                    if (api.IRShaderReflectionCopyGeometryInfo)(
+                        refl.raw,
+                        ffi::REFLECTION_VERSION_1_0,
+                        &mut gs,
+                    ) {
+                        geometry = Some(GeometryInfo {
+                            input_primitive: gs.input_primitive,
+                            max_input_primitives_per_mesh_threadgroup: gs
+                                .max_input_primitives_per_mesh_threadgroup,
+                            max_payload_bytes: gs.max_payload_size_in_bytes,
+                            instance_count: gs.instance_count,
+                            is_passthrough: gs.is_passthrough,
+                        });
+                        (api.IRShaderReflectionReleaseGeometryInfo)(&mut gs);
+                    }
+                }
                 _ => {}
             }
+        }
+
+        // The separate stage-in function of a vertex shader of a geometry pipeline.
+        let mut stage_in = None;
+        if stage == ShaderStage::Vertex
+            && options
+                .graphics
+                .as_ref()
+                .is_some_and(|g| g.geometry_emulation)
+            && let Some(elements) = &options.stage_in
+        {
+            stage_in = Some(self.synthesize_stage_in(&compiler, &refl, elements)?);
         }
 
         // Function constants.
@@ -643,6 +723,7 @@ impl Msc {
             mesh,
             vertex,
             fragment,
+            geometry,
             layout,
             uses_resource_heap: features
                 .is_some_and(|f| f & dxil::feature::RESOURCE_DESCRIPTOR_HEAP_INDEXING != 0),
@@ -653,7 +734,85 @@ impl Msc {
         };
         Ok(Converted {
             metallib,
+            stage_in,
             reflection,
         })
+    }
+}
+
+impl Msc {
+    /// `IRMetalLibSynthesizeStageInFunction`: the visible function that
+    /// fetches and converts the vertex inputs for a vertex shader made for
+    /// geometry emulation.
+    fn synthesize_stage_in(
+        &self,
+        compiler: &Compiler,
+        refl: &Refl,
+        elements: &[StageInElement],
+    ) -> Result<Vec<u8>, MscError> {
+        if elements.len() > 31 {
+            return Err(MscError::Unsupported(format!(
+                "{} input elements (a stage-in function takes 31)",
+                elements.len()
+            )));
+        }
+        let names: Vec<CString> = elements
+            .iter()
+            .map(|e| {
+                CString::new(e.semantic.as_str())
+                    .map_err(|_| MscError::BadInput("a semantic name with a NUL".into()))
+            })
+            .collect::<Result<_, _>>()?;
+        let mut layout = ffi::IRVersionedInputLayoutDescriptor {
+            version: ffi::INPUT_LAYOUT_VERSION_1,
+            semanticNames: [ptr::null(); 31],
+            inputElementDescs: [ffi::IRInputElementDescriptor1::default(); 31],
+            numElements: elements.len() as u32,
+        };
+        for (i, e) in elements.iter().enumerate() {
+            layout.semanticNames[i] = names[i].as_ptr();
+            layout.inputElementDescs[i] = ffi::IRInputElementDescriptor1 {
+                semanticIndex: e.semantic_index,
+                format: e.format,
+                inputSlot: e.slot,
+                alignedByteOffset: e.offset,
+                instanceDataStepRate: if e.per_instance {
+                    e.step_rate.max(1)
+                } else {
+                    0
+                },
+                inputSlotClass: u32::from(e.per_instance),
+            };
+        }
+        let api = self.api;
+        // SAFETY: plain constructor.
+        let lib = unsafe { (api.IRMetalLibBinaryCreate)() };
+        if lib.is_null() {
+            return Err(MscError::NoOutput(
+                "IRMetalLibBinaryCreate returned null".into(),
+            ));
+        }
+        let lib = Lib { api, raw: lib };
+        // SAFETY: live compiler and reflection; the layout and the names it
+        // points at outlive the call.
+        let ok = unsafe {
+            (api.IRMetalLibSynthesizeStageInFunction)(compiler.raw, refl.raw, &layout, lib.raw)
+        };
+        // SAFETY: a live library.
+        let size = unsafe { (api.IRMetalLibGetBytecodeSize)(lib.raw) };
+        if !ok || size == 0 {
+            return Err(MscError::NoOutput(
+                "the converter made no stage-in function".into(),
+            ));
+        }
+        let mut bytes = vec![0u8; size];
+        // SAFETY: `size` bytes.
+        let written = unsafe { (api.IRMetalLibGetBytecode)(lib.raw, bytes.as_mut_ptr()) };
+        if written != size {
+            return Err(MscError::NoOutput(format!(
+                "stage-in copy wrote {written} of {size} bytes"
+            )));
+        }
+        Ok(bytes)
     }
 }

@@ -264,10 +264,15 @@ fn malformed_and_unsupported_streams_say_which() {
     let mut s = Stream::default();
     s.add(t::RASTERIZER2, 4, &Stream::u32s(&[0; 10]));
     assert_eq!(pso::parse_stream(&s.0).unwrap_err().hr, Hr::E_NOTIMPL);
-    // A geometry shader parses, and the conversion refuses it.
+    // A geometry shader is carried; a hull shader is refused.
     let mut s = Stream::default();
     s.add(t::VS, 8, &Stream::code(8, 8));
     s.add(t::GS, 8, &Stream::code(16, 8));
+    let st = pso::parse_stream(&s.0).unwrap();
+    assert_eq!(pso::to_proto(&st, &[]).unwrap().gs.addr, 16);
+    let mut s = Stream::default();
+    s.add(t::VS, 8, &Stream::code(8, 8));
+    s.add(t::HS, 8, &Stream::code(16, 8));
     let st = pso::parse_stream(&s.0).unwrap();
     assert_eq!(pso::to_proto(&st, &[]).unwrap_err().hr, Hr::E_NOTIMPL);
     // Empty stream: parses (to nothing), no pipeline.

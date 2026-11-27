@@ -165,6 +165,10 @@ pub mod input_topology {
 
 /// `IRStageInCodeGenerationMode`.
 pub const STAGE_IN_METAL_VERTEX_FETCH: u32 = 0;
+pub const STAGE_IN_SEPARATE_FUNCTION: u32 = 1;
+
+/// `IRInputLayoutDescriptorVersion_1`.
+pub const INPUT_LAYOUT_VERSION_1: u32 = 1;
 
 /// `IRDualSourceBlendingConfiguration` / `IRDepthFeedbackConfiguration`
 /// (the two enums have the same three values).
@@ -331,6 +335,8 @@ pub struct IRVertexInputInfo {
 #[derive(Clone, Copy)]
 pub struct IRVersionedVSInfo {
     pub version: u32,
+    /// The union holds pointers: it starts at offset 8.
+    pub _pad: u32,
     pub instance_id_index: i32,
     pub vertex_id_index: i32,
     pub vertex_output_size_in_bytes: u32,
@@ -343,6 +349,7 @@ impl Default for IRVersionedVSInfo {
     fn default() -> Self {
         IRVersionedVSInfo {
             version: 0,
+            _pad: 0,
             instance_id_index: -1,
             vertex_id_index: -1,
             vertex_output_size_in_bytes: 0,
@@ -361,6 +368,69 @@ pub struct IRVersionedFSInfo {
     pub num_render_targets: i32,
     pub rt_index_int: u8,
     pub discards: bool,
+}
+
+/// `IRVertexOutputInfo_1_0`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IRVertexOutputInfo {
+    pub name: *const c_char,
+    pub attributeIndex: u8,
+}
+
+/// `IRVersionedGSInfo` (`IRGSInfo_1_0` inlined; the union starts at 8).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IRVersionedGSInfo {
+    pub version: u32,
+    pub vertex_outputs: *mut IRVertexOutputInfo,
+    pub num_vertex_outputs: usize,
+    pub is_passthrough: bool,
+    pub rt_array_index_record_id: i32,
+    pub viewport_array_index_record_id: i32,
+    pub input_primitive: u32,
+    pub max_input_primitives_per_mesh_threadgroup: u32,
+    pub max_payload_size_in_bytes: u32,
+    pub instance_count: u32,
+}
+
+impl Default for IRVersionedGSInfo {
+    fn default() -> Self {
+        IRVersionedGSInfo {
+            version: 0,
+            vertex_outputs: std::ptr::null_mut(),
+            num_vertex_outputs: 0,
+            is_passthrough: false,
+            rt_array_index_record_id: 0,
+            viewport_array_index_record_id: 0,
+            input_primitive: 0,
+            max_input_primitives_per_mesh_threadgroup: 0,
+            max_payload_size_in_bytes: 0,
+            instance_count: 0,
+        }
+    }
+}
+
+/// `IRInputElementDescriptor1`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct IRInputElementDescriptor1 {
+    pub semanticIndex: u32,
+    pub format: u32,
+    pub inputSlot: u32,
+    pub alignedByteOffset: u32,
+    pub instanceDataStepRate: u32,
+    pub inputSlotClass: u32,
+}
+
+/// `IRVersionedInputLayoutDescriptor` (`IRInputLayoutDescriptor1` inlined).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct IRVersionedInputLayoutDescriptor {
+    pub version: u32,
+    pub semanticNames: [*const c_char; 31],
+    pub inputElementDescs: [IRInputElementDescriptor1; 31],
+    pub numElements: u32,
 }
 
 #[repr(C)]
@@ -401,8 +471,22 @@ const _: () = {
     assert!(size_of::<IRFunctionConstant>() == 16);
     assert!(size_of::<IRVertexInputInfo>() == 16);
     assert!(size_of::<IRVersionedVSInfo>() == 40);
+    assert!(offset_of!(IRVersionedVSInfo, instance_id_index) == 8);
+    assert!(offset_of!(IRVersionedVSInfo, vertex_output_size_in_bytes) == 16);
+    assert!(offset_of!(IRVersionedVSInfo, needs_draw_params) == 20);
     assert!(offset_of!(IRVersionedVSInfo, vertex_inputs) == 24);
     assert!(offset_of!(IRVersionedVSInfo, num_vertex_inputs) == 32);
+    assert!(size_of::<IRVersionedGSInfo>() == 56);
+    assert!(offset_of!(IRVersionedGSInfo, vertex_outputs) == 8);
+    assert!(offset_of!(IRVersionedGSInfo, is_passthrough) == 24);
+    assert!(offset_of!(IRVersionedGSInfo, input_primitive) == 36);
+    assert!(offset_of!(IRVersionedGSInfo, max_input_primitives_per_mesh_threadgroup) == 40);
+    assert!(offset_of!(IRVersionedGSInfo, instance_count) == 48);
+    assert!(size_of::<IRInputElementDescriptor1>() == 24);
+    assert!(size_of::<IRVersionedInputLayoutDescriptor>() == 1008);
+    assert!(offset_of!(IRVersionedInputLayoutDescriptor, semanticNames) == 8);
+    assert!(offset_of!(IRVersionedInputLayoutDescriptor, inputElementDescs) == 256);
+    assert!(offset_of!(IRVersionedInputLayoutDescriptor, numElements) == 1000);
     assert!(size_of::<IRVersionedFSInfo>() == 12);
     assert!(offset_of!(IRVersionedFSInfo, rt_index_int) == 8);
 };
@@ -465,6 +549,8 @@ api! {
     fn IRCompilerSetMinimumDeploymentTarget(*mut IRCompiler, u32, *const c_char);
     fn IRCompilerSetInputTopology(*mut IRCompiler, u32);
     fn IRCompilerSetStageInGenerationMode(*mut IRCompiler, u32);
+    fn IRCompilerEnableGeometryAndTessellationEmulation(*mut IRCompiler, bool);
+    fn IRMetalLibSynthesizeStageInFunction(*const IRCompiler, *const IRShaderReflection, *const IRVersionedInputLayoutDescriptor, *mut IRMetalLibBinary) -> bool;
     fn IRCompilerSetDualSourceBlendingConfiguration(*mut IRCompiler, u32);
     fn IRCompilerSetDepthFeedbackConfiguration(*mut IRCompiler, u32);
     fn IRCompilerSetIntRTMask(*mut IRCompiler, u8);
@@ -499,6 +585,8 @@ api! {
     fn IRShaderReflectionReleaseAmplificationInfo(*mut IRVersionedASInfo) -> bool;
     fn IRShaderReflectionCopyVertexInfo(*const IRShaderReflection, u32, *mut IRVersionedVSInfo) -> bool;
     fn IRShaderReflectionReleaseVertexInfo(*mut IRVersionedVSInfo) -> bool;
+    fn IRShaderReflectionCopyGeometryInfo(*const IRShaderReflection, u32, *mut IRVersionedGSInfo) -> bool;
+    fn IRShaderReflectionReleaseGeometryInfo(*mut IRVersionedGSInfo) -> bool;
     fn IRShaderReflectionCopyFragmentInfo(*const IRShaderReflection, u32, *mut IRVersionedFSInfo) -> bool;
     fn IRShaderReflectionReleaseFragmentInfo(*mut IRVersionedFSInfo) -> bool;
     fn IRShaderReflectionGetResourceCount(*const IRShaderReflection) -> usize;

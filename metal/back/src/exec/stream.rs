@@ -25,6 +25,7 @@ use victory_metal_proto::cmd::{
     SetRootSignature, SetRootTable,
 };
 use victory_metal_proto::ids::{HeapId, QueueId};
+use victory_metal_proto::indirect::IndirectArgKind;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::Decoder;
 use victory_metal_proto::types::{BarrierClass, BindPoint, RootParamKind, format};
@@ -35,6 +36,23 @@ use crate::queue::Queue;
 use crate::record::CommandList;
 
 /// Checks everything about a block that does not need the object tables.
+/// `VICTORY_METAL_LOG=1`: an error that is about to become a bare status.
+pub(super) fn logged(what: &str, e: &crate::error::Error) -> Status {
+    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+        eprintln!("victory-metal back: {what}: {e}");
+    }
+    status_of(e)
+}
+
+/// `VICTORY_METAL_LOG=1`: what the validation pass refused.
+fn refused(what: &str) {
+    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+        eprintln!(
+            "victory-metal back: a command of the stream is refused: {what} is not implemented"
+        );
+    }
+}
+
 /// Returns the stream's capability bits.
 pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status> {
     let decoder = Decoder::new(block).map_err(|e| e.status())?;
@@ -42,7 +60,12 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
     let mut open: Option<u32> = None;
     let mut seen = HashSet::new();
     for c in decoder {
-        let c = c.map_err(|e| e.status())?;
+        let c = c.map_err(|e| {
+            if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                eprintln!("victory-metal back: a command of the stream is refused: {e}");
+            }
+            e.status()
+        })?;
         match &c {
             Command::BeginList(b) => {
                 if open.is_some() || b.list.is_null() || !seen.insert(b.list.0) {
@@ -65,6 +88,7 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
             // Not implemented by this back (the status is the same wherever
             // they stand, so they are refused before anything runs).
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
+                refused("SyncRecord, BufferData or DispatchIndirect");
                 return Err(Status::UNSUPPORTED);
             }
             other => {
@@ -72,26 +96,34 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
                     return Err(Status::BAD_STREAM);
                 }
                 match other {
-                    Command::SetRootSignature(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootSignature(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootConstants(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootConstants(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootDescriptor(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootDescriptor(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootTable(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootTable(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
                     // Draws, mesh dispatch, vertex and index buffers: waiting for the render encoder.
                     Command::ExecuteIndirect(c)
                         if c.arguments()
-                            .any(|a| !super::indirect::is_compute_arg(a.kind)) =>
+                            .any(|a| !super::indirect::is_supported_arg(a.kind)) =>
                     {
+                        let kinds: Vec<_> = c.arguments().map(|a| a.kind).collect();
+                        refused(&format!(
+                            "ExecuteIndirect with vertex or index buffer views, or rays (stride {}, max {}, count {}, arguments {kinds:?})",
+                            c.stride,
+                            c.max_count,
+                            !c.count.is_null()
+                        ));
                         return Err(Status::UNSUPPORTED);
                     }
                     Command::Barrier(b) if b.class == BarrierClass::LAYOUT => {
+                        refused("a layout barrier");
                         return Err(Status::UNSUPPORTED);
                     }
                     _ => {}
@@ -108,14 +140,38 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
 /// What a list has bound so far: the shadow of its argument buffer and the
 /// objects a dispatch needs.
 #[derive(Default)]
-struct Bound {
-    sig: Option<Arc<RootSig>>,
-    pso: Option<Arc<Pso>>,
+pub(super) struct Side {
+    pub(super) sig: Option<Arc<RootSig>>,
     /// The argument buffer as the stream has set it (root constants,
     /// pointers), `layout.size` bytes.
-    shadow: Vec<u8>,
-    /// Shadow changed since the last dispatch wrote it to the ring.
-    dirty: bool,
+    pub(super) shadow: Vec<u8>,
+    /// Shadow changed since the last dispatch or draw wrote it to the ring.
+    pub(super) dirty: bool,
+}
+
+/// Compute and graphics have a root signature, root arguments and a
+/// pipeline each (as in the original API); they share the argument table's
+/// slot 2, so whoever wrote it last owns it (`owner`).
+#[derive(Default)]
+pub(super) struct Bound {
+    pub(super) compute: Side,
+    pub(super) graphics: Side,
+    pub(super) pso: Option<Arc<Pso>>,
+    pub(super) gpso: Option<Arc<Pso>>,
+    /// `Some(true)`: the argument table's slot 2 holds the graphics arguments.
+    owner: Option<bool>,
+}
+
+fn known_bind_point(b: BindPoint) -> bool {
+    b == BindPoint::COMPUTE || b == BindPoint::GRAPHICS
+}
+
+fn side_of(bound: &mut Bound, b: BindPoint) -> Result<&mut Side, Status> {
+    match b {
+        BindPoint::COMPUTE => Ok(&mut bound.compute),
+        BindPoint::GRAPHICS => Ok(&mut bound.graphics),
+        _ => Err(Status::UNSUPPORTED),
+    }
 }
 
 /// A queue with the lists ended for it and not yet committed.
@@ -125,11 +181,68 @@ struct Batch {
     lists: Vec<CommandList>,
 }
 
-struct Run<'a> {
-    st: &'a mut State,
+pub(super) struct Run<'a> {
+    pub(super) st: &'a mut State,
     batches: Vec<Batch>,
     /// The list being recorded.
-    open: Option<(CommandList, QueueId, Bound)>,
+    pub(super) open: Option<(CommandList, QueueId, Bound)>,
+}
+
+/// `VICTORY_METAL_STEP=1`: every command is printed before it runs, so the
+/// last one printed is the one a crash of the process happened in.
+fn step_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_METAL_STEP").is_some_and(|v| v != "0");
+        if on {
+            crash_report();
+        }
+        on
+    })
+}
+
+/// The handler that was there before ours, to pass the signal on to.
+static PREVIOUS: [std::sync::atomic::AtomicUsize; 2] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 2];
+
+/// Prints the faulting address and the call stack of a `SIGSEGV` / `SIGBUS`
+/// in the process (for `VICTORY_METAL_STEP`), then hands the signal on.
+fn crash_report() {
+    extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+        let mut frames = [std::ptr::null_mut::<libc::c_void>(); 48];
+        // SAFETY: a diagnostic in a process that is about to fault anyway.
+        unsafe {
+            let n = libc::backtrace(frames.as_mut_ptr(), 48);
+            let addr = if info.is_null() {
+                std::ptr::null_mut()
+            } else {
+                (*info).si_addr
+            };
+            let msg = format!("victory-metal crash: signal {sig} at address {addr:p}\n");
+            libc::write(2, msg.as_ptr().cast(), msg.len());
+            libc::backtrace_symbols_fd(frames.as_ptr(), n, 2);
+            let i = usize::from(sig == libc::SIGBUS);
+            let prev = PREVIOUS[i].load(std::sync::atomic::Ordering::Relaxed);
+            if prev > 1 {
+                let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                    std::mem::transmute(prev);
+                f(sig, info, ctx);
+            }
+        }
+    }
+    for (i, sig) in [libc::SIGSEGV, libc::SIGBUS].into_iter().enumerate() {
+        // SAFETY: installs a handler with the platform's `sigaction`.
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            let mut new: libc::sigaction = std::mem::zeroed();
+            new.sa_sigaction = handler as *const () as usize;
+            new.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            libc::sigemptyset(&mut new.sa_mask);
+            if libc::sigaction(sig, &new, &mut old) == 0 {
+                PREVIOUS[i].store(old.sa_sigaction, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 impl State {
@@ -144,11 +257,21 @@ impl State {
             open: None,
         };
         let mut failed: Option<(Status, String)> = None;
+        run.st.note = None;
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
+            if step_log() {
+                eprintln!("victory-metal step: {c:?}");
+            }
             if let Err(s) = run.command(&c) {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    // `note` still holds the reason a refusal recorded (the
+                    // block's own note below replaces it).
+                    let why = run.st.note.as_deref().unwrap_or("no reason recorded");
+                    eprintln!("victory-metal back: {:?} failed: {s:?}: {why}", c.opcode());
+                }
                 // Dropping `run` drops the open list and the unflushed ones.
                 failed = Some((s, format!("{c:?}")));
                 break;
@@ -172,7 +295,7 @@ impl State {
     }
 }
 
-type R = Result<(), Status>;
+pub(super) type R = Result<(), Status>;
 
 impl Run<'_> {
     fn command(&mut self, c: &Command<'_>) -> R {
@@ -199,13 +322,26 @@ impl Run<'_> {
             Command::CopyTextureRegion(c) => self.copy_texture_region(c),
             Command::CopyResource(c) => self.copy_resource(c),
             Command::ClearUavTexture(c) => self.clear_uav_texture(c),
+            Command::BeginRenderPass(c) => self.begin_render_pass(c),
+            Command::EndRenderPass(c) => self.end_render_pass(c),
+            Command::SetViewports(c) => self.set_viewports(c),
+            Command::SetScissors(c) => self.set_scissors(c),
+            Command::SetBlendFactor(c) => self.render_state(|l| l.set_blend_factor(c.color)),
+            Command::SetStencilRef(c) => self.render_state(|l| l.set_stencil_ref(c.value)),
+            Command::SetPrimitiveTopology(c) => self.set_primitive(c),
+            Command::SetIndexBuffer(c) => self.set_index_buffer(c),
+            Command::SetVertexBuffers(c) => self.set_vertex_buffers(c),
+            Command::Draw(c) => self.draw(c),
+            Command::DrawIndexed(c) => self.draw_indexed(c),
+            Command::DispatchMesh(c) => self.dispatch_mesh(c),
+            Command::ClearAttachment(c) => self.clear_attachment(c),
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
                 Err(Status::UNSUPPORTED)
             }
         }
     }
 
-    fn list(&mut self) -> Result<(&mut CommandList, &mut Bound), Status> {
+    pub(super) fn list(&mut self) -> Result<(&mut CommandList, &mut Bound), Status> {
         match self.open.as_mut() {
             Some((l, _, b)) => Ok((l, b)),
             None => Err(Status::BAD_STREAM),
@@ -225,11 +361,12 @@ impl Run<'_> {
         let result = if batch.lists.is_empty() {
             Ok(())
         } else {
-            batch
-                .queue
-                .submit(batch.lists)
-                .map(|_| ())
-                .map_err(|e| status_of(&e))
+            batch.queue.submit(batch.lists).map(|_| ()).map_err(|e| {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    eprintln!("victory-metal back: committing the lists failed: {e}");
+                }
+                status_of(&e)
+            })
         };
         // Every submit ends with maintain.
         self.st.device.maintain();
@@ -269,7 +406,9 @@ impl Run<'_> {
         {
             self.flush(c.queue.0)?;
         }
-        let mut list = queue.begin_list().map_err(|e| status_of(&e))?;
+        let mut list = queue
+            .begin_list()
+            .map_err(|e| logged("begin of a list", &e))?;
         // Argument-table slots keep the addresses of the list that used them
         // last: clear the three binding points the stream sets.
         for point in [
@@ -286,7 +425,7 @@ impl Run<'_> {
 
     fn end_list(&mut self) -> R {
         let (mut list, queue_id, _) = self.open.take().ok_or(Status::BAD_STREAM)?;
-        list.end().map_err(|e| status_of(&e))?;
+        list.end().map_err(|e| logged("end of a list", &e))?;
         let queue = self
             .st
             .queues
@@ -343,7 +482,10 @@ impl Run<'_> {
     fn set_pipeline(&mut self, c: &SetPipeline) -> R {
         let pso = self.st.psos.get(c.pso.0).ok_or(Status::NOT_FOUND)?.clone();
         let (_, bound) = self.list()?;
-        bound.pso = Some(pso);
+        match pso.body {
+            PsoBody::Compute { .. } => bound.pso = Some(pso),
+            PsoBody::Graphics(_) => bound.gpso = Some(pso),
+        }
         Ok(())
     }
 
@@ -355,6 +497,7 @@ impl Run<'_> {
             .ok_or(Status::NOT_FOUND)?
             .clone();
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         // Setting the signature that is already bound changes nothing.
         if bound.sig.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sig)) {
             return Ok(());
@@ -399,6 +542,7 @@ impl Run<'_> {
 
     fn set_root_constants(&mut self, c: &SetRootConstants<'_>) -> R {
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         let SlotKind::Constants { count } = slot.kind else {
@@ -425,6 +569,7 @@ impl Run<'_> {
             }
         }
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         match (slot.kind, c.kind) {
@@ -449,6 +594,7 @@ impl Run<'_> {
         let va = heap.heap.entry_va(c.index);
         let heap_is_sampler = heap.sampler;
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         match slot.kind {
@@ -464,7 +610,7 @@ impl Run<'_> {
     fn dispatch(&mut self, c: &Dispatch) -> R {
         let (list, bound) = self.list()?;
         let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let sig = bound.compute.sig.clone().ok_or(Status::INVALID_ARG)?;
         let PsoBody::Compute { pipeline, threads } = &pso.body else {
             // A dispatch needs a compute pipeline.
             return Err(Status::INVALID_ARG);
@@ -474,15 +620,7 @@ impl Run<'_> {
         if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
-        if bound.dirty && !bound.shadow.is_empty() {
-            let tlab = list
-                .alloc_constants(bound.shadow.len() as u64, 8)
-                .map_err(|e| status_of(&e))?;
-            tlab.write_bytes(0, &bound.shadow)
-                .map_err(|e| status_of(&e))?;
-            list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
-        }
-        bound.dirty = false;
+        write_root_arguments(list, bound, false)?;
         list.dispatch(pipeline, [c.x, c.y, c.z], *threads)
             .map_err(|e| status_of(&e))
     }
@@ -510,11 +648,22 @@ impl Run<'_> {
             Some((l, _, b)) => (l, b),
             None => return Err(Status::BAD_STREAM),
         };
-        let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
-        let PsoBody::Compute { pipeline, threads } = &pso.body else {
-            return Err(Status::INVALID_ARG);
-        };
+        // The record's last argument says which side runs it.
+        let graphics = c
+            .arguments()
+            .any(|a| a.kind.is_action() && a.kind != IndirectArgKind::DISPATCH);
+        let sig = if graphics {
+            bound.graphics.sig.clone()
+        } else {
+            bound.compute.sig.clone()
+        }
+        .ok_or(Status::INVALID_ARG)?;
+        let pso = if graphics {
+            bound.gpso.clone()
+        } else {
+            bound.pso.clone()
+        }
+        .ok_or(Status::INVALID_ARG)?;
         if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
@@ -526,6 +675,20 @@ impl Run<'_> {
             return Err(Status::INVALID_ARG);
         }
         let plan = super::indirect::plan(c, Some(&sig))?;
+        let (side_graphics, action) = (graphics, plan.action);
+        if side_graphics != (action != super::indirect::Action::Dispatch) {
+            return Err(Status::INVALID_ARG);
+        }
+        if plan.roots.is_empty() {
+            write_root_arguments(list, bound, graphics)?;
+        }
+        let side = if graphics {
+            &bound.graphics
+        } else {
+            &bound.compute
+        };
+        use super::indirect::Action;
+        let draws = matches!(action, Action::Draw | Action::DrawIndexed);
         let spec = crate::indirect::IndirectDispatch {
             args: &args,
             args_offset: c.args_offset,
@@ -535,29 +698,53 @@ impl Run<'_> {
             dispatch_offset: plan.dispatch_offset,
             record_bytes: plan.record_bytes,
             roots: &plan.roots,
-            base: &bound.shadow,
+            base: &side.shadow,
+            action_words: match action {
+                Action::Draw => 4,
+                Action::DrawIndexed => 5,
+                _ => 3,
+            },
+            draws,
+            index_type: list.index_ir_type(),
+            consumer: if graphics {
+                crate::stages::VERTEX
+                    | crate::stages::OBJECT
+                    | crate::stages::MESH
+                    | crate::stages::FRAGMENT
+            } else {
+                crate::stages::DISPATCH
+            },
         };
         // The kernel makes its own copies of the argument buffer; otherwise
-        // the dispatches read the one the list has, written as for a dispatch.
-        if !spec.replaces_root_arguments() && bound.dirty && !bound.shadow.is_empty() {
-            let tlab = list
-                .alloc_constants(bound.shadow.len() as u64, 8)
-                .map_err(|e| status_of(&e))?;
-            tlab.write_bytes(0, &bound.shadow)
-                .map_err(|e| status_of(&e))?;
-            list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
-            bound.dirty = false;
-        }
+        // the draws and dispatches read the one the list has, written as for
+        // a direct one.
         let replaced = spec.replaces_root_arguments();
-        let r = list
-            .execute_indirect(kernels, pipeline, *threads, &spec)
-            .map_err(|e| {
-                self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
-                status_of(&e)
-            });
-        // The argument table now points at a record's copy: the next dispatch writes its own.
+        let r = match (&pso.body, action) {
+            (PsoBody::Compute { pipeline, threads }, Action::Dispatch) => {
+                list.execute_indirect(kernels, pipeline, *threads, &spec)
+            }
+            (PsoBody::Graphics(g), a) if a != Action::Dispatch => {
+                let kind = match a {
+                    Action::Draw => crate::draw::IndirectDraw::Draw,
+                    Action::DrawIndexed => crate::draw::IndirectDraw::DrawIndexed,
+                    _ => crate::draw::IndirectDraw::Mesh,
+                };
+                list.execute_indirect_draws(kernels, g, kind, &spec)
+            }
+            _ => return Err(Status::INVALID_ARG),
+        }
+        .map_err(|e| {
+            self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
+            status_of(&e)
+        });
+        // The argument table now points at a record's copy: the next draw or
+        // dispatch writes its own.
         if replaced {
-            bound.dirty = true;
+            if graphics {
+                bound.graphics.dirty = true;
+            } else {
+                bound.compute.dirty = true;
+            }
         }
         r
     }
@@ -751,6 +938,29 @@ impl Run<'_> {
         };
         r.map_err(|e| status_of(&e))
     }
+}
+
+/// Writes the root arguments of the compute (`graphics` false) or graphics
+/// side to the ring and binds them, when they changed or the other side
+/// wrote the table slot last.
+pub(super) fn write_root_arguments(list: &mut CommandList, bound: &mut Bound, graphics: bool) -> R {
+    let switched = bound.owner != Some(graphics);
+    let side = if graphics {
+        &mut bound.graphics
+    } else {
+        &mut bound.compute
+    };
+    if (side.dirty || switched) && !side.shadow.is_empty() {
+        let tlab = list
+            .alloc_constants(side.shadow.len() as u64, 8)
+            .map_err(|e| status_of(&e))?;
+        tlab.write_bytes(0, &side.shadow)
+            .map_err(|e| status_of(&e))?;
+        list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
+        bound.owner = Some(graphics);
+    }
+    side.dirty = false;
+    Ok(())
 }
 
 /// `Some(b)` when all four bytes of `v` are `b`.

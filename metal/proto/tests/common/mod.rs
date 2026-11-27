@@ -6,6 +6,7 @@ use victory_metal_proto::cmd::*;
 use victory_metal_proto::file::FileWriter;
 use victory_metal_proto::ids::*;
 use victory_metal_proto::indirect::ExecuteIndirect;
+use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::{Encoder, STREAM_HEADER_SIZE, STREAM_MAGIC};
@@ -186,6 +187,69 @@ pub fn one_of_each() -> Vec<Command<'static>> {
             _pad: 0,
             _pad2: 0,
         }),
+        Command::SetViewports(SetViewports::from_slice(&[
+            Viewport::new(0.0, 1.0, 640.0, 360.0),
+            Viewport {
+                min_depth: 0.25,
+                max_depth: 0.75,
+                ..Viewport::new(2.0, 3.0, 4.0, 5.0)
+            },
+        ])),
+        Command::SetScissors(SetScissors::from_slice(&[Rect::new(1, 2, 300, 200)])),
+        Command::SetBlendFactor(SetBlendFactor {
+            color: [0.1, 0.2, 0.3, 0.4],
+        }),
+        Command::SetStencilRef(SetStencilRef {
+            value: 0x80,
+            _pad: 0,
+        }),
+        Command::SetPrimitiveTopology(SetPrimitiveTopology {
+            topology: Topology::TRIANGLE_STRIP,
+            _pad: 0,
+        }),
+        Command::SetIndexBuffer(SetIndexBuffer {
+            va: 0x7000_0000_1000,
+            size: 4096,
+            format: IndexFormat::U32,
+        }),
+        Command::SetVertexBuffers(SetVertexBuffers::from_slice(
+            1,
+            &[
+                VertexBufferView {
+                    va: 0x1000,
+                    size: 96,
+                    stride: 32,
+                },
+                VertexBufferView {
+                    va: 0x2000,
+                    size: 48,
+                    stride: 16,
+                },
+            ],
+        )),
+        Command::Draw(Draw {
+            vertex_count: 3,
+            instance_count: 2,
+            start_vertex: 1,
+            start_instance: 5,
+        }),
+        Command::DrawIndexed(DrawIndexed {
+            index_count: 6,
+            instance_count: 1,
+            start_index: 3,
+            base_vertex: -2,
+            start_instance: 0,
+            _pad: 0,
+        }),
+        Command::DispatchMesh(DispatchMesh {
+            x: 4,
+            y: 3,
+            z: 2,
+            _pad: 0,
+        }),
+        Command::ClearAttachment(sample_clear_attachment()),
+        Command::BeginRenderPass(sample_begin_pass()),
+        Command::EndRenderPass(sample_end_pass()),
         Command::ExecuteIndirect(ExecuteIndirect {
             args: ResId(5),
             args_offset: 64,
@@ -498,4 +562,65 @@ pub fn raw_cmd(opcode: u16, version: u8, flags: u8, len: u32, payload: &[u8]) ->
     v.extend_from_slice(&len.to_le_bytes());
     v.extend_from_slice(payload);
     v
+}
+
+/// A pass with two colour targets (one cleared, one loaded) and a depth-stencil.
+pub fn sample_begin_pass() -> BeginRenderPass {
+    let mut b = <BeginRenderPass as Wire>::ZERO;
+    b.rt_count = 2;
+    b.rt[0] = RenderAttachment {
+        res: ResId(4),
+        format: format::R8G8B8A8_UNORM,
+        dimension: TexViewDim::TEX2D,
+        mip: 0,
+        load: LoadAction::CLEAR,
+        _pad: 0,
+        first_slice: 0,
+        slice_count: 1,
+        clear: [0.0, 0.5, 1.0, 1.0],
+    };
+    b.rt[1] = RenderAttachment {
+        res: ResId(5),
+        format: format::R32_FLOAT,
+        dimension: TexViewDim::TEX2D_ARRAY,
+        mip: 1,
+        load: LoadAction::LOAD,
+        _pad: 0,
+        first_slice: 2,
+        slice_count: 3,
+        clear: [0.0; 4],
+    };
+    b.ds = DepthAttachment {
+        res: ResId(6),
+        format: format::D32_FLOAT,
+        dimension: TexViewDim::TEX2D,
+        mip: 0,
+        depth_load: LoadAction::CLEAR,
+        stencil_load: LoadAction::DONT_CARE,
+        first_slice: 0,
+        slice_count: 1,
+        clear_depth: 1.0,
+        clear_stencil: 0,
+        _pad: 0,
+    };
+    b
+}
+
+pub fn sample_end_pass() -> EndRenderPass {
+    let mut e = <EndRenderPass as Wire>::ZERO;
+    e.rt_store[1] = StoreAction::DONT_CARE;
+    e.depth_store = StoreAction::DONT_CARE;
+    e
+}
+
+pub fn sample_clear_attachment() -> ClearAttachment {
+    let mut c = <ClearAttachment as Wire>::ZERO;
+    c.target = CLEAR_TARGET_DEPTH_STENCIL;
+    c.flags = CLEAR_DEPTH | CLEAR_STENCIL;
+    c.rect_count = 2;
+    c.rect[0] = Rect::new(0, 0, 16, 16);
+    c.rect[1] = Rect::new(32, 8, 64, 24);
+    c.clear_depth = 0.5;
+    c.clear_stencil = 7;
+    c
 }

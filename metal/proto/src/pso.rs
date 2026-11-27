@@ -322,6 +322,9 @@ wire_struct! {
         /// Amplification (object) stage.
         amp: StageCode,
         ms: StageCode,
+        /// Geometry stage (with `vs`): the pipeline is a vertex pipeline whose
+        /// primitives the geometry shader rewrites.
+        gs: StageCode,
         /// Valid entries of `inputs`.
         input_count: u32,
         /// Reserved, 0.
@@ -351,6 +354,8 @@ pub enum PsoKind {
     Vertex,
     /// `ms` (+ `amp`, `ps`): mesh.
     Mesh,
+    /// `vs` + `gs` (+ `ps`): vertex pipeline with a geometry shader.
+    Geometry,
 }
 
 impl GraphicsPsoDesc {
@@ -394,9 +399,11 @@ impl GraphicsPsoDesc {
             self.vs.is_present(),
             self.amp.is_present(),
             self.ms.is_present(),
+            self.gs.is_present(),
         ) {
-            (true, false, false) => Some(PsoKind::Vertex),
-            (false, _, true) => Some(PsoKind::Mesh),
+            (true, false, false, false) => Some(PsoKind::Vertex),
+            (true, false, false, true) => Some(PsoKind::Geometry),
+            (false, _, true, false) => Some(PsoKind::Mesh),
             _ => None,
         }
     }
@@ -409,7 +416,7 @@ impl GraphicsPsoDesc {
             opcode: OPCODE_NONE,
             field,
         };
-        for s in [&self.vs, &self.ps, &self.amp, &self.ms] {
+        for s in [&self.vs, &self.ps, &self.amp, &self.ms, &self.gs] {
             if s.is_present() && (s.addr == 0 || s.len == 0) {
                 return Err(bad("stage code"));
             }
@@ -495,7 +502,7 @@ mod tests {
         assert_eq!(<BlendDesc as Wire>::SIZE, 100);
         assert_eq!(<RasterDesc as Wire>::SIZE, 20);
         assert_eq!(<DepthStencilDesc as Wire>::SIZE, 16);
-        assert_eq!(<GraphicsPsoDesc as Wire>::SIZE, 2056);
+        assert_eq!(<GraphicsPsoDesc as Wire>::SIZE, 2072);
     }
 
     fn with_code() -> GraphicsPsoDesc {
@@ -517,6 +524,14 @@ mod tests {
         d.ms = StageCode::NONE;
         assert_eq!(d.kind(), None, "amp alone is no pipeline");
         assert_eq!(GraphicsPsoDesc::new().kind(), None);
+        let mut g = with_code();
+        g.gs = StageCode { addr: 8, len: 8 };
+        assert_eq!(g.kind(), Some(PsoKind::Geometry));
+        g.ms = StageCode { addr: 8, len: 8 };
+        assert_eq!(g.kind(), None, "gs with ms is no pipeline");
+        g.ms = StageCode::NONE;
+        g.vs = StageCode::NONE;
+        assert_eq!(g.kind(), None, "gs without vs is no pipeline");
     }
 
     #[test]

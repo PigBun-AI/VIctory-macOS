@@ -199,7 +199,7 @@ only in dumps.
 | 67 | `DESTROY_HEAP` (`DestroyHeapArgs`) | 1 | 16 | Implemented | head: CallHead @0, heap: MemHeapId @8 | in: heap |
 | 68 | `CREATE_PLACED_BUFFER` (`CreatePlacedBufferArgs`) | 1 | 56 | Implemented | head: CallHead @0, heap: MemHeapId @8, offset: u64 @16, size: u64 @24, res: ResId @32, gpu_va: u64 @40, cpu_addr: u64 @48 | in: heap, offset, size; out: res, gpu_va, cpu_addr (0 in a DEFAULT heap) |
 | 69 | `GET_RESOURCE_ALLOCATION_INFO` (`GetResourceAllocationInfoArgs`) | 1 | 72 | Implemented | head: CallHead @0, kind: ResKind @8, dimension: TexDim @12, format: u32 @16, width: u32 @20, height: u32 @24, depth_or_array: u32 @28, mips: u32 @32, samples: u32 @36, usage: u32 @40, heap_kind: MemKind @44, buffer_size: u64 @48, size: u64 @56, alignment: u64 @64 | in: kind (ResKind), the texture fields or buffer_size, heap_kind; out: size, alignment (what Metal's heap size-and-align says) |
-| 80 | `CREATE_GRAPHICS_PIPELINE` (`CreateGraphicsPipelineArgs`) | 1 | 2080 | Implemented | head: CallHead @0, root_sig: RootSigId @8, flags: u32 @12, pso: PsoId @16, desc: GraphicsPsoDesc @24 | in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make) |
+| 80 | `CREATE_GRAPHICS_PIPELINE` (`CreateGraphicsPipelineArgs`) | 1 | 2096 | Implemented | head: CallHead @0, root_sig: RootSigId @8, flags: u32 @12, pso: PsoId @16, desc: GraphicsPsoDesc @24 | in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make) |
 | 96 | `CREATE_SWAPCHAIN` (`CreateSwapchainArgs`) | 1 | 120 | Implemented | head: CallHead @0, window: u64 @8, width: u32 @16, height: u32 @20, format: u32 @24, buffer_count: u32 @28, usage: u32 @32, flags: u32 @36, max_latency: u32 @40, swapchain: SurfaceId @44, surface_format: u32 @48, buffers: [u32; 16] @56 | in: window (WindowRef), width, height, format (DXGI), buffer_count, usage, flags (swapchain_flags), max_latency; out: swapchain, surface_format, buffers (ResId numbers of the back buffers) |
 | 97 | `RESIZE_SWAPCHAIN` (`ResizeSwapchainArgs`) | 1 | 96 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, width: u32 @12, height: u32 @16, format: u32 @20, buffer_count: u32 @24, usage: u32 @28, buffers: [u32; 16] @32 | in: swapchain, width, height, format (0 = keep), buffer_count (0 = keep), usage (0 = keep); out: buffers (new ResId numbers) |
 | 98 | `DESTROY_SWAPCHAIN` (`DestroySwapchainArgs`) | 1 | 16 | Implemented | head: CallHead @0, swapchain: SurfaceId @8 | in: swapchain (the back buffers stay the caller's) |
@@ -231,6 +231,19 @@ only in dumps.
 | 0x0400 | `COPY_TEXTURE_REGION` | 1 | 120 | Implemented | dst: TextureLocation @0, src: TextureLocation @40, dst_x: u32 @80, dst_y: u32 @84, dst_z: u32 @88, flags: u32 @92, box_left: u32 @96, box_top: u32 @100, box_front: u32 @104, box_right: u32 @108, box_bottom: u32 @112, box_back: u32 @116 | buffer footprint to texture, texture to buffer footprint, or texture to texture (optional source box) |
 | 0x0401 | `COPY_RESOURCE` | 1 | 8 | Implemented | dst: ResId @0, src: ResId @4 | whole resource to a resource of the same description (buffer or texture) |
 | 0x0402 | `CLEAR_UAV_TEXTURE` | 1 | 64 | Implemented | res: ResId @0, format: u32 @4, dimension: TexViewDim @8, float_values: u8 @9, flags: u16 @10, mip: u32 @12, first_slice: u32 @16, slice_count: u32 @20, values: [u32; 4] @24, rect_left: u32 @40, rect_top: u32 @44, rect_right: u32 @48, rect_bottom: u32 @52 | clear a texture UAV (mip, slices, optional rectangle) with float or uint values |
+| 0x0501 | `SET_VIEWPORTS` | 1 | 392 | Implemented | count: u32 @0, vp: [Viewport; 16] @8 | RSSetViewports: first count of 16 (applied at the next draw) |
+| 0x0502 | `SET_SCISSORS` | 1 | 264 | Implemented | count: u32 @0, rect: [Rect; 16] @8 | RSSetScissorRects: first count of 16 edge rectangles |
+| 0x0503 | `SET_BLEND_FACTOR` | 1 | 16 | Implemented | color: [f32; 4] @0 | OMSetBlendFactor |
+| 0x0504 | `SET_STENCIL_REF` | 1 | 8 | Implemented | value: u32 @0 | OMSetStencilRef |
+| 0x0505 | `SET_PRIMITIVE_TOPOLOGY` | 1 | 8 | Implemented | topology: Topology @0 | IASetPrimitiveTopology (point/line/triangle lists and strips) |
+| 0x0506 | `SET_INDEX_BUFFER` | 1 | 16 | Implemented | va: u64 @0, size: u32 @8, format: IndexFormat @12 | IASetIndexBuffer: GPU address, size, 16 or 32 bit |
+| 0x0507 | `SET_VERTEX_BUFFERS` | 1 | 264 | Implemented | start_slot: u32 @0, count: u32 @4, vb: [VertexBufferView; 16] @8 | IASetVertexBuffers: start slot and first count of 16 views |
+| 0x0510 | `DRAW` | 1 | 16 | Implemented | vertex_count: u32 @0, instance_count: u32 @4, start_vertex: u32 @8, start_instance: u32 @12 | DrawInstanced |
+| 0x0511 | `DRAW_INDEXED` | 1 | 24 | Implemented | index_count: u32 @0, instance_count: u32 @4, start_index: u32 @8, base_vertex: i32 @12, start_instance: u32 @16 | DrawIndexedInstanced |
+| 0x0512 | `DISPATCH_MESH` | 1 | 16 | Implemented | x: u32 @0, y: u32 @4, z: u32 @8 | DispatchMesh (object or mesh threadgroup counts) |
+| 0x0520 | `CLEAR_ATTACHMENT` | 1 | 168 | Implemented | target: u32 @0, flags: u32 @4, rect_count: u32 @8, clear_stencil: u32 @12, color: [f32; 4] @16, clear_depth: f32 @32, rect: [Rect; 8] @40 | clear an attachment, or rectangles of it, inside the open pass |
+| 0x0600 | `BEGIN_RENDER_PASS` | 2 | 336 | Implemented | rt_count: u32 @0, flags: u32 @4, rt: [RenderAttachment; 8] @8, ds: DepthAttachment @296, width: u32 @328, height: u32 @332 | start a render pass: colour and depth attachments with their load actions and clear values |
+| 0x0601 | `END_RENDER_PASS` | 1 | 16 | Implemented | rt_store: [StoreAction; 8] @0, depth_store: StoreAction @8, stencil_store: StoreAction @9 | end the render pass: store action of every attachment |
 | 0x0800 | `EXECUTE_INDIRECT` | 1 | 40 + data | Implemented | args: ResId @0, count: ResId @4, args_offset: u64 @8, count_offset: u64 @16, max_count: u32 @24, stride: u32 @28, root_sig: RootSigId @32, num_args: u32 @36 | ExecuteIndirect: a signature (num_args IndirectArg of 16 bytes follow) and the buffers it reads |
 | 0x0F00 | `SYNC_RECORD` | 1 | 16 + data | ReplayOnly | op: SyncOp @0, status: Status @4, args_len: u32 @8, blob_len: u32 @12 | recorded sync call (args, blob follow) |
 | 0x0F01 | `BUFFER_DATA` | 1 | 24 + data | ReplayOnly | res: ResId @0, offset: u64 @8, len: u64 @16 | recorded CPU write to a buffer (len bytes follow) |
@@ -238,8 +251,8 @@ only in dumps.
 ### Reserved opcode ranges
 
 - 0x0403-0x04FF: textures: numbers not yet used
-- 0x0500-0x05FF: render state, draws, mesh dispatch (M3, m3-gfx)
-- 0x0600-0x06FF: render passes and render-encoder bindings (M3, m3-gfx)
+- 0x0500-0x05FF: render state, draws, mesh dispatch, clears in a pass (m4-render; numbers not yet used)
+- 0x0602-0x06FF: render passes and render-encoder bindings (m4-render; numbers not yet used)
 - 0x0700-0x07FF: present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)
 - 0x0801-0x08FF: queries, timestamps, other compute-side commands (m4-compute)
 - 0x0900-0x09FF: ExecuteIndirect (M2)
