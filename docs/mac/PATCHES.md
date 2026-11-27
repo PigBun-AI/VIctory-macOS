@@ -653,6 +653,36 @@ draws (`VICTORY_WORLD_DRAWS`); with `w<N>` and no world ever reached, nothing tr
 *Fidelity.* None affected: it only chooses which frame is recorded or saved. *Remove when* the Windows line's
 recorder names world frames itself (then drop `frames.rs` and the three hooks; `world.rs` stays for I1).
 
+### S2 — mesh shader outputs numbered by alignment (`victory-shader/src/emit/mesh_order.rs`, 6 lines in `emit/mod.rs`)
+
+*What.* The translator numbers a mesh shader's vertex and primitive output elements as the console's signature
+has them. `emit_program` now sorts the two lists (`mesh_order::vertex`, `mesh_order::primitive`: position first,
+then at each step the element that needs the fewest padding bytes in Metal's struct, the bigger one first on a tie)
+before `lower`, which takes an element's id from its place in the list, so the metadata and every
+`storeVertexOutput` / `storePrimitiveOutput` follow. Only mesh stages are touched (`StageIo::Ms`); D3D12 links
+stages by semantic, so the order is of no meaning to a pixel shader. Upstream edits are the `mod mesh_order;` line and
+the `if` block in `emit_program`, each marked `mac S2`. The translation fingerprint changes with the source hash, so
+cached translations are made again. `back` keeps its run-time repack (`mesh_fit::repack_outputs`) as a fallback.
+
+*Why not needed on Windows.* AMD and D3D12 have no per-mesh-vertex-struct size limit that counts padding: the DXIL
+limit (32 KB) counts 4 bytes a component. Metal counts `round_up(NV, 4) x vertex_stride + NP x primitive_stride`
+against 32768 bytes, with every struct member aligned to its own size and the members in element-id order (measured
+on an Apple M5 Max, macOS 27.2.1, SDK 27.2, MSC 4.0.3, 2026-11-27; `docs/metal/mesh32k.md` on the metal line). A
+`float` between two `float3`s costs 4 bytes on every vertex: 520 of the 8,765 translated mesh shaders of the title were
+refused for the total size. S1 adds per-primitive outputs, whose stride counts the same way: they are ordered here too.
+
+*Remove when.* The Windows line numbers mesh outputs by alignment itself (merge conflict at the `mac S2` lines), or
+Metal stops counting padding.
+
+*Evidence (2026-11-27/28).* Unit tests `emit::mesh_order::tests` (4: the alternating float/float3 case 276 -> 192
+bytes, nothing lost or reordered when already packed, clip distances counted, primitive outputs 40 -> 32 bytes).
+Census on the 8,765 translated mesh shaders, the translator before and after S2 and each built into a Metal 4 mesh
+pipeline with MSC and the default pixel shader (`victory-census translate --hashes` then `convert --kind ms`):
+refused for the total size **520 -> 143**, builds 8,245 -> 8,622, 0 shaders that built before stop building. The
+143 left are real content (4 to 36 bytes a vertex over); dropping what the title's real pixel shaders do not read
+saves 0 bytes for them. Frame-capture replay (`tools/metal/replay.sh`, `rec-a-f300`) with S2 on the metal line's back:
+`replay.png` byte-identical to the replay without S2 (md5 458e2f66...).
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
