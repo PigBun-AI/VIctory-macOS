@@ -45,26 +45,64 @@ fn now_us() -> u64 {
         .map_or(0, |d| d.as_micros() as u64)
 }
 
+/// A file made on first use (the PE half of the front is two dlls, `d3d12`
+/// and `dxgi`, each with its own copy of this module: each makes only the
+/// files it writes to, so they do not truncate one another's).
+struct Lazy {
+    path: PathBuf,
+    header: &'static str,
+    file: Mutex<Option<File>>,
+}
+
+impl Lazy {
+    fn new(dir: &Path, name: &str, header: &'static str) -> Lazy {
+        Lazy {
+            path: dir.join(name),
+            header,
+            file: Mutex::new(None),
+        }
+    }
+
+    fn line(&self, text: &str) {
+        let mut g = lock(&self.file);
+        if g.is_none() {
+            *g = File::create(&self.path).ok().inspect(|_| ());
+            if let Some(f) = g.as_mut() {
+                let _ = writeln!(f, "{}", self.header);
+            }
+        }
+        if let Some(f) = g.as_mut() {
+            let _ = writeln!(f, "{text}");
+            let _ = f.flush();
+        }
+    }
+}
+
+/// `front.csv` has one row per `ExecuteCommandLists` call (and per list that
+/// failed at `Close`), in [`HEADER`]'s columns: the first column counts the
+/// rows, not frames. The `d3d12` dll holds the lists and the pipelines, the
+/// `dxgi` dll holds `Present`: `front-present.csv` has one line per present
+/// (`present,epoch_ms`), and the rows are put into frames by those times.
 pub struct Collector {
     stats: Mutex<FrameStats>,
-    frame: Mutex<u64>,
-    csv: Mutex<File>,
-    pso_csv: Mutex<File>,
+    rows: Mutex<u64>,
+    presents: Mutex<u64>,
+    csv: Lazy,
+    present_csv: Lazy,
+    pso_csv: Lazy,
     labels: Mutex<HashMap<u32, Label>>,
 }
 
 impl Collector {
     pub fn open(dir: &Path) -> std::io::Result<Collector> {
         std::fs::create_dir_all(dir)?;
-        let mut csv = File::create(dir.join("front.csv"))?;
-        writeln!(csv, "{HEADER}")?;
-        let mut pso_csv = File::create(dir.join("front-pso.csv"))?;
-        writeln!(pso_csv, "{PSO_HEADER}")?;
         Ok(Collector {
             stats: Mutex::new(FrameStats::new()),
-            frame: Mutex::new(0),
-            csv: Mutex::new(csv),
-            pso_csv: Mutex::new(pso_csv),
+            rows: Mutex::new(0),
+            presents: Mutex::new(0),
+            csv: Lazy::new(dir, "front.csv", HEADER),
+            present_csv: Lazy::new(dir, "front-present.csv", "present,epoch_ms"),
+            pso_csv: Lazy::new(dir, "front-pso.csv", PSO_HEADER),
             labels: Mutex::new(HashMap::new()),
         })
     }
@@ -101,6 +139,14 @@ impl Collector {
         out
     }
 
+    /// Writes the counts since the last row as a row.
+    fn flush_row(&self) {
+        let mut n = lock(&self.rows);
+        *n += 1;
+        let row = lock(&self.stats).take_row(*n, now_us() / 1000);
+        self.csv.line(&row);
+    }
+
     /// `lists` were handed to `ExecuteCommandLists`: their ops are submitted.
     pub fn submitted(&self, lists: &[std::sync::Arc<[Item]>]) -> Vec<(Op, Label)> {
         let ops: Vec<(Op, Label)> = lists.iter().flat_map(|l| self.ops_of(l)).collect();
@@ -118,9 +164,15 @@ impl Collector {
         }
     }
 
-    /// A list that failed at `Close`: its ops were recorded, never executed.
-    pub fn list_failed(&self, items: &[Item], why: &str) {
-        let ops = self.ops_of(items);
+    /// The call is over: its row goes out.
+    pub fn executed(&self) {
+        self.flush_row();
+    }
+
+    /// Ops that never reached the queue (a list was not closed or had failed):
+    /// submitted and dropped in one row.
+    pub fn lost(&self, items: &[&[Item]], why: &str) {
+        let ops: Vec<(Op, Label)> = items.iter().flat_map(|l| self.ops_of(l)).collect();
         {
             let mut s = lock(&self.stats);
             for (op, label) in &ops {
@@ -128,7 +180,13 @@ impl Collector {
             }
         }
         self.dropped(&ops, why);
+        self.flush_row();
+    }
+
+    /// A list that failed at `Close`: its ops were recorded, never executed.
+    pub fn list_failed(&self, items: &[Item], why: &str) {
         lock(&self.stats).extra("lists failed at Close", 1);
+        self.lost(&[items], why);
     }
 
     /// A pipeline creation, with the front's answer.
@@ -137,23 +195,18 @@ impl Collector {
             Ok(id) => (id.0, "ok", String::new()),
             Err(why) => (0, "refused", sanitize(why)),
         };
-        let _ = writeln!(
-            lock(&self.pso_csv),
+        self.pso_csv.line(&format!(
             "{},{kind},{hash:016x},{pso},{result},{reason}",
             now_us()
-        );
-        if result != "ok" {
-            lock(&self.stats).extra(&format!("pso refused {kind}"), 1);
-        }
+        ));
     }
 
+    /// `Present` (the `dxgi` dll's copy).
     pub fn end_frame(&self) {
-        let mut frame = lock(&self.frame);
-        *frame += 1;
-        let row = lock(&self.stats).take_row(*frame, now_us() / 1000);
-        let mut csv = lock(&self.csv);
-        let _ = writeln!(csv, "{row}");
-        let _ = csv.flush();
+        let mut n = lock(&self.presents);
+        *n += 1;
+        self.present_csv
+            .line(&format!("{},{}", *n, now_us() / 1000));
     }
 }
 
@@ -289,15 +342,22 @@ mod tests {
         let ops = c.submitted(&lists);
         assert_eq!(ops.len(), 6);
         c.dropped(&ops, "ExecuteCommandLists refused");
+        c.executed();
         c.list_failed(&list(), "list failed at x.rs:1");
         c.end_frame();
         let text = std::fs::read_to_string(dir.join("front.csv")).unwrap();
+        assert_eq!(text.lines().count(), 3);
+        let present = std::fs::read_to_string(dir.join("front-present.csv")).unwrap();
+        assert!(present.starts_with("present,epoch_ms\n1,"));
         let row: Vec<&str> = text.lines().nth(1).unwrap().split(',').collect();
         let header: Vec<&str> = HEADER.split(',').collect();
         let at = |n: &str| row[header.iter().position(|h| *h == n).unwrap()];
-        assert_eq!((at("submitted_draw"), at("submitted_dispatch")), ("6", "3"));
-        assert_eq!((at("dropped_draw"), at("dropped_dispatch")), ("6", "3"));
+        assert_eq!((at("submitted_draw"), at("submitted_dispatch")), ("4", "2"));
+        assert_eq!((at("dropped_draw"), at("dropped_dispatch")), ("4", "2"));
         assert!(at("reasons").contains("ExecuteCommandLists refused=6"));
+        let row: Vec<&str> = text.lines().nth(2).unwrap().split(',').collect();
+        let at = |n: &str| row[header.iter().position(|h| *h == n).unwrap()];
+        assert_eq!((at("submitted_draw"), at("dropped_draw")), ("2", "2"));
         assert!(at("extras").contains("lists failed at Close=1"));
         let _ = std::fs::remove_dir_all(&dir);
     }

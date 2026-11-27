@@ -1046,11 +1046,14 @@ impl Queue {
             self.dev.next_list_id()
         })
         .and_then(|block| self.dev.gpu().submit(&block));
-        if let (Some((stats, ops)), Err(e)) = (counted, &result) {
-            stats.dropped(
-                &ops,
-                &format!("ExecuteCommandLists refused {:#x}", e.0 as u32),
-            );
+        if let Some((stats, ops)) = counted {
+            if let Err(e) = &result {
+                stats.dropped(
+                    &ops,
+                    &format!("ExecuteCommandLists refused {:#x}", e.0 as u32),
+                );
+            }
+            stats.executed();
         }
         result
     }
