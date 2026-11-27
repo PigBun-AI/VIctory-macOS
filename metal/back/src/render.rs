@@ -379,24 +379,9 @@ pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, Msc
     }
     let layout = first.reflection.layout.clone();
 
-    // The pixel shader may write as many targets as the pipeline has
-    // attachments, plus the second source of dual-source blending.
-    if let Some(ps) = &ps
-        && let Some(f) = ps.reflection.fragment
-    {
-        let declared = desc
-            .targets
-            .iter()
-            .rposition(|t| t.format != MTLPixelFormat::Invalid)
-            .map_or(0, |i| i + 1) as i32;
-        let dual = i32::from(desc.targets.iter().any(|t| t.blend.uses_second_source()));
-        if f.num_render_targets > declared + dual {
-            return Err(MscError::Mismatch(format!(
-                "the pixel shader writes {} render targets, the pipeline declares {}",
-                f.num_render_targets, declared
-            )));
-        }
-    }
+    // A pixel shader that writes more targets than the pipeline has
+    // attachments (D3D12: the extra outputs are dropped) is made as it is:
+    // Metal drops writes to colour slots without an attachment.
 
     let mesh = match &ms {
         None => None,

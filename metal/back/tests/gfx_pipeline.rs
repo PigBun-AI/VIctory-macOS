@@ -285,10 +285,10 @@ fn the_refusals_say_why() {
     d.rt_formats[0] = 9999;
     assert_eq!(create(&fx, sig, d).0, Status::UNSUPPORTED);
 
-    // State Metal lacks.
+    // Conservative rasterization is accepted and ignored.
     let mut d = vertex_desc(&s);
     d.raster.conservative = 1;
-    assert_eq!(create(&fx, sig, d).0, Status::UNSUPPORTED);
+    assert_eq!(create(&fx, sig, d).0, Status::OK);
 
     // Bad calls.
     assert_eq!(

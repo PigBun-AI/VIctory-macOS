@@ -1144,3 +1144,29 @@ fn root_va_graphics(root_index: u32, kind: RootParamKind, gpu_va: u64) -> Comman
         gpu_va,
     })
 }
+
+const PS_TWO_OUTPUTS: &str = "struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+struct Out { float4 c : SV_Target0; float4 extra : SV_Target1; };\n\
+Out main(VSOut i) { Out o; o.c = i.col; o.extra = float4(1, 0, 1, 1); return o; }\n";
+
+/// D3D12 drops what a pixel shader writes beyond the pipeline's targets:
+/// the pipeline is made (and conservative rasterization is ignored) and the
+/// first target is drawn as usual.
+#[test]
+fn outputs_beyond_the_pipelines_targets_are_dropped() {
+    let Some(ps) = dxil_or_skip("draw_ps2", "ps_6_6", PS_TWO_OUTPUTS) else { return };
+    let Some(mut g) = setup() else { return };
+    g.ps = ps;
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let (_vb, va) = g.vertex_buffer(&HALF.vertices());
+    let mut d = g.desc();
+    d.raster.conservative = 1;
+    let pso = g.pso(d);
+    let bg = [0.0, 0.0, 0.25, 1.0];
+    let mut cmds = g.state(pso, va, 3 * STRIDE);
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(draw(3));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    assert_image(&got, &reference(bg, &[HALF]), "extra output dropped");
+}

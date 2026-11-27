@@ -332,11 +332,9 @@ pub(crate) fn describe<'a>(
 ) -> Result<GraphicsDesc<'a>, Refusal> {
     let [vs, ps, amp, ms] = code;
     let raster = &d.raster;
-    if raster.conservative != 0 {
-        return Err(Refusal::Unsupported(
-            "conservative rasterization (Metal has none)".into(),
-        ));
-    }
+    // Conservative rasterization: Metal has none. The pipeline is made
+    // without it (a known difference, docs/metal/m4-render.md): the games
+    // ask for it on a few passes where the plain rule only loses edge pixels.
     let blend = &d.blend;
     let mut targets = Vec::new();
     for i in 0..d.rt_count as usize {
@@ -730,12 +728,10 @@ mod tests {
     #[test]
     fn what_metal_lacks_is_refused_by_name() {
         let root = RootSignatureDesc::default();
+        // Conservative rasterization is accepted and ignored.
         let mut d = base();
         d.raster.conservative = 1;
-        assert!(matches!(
-            describe(&d, &root, [None; 4], crate::msc::Compat::NONE),
-            Err(Refusal::Unsupported(t)) if t.contains("conservative")
-        ));
+        assert!(describe(&d, &root, [None; 4], crate::msc::Compat::NONE).is_ok());
         let mut d = base();
         d.rt_count = 1;
         d.rt_formats[0] = dx::R8G8B8A8_UNORM;
