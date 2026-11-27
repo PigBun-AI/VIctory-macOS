@@ -9,6 +9,7 @@
 #   5. cargo doc of proto with warnings denied (broken links)
 #   6. cargo fmt --check
 #   7. gen-front-stubs.sh --check    the generated front shell stubs are current
+#   8. cargo xtask policy            the asset policy (docs/asset-policy.md), repository-wide
 #
 # Every step runs even when an earlier one failed; a passing step prints one
 # line, a failing one prints its whole output. -v prints the output of every step.
@@ -83,6 +84,7 @@ step "cargo doc (proto)"    env RUSTDOCFLAGS="-D warnings" cargo doc -p victory-
 step "cargo fmt --check"    cargo fmt --check
 cd "$ROOT" || exit 2
 step "front stubs current"  tools/metal/gen-front-stubs.sh --check
+step "asset policy"         cargo xtask policy
 
 echo
 if [ -z "$failed_steps" ]; then
