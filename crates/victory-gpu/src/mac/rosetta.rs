@@ -87,6 +87,21 @@ pub fn wait_for_overlapped_reads() -> bool {
     rosetta() && fault_tracking()
 }
 
+/// Whether an access violation that says "read" is a write after all: a locked or
+/// exchanging instruction (`lock or/bts/cmpxchg/xadd`, `xchg`) that splits across a
+/// page boundary into a read-only page (private memory in the Wine probe), or sits in a
+/// page that is `PAGE_NOACCESS`, is reported by Rosetta under Wine as a read (probe
+/// 2026-11-27/28: `lock_or32`, `xchg32`, `lock_xadd*`, `cmpxchg*` in the `cross`,
+/// `crossro` and `fault` modes; x86 reports a write). `watch.rs`'s handler only opens a guarded block for a
+/// write, so such a store would be passed on as a crash, or retried for ever. Our guards
+/// are `PAGE_READONLY` (`protect_alias`, `protect_here`), on which a real read never
+/// faults: a "read" fault in a block we guard is therefore this misreport, and only
+/// there, under Rosetta, it is taken for the write it is (G10).
+pub(crate) fn read_fault_is_write(under_rosetta: bool, access: usize, guarded: bool) -> bool {
+    const READ: usize = 0;
+    under_rosetta && access == READ && guarded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +122,18 @@ mod tests {
         assert!(!under || cfg!(windows));
         assert_eq!(stores_need_patching(), fault_tracking() && under);
         assert_eq!(wait_for_overlapped_reads(), fault_tracking() && under);
+    }
+
+    #[test]
+    fn a_read_fault_in_a_guarded_block_is_a_write_only_under_rosetta() {
+        // (access: 0 read, 1 write, 8 execute)
+        assert!(read_fault_is_write(true, 0, true));
+        // Not in a block we guard: a real read fault, as before.
+        assert!(!read_fault_is_write(true, 0, false));
+        // The write case is the ordinary path; execute is never one.
+        assert!(!read_fault_is_write(true, 1, true));
+        assert!(!read_fault_is_write(true, 8, true));
+        // A PC: the hardware reports writes as writes, nothing changes.
+        assert!(!read_fault_is_write(false, 0, true));
     }
 }

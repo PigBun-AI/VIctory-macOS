@@ -50,9 +50,13 @@ fn decode(code: &[u8], at: usize) -> Option<(MaskedKind, bool)> {
         (2, 0x8e) => MaskedKind::Vpmaskmovd,
         (2, 0x2e) => MaskedKind::Vmaskmovps,
         (2, 0x2f) => MaskedKind::Vmaskmovpd,
-        (3, 0x1d) if !w => MaskedKind::Vcvtps2ph,
-        (3, 0x19) if !w && b2 & 4 != 0 => MaskedKind::Vextractf128,
-        (3, 0x39) if !w && b2 & 4 != 0 => MaskedKind::Vextracti128,
+        // The three unmasked ones have no second source: VEX.vvvv must be 1111
+        // (otherwise the bytes are not that instruction: #UD on hardware). The
+        // title has one such look-alike, the immediate of `mov eax, 0x396dc3c4`
+        // at RVA 0x2d566d5, which the scan used to take for a `vextracti128`.
+        (3, 0x1d) if !w && b2 & 0x78 == 0x78 => MaskedKind::Vcvtps2ph,
+        (3, 0x19) if !w && b2 & 0x7c == 0x7c => MaskedKind::Vextractf128,
+        (3, 0x39) if !w && b2 & 0x7c == 0x7c => MaskedKind::Vextracti128,
         _ => return None,
     };
     Some((kind, b2 & 4 != 0))
@@ -189,6 +193,25 @@ mod tests {
     }
 
     #[test]
+    fn the_unmasked_stores_need_vvvv_1111() {
+        // vcvtps2ph [rax], ymm0, 0 and xmm0, vextractf128/vextracti128 [rax], ymm0, 1.
+        for (bytes, kind, wide) in [
+            ([0xc4, 0xe3, 0x7d, 0x1d, 0x00], MaskedKind::Vcvtps2ph, true),
+            ([0xc4, 0xe3, 0x79, 0x1d, 0x00], MaskedKind::Vcvtps2ph, false),
+            ([0xc4, 0xe3, 0x7d, 0x19, 0x00], MaskedKind::Vextractf128, true),
+            ([0xc4, 0xe3, 0x7d, 0x39, 0x00], MaskedKind::Vextracti128, true),
+        ] {
+            assert_eq!(decode(&bytes, 0), Some((kind, wide)), "{bytes:02x?}");
+            // The same with vvvv 1101 is no such instruction (the title's
+            // `mov eax, 0x396dc3c4` holds c4 c3 6d 39 b9 in its bytes).
+            let mut other = bytes;
+            other[2] = (other[2] & 0x87) | 0x68;
+            assert_eq!(decode(&other, 0), None, "{other:02x?}");
+        }
+        assert_eq!(decode(&[0xc4, 0xc3, 0x6d, 0x39, 0xb9], 0), None);
+    }
+
+    #[test]
     fn leaves_loads_registers_and_other_maps_alone() {
         // The load forms (8c, 2c) are not stores.
         assert_eq!(decode(&[0xc4, 0xe2, 0x45, 0x8c, 0x30], 0), None);
@@ -272,7 +295,7 @@ impl Store {
 
 /// The memory operand whose ModRM byte is at `at`: ModRM, the SIB byte if
 /// any, the displacement, and where the operand ends.
-fn operand(code: &[u8], at: usize) -> Option<(u8, Option<u8>, i32, usize)> {
+pub(crate) fn operand(code: &[u8], at: usize) -> Option<(u8, Option<u8>, i32, usize)> {
     let modrm = *code.get(at)?;
     let mut end = at + 1;
     let (md, rm) = (modrm >> 6, modrm & 7);
@@ -377,38 +400,46 @@ pub(crate) fn decode_wide_move(code: &[u8], at: usize) -> Option<Store> {
 /// Bytes the stack moves before the trampoline's `lea`: rax, rcx, flags.
 const PUSHED: i32 = 24;
 
+/// `lea <reg>, [operand of s]` (`reg` 0-7, no REX.R) appended to `c`, for the
+/// instruction `s` at `site`, the code being placed at `at`; `pushed` is what the
+/// trampoline has pushed before it (an rsp-based operand moves by that much).
+pub(crate) fn lea_operand(c: &mut Vec<u8>, reg: u8, s: &Store, site: u64, at: u64, pushed: i32) -> Option<()> {
+    c.push(0x48 | u8::from(s.x) << 1 | u8::from(s.b));
+    c.push(0x8d);
+    let rm = s.modrm & 7;
+    let reg = (reg & 7) << 3;
+    if s.rip_relative() {
+        c.push(reg | rm); // mod 0, r/m 5
+        let target = (site as i64) + s.len as i64 + i64::from(s.disp);
+        let next = at as i64 + c.len() as i64 + 4;
+        c.extend_from_slice(&i32::try_from(target - next).ok()?.to_le_bytes());
+    } else if s.no_base() {
+        c.push(reg | rm);
+        c.push(s.sib?);
+        c.extend_from_slice(&s.disp.to_le_bytes());
+    } else {
+        // Always a disp32 form (mod 2), so rsp's shift always fits.
+        c.push(0x80 | reg | rm);
+        if let Some(sib) = s.sib {
+            c.push(sib);
+        }
+        let disp = if s.rsp_base() {
+            s.disp.checked_add(pushed)?
+        } else {
+            s.disp
+        };
+        c.extend_from_slice(&disp.to_le_bytes());
+    }
+    Some(())
+}
+
 /// The trampoline for `s`, placed at `at`, for the store at `site`: the
 /// same stores done one lane at a time with plain `mov`s (which Rosetta
 /// can resume after a fault), then a jump back past the store. Flags,
 /// rax, rcx and the vector registers are kept.
 pub(crate) fn trampoline(s: &Store, site: u64, at: u64) -> Option<Vec<u8>> {
     let mut c = vec![0x50, 0x51, 0x9c]; // push rax; push rcx; pushfq
-    // lea rax, [operand]
-    c.push(0x48 | u8::from(s.x) << 1 | u8::from(s.b));
-    c.push(0x8d);
-    let rm = s.modrm & 7;
-    if s.rip_relative() {
-        c.push(rm); // mod 0, reg 0 (rax), r/m 5
-        let target = (site as i64) + s.len as i64 + i64::from(s.disp);
-        let next = at as i64 + c.len() as i64 + 4;
-        c.extend_from_slice(&i32::try_from(target - next).ok()?.to_le_bytes());
-    } else if s.no_base() {
-        c.push(rm);
-        c.push(s.sib?);
-        c.extend_from_slice(&s.disp.to_le_bytes());
-    } else {
-        // Always a disp32 form (mod 2), so rsp's shift always fits.
-        c.push(0x80 | rm);
-        if let Some(sib) = s.sib {
-            c.push(sib);
-        }
-        let disp = if s.rsp_base() {
-            s.disp.checked_add(PUSHED)?
-        } else {
-            s.disp
-        };
-        c.extend_from_slice(&disp.to_le_bytes());
-    }
+    lea_operand(&mut c, 0, s, site, at, PUSHED)?; // lea rax, [operand]
     if let Some((b1, b2, opcode, imm, bytes)) = s.plain {
         // The same instruction into [rsp] (X and B cleared, ModRM.reg
         // kept), then the bytes copied out 8 at a time with plain moves.
@@ -473,6 +504,49 @@ fn tail(mut c: Vec<u8>, site: u64, len: usize, at: u64) -> Option<Vec<u8>> {
     c.push(0xe9);
     c.extend_from_slice(&i32::try_from(back - next).ok()?.to_le_bytes());
     Some(c)
+}
+
+/// What [`audit`] finds out about the stores the scan picks.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Audit {
+    /// Sites `decode_store` cannot decode (the patch would skip them).
+    pub undecoded: Vec<u32>,
+    /// Sites with no trampoline (a displacement out of range).
+    pub no_trampoline: Vec<u32>,
+    /// Sites with a segment-override or address-size byte right before the VEX
+    /// prefix, `(rva, byte)`: the trampoline's `lea` would not honour it.
+    pub prefixed: Vec<(u32, u8)>,
+}
+
+/// Runs the patch's own decoder and trampoline builder over every store the scan
+/// finds in `bytes`, without touching memory: the static half of L1/L6's check
+/// (`examples/masked_census.rs` prints it for a real image).
+pub fn audit(info: &ImageInfo, bytes: &[u8]) -> Audit {
+    let mut a = Audit::default();
+    for f in masked_stores(info, bytes) {
+        let Some(s) = info.sections.iter().find(|s| {
+            s.characteristics & MEM_EXECUTE != 0 && s.rva <= f.rva && f.rva - s.rva < s.file_size
+        }) else {
+            continue;
+        };
+        let start = s.file_offset as usize;
+        let Some(code) = bytes.get(start..start.saturating_add(s.file_size as usize)) else {
+            continue;
+        };
+        let at = (f.rva - s.rva) as usize;
+        match decode_store(code, at) {
+            None => a.undecoded.push(f.rva),
+            Some(st) => {
+                if trampoline(&st, 0x1_4000_0000 + u64::from(f.rva), 0x1_3000_0000).is_none() {
+                    a.no_trampoline.push(f.rva);
+                }
+            }
+        }
+        if at > 0 && matches!(code[at - 1], 0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65 | 0x67) {
+            a.prefixed.push((f.rva, code[at - 1]));
+        }
+    }
+    a
 }
 
 /// The bytes that replace the store at `site`: a jump to `to`, then
@@ -891,6 +965,109 @@ mod patch_tests {
             assert_eq!(got, vec![0, 2, 0, 0, 0, 0, 0, 8]);
             VirtualFree(data.cast(), 0, MEM_RELEASE);
             VirtualFree(exec.cast(), 0, MEM_RELEASE);
+        }
+    }
+
+    /// The 70 `vcvtps2ph [mem]` of the title (L1 patches them with the masked
+    /// stores): the unpatched store into a read-only page is fatal under
+    /// Rosetta whatever the lane (Wine probe 2026-11-27, 60 of 60), so the
+    /// patched one must fault as plain `mov`s do, resume after the handler
+    /// opens the page, and leave the half-floats in memory: ymm (16 bytes)
+    /// and xmm (8 bytes), inside the read-only page and across the
+    /// boundary into it at several offsets, imm8 0 (nearest) and 3 (towards zero).
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn a_patched_vcvtps2ph_resumes_after_a_write_fault() {
+        use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
+        use windows_sys::Win32::System::Diagnostics::Debug::*;
+        use windows_sys::Win32::System::Memory::*;
+        static PAGE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static FAULTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        unsafe extern "system" fn unguard(info: *mut EXCEPTION_POINTERS) -> i32 {
+            // SAFETY: the system passes valid pointers.
+            unsafe {
+                let r = &*(*info).ExceptionRecord;
+                let page = PAGE.load(std::sync::atomic::Ordering::Relaxed);
+                let at = r.ExceptionInformation[1];
+                if r.ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+                    && at.wrapping_sub(page - 0x1000) < 0x2000
+                {
+                    FAULTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let mut old = 0;
+                    VirtualProtect(page as *const _, 0x1000, PAGE_READWRITE, &mut old);
+                    return -1; // EXCEPTION_CONTINUE_EXECUTION
+                }
+            }
+            0
+        }
+        let floats: [f32; 8] = [1.0, -2.5, 65504.0, 0.5, 2.0, 3.0, -1.0, 4.0];
+        let halves: [u16; 8] = [0x3c00, 0xc100, 0x7bff, 0x3800, 0x4000, 0x4200, 0xbc00, 0x4400];
+        // (ymm, imm8, bytes before the boundary; 0: the store lies in the read-only page)
+        let mut cases = Vec::new();
+        for ymm in [true, false] {
+            for imm in [0u8, 3] {
+                for back in [0usize, 1, 2, 7, 8, 15] {
+                    if back < if ymm { 16 } else { 8 } || back == 0 {
+                        cases.push((ymm, imm, back));
+                    }
+                }
+            }
+        }
+        for (ymm, imm, back) in cases {
+            // f(dst rcx, _, src r8): vmovups ymm1, [r8]; <store>; vzeroupper; ret.
+            let mut code = vec![0xc4, 0xc1, 0x7c, 0x10, 0x08];
+            let site_at = code.len();
+            // vcvtps2ph [rcx], ymm1/xmm1, imm
+            code.extend_from_slice(&[0xc4, 0xe3, if ymm { 0x7d } else { 0x79 }, 0x1d, 0x09, imm]);
+            code.extend_from_slice(&[0xc5, 0xf8, 0x77, 0xc3]);
+            // SAFETY: our own pages and handler.
+            unsafe {
+                let exec = VirtualAlloc(
+                    std::ptr::null(),
+                    1 << 16,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_EXECUTE_READWRITE,
+                ) as *mut u8;
+                std::ptr::copy_nonoverlapping(code.as_ptr(), exec, code.len());
+                let s = decode_store(&code, site_at).unwrap();
+                assert_eq!(s.plain.map(|p| p.4), Some(if ymm { 16 } else { 8 }));
+                let site = exec as u64 + site_at as u64;
+                let at = exec as u64 + 0x1000;
+                let t = trampoline(&s, site, at).unwrap();
+                std::ptr::copy_nonoverlapping(t.as_ptr(), at as *mut u8, t.len());
+                let j = jump(site, s.len, at).unwrap();
+                std::ptr::copy_nonoverlapping(j.as_ptr(), site as *mut u8, j.len());
+                let data = VirtualAlloc(
+                    std::ptr::null(),
+                    0x2000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    PAGE_READWRITE,
+                ) as *mut u8;
+                let guarded = data.add(0x1000);
+                let mut old = 0;
+                VirtualProtect(guarded.cast(), 0x1000, PAGE_READONLY, &mut old);
+                PAGE.store(guarded as usize, std::sync::atomic::Ordering::Relaxed);
+                FAULTS.store(0, std::sync::atomic::Ordering::Relaxed);
+                let handler = AddVectoredExceptionHandler(1, Some(unguard));
+                let f: extern "win64" fn(*mut u8, *const u32, *const f32) =
+                    std::mem::transmute(exec);
+                let dst = guarded.sub(back);
+                f(dst, std::ptr::null(), floats.as_ptr());
+                RemoveVectoredExceptionHandler(handler);
+                let n = if ymm { 8 } else { 4 };
+                let bytes = std::slice::from_raw_parts(dst, 2 * n);
+                let got: Vec<u16> = bytes
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                assert_eq!(got, halves[..n].to_vec(), "ymm {ymm} imm {imm} back {back}");
+                assert!(
+                    FAULTS.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+                    "ymm {ymm} imm {imm} back {back}: the page was read-only, a plain store faults"
+                );
+                VirtualFree(data.cast(), 0, MEM_RELEASE);
+                VirtualFree(exec.cast(), 0, MEM_RELEASE);
+            }
         }
     }
 

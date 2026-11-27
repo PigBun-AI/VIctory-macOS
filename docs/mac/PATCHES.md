@@ -107,7 +107,7 @@ default changed (it was "off under Rosetta"): the file is Mac layer, no upstream
 ("unexpectedly need to EmulateForward on a synchronous exception"; VIctory-macOS #1, #14, #50, #144) and the
 first run found our own `vpmaskmovd` in `safecopy.rs` doing just that. G6 (`b7943221`) put plain `mov`s in
 its place, and with tracking on the loader patches the title's masked stores at load (L1), the 8 extra sites
-of #144 included (log: `masked stores  1242 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
+of #144 included (log: `masked stores  1241 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
 Evidence (2026-11-27, 15 default-config runs after the change, 10 of them the series with neutral input and
 Enter every 3 s, release exe of commit `4ab34ad8`): no EmulateForward, no title-watchdog crash, no warning or error
 from `titlewrite`, `shadow`, `inplace`, `safecopy` or `watch`; one run lasted 7 minutes into the streaming world
@@ -387,18 +387,72 @@ memory behind the pointers, so the same pipeline in another run or place is the 
 `pipeline.rs` (`compute_from_container`, `PIPELINE_IIDS` made `pub(crate)`). *Remove when* the Windows line implements the
 slots (the records' format is then theirs), or when a batch run shows the title's own fallback is as good and the patch is of no use.
 
+### G10 — a "read" fault in a guarded block is a write (`victory-gpu/src/mac/rosetta.rs`, 1 hook in `watch.rs`' handler)
+
+*Question (translation map `mac.isa.rmw_fault_access_type`).* Under Wine on Rosetta a locked or exchanging read-modify-write
+(`lock or/bts/cmpxchg/xadd`, `xchg`, 8/16/32/64-bit, 56,796 sites in the title) that faults on `PAGE_NOACCESS` memory, or that
+straddles a page boundary into a `PAGE_READONLY` page, reports access type *read* to the VEH; x86 reports a write
+(probe: `lock_or32`, `xchg32`, `lock_xadd*`, `cmpxchg*`, `lock_cmpxchg*`: `fault`, `cross`, `crossro`, `crossfirst` modes FAIL
+`access_type`; the same instructions in the `ro` mode, wholly inside a `PAGE_READONLY` page, report a write and pass).
+`watch::on_write` opens a guarded block only for a write, so a misreported one would reach the crash reporter.
+
+*What the guards use.* `PAGE_READONLY`, never `PAGE_NOACCESS`: `protect_alias` and `protect_here` in `watch.rs` (and `inplace.rs`'
+own guards) call `VirtualProtect(.., PAGE_READONLY)`, and `unguard`/`open` put `PAGE_READWRITE` back. `PAGE_NOACCESS` appears
+only for the title's own reservations/placeholders (`xmem.rs`), which the handler is not meant to open. So the plain case
+(an RMW wholly inside a guarded block) is the `ro` mode: a write, already handled. Left are RMWs that straddle from open
+memory into a guarded block. Guard blocks are 64 KiB aligned.
+
+*Measured.* On the mapped views the guards protect, `lock or`, `xchg`, `lock xadd`, `lock cmpxchg` (dword) starting 0-3 bytes before a
+guarded block's start report a **write** at the block's first byte, with or without this patch (test below with a recording
+handler, 2026-11-28); the probe's misreport is on private `VirtualAlloc` memory at 4 KiB and 16 KiB-aligned boundaries
+alike (`b=0x3000/0x4000/0x8000`), which the guards never cover. So no run is known to have hit it.
+
+*Patch (small, defensive).* `read_fault_is_write(rosetta, access, guarded)`: under Rosetta a fault of access type read in a
+block that `PROTECTED` holds is taken as the write it is (the handler then opens the block and the instruction runs again).
+Why this one and not the alternatives: `PAGE_READONLY` is already what is used, so "switch to READONLY" is a no-op; switching
+guards to anything else would change what every title store sees. A read fault on a `PAGE_READONLY` page cannot be a real read
+(reads are allowed), so inside our own guarded blocks the rule has no false positive; a block that was unmapped meanwhile fails
+`open` as before and falls through to the old paths. Nothing changes off Rosetta. Tests:
+`mac::rosetta::tests::a_read_fault_in_a_guarded_block_is_a_write_only_under_rosetta` (the rule, native),
+`watch::tests::locked_read_modify_writes_into_a_guarded_block_complete` (Windows; run under Wine/Rosetta: eight locked/exchanging
+forms into and across a guarded block all complete). Not needed on Windows (the CPU reports a write). *Remove with G2*, or
+when Rosetta reports these as writes; keep until a probe on a macOS update shows `crossro` passing.
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
 Rosetta can resume. Done whenever fault tracking runs under Rosetta, which is now the default (G2), so it
 needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`, a plain `wine victory.exe`,
-and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1242 patched to plain stores`.
+and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1241 patched to plain stores`.
 `VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `apps/victory/src/mac.rs`
 adds the 8 plain 256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
-variable is unset **or is plain `all`**: 1234 found by the scan + 8 = 1242. Before, an explicit `all` (which `run.sh`
+variable is unset **or is plain `all`**: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
 exported) replaced the list, so those 8 were never patched on a `run.sh` start; and with tracking off by default
 nothing was patched at all without the variable. With `VICTORY_FAULT_TRACKING=0` nothing is patched (nothing is guarded).
 Not needed on Windows: it resumes them. Remove with G2.
+
+*Coverage (checked 2026-11-28 against the static census of build 1.0.2.1, `research/census/title-isa-20261127`;
+`cargo run --release -p victory-loader --example masked_census -- <image> <site lists>`).* The census (a real
+disassembly) has 1130 masked stores (`vpmaskmovd` 789, `vpmaskmovq` 160, `vmaskmovps` 180, `vmaskmovpd` 1), 70 `vcvtps2ph [mem]`
+and 33 `vextract{f,i}128 [mem]`, 1233 sites. The scan finds 1233, **the same 1233: 0 missed in each of the three classes**, and
+`mac::masked::audit` decodes each one and builds its trampoline (0 undecoded, 0 out of reach, none with a segment or `67` prefix
+in front of the VEX byte, which the trampoline's `lea` would not honour). The scan used to find **1234**: the extra one was a byte
+look-alike, `c4 c3 6d 39 b9` inside the immediate of `mov eax, 0x396dc3c4` at RVA `0x2d566d5`, taken for a `vextracti128` and so *patched*: its five bytes overwritten by a jump, which changed that constant
+and the `mov ecx, 0xae64642c` after it. A real `vextract*128`/`vcvtps2ph` has VEX.vvvv = 1111; the scan now requires it
+(test `the_unmasked_stores_need_vvvv_1111`), so the count is 1233 and 1241 with the 8 plain stores. `vcvtps2ph [mem]` is in this
+patch since the start (the 70 sites above); there is no separate patch for it (see "L1 and vcvtps2ph" below).
+
+*L1 and `vcvtps2ph`.* The Wine probe (2026-11-27, `docs/mac/translation-map-mac.md`) found `vcvtps2ph [mem], ymm/xmm, imm`
+fatal under Rosetta (EmulateForward, the VEH never runs) on **any** write fault of the store, 60 of 60 runs; the title has 70.
+They are not missing a patch: L1's scan has had them from the start (`MaskedKind::Vcvtps2ph`; the trampoline runs the same
+`vcvtps2ph` into `[rsp]` with the same imm8 and the same MXCSR, then moves the 8 or 16 bytes out with plain `mov`s, which
+Rosetta resumes), and the census above has all 70 of the census's 70 in it. What was missing was the proof for them:
+`a_patched_vcvtps2ph_resumes_after_a_write_fault` (Windows test, run under Wine/Rosetta by `tools/mac/wine-tests.sh -p victory-loader
+--lib mac::masked`) stores ymm and xmm half-floats (imm8 0 and 3) inside a read-only page and across the boundary into it at five
+offsets, with a handler that makes the page writable, and every one resumes with the right bytes (the same cases unpatched
+are the probe's fatal ones); `patched_stores_match_the_stores_in_every_form` already compares the patched store with the
+real one (memory, registers, flags) over 4000 random operand forms, vcvtps2ph with random imm8 among them. So no L6
+for it. *Remove with L1.*
 
 ### L2 — 256-bit stores split into two 128-bit stores (`mac/wide.rs`, `xtask/src/wide_stores.rs`)
 
@@ -475,6 +529,46 @@ there when the capture runs need it.
 
 *Remove when* frames are fast enough that the watchdog never fires (the Metal backend, or a measured run with a
 world frame under a second shows it quiet), or when the Windows line gets a switch of its own.
+
+### L6 — 16-bit `lock cmpxchg` check: `VICTORY_MAC_CMPXCHG16_CHECK=1`, off by default (`victory-loader/src/mac/cmpxchg16.rs`, 8 lines in `apps/victory/src/mac.rs`)
+
+*Question (Wine probe 2026-11-28, `lock_cmpxchg16_hit`).* Under Rosetta a `lock cmpxchg [m], r16` whose address is 15 mod 16
+loses the update when the compare **succeeds** (memory unchanged, ZF set); a miss, every other offset, the 32/64-bit forms and the
+unlocked form are right. The title has 2036 16-bit `cmpxchg`, all locked (`python3 tools/mac/census-cmpxchg.py.txt <out dir> < objdump text`, results in
+`research/census/title-cmpxchg-20261128/`): 1877 `[base+even disp]` (63 of them rsp/rbp), 26 `[base+2*index+even disp]`, 70
+RIP-relative whose targets are 0, 2, 4 or 8 mod 16 (none 15). A hit needs an **odd** address: a 16-bit atomic in a packed
+object, or a base pointer that is odd. Nothing static says so, and no compiler makes an atomic 16-bit field odd on its own.
+Not provable from the bytes: so a run decides.
+
+*The check.* With the variable set to `1`, every one of the 2036 sites (the scan is bytes, so it works on any build; the
+scan equals the census: `cargo run --release -p victory-loader --example cmpxchg16_census -- <image> <tsv>`) becomes a jump to
+a trampoline that saves rcx and the flags, counts the run in its own slot, computes `lea rcx,[operand]`, and if the low four bits
+are 1111 records the address and counts a hit; then it restores rcx and the flags and runs the original instruction (copied, its
+RIP-relative displacement redone), and jumps back. A thread prints every 5 s while the numbers change (and every minute):
+`cmpxchg16  N of 2036 sites ran, M met an address = 15 mod 16` plus the first 8 hits (RVA, hits of runs, last address). It does not
+change what the instruction does. Test: `the_checked_instruction_does_what_the_instruction_does` (Windows, run under Wine/Rosetta
+by `tools/mac/wine-tests.sh -p victory-loader --lib mac::`): three operand forms at nine offsets 0..4095 including 15, 31, 4095, hit
+and miss: AX, ZF and memory are the instruction's, and only the 15 mod 16 runs are counted as hits (in the test the
+instruction's own bug may also show at those: it compares patched with unpatched, both through Rosetta, so both are equally wrong;
+this is a *counter*, not a fix).
+
+*If it ever reports a hit.* Rewrite that site: take the address, and do the compare-and-swap with a 32-bit `lock cmpxchg` loop on the
+dword that holds the word (at `addr-2`, which is 13 mod 16, and 32-bit forms are right at every offset): load the dword, check the
+word in its upper half equals AX, build the new dword, `lock cmpxchg`, retry on a changed dword, set ZF and AX as the instruction does
+(AX = the old word on a miss). It needs rax/rdx/rcx/r8 saved and a RIP-relative redo, in the style of this module's trampoline: about
+half a day with the same random-form test against the instruction (on a Mac the instruction's result at 15 mod 16 is the wrong one,
+so the reference is a soft model of cmpxchg). Do it only when the check reports a hit; until then no behaviour is changed.
+*Remove when* Rosetta fixes it (re-run `lock_cmpxchg16_hit`) or after a few full sessions of the check with no hit.
+
+*The 32-bit form (`mac.isa.cmpxchg32_rax_hit`).* The probe also showed that after a **hit** of a 32-bit `lock cmpxchg` Rosetta **zeroes**
+the upper half of RAX, where x86 leaves RAX alone on a hit (only a miss writes EAX). Only code whose RAX has a non-zero upper half before
+the instruction and that reads all of RAX after a hit, before writing it, can notice.
+Of the title's 9665 sites (all locked), 834 do read RAX that way on the hit path; the upper half was provably zero before for 772
+(an earlier `mov eax,..`) and for 57 more across a branch; the one checked by hand in 117759 is safe (`mov eax,[rax]` in the loop);
+the others are false positives of the classifier (3-operand `imul`, `cdqe`, `nop [rax]`) or `ret` after a CAS loop that loaded EAX with
+a 32-bit load. Three remain which the linear analysis could not decide (RVAs `0x3e00a2`, `0x2bdb621`, `0x335a93d`; the first two are
+CAS loops whose eax comes from a 32-bit `mov eax,[..]`, the third `cmpxchg [rcx+0x14], edx` followed by `vmovd xmm1, eax`, which
+reads only EAX): no exposure found, no patch.
 
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 

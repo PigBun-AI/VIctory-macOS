@@ -1,4 +1,4 @@
-//! Mac patches of the loader (docs/mac/PATCHES.md, patches L1-L5), kept apart
+//! Mac patches of the loader (docs/mac/PATCHES.md, patches L1-L6), kept apart
 //! from the Windows line's files: edits to patch the title's code that
 //! exist only because the Windows exe runs on Wine + Rosetta 2 on a Mac.
 //! Ported from VIctory-macOS (origin/main 7772921b); nothing here runs unless
@@ -11,10 +11,13 @@
 //! - [`resolution`]: the title's output size (1280x720 by default on a Mac).
 //! - [`clwb`]: `clwb` write-back loops turned into NOPs (a fault per loop
 //!   under Rosetta).
+//! - [`cmpxchg16`]: a diagnostic for 16-bit `lock cmpxchg` at addresses = 15 mod 16
+//!   (L6; off by default, `VICTORY_MAC_CMPXCHG16_CHECK=1`).
 //! - [`watchdog`]: the title's hang watchdog turned off (L5; off by default,
 //!   `VICTORY_MAC_NO_WATCHDOG=1`).
 
 pub mod clwb;
+pub mod cmpxchg16;
 pub mod masked;
 pub mod resolution;
 pub mod watchdog;
