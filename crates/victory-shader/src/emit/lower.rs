@@ -98,6 +98,8 @@ struct VtxExchange {
     corners: u32,
     /// Lanes that write a primitive.
     primitives: u32,
+    /// Vertices whose values are in group memory (an index past them reads vertex 0).
+    vertices: u32,
     /// The index in `prims` of each added element (S2 numbers the primitive outputs, so not in a row).
     ids: Vec<usize>,
 }
@@ -356,6 +358,8 @@ struct Lower<'a> {
     vflat_id: usize,
     vtx: Option<VtxExchange>,
     vtx_fail: Option<Why>,
+    /// mac S1, mesh: the read channels whose exchanged value is a raw 16-bit half (converted after the meeting).
+    vtx_halves: HashSet<usize>,
     /// mac S1, mesh: the block every lane leaves through (the exchange meets there).
     epilogue: Option<usize>,
     /// Mesh: IR blocks whose `s_barrier` is left out.
@@ -1721,7 +1725,7 @@ impl<'a> Lower<'a> {
                 if ids.len() != vertex_flat::elements(&vreads, None).len() {
                     vtx_fail = Some("a mesh shader without the added per-vertex outputs");
                 }
-                vtx = Some(VtxExchange { base, stride, corners, primitives, ids });
+                vtx = Some(VtxExchange { base, stride, corners, primitives, vertices, ids });
             }
             s.mesh = Some(super::shader::Mesh {
                 max_vertices: ms.max_vertices,
@@ -1856,6 +1860,7 @@ impl<'a> Lower<'a> {
             vflat_id,
             vtx,
             vtx_fail,
+            vtx_halves: HashSet::new(),
             epilogue: None,
             no_barrier,
             fence_only,
@@ -12652,6 +12657,7 @@ impl<'a> Lower<'a> {
         let sat = sunclamp::export_sat() && matches!(e.target, Target::Color(_));
         for (id, col, value, half) in stores {
             let mut x = self.i32_of(value)?;
+            let mut raw_half = None;
             if let Some(high) = half {
                 // An f16 half, declared a 32-bit float on the host.
                 let c = self.cur;
@@ -12659,13 +12665,16 @@ impl<'a> Lower<'a> {
                     let k16 = self.s.m.i32(16);
                     x = self.s.m.bin(c, Bin::LShr, x, k16);
                 }
+                raw_half = Some(x);
                 let f32t = self.s.t.f32;
                 let f = self
                     .s
                     .op(c, "legacyF16ToF32", Attr::ReadNone, f32t, 131, &[x]);
                 x = self.as_int(f);
             }
-            let bits = x; // mac S1: what the host's (32-bit) element holds, a 16-bit output converted
+            // mac S1: the exchange holds a 16-bit output as its raw half (the converted value, shared with the
+            // output's store, crashes Apple's GPU compiler); the epilogue converts it.
+            let bits = raw_half.unwrap_or(x);
             let el = &mut elements(self, primitive)[id];
             el.usage |= 1 << col;
             let (suffix, x) = match el.comp {
@@ -12699,7 +12708,7 @@ impl<'a> Lower<'a> {
                 &args,
             );
             if mesh && !primitive {
-                self.vtx_store(id, col, bits)?; // mac S1
+                self.vtx_store(id, col, bits, raw_half.is_some())?; // mac S1
             }
         }
         self.end_guarded(at, &[]);
@@ -12824,7 +12833,7 @@ impl<'a> Lower<'a> {
 
     /// mac S1, mesh: the vertex output channel (`id`, `col`) the pixel stage reads of other vertices,
     /// written to the exchange for this lane's vertex.
-    fn vtx_store(&mut self, id: usize, col: u8, bits: V) -> Result<(), Why> {
+    fn vtx_store(&mut self, id: usize, col: u8, bits: V, half: bool) -> Result<(), Why> {
         let Some(x) = self.vtx.clone() else {
             return Ok(());
         };
@@ -12832,6 +12841,9 @@ impl<'a> Lower<'a> {
         let Some(read) = vertex_flat::find(&self.vreads, &o.name, o.index, o.col + col) else {
             return Ok(());
         };
+        if half {
+            self.vtx_halves.insert(read);
+        }
         let c = self.cur;
         let flat = self.mesh_thread();
         let stride = self.s.m.i32(x.stride);
@@ -12842,6 +12854,39 @@ impl<'a> Lower<'a> {
         let ptr = self.s.m.element(c, lds, at);
         self.s.m.store(c, ptr, bits);
         Ok(())
+    }
+
+    /// mac S1, mesh: the bits of the f32 equal to the half in the low 16 bits of `h`, in integer
+    /// arithmetic (a `legacyF16ToF32` of a value read back from group memory crashes Apple's GPU
+    /// compiler in some shapes).
+    fn half_to_f32_bits(&mut self, h: V) -> V {
+        let c = self.cur;
+        let k = |l: &mut Self, v: u32| l.s.m.i32(v);
+        let (m16, m15, m10, m5) = (k(self, 0xFFFF), k(self, 0x8000), k(self, 0x3FF), k(self, 31));
+        let (s16, s10, s13, s23) = (k(self, 16), k(self, 10), k(self, 13), k(self, 23));
+        let (zero, bias) = (k(self, 0), k(self, 112));
+        let h = self.s.m.bin(c, Bin::And, h, m16);
+        let sign = self.s.m.bin(c, Bin::And, h, m15);
+        let sign = self.s.m.bin(c, Bin::Shl, sign, s16);
+        let e = self.s.m.bin(c, Bin::LShr, h, s10);
+        let e = self.s.m.bin(c, Bin::And, e, m5);
+        let m = self.s.m.bin(c, Bin::And, h, m10);
+        let eb = self.s.m.bin(c, Bin::Add, e, bias);
+        let eb = self.s.m.bin(c, Bin::Shl, eb, s23);
+        let mb = self.s.m.bin(c, Bin::Shl, m, s13);
+        let normal = self.s.m.bin(c, Bin::Or, eb, mb);
+        let inf = k(self, 0x7F80_0000);
+        let special = self.s.m.bin(c, Bin::Or, inf, mb);
+        let f32t = self.s.t.f32;
+        let mf = self.s.m.cast(c, Cast::UiToFp, m, f32t);
+        let scale = self.s.m.f32(0x3380_0000);
+        let sub = self.s.m.bin(c, Bin::Mul, mf, scale);
+        let sub = self.as_int(sub);
+        let is_zero = self.s.m.cmp(c, pred::EQ, e, zero);
+        let is_max = self.s.m.cmp(c, pred::EQ, e, m5);
+        let v = self.s.m.select(c, is_max, special, normal);
+        let v = self.s.m.select(c, is_zero, sub, v);
+        self.s.m.bin(c, Bin::Or, v, sign)
     }
 
     /// mac S1, mesh: the block every lane leaves through. The lanes meet (the group memory holds every
@@ -12868,10 +12913,17 @@ impl<'a> Lower<'a> {
         let packed = self.s.m.load(c, ptr);
         let mask = self.s.m.i32(0x1FF);
         let void = self.s.t.void;
+        // All the loads come before the stores: loads and stores alternating crash Apple's GPU compiler
+        // (AGX register allocation), so the values wait in registers until every one is read.
+        let mut pending: Vec<(usize, u8, V)> = Vec::new();
         for k in 1..=2u8 {
             let shift = self.s.m.i32(10 * u32::from(k));
             let v = self.s.m.bin(c, Bin::LShr, packed, shift);
             let v = self.s.m.bin(c, Bin::And, v, mask);
+            // Never an index past the vertices' values (the array's bounds are then provable).
+            let (n, zero) = (self.s.m.i32(x.vertices), self.s.m.i32(0));
+            let inside = self.s.m.cmp(c, pred::IULT, v, n);
+            let v = self.s.m.select(c, inside, v, zero);
             let stride = self.s.m.i32(x.stride);
             let row = self.s.m.bin(c, Bin::Mul, v, stride);
             for read in 0..self.vreads.len() {
@@ -12882,17 +12934,26 @@ impl<'a> Lower<'a> {
                 let at = self.s.m.bin(c, Bin::Add, row, at);
                 let ptr = self.s.m.element(c, lds, at);
                 let value = self.s.m.load(c, ptr);
-                let id = x.ids[n];
-                self.s.prims[id].usage |= 1 << comp;
-                let args = [
-                    self.s.m.i32(id as u32),
-                    self.s.m.i32(0),
-                    self.s.m.i8(comp),
-                    value,
-                    flat,
-                ];
-                self.s.op(c, "storePrimitiveOutput.i32", Attr::NoUnwind, void, 172, &args);
+                let value = if self.vtx_halves.contains(&read) {
+                    self.half_to_f32_bits(value)
+                } else {
+                    value
+                };
+                pending.push((x.ids[n], comp, value));
             }
+        }
+        // And in element and column order (scattered columns of a vector crash it too).
+        pending.sort_by_key(|&(id, comp, _)| (id, comp));
+        for (id, comp, value) in pending {
+            self.s.prims[id].usage |= 1 << comp;
+            let args = [
+                self.s.m.i32(id as u32),
+                self.s.m.i32(0),
+                self.s.m.i8(comp),
+                value,
+                flat,
+            ];
+            self.s.op(c, "storePrimitiveOutput.i32", Attr::NoUnwind, void, 172, &args);
         }
         self.end_guarded(at, &[]);
         self.s.m.terminate(self.cur, Term::Ret);
