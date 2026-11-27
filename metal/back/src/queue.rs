@@ -93,7 +93,7 @@ struct Sink {
 
 impl Sink {
     fn record(&self, failure: Option<Failure>, gpu_ns: u64) {
-        self.completed.fetch_add(1, Ordering::Relaxed);
+        self.completed.fetch_add(1, Ordering::AcqRel);
         self.gpu_ns.fetch_add(gpu_ns, Ordering::Relaxed);
         let Some(failure) = failure else {
             return;
@@ -222,7 +222,6 @@ pub(crate) struct QueueInner {
     idle: Mutex<Vec<Slot>>,
     slots_made: Mutex<u32>,
     ring: Mutex<ConstantRing>,
-    commit_options: Retained<MTL4CommitOptions>,
     sink: Arc<Sink>,
     attached: Mutex<u32>,
     submissions: AtomicU64,
@@ -237,6 +236,38 @@ unsafe impl Sync for QueueInner {}
 #[derive(Clone)]
 pub struct Queue {
     pub(crate) inner: Arc<QueueInner>,
+}
+
+/// Commit options with a feedback handler that reports to `sink`. One
+/// per commit: Metal runs a handler for the first commit only.
+fn commit_options(sink: &Arc<Sink>) -> Retained<MTL4CommitOptions> {
+    let options = MTL4CommitOptions::new();
+    let sink = sink.clone();
+    let block = RcBlock::new(move |fb: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
+        // SAFETY: Metal passes a live feedback object for the call.
+        let fb = unsafe { fb.as_ref() };
+        let gpu_ns = ((fb.GPUEndTime() - fb.GPUStartTime()).max(0.0) * 1e9) as u64;
+        let failure = fb.error().map(|e| {
+            // SAFETY: a plain extern static.
+            let ours = e
+                .domain()
+                .isEqualToString(unsafe { MTL4CommandQueueErrorDomain });
+            Failure {
+                // A code from another domain is not ours to interpret.
+                code: if ours {
+                    e.code()
+                } else {
+                    MTL4CommandQueueError::Internal.0
+                },
+                domain: e.domain().to_string(),
+                message: e.localizedDescription().to_string(),
+            }
+        });
+        sink.record(failure, gpu_ns);
+    });
+    // SAFETY: the block is valid; Metal copies it.
+    unsafe { options.addFeedbackHandler(RcBlock::as_ptr(&block)) };
+    options
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -270,34 +301,6 @@ impl Queue {
         device.register_timeline(&timeline);
         let ring = ConstantRing::new(device, options.ring_segment_bytes, options.ring_segments)?;
         let sink = Arc::new(Sink::default());
-        let commit_options = MTL4CommitOptions::new();
-        {
-            let sink = sink.clone();
-            let block = RcBlock::new(move |fb: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
-                // SAFETY: Metal passes a live feedback object for the call.
-                let fb = unsafe { fb.as_ref() };
-                let gpu_ns = ((fb.GPUEndTime() - fb.GPUStartTime()).max(0.0) * 1e9) as u64;
-                let failure = fb.error().map(|e| {
-                    // SAFETY: a plain extern static.
-                    let ours = e
-                        .domain()
-                        .isEqualToString(unsafe { MTL4CommandQueueErrorDomain });
-                    Failure {
-                        // A code from another domain is not ours to interpret.
-                        code: if ours {
-                            e.code()
-                        } else {
-                            MTL4CommandQueueError::Internal.0
-                        },
-                        domain: e.domain().to_string(),
-                        message: e.localizedDescription().to_string(),
-                    }
-                });
-                sink.record(failure, gpu_ns);
-            });
-            // SAFETY: the block is valid; Metal copies it.
-            unsafe { commit_options.addFeedbackHandler(RcBlock::as_ptr(&block)) };
-        }
         Ok(Queue {
             inner: Arc::new(QueueInner {
                 device: device.clone(),
@@ -308,7 +311,6 @@ impl Queue {
                 idle: Mutex::new(Vec::new()),
                 slots_made: Mutex::new(0),
                 ring: Mutex::new(ring),
-                commit_options,
                 sink,
                 attached: Mutex::new(sets.len() as u32),
                 submissions: AtomicU64::new(0),
@@ -361,8 +363,9 @@ impl Queue {
         lock(&self.inner.sink.last).clone()
     }
 
-    /// Lists the GPU has completed (feedback received).
-    pub fn completed_lists(&self) -> u64 {
+    /// Submissions the GPU has completed and reported through the commit
+    /// feedback handler (one report per `submit`).
+    pub fn completed_submissions(&self) -> u64 {
         self.inner.sink.completed.load(Ordering::Relaxed)
     }
 
@@ -385,6 +388,19 @@ impl Queue {
     /// [`submit`](Self::submit)) has completed.
     pub fn wait_for(&self, value: u64, timeout_ms: u64) -> Result<()> {
         if self.inner.timeline.wait(value, timeout_ms) {
+            // Feedback (and with it any error) arrives on another thread
+            // shortly after the timeline signal. When waiting for the very
+            // latest submission, give it a moment so that `status` is
+            // current when this returns.
+            if value >= self.inner.timeline.submitted() {
+                let committed = self.inner.submissions.load(Ordering::Acquire);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+                while self.inner.sink.completed.load(Ordering::Acquire) < committed
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::yield_now();
+                }
+            }
             self.check()
         } else {
             Err(Error::Timeout)
@@ -552,7 +568,7 @@ impl Queue {
             self.inner.raw.commit_count_options(
                 NonNull::new(buffers.as_mut_ptr()).expect("non-empty"),
                 buffers.len(),
-                &self.inner.commit_options,
+                &commit_options(&self.inner.sink),
             );
         }
         let event: &ProtocolObject<dyn MTLEvent> =
