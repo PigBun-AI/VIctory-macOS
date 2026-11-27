@@ -116,13 +116,25 @@ pub(crate) fn on_present(present: u64) {
     let since = draws.saturating_sub(AT_LAST_PRESENT.swap(draws, Relaxed));
     let latched = CLOCK.advance(present, since, threshold());
     super::render_size::on_present(world_frame());
-    if latched && LOG.load(Relaxed) {
+    let each = log_each();
+    if latched && (each || LOG.load(Relaxed)) {
         tracing::info!(
             present,
             draws = since,
             "world frame 1 (input scripts and world-indexed captures count from here)"
         );
+    } else if each && !latched && world_frame() > 1 {
+        // `VICTORY_LOG_WORLD=1` (tools/mac/run.sh --until-world / --until-capture with w<N>, M4): a line per world
+        // frame, so that a script can stop the run at the world frame it wants.
+        tracing::info!(present, "world frame {}", world_frame());
     }
+}
+
+/// Whether `VICTORY_LOG_WORLD` asks for a log line at every world frame (off by default).
+fn log_each() -> bool {
+    static EACH: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("VICTORY_LOG_WORLD").is_ok_and(|v| !v.trim().is_empty() && v.trim() != "0"));
+    *EACH
 }
 
 /// BLAKE3 digest (hex) of a script's bytes, to tie logs and timings to the

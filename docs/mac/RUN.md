@@ -118,7 +118,7 @@ Do not use a seed another game is writing at that moment if you need an exact st
 |---|---|---|
 | `--exe PATH` | the `victory.exe` to run | `target/x86_64-pc-windows-gnullvm/release/victory.exe` |
 | `--out DIR` | logs go here | `target/mac-runs/<time>` |
-| `--timeout SEC` | stop the run after SEC seconds (0: no limit) | 900 |
+| `--timeout SEC` | stop the run after SEC seconds (0: no limit); with `--until-*` only the cap (not met by then: exit status 6) | 900 |
 | `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `victory-data-livetr-<profile>-<backend>/{data,cache}` next to the checkout (below) |
 | `--seed DIR` | the read-only seed the data directories are cloned from | `victory-data-livetr` next to the checkout |
 | `--fresh-data` | delete the run's own data directory and clone it from the seed again, so the run starts from the seed state (only with the default directory) | off |
@@ -143,6 +143,7 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--sample SEC` | every SEC seconds a line in `<out>/mem.csv`: GPU memory in use and allocated (`ioreg`), GPU `recoveryCount`, swap, `vm_stat` pages, RSS of all `victory.exe` | off |
 | `--allow-concurrent`, `--i-have-approval` | start without the game lock although another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory); needs the approval of the Mac integration lead (`--i-have-approval` or `VICTORY_MAC_CONCURRENT_APPROVED=1`) | refused |
 | `--lock-timeout SEC` | how long to queue for the game lock (0: for ever); exit status 4 when it runs out | 0 |
+| `--until-capture`, `--until-log ERE`, `--until-world N`, `--until-present N`, `--linger SEC` | end the run as soon as the data is there; `--timeout` stays the cap. See "Stop as soon as you have the data" | off |
 | `--print-env`, `--dry-run` | print and exit | |
 | `--exec` | run `victory.exe ARGS` (the arguments after `--`, e.g. `-- warm --jobs 4`) in the foreground instead of the title, with the environment, prefix, DLLs, data and cache of a run; no keys, no time limit, no log folder, exit status is `victory.exe`'s | off |
 | `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` (with `--exec`: the whole `victory.exe` command line) | |
@@ -184,12 +185,70 @@ VICTORY_RECORD=$HOME/captures tools/mac/run.sh --corpus --backend d3dmetal --tim
 tools/mac/run.sh --print-env --corpus --backend metal        # shows VICTORY_RECORD_AT=w5 and VICTORY_MAC_NO_WATCHDOG=1
 ```
 
+## Stop as soon as you have the data
+
+**The rule: a run ends when it has what it was started for, not after `--timeout`.** A ten-minute round for a frame that was written
+after forty seconds is wasted machine time (one game at a time, "One game at a time" above). So every run that waits for something
+names it with `--until-*`; `--timeout` is only the upper limit for a run where it never comes. The options stack; **the first
+condition that holds ends the run**.
+
+| Option | Holds when |
+|---|---|
+| `--until-capture` | every frame of `--capture-frames` is written, and, with `--record-at`/`--corpus` and `VICTORY_RECORD=<folder>`, the recorder has captured its frame. A frame is written when the title logs `frame saved ...frame-<n>.png` (it logs it after the PNG is written) or when `$VICTORY_CAPTURE/frame-<n>.png` exists and keeps its size for 2 s; `w<N>` items are resolved with the present number in `world frame 1 ... present=<p>` (`p+N`). The recorder is done at `frame recorder: the frame is captured` in the log, or a new `capture-<n>/notes.txt` (written last, after `frame.bin`) in `$VICTORY_RECORD`. A recorder that does not start or writes `failed.txt` ends the run at once as not met. Refused when there is nothing to wait for (no `--capture-frames`, no recording) |
+| `--until-log ERE` | a line of `stdout.log` or `stderr.log` matches the extended regular expression (`grep -E`); repeat the option for more, any match ends the run |
+| `--until-world N` | the log has the line `world frame N`, the same as `--until-log 'world frame N\b'` (so `5` is not `50`). The title logs one such line per world frame only when asked, so `run.sh` sets `VICTORY_LOG_WORLD=1` (patch I2); world frame 1's line (`world frame 1 (input scripts ...) present=<p>`) is the old one. Needs an exe with that switch (this commit on); an older exe logs only world frames 1, 2, 5, 10, 30, 100, 300, ... (and only with `--log-render-size`) |
+| `--until-present N` | the title's present number is N or more. Turns `--frametime-log` on and reads its first column (a second behind at most); the `frame presented ... frame=<n>` lines (powers of two) count too |
+| `--linger SEC` | not a condition: the run goes on SEC more seconds after one holds (default 0), for the frame dumps of that frame, a few more log lines. `start.txt` keeps the time of the match |
+
+**How it ends.** The way `--timeout` ends a run: the title is stopped, `wineserver -k` of **this run's prefix only**, the game lock let
+go (also on `INT`/`TERM`). Exit status **0**, and `until 条件满足：<which> 在 <seconds> s` (the condition, and seconds from the start to
+the match, the linger not included; with `--linger` also the end time) goes into `start.txt`, `run-env.txt`, `stderr.log`, `end.txt`
+and `summary.txt`. The files `until-met.txt` / `until-failed.txt` in the out directory hold the same for scripts.
+
+**Not met.** `--timeout` ran out (or the title ended by itself first, or the recorder failed): the run ends as before, the log says
+`until 未满足：<the conditions>: <why>`, and the exit status is **6** (the title's own status is in `end.txt`). Without any
+`--until-*` the run is exactly what it was: the title's status, no new lines, no new files. (Exit statuses of `run.sh`: 0 ok, 1 setup
+failed, 2 bad option, 3 another `victory.exe` is running, 4 lock wait ran out, 6 `--until-*` not met; otherwise the title's.)
+`--until-*` with `--timeout 0` warns: nothing ends a run whose condition never comes. A bare `--capture-frames` or `--corpus` prints a
+hint to add `--until-capture`.
+
+Examples:
+
+```sh
+# the frames of one shot, then stop (instead of 10 minutes): w300 is the same moment in every run
+VICTORY_CAPTURE=$PWD/cap tools/mac/run.sh --fidelity --capture-frames w1,w100,w300 --until-capture --timeout 600
+
+# one capture for the corpus: stops when the recorder has the frame
+VICTORY_RECORD=$HOME/captures tools/mac/run.sh --corpus --until-capture --timeout 600
+
+# up to a world frame, or a log line, whichever comes first; 3 s more for the log to catch up
+tools/mac/run.sh --until-world 300 --until-log 'device removed|kIOGPU' --linger 3 --timeout 600
+tools/mac/run.sh --until-present 2000 --timeout 600
+
+# the same shot in short rounds, one after the other (each with its own --out and the game lock between them):
+# perf against fidelity, the same frame, 2 s more of frame times after it
+for p in perf fidelity; do
+  VICTORY_CAPTURE=$PWD/shot-$p tools/mac/run.sh --profile $p --capture-frames w300 --until-capture --frametime-log \
+      --linger 2 --out target/mac-runs/shot-$p --timeout 600
+done
+
+# with and without VICTORY_DISPLAY_MODE=WxH (passes through from the environment), the same shot, two short rounds
+env -u VICTORY_DISPLAY_MODE VICTORY_CAPTURE=$PWD/shot-base tools/mac/run.sh --fidelity --capture-frames w300 \
+    --until-capture --out target/mac-runs/shot-base --timeout 600
+VICTORY_DISPLAY_MODE=1920x1080 VICTORY_CAPTURE=$PWD/shot-dm tools/mac/run.sh --fidelity --capture-frames w300 \
+    --until-capture --out target/mac-runs/shot-dm --timeout 600
+```
+
+Every round of a series carries `--until-capture`, so a round costs the time to the frame, not the limit.
+`tools/mac/test-run-until.sh` tests all of this with a fake Wine (no game): `--until-log`, `-world`, `-capture` (log, file, `w<N>`,
+recording), `-present`, not met (exit 6), `--linger`, and that a run without `--until-*` is as before.
+
 ## What a run leaves in its out directory
 
 `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
 hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` (the `--print-env` text of this run), `summary.txt`
 (status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, `load.log` (load average every 10 s), and as asked
-`mem.csv`, `frametime.log`, `notimpl.log` (metal).
+`mem.csv`, `frametime.log`, `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
 
 Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env)`.
 

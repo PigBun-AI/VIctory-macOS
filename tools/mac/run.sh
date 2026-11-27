@@ -58,6 +58,18 @@
 #   --i-have-approval            the approval --allow-concurrent needs
 #   --lock-timeout SEC           how long to queue for the game lock (default 0 = for ever); exit status 4 when it runs out
 #
+# STOP AS SOON AS YOU HAVE THE DATA (all optional, they stack, the first one that holds ends the run; --timeout is only the cap):
+#   --until-capture              the frames of --capture-frames are written (PNG done) and, with --record-at/--corpus and
+#                                VICTORY_RECORD, the recorder has captured its frame
+#   --until-log ERE              a line of stdout.log or stderr.log matches the extended regular expression (repeatable)
+#   --until-world N              the log has `world frame N` (= --until-log 'world frame N\b'; sets VICTORY_LOG_WORLD=1 so the
+#                                title logs every world frame)
+#   --until-present N            the title's present number is N or more (turns --frametime-log on; read from frametime.log)
+#   --linger SEC                 keep running SEC more seconds after the condition holds (default 0)
+#   It ends by the same way --timeout does (the title stopped, `wineserver -k` of this prefix, the lock let go) with exit status 0
+#   and `until 条件满足：<which> 在 <seconds> s` in start.txt, run-env.txt, stderr.log. Not met by --timeout (or the title ending
+#   first): `until 未满足`, exit status 6. Without any --until-* nothing changes. docs/mac/RUN.md has the examples.
+#
 # ONE GAME AT A TIME on this Mac: before it starts victory.exe (the title, or --exec; not --print-env) run.sh takes the
 # machine-wide game lock (tools/mac/game-lock.sh: a directory next to all checkouts, shared by every worktree), queues if
 # another run holds it (printing the holder every 30 s), takes over a lock whose holder is gone, and lets it go when the
@@ -112,6 +124,7 @@ exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
+until_logs=(); until_world=""; until_present=""; until_capture=0; linger=0; linger_set=0
 lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -134,6 +147,11 @@ while [ $# -gt 0 ]; do
         --console) console=${2:?}; shift ;; --build) build=1 ;; --sample) sample=${2:?}; shift ;;
         --allow-concurrent) concurrent=1 ;; --i-have-approval) approved=1 ;;
         --lock-timeout) lock_tmo=${2:?--lock-timeout SECONDS}; shift ;;
+        --until-capture) until_capture=1 ;;
+        --until-log) until_logs+=("${2:?--until-log ERE}"); shift ;;
+        --until-world) until_world=${2:?--until-world N}; shift ;;
+        --until-present) until_present=${2:?--until-present N}; shift ;;
+        --linger) linger=${2:?--linger SECONDS}; linger_set=1; shift ;;
         --print-env|--dry-run) print_env=1 ;;
         --exec) execmode=1 ;;
         -h|--help) usage ;;
@@ -167,6 +185,40 @@ fi
 case "$tmo" in ''|*[!0-9]*) die "--timeout takes whole seconds" ;; esac
 case "$sample" in ''|*[!0-9]*) die "--sample takes whole seconds" ;; esac
 case "$lock_tmo" in ''|*[!0-9]*) die "--lock-timeout takes whole seconds" ;; esac
+# ---- --until-*: stop as soon as the data is there ------------------------------------------------------------------
+case "$linger" in ''|*[!0-9]*) die "--linger takes whole seconds" ;; esac
+[ -z "$until_world" ] || case "$until_world" in ''|0|*[!0-9]*) die "--until-world takes a world frame number, 1 or more" ;; esac
+[ -z "$until_present" ] || case "$until_present" in ''|0|*[!0-9]*) die "--until-present takes a present number, 1 or more" ;; esac
+for _re in ${until_logs[@]+"${until_logs[@]}"}; do
+    [ -n "$_re" ] || die "--until-log: an empty pattern matches every line"
+    printf '' | grep -E -e "$_re" >/dev/null 2>&1; [ $? -le 1 ] || die "--until-log: '$_re' is not an extended regular expression (grep -E)"
+done
+until_record=0; [ -z "$record_at" ] || [ -z "${VICTORY_RECORD:-}" ] || until_record=1
+until_on=0
+{ [ "$until_capture" = 1 ] || [ ${#until_logs[@]} -gt 0 ] || [ -n "$until_world" ] || [ -n "$until_present" ]; } && until_on=1
+if [ "$until_capture" = 1 ] && [ -z "$capture" ] && [ "$until_record" = 0 ]; then
+    die "--until-capture needs something to wait for: --capture-frames LIST, or --record-at/--corpus with VICTORY_RECORD=<folder> in the environment"
+fi
+if [ "$until_on" = 0 ] && [ "$linger_set" = 1 ]; then
+    echo "tools/mac/run.sh: warning: --linger has no effect without --until-*" >&2
+fi
+[ "$until_on" = 0 ] || [ "$execmode" = 0 ] || die "--until-* is for the title run, not --exec"
+until_desc=""
+if [ "$until_on" = 1 ]; then
+    [ "$until_capture" = 0 ] || until_desc="$until_desc --until-capture"
+    for _re in ${until_logs[@]+"${until_logs[@]}"}; do until_desc="$until_desc --until-log '$_re'"; done
+    [ -z "$until_world" ] || until_desc="$until_desc --until-world $until_world"
+    [ -z "$until_present" ] || until_desc="$until_desc --until-present $until_present"
+    until_desc="${until_desc# }"
+    # --until-present reads the present number from frametime.log
+    [ -z "$until_present" ] || frametime=1
+    # --until-world, and --until-capture with a w<N> frame, need the title to log every world frame
+    case ",$capture," in *,[wW][0-9]*) _wcap=1 ;; *) _wcap=0 ;; esac
+    if [ -n "$until_world" ] || { [ "$until_capture" = 1 ] && [ "$_wcap" = 1 ]; }; then export VICTORY_LOG_WORLD=1; fi
+    if [ "$tmo" = 0 ]; then
+        echo "tools/mac/run.sh: warning: --until-* without --timeout: nothing ends the run if the condition never comes" >&2
+    fi
+fi
 if [ "$concurrent" = 1 ] && [ "$approved" = 0 ] && [ "${VICTORY_MAC_CONCURRENT_APPROVED:-0}" != 1 ]; then
     die "--allow-concurrent needs the approval of the Mac integration lead: add --i-have-approval (or VICTORY_MAC_CONCURRENT_APPROVED=1) once it is given. Only one game at a time otherwise (the queue is automatic: drop --allow-concurrent)"
 fi
@@ -279,6 +331,9 @@ helper="$ROOT/target/dxc-d3dmetal"
 export VICTORY_DXC_HELPER="$helper" VICTORY_DXC_DIR="$(dirname "$cache")/dxc"
 export DXC_LIB="$WDIR/lib/external/D3DMetal.framework/Versions/A/Resources/libdxcompiler.dylib"
 
+if [ "$execmode" = 0 ] && [ "$until_capture" = 0 ] && { [ -n "$capture" ] || [ "$corpus" = 1 ]; }; then
+    echo "tools/mac/run.sh: hint: --until-capture ends the run as soon as the frames are written (--timeout stays the cap)" >&2
+fi
 if [ "$execmode" = 1 ]; then
     [ ${#title_args[@]} -gt 0 ] || die "--exec needs the victory.exe arguments after --, for example: --exec -- warm"
     cmd=("$WINE" "$exe" "${title_args[@]}")
@@ -303,6 +358,7 @@ describe() {
         echo "# non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG}; patch L5): a real hang does not crash, the run ends by --timeout (${tmo} s; 0 = never)"
     fi
     [ "$corpus" = 0 ] || echo "# corpus: --record-at ${record_at} (--corpus-frame ${corpus_frame}) plus --no-watchdog"
+    [ "$until_on" = 0 ] || echo "# until: stop at the first of: ${until_desc} (linger ${linger} s); --timeout ${tmo} s is only the cap (not met: exit status 6)"
     if [ "$backend" = metal ]; then
         echo "# metal: stage $stage (from $stage_from); front/d3d12.dll front/dxgi.dll x86_64-windows/victory_metal_bridge.dll go into the prefix's system32 (originals kept as .metal-orig)"
     else
@@ -331,7 +387,7 @@ if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
 # (victory.exe is only ever started below this line; --print-env has left already)
 . "$ROOT/tools/mac/game-lock.sh"
 GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"
-pid=""; wd=""; sm=""; ld=""; _cleaned=0
+pid=""; wd=""; sm=""; ld=""; uw=""; _cleaned=0
 cleanup() {
     [ "$_cleaned" = 0 ] || return 0
     _cleaned=1
@@ -341,7 +397,8 @@ cleanup() {
         for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
         kill -KILL "$pid" 2>/dev/null
     fi
-    for _j in "$wd" "$sm" "$ld"; do
+    [ -z "$wd" ] || kill "$wd" 2>/dev/null   # (its trap stops its sleep; killing the sleep first made it "reach" the limit)
+    for _j in "$sm" "$ld" "$uw"; do
         [ -z "$_j" ] || { pkill -P "$_j" 2>/dev/null; kill "$_j" 2>/dev/null; }
     done
     gl_release
@@ -469,11 +526,25 @@ cat "$out/start.txt"
 
 # ---- the run ---------------------------------------------------------------
 "$SERVER" -k 2>/dev/null; "$SERVER" -w 2>/dev/null
+until_t0=$(date +%s)
+rm -f "$out/until-met.txt" "$out/until-failed.txt"
 "${cmd[@]}" >"$out/stdout.log" 2>"$out/stderr.log" &
 pid=$!
 if [ "$tmo" -gt 0 ]; then
-    ( sleep "$tmo"; echo "== time limit ${tmo}s reached" >>"$out/stderr.log"; kill -TERM $pid 2>/dev/null; "$SERVER" -k 2>/dev/null ) 2>/dev/null &
+    ( sleep "$tmo" & sp=$!; trap 'kill $sp 2>/dev/null; exit 0' TERM; wait $sp
+      echo "== time limit ${tmo}s reached" >>"$out/stderr.log"; kill -TERM $pid 2>/dev/null; "$SERVER" -k 2>/dev/null ) 2>/dev/null &
     wd=$!
+fi
+if [ "$until_on" = 1 ]; then
+    # the watcher ends the run the way the time limit does: the title is stopped and the prefix's wineserver with it
+    wargs=(--out "$out" --pid "$pid" --t0 "$until_t0" --linger "$linger")
+    for _re in ${until_logs[@]+"${until_logs[@]}"}; do wargs+=(--log "$_re"); done
+    [ -z "$until_world" ] || wargs+=(--world "$until_world")
+    [ -z "$until_present" ] || wargs+=(--present "$until_present")
+    [ "$until_capture" = 0 ] || { [ -z "$capture" ] || wargs+=(--capture "$capture"); [ "$until_record" = 0 ] || wargs+=(--record); }
+    ( "$ROOT/tools/mac/until-watch.sh" "${wargs[@]}"; rc=$?
+      if [ $rc = 0 ] || [ $rc = 3 ]; then kill -TERM $pid 2>/dev/null; "$SERVER" -k 2>/dev/null; fi ) 2>/dev/null &
+    uw=$!
 fi
 if [ "$sample" -gt 0 ]; then
     (
@@ -502,16 +573,38 @@ ld=$!
 start=$(date +%s)
 wait $pid; st=$?
 {
-    [ -z "${wd:-}" ] || { pkill -P $wd; kill $wd; wait $wd; }
+    [ -z "${uw:-}" ] || wait $uw   # (it sees the title gone within a poll, and looks one last time)
+    [ -z "${wd:-}" ] || { kill $wd; wait $wd; }
     [ -z "${sm:-}" ] || { kill $sm; wait $sm; }
     [ -z "${ld:-}" ] || { kill $ld; wait $ld; }
-    wd=""; sm=""; ld=""
+    wd=""; sm=""; ld=""; uw=""
 } 2>/dev/null
 "$SERVER" -k 2>/dev/null
 end=$(date +%s)
 { date +%FT%T; echo "exit $st"; } >"$out/end.txt"
+# --until-*: met (exit 0) or not (exit 6), said in the logs and next to the run's settings
+final_st=$st; until_msg=""
+if [ "$until_on" = 1 ]; then
+    if [ -f "$out/until-met.txt" ]; then
+        IFS=$'\t' read -r u_which u_secs u_line <"$out/until-met.txt"
+        until_msg="until 条件满足：${u_which} 在 ${u_secs} s"
+        [ "$linger" = 0 ] || until_msg="$until_msg (linger ${linger} s, run ended at $((end - start)) s)"
+        [ -z "${u_line:-}" ] || until_msg="$until_msg: ${u_line}"
+        final_st=0
+    else
+        if [ -f "$out/until-failed.txt" ]; then u_why="$(cat "$out/until-failed.txt")"
+        elif [ "$tmo" -gt 0 ] && [ $((end - start)) -ge $((tmo - 1)) ]; then u_why="not seen within --timeout ${tmo} s"
+        else u_why="the title ended by itself (status $st) after $((end - start)) s first"; fi
+        until_msg="until 未满足：${until_desc}: ${u_why}"
+        final_st=6
+    fi
+    echo "== $until_msg" >>"$out/stderr.log"
+    echo "$until_msg" >>"$out/start.txt"; echo "# $until_msg" >>"$out/run-env.txt"; echo "until: $until_msg" >>"$out/end.txt"
+    echo "$until_msg"
+fi
 {
     echo "backend $backend, profile $profile, $((end - start)) s (limit $tmo), exit status $st"
+    [ -z "$until_msg" ] || echo "$until_msg (run.sh exit status $final_st)"
     for pat in 'non-fidelity' '^resolution:' 'presenting to a window' 'display mode reported' 'VICTORY_PRESENT_MAX' 'render size:' 'world frame 1'; do
         grep -a -m3 -h "$pat" "$out/stdout.log" "$out/stderr.log" 2>/dev/null
     done
@@ -521,5 +614,5 @@ end=$(date +%s)
     [ "$backend" != metal ] || echo "victory-metal lines: $(grep -a -c '^victory-metal' "$out/stderr.log")"
 } >"$out/summary.txt"
 cat "$out/summary.txt"
-echo "logs in $out (exit $st)"
-exit "$st"
+echo "logs in $out (exit $final_st)"
+exit "$final_st"

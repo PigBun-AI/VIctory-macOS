@@ -195,6 +195,14 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
 - **Capture and watchdog switches**: `--record-at` (`VICTORY_RECORD_AT`, I2), `--capture-frames` (takes `w<N>`, I2), `--no-watchdog`
   (`VICTORY_MAC_NO_WATCHDOG=1`, L5; logged as `non-fidelity`) and the preset `--corpus` (`--record-at w<N>` plus `--no-watchdog`, default
   `w5`): see "Capture runs" in `docs/mac/RUN.md`.
+- **Stop as soon as you have the data** (`--until-capture`, `--until-log ERE`, `--until-world N`, `--until-present N`, `--linger SEC`;
+  `tools/mac/until-watch.sh`, tested by `tools/mac/test-run-until.sh` with a fake Wine): a watcher next to the title polls its logs (and
+  the capture/recording folders) once a second and, when any condition holds, ends the run the way `--timeout` does (title stopped,
+  `wineserver -k` of the run's prefix, lock let go), exit status 0, `until 条件满足：<which> 在 <s> s` in `start.txt`/`run-env.txt`/
+  `stderr.log`. `--timeout` is then only the cap: not met, the log says `until 未满足` and the exit status is **6**. Without
+  `--until-*` the run is as before. One Rust line pair for `--until-world` (I2 below): `VICTORY_LOG_WORLD=1` makes the title log every
+  world frame (off by default). The same change fixes the time-limit sleeper, which logged `== time limit ... reached` (and could
+  signal a stale pid) when a run ended before its limit. *Remove when* never needed (it is run.sh's own interface).
 - `--print-env` prints what would be passed (sorted, `~` for the home directory) and the command, and does nothing else.
 - Each run keeps `run-env.txt`, `start.txt`, `summary.txt` next to its logs.
 - Refuses: the Metal backend on a D3DMetal prefix (`wineprefix-play`, `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`); a start while
@@ -664,6 +672,10 @@ asked of the clock at every present). Upstream edits are one line each, marked `
 (`At::World`, the `w<N>` branch of `parse_at`, and `log_latch()` so the log says when world frame 1 latched),
 `replay/snap.rs` (the `At::World(n) => world::reached(n)` arm beside `At::Frame`), and `capture.rs` (`listed()` takes the
 list through `frames::listed`). Tests: `mac/frames.rs` (native) and `record.rs`'s `parse_at` test.
+
+*Log switch (M4).* `VICTORY_LOG_WORLD=1` (set by `run.sh --until-world`, and by `--until-capture` with a `w<N>` frame) makes
+`world::on_present` log `world frame <n> present=<p>` for every world frame from 2 on, and the existing `world frame 1 ... present=<p>` line
+without a recorder; `tools/mac/until-watch.sh` stops the run on them. Off (no new line) when unset or `0`.
 
 *Notes.* A `w<N>` capture lands the same few frames after the trigger as `f<N>` does (the recorder arms, then takes
 the next whole frame). `VICTORY_CAPTURE_FRAMES=w0` cannot trace the world's first frame's draws ahead of time (it is
