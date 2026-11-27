@@ -18,7 +18,7 @@ use victory_metal_proto::sync::*;
 use victory_metal_proto::types::{Caps, SamplerDesc, ViewDesc, ViewKind};
 use victory_metal_proto::{
     Command, Decoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId, RootSigDesc,
-    RootSigId, Status,
+    RootSigId, Status, SurfaceId,
 };
 
 const VA_START: u64 = 0x1_0000_0000;
@@ -87,6 +87,23 @@ pub struct TextureRecord {
     pub placed: Option<(u32, u64)>,
 }
 
+/// A `PRESENT` the mock accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentRecord {
+    pub queue: QueueId,
+    pub swapchain: SurfaceId,
+    pub buffer: ResId,
+    pub sync_interval: u32,
+    pub flags: u32,
+}
+
+struct SwapRecord {
+    window: u64,
+    width: u32,
+    height: u32,
+    latency: u32,
+}
+
 /// A memory heap (`CREATE_HEAP`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemHeapRecord {
@@ -117,6 +134,8 @@ struct State {
     graphics: HashMap<u32, GraphicsPsoDesc>,
     fences: HashMap<u32, u64>,
     queues: HashMap<u32, u32>,
+    swapchains: HashMap<u32, SwapRecord>,
+    presents: Vec<PresentRecord>,
     calls: Vec<CallRecord>,
     blocks: Vec<Vec<u8>>,
     /// Commands that could not be carried out (bad ids, out of range).
@@ -219,6 +238,42 @@ impl MockLink {
 
     pub fn live_queues(&self) -> usize {
         self.st.lock().unwrap().queues.len()
+    }
+
+    pub fn live_swapchains(&self) -> usize {
+        self.st.lock().unwrap().swapchains.len()
+    }
+
+    pub fn swapchain_window(&self, id: SurfaceId) -> Option<u64> {
+        self.st
+            .lock()
+            .unwrap()
+            .swapchains
+            .get(&id.0)
+            .map(|s| s.window)
+    }
+
+    pub fn swapchain_size(&self, id: SurfaceId) -> Option<(u32, u32)> {
+        self.st
+            .lock()
+            .unwrap()
+            .swapchains
+            .get(&id.0)
+            .map(|s| (s.width, s.height))
+    }
+
+    pub fn swapchain_latency(&self, id: SurfaceId) -> Option<u32> {
+        self.st
+            .lock()
+            .unwrap()
+            .swapchains
+            .get(&id.0)
+            .map(|s| s.latency)
+    }
+
+    /// Every `PRESENT` the mock accepted, in order.
+    pub fn presents(&self) -> Vec<PresentRecord> {
+        self.st.lock().unwrap().presents.clone()
     }
 
     /// The next call of `op` fails with `status` (once).
@@ -352,6 +407,86 @@ impl State {
         );
         a.res = ResId(id);
         a.alloc_size = mock_texture_size(a.width, a.height, a.depth_or_array);
+        Status::OK
+    }
+
+    fn make_back_buffers(
+        &mut self,
+        count: u32,
+        w: u32,
+        h: u32,
+        format: u32,
+        usage: u32,
+    ) -> [u32; 16] {
+        let mut out = [0u32; 16];
+        for slot in out.iter_mut().take(count as usize) {
+            let id = self.new_id();
+            self.textures.insert(
+                id,
+                TextureRecord {
+                    dimension: 3,
+                    format,
+                    width: w,
+                    height: h,
+                    depth_or_array: 1,
+                    mips: 1,
+                    samples: 1,
+                    usage: usage | 5,
+                    placed: None,
+                },
+            );
+            *slot = id;
+        }
+        out
+    }
+
+    fn create_swapchain(&mut self, a: &mut CreateSwapchainArgs) -> Status {
+        if a.buffer_count == 0
+            || a.buffer_count as usize > MAX_SWAPCHAIN_BUFFERS
+            || a.width == 0
+            || a.height == 0
+        {
+            return Status::INVALID_ARG;
+        }
+        a.buffers = self.make_back_buffers(a.buffer_count, a.width, a.height, a.format, a.usage);
+        let id = self.new_id();
+        self.swapchains.insert(
+            id,
+            SwapRecord {
+                window: a.window,
+                width: a.width,
+                height: a.height,
+                latency: if a.max_latency == 0 { 3 } else { a.max_latency },
+            },
+        );
+        a.swapchain = SurfaceId(id);
+        a.surface_format = 80;
+        Status::OK
+    }
+
+    fn resize_swapchain(&mut self, a: &mut ResizeSwapchainArgs) -> Status {
+        let Some(s) = self.swapchains.get_mut(&a.swapchain.0) else {
+            return Status::NOT_FOUND;
+        };
+        (s.width, s.height) = (a.width, a.height);
+        a.buffers = self.make_back_buffers(a.buffer_count, a.width, a.height, a.format, a.usage);
+        Status::OK
+    }
+
+    fn present(&mut self, a: &mut PresentArgs) -> Status {
+        if !self.swapchains.contains_key(&a.swapchain.0)
+            || !self.textures.contains_key(&a.buffer.0)
+            || !self.queues.contains_key(&a.queue.0)
+        {
+            return Status::NOT_FOUND;
+        }
+        self.presents.push(PresentRecord {
+            queue: a.queue,
+            swapchain: a.swapchain,
+            buffer: a.buffer,
+            sync_interval: a.sync_interval,
+            flags: a.flags,
+        });
         Status::OK
     }
 
@@ -801,6 +936,27 @@ impl Link for MockLink {
                 let a = args!(DeviceStatusArgs);
                 a.state = 0;
                 Status::OK
+            }
+            SyncOp::CREATE_SWAPCHAIN => s.create_swapchain(args!(CreateSwapchainArgs)),
+            SyncOp::RESIZE_SWAPCHAIN => s.resize_swapchain(args!(ResizeSwapchainArgs)),
+            SyncOp::DESTROY_SWAPCHAIN => {
+                let a = args!(DestroySwapchainArgs);
+                if s.swapchains.remove(&a.swapchain.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
+            }
+            SyncOp::PRESENT => s.present(args!(PresentArgs)),
+            SyncOp::SET_SWAPCHAIN_LATENCY => {
+                let a = args!(SetSwapchainLatencyArgs);
+                match s.swapchains.get_mut(&a.swapchain.0) {
+                    Some(sc) => {
+                        sc.latency = a.max_latency;
+                        Status::OK
+                    }
+                    None => Status::NOT_FOUND,
+                }
             }
             SyncOp::WRAP_MEMORY | SyncOp::GET_SURFACE_LAYER => Status::UNSUPPORTED,
             _ => Status::UNKNOWN_OP,

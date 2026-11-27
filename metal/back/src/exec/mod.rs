@@ -47,6 +47,7 @@ mod dxil;
 mod gfx;
 mod handles;
 mod indirect;
+mod present;
 mod stream;
 mod sync;
 pub mod tlab;
@@ -168,6 +169,8 @@ pub(crate) struct State {
     pub(crate) psos: Table<Arc<Pso>>,
     pub(crate) fences: Table<crate::queue::Fence>,
     pub(crate) queues: Table<crate::queue::Queue>,
+    /// Swap chains (`CREATE_SWAPCHAIN`).
+    pub(crate) swapchains: Table<present::SwapEntry>,
     /// Why the last call refused, for `Executor::last_error` (the wire has
     /// only a status). Taken by the executor after each call.
     pub(crate) note: Option<String>,
@@ -213,6 +216,8 @@ pub struct Executor {
     pub(crate) options: ExecOptions,
     pub(crate) state: Mutex<Option<State>>,
     last_error: Mutex<Option<String>>,
+    /// Where windows' layers come from (`set_surface_provider`).
+    surface: Mutex<Option<Arc<dyn victory_metal_proto::SurfaceProvider>>>,
 }
 
 impl Default for Executor {
@@ -233,6 +238,7 @@ impl Executor {
             options,
             state: Mutex::new(None),
             last_error: Mutex::new(None),
+            surface: Mutex::new(None),
         }
     }
 
@@ -274,6 +280,8 @@ impl Executor {
             SyncOp::CREATE_GRAPHICS_PIPELINE => {
                 typed(args, len, |a| self.create_graphics_pipeline(a))
             }
+            SyncOp::CREATE_SWAPCHAIN => typed(args, len, |a| self.create_swapchain(a)),
+            SyncOp::DESTROY_SWAPCHAIN => typed(args, len, |a| self.destroy_swapchain(a)),
             op if op.is_known() => {
                 match self.with_state(|st| (st.call(op, args, len), st.note.take())) {
                     Ok((s, note)) => {

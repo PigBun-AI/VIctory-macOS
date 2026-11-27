@@ -38,8 +38,13 @@ pub struct WindowRef(pub u64);
 /// Where the back gets the drawing layer of a window from. Installed by the
 /// bridge: the Wine implementation asks the window system of the Wine
 /// process, Route B makes its own window.
-pub trait SurfaceProvider {
-    /// The layer object for `window`, or null. Valid until the window goes away.
-    /// (Architecture note 2.4 spells it `metal_layer_for`; proto does not name Metal.)
+pub trait SurfaceProvider: Send + Sync {
+    /// The layer object for `window`, or null. Valid until `release_layer`
+    /// or until the window goes away. (Architecture note 2.4 spells it
+    /// `metal_layer_for`; proto does not name Metal.)
     fn layer_for(&self, window: WindowRef) -> *mut c_void;
+
+    /// The back is done with the layer it got for `window` (it keeps its
+    /// own reference to it until then). Default: nothing to give back.
+    fn release_layer(&self, _window: WindowRef) {}
 }

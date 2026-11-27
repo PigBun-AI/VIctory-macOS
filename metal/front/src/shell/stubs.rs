@@ -12,6 +12,7 @@ use super::library::*;
 use super::list::*;
 use super::objects::*;
 use super::serialize::*;
+use super::swapchain::*;
 
 impl IDXGIObject_Impl for FactoryObj_Impl {
     fn SetPrivateData(&self, name: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
@@ -40,8 +41,7 @@ impl IDXGIFactory_Impl for FactoryObj_Impl {
         self.x_GetWindowAssociation()
     }
     fn CreateSwapChain(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, pdesc: *const DXGI_SWAP_CHAIN_DESC, ppswapchain: windows::core::OutRef<IDXGISwapChain>) -> windows::core::HRESULT {
-        super::note_notimpl("IDXGIFactory::CreateSwapChain");
-        E_NOTIMPL
+        self.x_CreateSwapChain(pdevice, pdesc, ppswapchain)
     }
     fn CreateSoftwareAdapter(&self, module: windows::Win32::Foundation::HMODULE) -> windows::core::Result<IDXGIAdapter> {
         super::note_notimpl("IDXGIFactory::CreateSoftwareAdapter");
@@ -64,8 +64,7 @@ impl IDXGIFactory2_Impl for FactoryObj_Impl {
         unsafe { core::mem::zeroed() }
     }
     fn CreateSwapChainForHwnd(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, hwnd: windows::Win32::Foundation::HWND, pdesc: *const DXGI_SWAP_CHAIN_DESC1, pfullscreendesc: *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC, prestricttooutput: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<IDXGISwapChain1> {
-        super::note_notimpl("IDXGIFactory2::CreateSwapChainForHwnd");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreateSwapChainForHwnd(pdevice, hwnd, pdesc, pfullscreendesc, prestricttooutput)
     }
     fn CreateSwapChainForCoreWindow(&self, pdevice: windows::core::Ref<windows::core::IUnknown>, pwindow: windows::core::Ref<windows::core::IUnknown>, pdesc: *const DXGI_SWAP_CHAIN_DESC1, prestricttooutput: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<IDXGISwapChain1> {
         super::note_notimpl("IDXGIFactory2::CreateSwapChainForCoreWindow");
@@ -214,6 +213,158 @@ impl IDXGIAdapter3_Impl for AdapterObj_Impl {
 impl IDXGIAdapter4_Impl for AdapterObj_Impl {
     fn GetDesc3(&self) -> windows::core::Result<DXGI_ADAPTER_DESC3> {
         self.x_GetDesc3()
+    }
+}
+
+impl IDXGIObject_Impl for SwapChainObj_Impl {
+    fn SetPrivateData(&self, name: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.dxgi_SetPrivateData(name, datasize, pdata)
+    }
+    fn SetPrivateDataInterface(&self, name: *const windows::core::GUID, punknown: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        self.private.dxgi_SetPrivateDataInterface(name, punknown)
+    }
+    fn GetPrivateData(&self, name: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.dxgi_GetPrivateData(name, pdatasize, pdata)
+    }
+    fn GetParent(&self, riid: *const windows::core::GUID, ppparent: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_GetParent(riid, ppparent)
+    }
+}
+
+impl IDXGIDeviceSubObject_Impl for SwapChainObj_Impl {
+    fn GetDevice(&self, riid: *const windows::core::GUID, ppdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_GetDevice(riid, ppdevice)
+    }
+}
+
+impl IDXGISwapChain_Impl for SwapChainObj_Impl {
+    fn Present(&self, syncinterval: u32, flags: DXGI_PRESENT) -> windows::core::HRESULT {
+        self.x_Present(syncinterval, flags)
+    }
+    fn GetBuffer(&self, buffer: u32, riid: *const windows::core::GUID, ppsurface: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_GetBuffer(buffer, riid, ppsurface)
+    }
+    fn SetFullscreenState(&self, fullscreen: windows::core::BOOL, ptarget: windows::core::Ref<IDXGIOutput>) -> windows::core::Result<()> {
+        self.x_SetFullscreenState(fullscreen, ptarget)
+    }
+    fn GetFullscreenState(&self, pfullscreen: *mut windows::core::BOOL, pptarget: windows::core::OutRef<IDXGIOutput>) -> windows::core::Result<()> {
+        self.x_GetFullscreenState(pfullscreen, pptarget)
+    }
+    fn GetDesc(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_DESC> {
+        self.x_GetDesc()
+    }
+    fn ResizeBuffers(&self, buffercount: u32, width: u32, height: u32, newformat: Common::DXGI_FORMAT, swapchainflags: &DXGI_SWAP_CHAIN_FLAG) -> windows::core::Result<()> {
+        self.x_ResizeBuffers(buffercount, width, height, newformat, swapchainflags)
+    }
+    fn ResizeTarget(&self, pnewtargetparameters: *const Common::DXGI_MODE_DESC) -> windows::core::Result<()> {
+        self.x_ResizeTarget(pnewtargetparameters)
+    }
+    fn GetContainingOutput(&self) -> windows::core::Result<IDXGIOutput> {
+        super::note_notimpl("IDXGISwapChain::GetContainingOutput");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetFrameStatistics(&self, pstats: *mut DXGI_FRAME_STATISTICS) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain::GetFrameStatistics");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetLastPresentCount(&self) -> windows::core::Result<u32> {
+        self.x_GetLastPresentCount()
+    }
+}
+
+impl IDXGISwapChain1_Impl for SwapChainObj_Impl {
+    fn GetDesc1(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_DESC1> {
+        self.x_GetDesc1()
+    }
+    fn GetFullscreenDesc(&self) -> windows::core::Result<DXGI_SWAP_CHAIN_FULLSCREEN_DESC> {
+        self.x_GetFullscreenDesc()
+    }
+    fn GetHwnd(&self) -> windows::core::Result<windows::Win32::Foundation::HWND> {
+        self.x_GetHwnd()
+    }
+    fn GetCoreWindow(&self, refiid: *const windows::core::GUID, ppunk: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain1::GetCoreWindow");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn Present1(&self, syncinterval: u32, presentflags: DXGI_PRESENT, ppresentparameters: *const DXGI_PRESENT_PARAMETERS) -> windows::core::HRESULT {
+        self.x_Present1(syncinterval, presentflags, ppresentparameters)
+    }
+    fn IsTemporaryMonoSupported(&self) -> windows::core::BOOL {
+        super::note_notimpl("IDXGISwapChain1::IsTemporaryMonoSupported");
+        unsafe { core::mem::zeroed() }
+    }
+    fn GetRestrictToOutput(&self) -> windows::core::Result<IDXGIOutput> {
+        super::note_notimpl("IDXGISwapChain1::GetRestrictToOutput");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn SetBackgroundColor(&self, pcolor: *const DXGI_RGBA) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain1::SetBackgroundColor");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetBackgroundColor(&self) -> windows::core::Result<DXGI_RGBA> {
+        super::note_notimpl("IDXGISwapChain1::GetBackgroundColor");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn SetRotation(&self, rotation: Common::DXGI_MODE_ROTATION) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain1::SetRotation");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetRotation(&self) -> windows::core::Result<Common::DXGI_MODE_ROTATION> {
+        super::note_notimpl("IDXGISwapChain1::GetRotation");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+}
+
+impl IDXGISwapChain2_Impl for SwapChainObj_Impl {
+    fn SetSourceSize(&self, width: u32, height: u32) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain2::SetSourceSize");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetSourceSize(&self, pwidth: *mut u32, pheight: *mut u32) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain2::GetSourceSize");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn SetMaximumFrameLatency(&self, maxlatency: u32) -> windows::core::Result<()> {
+        self.x_SetMaximumFrameLatency(maxlatency)
+    }
+    fn GetMaximumFrameLatency(&self) -> windows::core::Result<u32> {
+        self.x_GetMaximumFrameLatency()
+    }
+    fn GetFrameLatencyWaitableObject(&self) -> windows::Win32::Foundation::HANDLE {
+        self.x_GetFrameLatencyWaitableObject()
+    }
+    fn SetMatrixTransform(&self, pmatrix: *const DXGI_MATRIX_3X2_F) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain2::SetMatrixTransform");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn GetMatrixTransform(&self, pmatrix: *mut DXGI_MATRIX_3X2_F) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain2::GetMatrixTransform");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+}
+
+impl IDXGISwapChain3_Impl for SwapChainObj_Impl {
+    fn GetCurrentBackBufferIndex(&self) -> u32 {
+        self.x_GetCurrentBackBufferIndex()
+    }
+    fn CheckColorSpaceSupport(&self, colorspace: Common::DXGI_COLOR_SPACE_TYPE) -> windows::core::Result<u32> {
+        super::note_notimpl("IDXGISwapChain3::CheckColorSpaceSupport");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn SetColorSpace1(&self, colorspace: Common::DXGI_COLOR_SPACE_TYPE) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain3::SetColorSpace1");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+    fn ResizeBuffers1(&self, buffercount: u32, width: u32, height: u32, format: Common::DXGI_FORMAT, swapchainflags: &DXGI_SWAP_CHAIN_FLAG, pcreationnodemask: *const u32, pppresentqueue: *const Option<windows::core::IUnknown>) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain3::ResizeBuffers1");
+        Err(windows::core::Error::from(E_NOTIMPL))
+    }
+}
+
+impl IDXGISwapChain4_Impl for SwapChainObj_Impl {
+    fn SetHDRMetaData(&self, r#type: DXGI_HDR_METADATA_TYPE, size: u32, pmetadata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        super::note_notimpl("IDXGISwapChain4::SetHDRMetaData");
+        Err(windows::core::Error::from(E_NOTIMPL))
     }
 }
 

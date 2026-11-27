@@ -41,6 +41,10 @@ impl<T> Table<T> {
         self.map.get(&id)
     }
 
+    pub(crate) fn get_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.map.get_mut(&id)
+    }
+
     /// Puts `value` under an existing handle.
     pub(crate) fn replace(&mut self, id: u32, value: T) {
         if self.map.contains_key(&id) {

@@ -32,6 +32,7 @@ pub mod pso;
 pub mod resource;
 pub mod rootsig;
 pub mod state;
+pub mod swapchain;
 pub mod view;
 
 #[cfg(windows)]

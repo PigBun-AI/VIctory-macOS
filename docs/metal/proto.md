@@ -1,7 +1,7 @@
 # victory-metal-proto: the contract between front and back (seam B)
 
-Crate `metal/proto` (`victory-metal-proto`), protocol **version 2** (version 1 was M1: buffers and compute; version 2 adds
-textures, placement heaps and texture copies, see sections 3 and 4, and graphics pipelines, see section 5b), written
+Crate `metal/proto` (`victory-metal-proto`), protocol **version 3** (version 1 was M1: buffers and compute; version 2 adds
+textures, placement heaps and texture copies, see sections 3 and 4, and graphics pipelines, see section 5b; version 3 adds swap chains and present, see section 3), written
 2026-11-27 (Asia/Shanghai). `no_std` + `alloc`, no dependencies, builds for
 `x86_64-pc-windows-gnullvm` and for both Apple targets. It names no D3D12,
 DXGI or Metal type: layering rule 3 (`tools/metal/check-layers.sh` enforces it).
@@ -41,8 +41,11 @@ pub trait SurfaceProvider { fn layer_for(&self, window: WindowRef) -> *mut c_voi
 ```
 
 `SurfaceProvider::layer_for` is `metal_layer_for` in the architecture note
-(section 2.4); the name changed because proto does not name Metal. Install it
-in the back through the bridge; it is only used by `GET_SURFACE_LAYER` (M3).
+(section 2.4); the name changed because proto does not name Metal. The bridge
+installs it in the back (`Executor::set_surface_provider`); the back asks it
+for the layer of a window in `CREATE_SWAPCHAIN` and gives it back with
+`release_layer` in `DESTROY_SWAPCHAIN`. The layer never crosses the seam, so
+`GET_SURFACE_LAYER` stays a placeholder (the back answers `UNSUPPORTED`).
 
 ## 3. Sync calls (`Link::call`)
 
@@ -70,6 +73,7 @@ Notes the table cannot hold:
 * `WRITE_DESCRIPTOR` (block version 2) texture views: `kind` `TEXTURE_SRV` / `TEXTURE_UAV`, `resource` a texture, `format` the view format (`UNKNOWN` = the texture's own; a different one needs the texture to be typeless or of the same family), `dimension` (`TexViewDim`), `plane` (depth-stencil: 0 depth, 1 stencil), `swizzle` (component sources, `[R,G,B,A]` = none), `mip_first`/`mip_count` and `slice_first`/`slice_count` (0 = all that remain), `min_lod` (SRV `ResourceMinLODClamp`). RTV/DSV have no descriptors in the back: the front keeps `(res, mip, slice, format)` records itself.
 * `CREATE_COMPUTE_PIPELINE`: `dxil_addr/dxil_len` is the DXIL container, valid for the call. The conversion (Metal Shader Converter) is not part of this milestone's proto work: until the back has it the call may answer `UNSUPPORTED`.
 * `CREATE_GRAPHICS_PIPELINE` (version 2, number 0x50): see section 5b. The description is a fixed-size POD, not a D3D12 struct. `DESTROY_PIPELINE` frees the result.
+* Swap chains (version 3, `0x60-0x65`). `CREATE_SWAPCHAIN` binds a window (`WindowRef` = the HWND) to a surface and makes `buffer_count` back buffers as ordinary textures (their `ResId`s come back in `buffers`; destroy them with `DESTROY_TEXTURE`, the swap chain keeps no reference), so rendering into a back buffer is rendering into a texture. `PRESENT{queue, swapchain, buffer, sync_interval, flags}` is a **sync call, not a stream command**: the front makes it after the `submit` of the work it should show, and the back orders it after everything already committed to `queue`; it copies the buffer into the surface's next drawable (a compute kernel: format conversion, nearest-neighbour scaling when the sizes differ), waits for the drawable with the queue (`waitForDrawable`) before and signals it (`signalDrawable`) after, then presents; `max_latency` presents in flight at most (the call blocks beyond that). `RESIZE_SWAPCHAIN` makes new back buffers and sets the surface size; the caller destroyed the old ones first. `SWAPCHAIN_INFO` reports drawable size, counters and, for a swap chain made with `swapchain_flags::PROBE`, one texel read back from the drawable after each present (tests; it also waits for the GPU). The opcode range 0x0700-0x07FF stays unused.
 * `FENCE_WAIT`: `timeout_ms == u64::MAX` waits forever; `TIMEOUT` when it runs out. `FENCE_VALUE` reads the completed value. The queue-side signal/wait are stream commands.
 * `DEVICE_STATUS.state`: 0 fine, 1 hung, 2 removed (front's `GetDeviceRemovedReason`).
 
@@ -196,6 +200,12 @@ only in dumps.
 | 68 | `CREATE_PLACED_BUFFER` (`CreatePlacedBufferArgs`) | 1 | 56 | Implemented | head: CallHead @0, heap: MemHeapId @8, offset: u64 @16, size: u64 @24, res: ResId @32, gpu_va: u64 @40, cpu_addr: u64 @48 | in: heap, offset, size; out: res, gpu_va, cpu_addr (0 in a DEFAULT heap) |
 | 69 | `GET_RESOURCE_ALLOCATION_INFO` (`GetResourceAllocationInfoArgs`) | 1 | 72 | Implemented | head: CallHead @0, kind: ResKind @8, dimension: TexDim @12, format: u32 @16, width: u32 @20, height: u32 @24, depth_or_array: u32 @28, mips: u32 @32, samples: u32 @36, usage: u32 @40, heap_kind: MemKind @44, buffer_size: u64 @48, size: u64 @56, alignment: u64 @64 | in: kind (ResKind), the texture fields or buffer_size, heap_kind; out: size, alignment (what Metal's heap size-and-align says) |
 | 80 | `CREATE_GRAPHICS_PIPELINE` (`CreateGraphicsPipelineArgs`) | 1 | 2080 | Implemented | head: CallHead @0, root_sig: RootSigId @8, flags: u32 @12, pso: PsoId @16, desc: GraphicsPsoDesc @24 | in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make) |
+| 96 | `CREATE_SWAPCHAIN` (`CreateSwapchainArgs`) | 1 | 120 | Implemented | head: CallHead @0, window: u64 @8, width: u32 @16, height: u32 @20, format: u32 @24, buffer_count: u32 @28, usage: u32 @32, flags: u32 @36, max_latency: u32 @40, swapchain: SurfaceId @44, surface_format: u32 @48, buffers: [u32; 16] @56 | in: window (WindowRef), width, height, format (DXGI), buffer_count, usage, flags (swapchain_flags), max_latency; out: swapchain, surface_format, buffers (ResId numbers of the back buffers) |
+| 97 | `RESIZE_SWAPCHAIN` (`ResizeSwapchainArgs`) | 1 | 96 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, width: u32 @12, height: u32 @16, format: u32 @20, buffer_count: u32 @24, usage: u32 @28, buffers: [u32; 16] @32 | in: swapchain, width, height, format (0 = keep), buffer_count (0 = keep), usage (0 = keep); out: buffers (new ResId numbers) |
+| 98 | `DESTROY_SWAPCHAIN` (`DestroySwapchainArgs`) | 1 | 16 | Implemented | head: CallHead @0, swapchain: SurfaceId @8 | in: swapchain (the back buffers stay the caller's) |
+| 99 | `PRESENT` (`PresentArgs`) | 1 | 32 | Implemented | head: CallHead @0, queue: QueueId @8, swapchain: SurfaceId @12, buffer: ResId @16, sync_interval: u32 @20, flags: u32 @24 | in: queue, swapchain, buffer (ResId), sync_interval, flags (present_flags): shows the buffer after the queue's earlier work |
+| 100 | `SWAPCHAIN_INFO` (`SwapchainInfoArgs`) | 1 | 64 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, width: u32 @16, height: u32 @20, surface_format: u32 @24, probe_valid: u32 @28, presents: u64 @32, completed: u64 @40, probe_texel: u64 @48, probe_x: u32 @56, probe_y: u32 @60 | in: swapchain; out: drawable size, surface_format, presents, completed, probe_texel (swap chains made with PROBE) |
+| 101 | `SET_SWAPCHAIN_LATENCY` (`SetSwapchainLatencyArgs`) | 1 | 16 | Implemented | head: CallHead @0, swapchain: SurfaceId @8, max_latency: u32 @12 | in: swapchain, max_latency (1 to 8) |
 
 ### Stream commands (`Link::submit`)
 
@@ -230,7 +240,7 @@ only in dumps.
 - 0x0403-0x04FF: textures: numbers not yet used
 - 0x0500-0x05FF: render state, draws, mesh dispatch (M3, m3-gfx)
 - 0x0600-0x06FF: render passes and render-encoder bindings (M3, m3-gfx)
-- 0x0700-0x07FF: present (M3)
+- 0x0700-0x07FF: present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)
 - 0x0801-0x08FF: queries, timestamps, other compute-side commands (m4-compute)
 - 0x0900-0x09FF: ExecuteIndirect (M2)
 <!-- END GENERATED: api_table -->
