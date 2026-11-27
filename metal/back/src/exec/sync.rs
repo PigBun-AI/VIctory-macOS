@@ -752,6 +752,10 @@ impl Executor {
         // A second HELLO shares the device the first one made.
         if g.is_none() {
             let device = Device::new().map_err(|e| status_of(&e))?;
+            // A pipeline archive the census wrote: found pipelines are not compiled.
+            if let Some(dir) = std::env::var_os("VICTORY_METAL_ARCHIVE").filter(|v| !v.is_empty()) {
+                crate::archive::open_dir(&device, std::path::Path::new(&dir));
+            }
             *g = Some(State::new(device, self.options));
         }
         let st = g.as_ref().expect("made above");

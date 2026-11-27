@@ -35,7 +35,7 @@ fn epoch_ms() -> u64 {
 
 /// A pipeline's creation row: when (ms and us of the day, for matching
 /// against logs), kind, hash, result, reason.
-pub(crate) const PSO_HEADER: &str = "epoch_us,kind,hash,pso,result,reason";
+pub(crate) const PSO_HEADER: &str = "epoch_us,kind,hash,pso,result,compile_us,reason";
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -86,13 +86,15 @@ impl Collector {
         let us = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_micros() as u64);
+        // The time the Metal compiler took (0: it was not called).
+        let compile_us = crate::archive::take_compile_us();
         let (pso, result, reason) = match result {
             Ok(id) => (id, "ok", String::new()),
             Err(why) => (0, "refused", victory_metal_proto::dropstats::sanitize(why)),
         };
         let _ = writeln!(
             lock(&self.pso_csv),
-            "{us},{kind},{hash:016x},{pso},{result},{reason}"
+            "{us},{kind},{hash:016x},{pso},{result},{compile_us},{reason}"
         );
         if result != "ok" {
             self.extra(&format!("pso refused {kind}"), 1);
@@ -222,9 +224,9 @@ mod tests {
         let lines: Vec<&str> = pso.lines().collect();
         assert_eq!(lines[0], PSO_HEADER);
         assert!(
-            lines[1].ends_with(",ms,000000000000abcd,0,refused,MSC refused  attributeAtVertex")
+            lines[1].ends_with(",ms,000000000000abcd,0,refused,0,MSC refused  attributeAtVertex")
         );
-        assert!(lines[2].ends_with(",vs,00000000000000ef,3,ok,"));
+        assert!(lines[2].ends_with(",vs,00000000000000ef,3,ok,0,"));
         let frames = std::fs::read_to_string(dir.join("back.csv")).unwrap();
         assert!(frames.lines().nth(1).unwrap().ends_with("pso refused ms=1"));
         let _ = std::fs::remove_dir_all(&dir);

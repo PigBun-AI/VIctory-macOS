@@ -157,3 +157,48 @@ pub(crate) fn task_options() -> Option<Retained<MTL4CompilerTaskOptions>> {
         .as_ref()
         .map(|o| o.0.clone())
 }
+
+thread_local! {
+    /// What the compiler calls of this thread took since the last
+    /// [`take_compile_us`] (microseconds), for `VICTORY_METAL_DROPSTATS`:
+    /// a pipeline found in an archive takes well under a millisecond.
+    static COMPILE_US: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs a compiler call and adds its time to the thread's tally.
+pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> T {
+    let t = std::time::Instant::now();
+    let r = f();
+    COMPILE_US.with(|c| c.set(c.get() + t.elapsed().as_micros() as u64));
+    r
+}
+
+/// The compiler time of this thread since the last call.
+pub(crate) fn take_compile_us() -> u64 {
+    COMPILE_US.with(|c| c.replace(0))
+}
+
+/// The four archives of `dir` (`cs`, `ms`, `ps`, `vs` `.mtl4a`, what the
+/// census wrote), opened and set as the lookup. Returns how many opened.
+pub fn open_dir(device: &Device, dir: &Path) -> usize {
+    let mut opened = Vec::new();
+    for name in ["cs", "ms", "ps", "vs"] {
+        let path = dir.join(format!("{name}.mtl4a"));
+        let t = std::time::Instant::now();
+        match open(device, &path) {
+            Ok(a) => {
+                eprintln!(
+                    "victory-metal back: archive {} opened in {} ms",
+                    path.display(),
+                    t.elapsed().as_millis()
+                );
+                opened.push(a);
+            }
+            Err(e) => eprintln!("victory-metal back: archive not opened: {e}"),
+        }
+    }
+    let refs: Vec<&Archive> = opened.iter().collect();
+    set_lookup(&refs);
+    // The lookup holds what it needs (the options keep the archives).
+    opened.len()
+}

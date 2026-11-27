@@ -1130,12 +1130,13 @@ fn compile_render(
     what: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, MscError> {
     let base: &MTL4PipelineDescriptor = d;
-    compiler
-        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
+    crate::archive::timed(|| {
+        compiler.newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
             base,
             crate::archive::task_options().as_deref(),
         )
-        .map_err(|e| metal_refusal(what, &e.localizedDescription().to_string()))
+    })
+    .map_err(|e| metal_refusal(what, &e.localizedDescription().to_string()))
 }
 
 /// The compiler call of mesh pipelines (see [`compile_render`]).
@@ -1144,12 +1145,13 @@ fn compile_mesh(
     d: &MTL4MeshRenderPipelineDescriptor,
 ) -> Result<Retained<ProtocolObject<dyn MTLRenderPipelineState>>, MscError> {
     let base: &MTL4PipelineDescriptor = d;
-    compiler
-        .newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
+    crate::archive::timed(|| {
+        compiler.newRenderPipelineStateWithDescriptor_compilerTaskOptions_error(
             base,
             crate::archive::task_options().as_deref(),
         )
-        .map_err(|e| metal_refusal("mesh pipeline", &e.localizedDescription().to_string()))
+    })
+    .map_err(|e| metal_refusal("mesh pipeline", &e.localizedDescription().to_string()))
 }
 
 /// Metal's refusal of a pipeline, told apart when it is a size limit (the

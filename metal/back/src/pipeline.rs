@@ -142,12 +142,13 @@ fn pipeline_state(
     function.setLibrary(Some(library));
     let descriptor = MTL4ComputePipelineDescriptor::new();
     descriptor.setComputeFunctionDescriptor(Some(&function));
-    compiler
-        .newComputePipelineStateWithDescriptor_compilerTaskOptions_error(
+    crate::archive::timed(|| {
+        compiler.newComputePipelineStateWithDescriptor_compilerTaskOptions_error(
             &descriptor,
             crate::archive::task_options().as_deref(),
         )
-        .map_err(|e| Error::Metal(format!("pipeline {entry}: {}", e.localizedDescription())))
+    })
+    .map_err(|e| Error::Metal(format!("pipeline {entry}: {}", e.localizedDescription())))
 }
 
 pub(crate) fn probe_caps(
