@@ -484,10 +484,18 @@ pub fn bucket(n: u64) -> String {
 /// `D3D12_COMPARISON_FUNC` by name.
 pub fn compare_name(f: u32) -> String {
     const N: [&str; 9] = [
-        "?", "NEVER", "LESS", "EQUAL", "LESS_EQUAL", "GREATER", "NOT_EQUAL", "GREATER_EQUAL",
+        "?",
+        "NEVER",
+        "LESS",
+        "EQUAL",
+        "LESS_EQUAL",
+        "GREATER",
+        "NOT_EQUAL",
+        "GREATER_EQUAL",
         "ALWAYS",
     ];
-    N.get(f as usize).map_or_else(|| format!("cmp{f}"), |s| (*s).to_string())
+    N.get(f as usize)
+        .map_or_else(|| format!("cmp{f}"), |s| (*s).to_string())
 }
 
 fn blend_factor_name(f: u32) -> String {
@@ -772,7 +780,10 @@ pub fn pipeline_state_into(t: Sink<'_>, s: &PipelineState) {
     if s.stream_output_entries != 0 {
         t("pso.stream_output", "entries>0".to_string());
     }
-    t("pso.input_elements", bucket(u64::from(s.input_layout.count)));
+    t(
+        "pso.input_elements",
+        bucket(u64::from(s.input_layout.count)),
+    );
     if s.flags != 0 {
         t("pso.flags", format!("0x{:x}", s.flags));
     }
@@ -877,7 +888,10 @@ pub fn buffer_view_into(t: Sink<'_>, v: &BufferView) {
     };
     t(
         "view.buffer",
-        format!("{kind} {shape}{}", if v.counter.is_some() { " counter" } else { "" }),
+        format!(
+            "{kind} {shape}{}",
+            if v.counter.is_some() { " counter" } else { "" }
+        ),
     );
 }
 
@@ -935,12 +949,22 @@ pub fn barriers_into(t: Sink<'_>, bs: &[ResourceBarrier]) {
                 if flags != 0 {
                     t(
                         "barrier.split",
-                        if flags & 1 != 0 { "begin_only" } else { "end_only" }.to_string(),
+                        if flags & 1 != 0 {
+                            "begin_only"
+                        } else {
+                            "end_only"
+                        }
+                        .to_string(),
                     );
                 }
                 t(
                     "barrier.subresource",
-                    if subresource == 0xffff_ffff { "all" } else { "one" }.to_string(),
+                    if subresource == 0xffff_ffff {
+                        "all"
+                    } else {
+                        "one"
+                    }
+                    .to_string(),
                 );
             }
             ResourceBarrier::Uav { res } => {
@@ -992,7 +1016,10 @@ pub fn execute_indirect_into(
 /// A query heap at creation (`D3D12_QUERY_HEAP_TYPE`) or a query that ends.
 pub fn query_heap(ty: u32, count: u32) {
     with_global(|t| {
-        t("query.heap", format!("type={ty} count={}", bucket(u64::from(count))));
+        t(
+            "query.heap",
+            format!("type={ty} count={}", bucket(u64::from(count))),
+        );
     });
 }
 
@@ -1029,7 +1056,11 @@ pub fn heap_created(ty: u32, size: u64, flags: u32) {
     with_global(|t| {
         t(
             "heap.create",
-            format!("{} {}MiB flags=0x{flags:x}", heap_type_name(ty), bucket(size >> 20)),
+            format!(
+                "{} {}MiB flags=0x{flags:x}",
+                heap_type_name(ty),
+                bucket(size >> 20)
+            ),
         );
     });
 }
@@ -1062,7 +1093,12 @@ pub fn topology(d3d: i32) {
 
 /// `OMSetRenderTargets`: bound targets and whether depth is bound.
 pub fn render_targets(rt_bound: usize, depth: bool) {
-    with_global(|t| t("om.targets", format!("rt={rt_bound} ds={}", u8::from(depth))));
+    with_global(|t| {
+        t(
+            "om.targets",
+            format!("rt={rt_bound} ds={}", u8::from(depth)),
+        )
+    });
 }
 
 /// `CopyTextureRegion`: the kinds of the two locations ("sub" or "footprint").
@@ -1193,7 +1229,9 @@ mod tests {
         }
         assert!(!enabled());
         call("A::B");
-        tally("cat", || panic!("the key is built only when the switch is on"));
+        tally("cat", || {
+            panic!("the key is built only when the switch is on")
+        });
         flush();
     }
 
@@ -1399,7 +1437,10 @@ mod tests {
         };
         command_signature_into(&sink(&s), &sig);
         execute_indirect_into(&sink(&s), &sig, 1, false);
-        assert_eq!(s.count_of("indirect.signature", "constants + dispatch_mesh"), 1);
+        assert_eq!(
+            s.count_of("indirect.signature", "constants + dispatch_mesh"),
+            1
+        );
         assert_eq!(
             s.count_of("indirect.execute", "dispatch_mesh max=1 count_buffer=0"),
             1
@@ -1417,6 +1458,9 @@ mod tests {
             max_lod: 3.0e38,
         };
         sampler_into(&sink(&s), &sp);
-        assert_eq!(s.count_of("sampler", "filter=0x15 addr=1,1,3 aniso=1 cmp=-"), 1);
+        assert_eq!(
+            s.count_of("sampler", "filter=0x15 addr=1,1,3 aniso=1 cmp=-"),
+            1
+        );
     }
 }

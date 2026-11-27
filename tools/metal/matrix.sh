@@ -3,7 +3,12 @@
 #   docs/metal/translation-unproven.md  (used=yes and status != proven, by freq)
 #   docs/metal/translation-stubbed.md   (disposition=stubbed, by freq)
 # Inputs: docs/metal/translation-matrix.csv (this line) and the Mac lead's
-# docs/mac/translation-matrix-mac.csv (MATRIX_MAC=<path> to override; absent = skipped).
+# docs/mac/translation-matrix-mac.csv, looked for in this order:
+#   MATRIX_MAC=<file>            that file
+#   MAC_MATRIX_REF=<git ref>     `git show <ref>:docs/mac/translation-matrix-mac.csv`
+#                                (default ref: fork/mac/livetr; unreadable = next)
+#   the file in this checkout    docs/mac/translation-matrix-mac.csv
+#   none of them                 skipped, said in the first line
 # Columns are read by header name; a column the Mac file lacks is empty there.
 # A row id in both files: the Mac file wins.
 # Usage: tools/metal/matrix.sh [--check]   (--check: fail if the .md files are not current)
@@ -11,31 +16,50 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$here"
 check=0; [ "${1:-}" = "--check" ] && check=1
-MATRIX_MAC="${MATRIX_MAC:-docs/mac/translation-matrix-mac.csv}"
-export MATRIX_MAC CHECK=$check
+export MATRIX_MAC="${MATRIX_MAC:-}" MAC_MATRIX_REF="${MAC_MATRIX_REF:-fork/mac/livetr}" CHECK=$check
 exec python3 - <<'PY'
 import csv, os, sys, collections
 
 MAIN = 'docs/metal/translation-matrix.csv'
-MAC = os.environ['MATRIX_MAC']
+import io, subprocess
+MAC_FILE = os.environ['MATRIX_MAC']
+MAC_REF = os.environ['MAC_MATRIX_REF']
+MAC_PATH = 'docs/mac/translation-matrix-mac.csv'
 check = os.environ['CHECK'] == '1'
 COLS = ['id','chain','hop','unit','owner','used','freq','freq_source','tests','reference','reference_detail',
         'status','disposition','xbox_hw','deviation','restore_plan','notes']
 
+def parse(f, path):
+    rd = csv.DictReader(f)
+    missing = [c for c in ('id','chain','owner','used','status') if c not in (rd.fieldnames or [])]
+    if missing:
+        sys.exit(f'{path}: missing columns {missing}')
+    return [{c: (row.get(c) or '') for c in COLS} for row in rd]
+
 def load(path):
     with open(path, newline='') as f:
-        rd = csv.DictReader(f)
-        missing = [c for c in ('id','chain','owner','used','status') if c not in (rd.fieldnames or [])]
-        if missing:
-            sys.exit(f'{path}: missing columns {missing}')
-        return [{c: (row.get(c) or '') for c in COLS} for row in rd]
+        return parse(f, path)
+
+def load_mac():
+    """(rows, where from) of the Mac lead's matrix, or ([], None)."""
+    if MAC_FILE:
+        return load(MAC_FILE), MAC_FILE
+    g = subprocess.run(['git', 'show', f'{MAC_REF}:{MAC_PATH}'], capture_output=True, text=True)
+    if g.returncode == 0:
+        return parse(io.StringIO(g.stdout, newline=''), f'{MAC_REF}:{MAC_PATH}'), f'{MAC_REF}:{MAC_PATH}'
+    if os.path.exists(MAC_PATH):
+        return load(MAC_PATH), MAC_PATH
+    return [], None
 
 rows = {r['id']: r for r in load(MAIN)}
+mac_rows, mac_from = load_mac()
 mac_n = 0
-if os.path.exists(MAC):
-    for r in load(MAC):
-        rows[r['id']] = r      # the Mac file wins
-        mac_n += 1
+if mac_rows:
+    # skeleton rows (notes start with SKELETON) only stand in until the Mac lead's file exists
+    rows = {i: r for i, r in rows.items() if not r['notes'].startswith('SKELETON')}
+for r in mac_rows:
+    mac_n += 1
+    rows[r['id']] = r          # the Mac file wins
 rows = list(rows.values())
 
 def num(x):
@@ -53,7 +77,7 @@ for r in rows:
 
 out = []
 P = out.append
-P(f"rows: {len(rows)} ({MAIN}: {len(rows)-mac_n}+; {MAC}: {mac_n if mac_n else 'absent'})")
+P(f"rows: {len(rows)} (this line {MAIN}: {len(load(MAIN))}; Mac file {mac_from or 'not found, skipped'}: {mac_n}; skeleton rows of this file dropped when the Mac file is present)")
 
 def stats(sel):
     used = [r for r in sel if r['used'] == 'yes']
