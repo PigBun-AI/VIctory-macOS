@@ -375,6 +375,125 @@ fn upload_bc_zero(d: &Device, q: &Queue, t: &Texture, data: &[u8], pitch: u32) {
     upload(d, q, t, 0, 0, data, pitch);
 }
 
+/// `CopyResource` between a typeless texture and a view-format sibling of its
+/// family (`R8G8B8A8_TYPELESS` and `R8G8B8A8_UNORM_SRGB`, the game's
+/// 853x480 copy): the bytes move as they are, every mip and slice, both ways.
+#[test]
+fn copy_resource_between_formats_of_one_family_moves_the_bytes() {
+    let (_g, d, q) = setup();
+    for (a, b) in [
+        (dxgi::R8G8B8A8_TYPELESS, dxgi::R8G8B8A8_UNORM_SRGB),
+        (dxgi::R8G8B8A8_UNORM_SRGB, dxgi::R8G8B8A8_TYPELESS),
+    ] {
+        let mk = |format| {
+            d.create_texture(&TextureDesc {
+                dim: TexDim::D2,
+                format,
+                width: 37,
+                height: 21,
+                depth_or_array: 2,
+                mips: 3,
+                samples: 1,
+                usage: SRV,
+            })
+            .unwrap()
+        };
+        let (src, dst) = (mk(a), mk(b));
+        let mut imgs = Vec::new();
+        for slice in 0..2 {
+            for mip in 0..3 {
+                let [w, h, _] = src.desc().mip_size(mip);
+                let img = pattern((w * h * 4) as usize, a * 5 + slice * 3 + mip);
+                upload(&d, &q, &src, mip, slice, &img, w * 4);
+                imgs.push((mip, slice, w, img));
+            }
+        }
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture_resource(&dst, &src)
+            .unwrap_or_else(|e| panic!("{a} -> {b}: {e}"));
+        l.end().unwrap();
+        run(&q, l);
+        for (mip, slice, w, img) in imgs {
+            assert_eq!(
+                download(&d, &q, &dst, mip, slice, w * 4),
+                img,
+                "{a} -> {b} mip {mip} slice {slice}"
+            );
+        }
+    }
+}
+
+/// A whole subresource of a depth-stencil texture copies to another of the
+/// same format, both planes; one plane or a region is still refused.
+#[test]
+fn a_whole_depth_stencil_subresource_copies_with_both_planes() {
+    let (_g, d, q) = setup();
+    let mk = || {
+        d.create_texture(&TextureDesc::tex2d(
+            dxgi::D32_FLOAT_S8X24_UINT,
+            8,
+            8,
+            DS | SRV,
+        ))
+        .unwrap()
+    };
+    let (src, dst) = (mk(), mk());
+    let depth: Vec<u8> = (0..64u32)
+        .flat_map(|i| (i as f32 / 64.0).to_le_bytes())
+        .collect();
+    let stencil = pattern(64, 11);
+    let up_d = d.create_buffer(BufferKind::Upload, 256).unwrap();
+    let up_s = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up_d.write(0, &depth).unwrap();
+    up_s.write(0, &stencil).unwrap();
+    let plane = |t, plane| TexLoc {
+        plane,
+        ..loc(t, 0, 0)
+    };
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&src, 0),
+        &buf_loc(&up_d, dxgi::R32_TYPELESS, 32, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&src, 1),
+        &buf_loc(&up_s, dxgi::R8_TYPELESS, 8, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_texture(&loc(&dst, 0, 0), &loc(&src, 0, 0), [8, 8, 1])
+        .unwrap_or_else(|e| panic!("whole copy: {e}"));
+    let rd = d.create_buffer(BufferKind::Readback, 256).unwrap();
+    let rs = d.create_buffer(BufferKind::Readback, 64).unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&rd, dxgi::R32_TYPELESS, 32, 8),
+        &plane(&dst, 0),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&rs, dxgi::R8_TYPELESS, 8, 8),
+        &plane(&dst, 1),
+        [8, 8, 1],
+    )
+    .unwrap();
+    // A region is refused, in the same list.
+    assert!(matches!(
+        l.copy_texture(&loc(&dst, 0, 0), &loc(&src, 0, 0), [4, 4, 1]),
+        Err(Error::Unsupported(_))
+    ));
+    l.end().unwrap();
+    run(&q, l);
+    let mut got = vec![0u8; 256];
+    rd.read(0, &mut got).unwrap();
+    assert_eq!(got, depth, "depth plane");
+    let mut got = vec![0u8; 64];
+    rs.read(0, &mut got).unwrap();
+    assert_eq!(got, stencil, "stencil plane");
+}
+
 #[test]
 fn one_d_and_three_d_textures_round_trip() {
     let (_g, d, q) = setup();

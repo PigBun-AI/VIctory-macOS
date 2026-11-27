@@ -414,9 +414,21 @@ impl CommandList {
             return Ok(());
         }
         if sf.planes() > 1 || df.planes() > 1 {
-            return Err(Error::Unsupported(
-                "copying one plane or a region of a depth-stencil texture".into(),
-            ));
+            // A whole subresource of a depth-stencil texture copies as one:
+            // Metal's blit moves every plane of equal formats. One plane, or
+            // a region, has no such copy.
+            let whole = src.origin == [0; 3]
+                && dst.origin == [0; 3]
+                && size == src.texture.desc().mip_size(src.mip)
+                && size == dst.texture.desc().mip_size(dst.mip);
+            if !whole
+                || sf.dxgi != df.dxgi
+                || src.texture.pixel_format() != dst.texture.pixel_format()
+            {
+                return Err(Error::Unsupported(
+                    "copying one plane or a region of a depth-stencil texture".into(),
+                ));
+            }
         }
         if sl.bytes != dl.bytes || sl.block != dl.block {
             return Err(Error::BadArgument(format!(
@@ -523,11 +535,32 @@ impl CommandList {
                 "copy of a texture of another device".into(),
             ));
         }
-        let same = a.dim == b.dim
+        let shape = a.dim == b.dim
             && (a.width, a.height, a.depth_or_array) == (b.width, b.height, b.depth_or_array)
             && a.mips == b.mips
-            && a.samples == b.samples
-            && dst.pixel_format() == src.pixel_format();
+            && a.samples == b.samples;
+        if shape && dst.pixel_format() != src.pixel_format() && a.samples == 1 {
+            // Formats of one family (`R8G8B8A8_TYPELESS` and its sRGB view
+            // format): every subresource goes through `copy_texture`, which
+            // moves the bytes.
+            if dst.same(src) {
+                return Err(Error::BadArgument("copy of a texture onto itself".into()));
+            }
+            for slice in 0..a.array_len() {
+                for mip in 0..a.mips {
+                    let at = |t| TexLoc {
+                        texture: t,
+                        mip,
+                        slice,
+                        plane: 0,
+                        origin: [0; 3],
+                    };
+                    self.copy_texture(&at(dst), &at(src), a.mip_size(mip))?;
+                }
+            }
+            return Ok(());
+        }
+        let same = shape && dst.pixel_format() == src.pixel_format();
         if !same {
             return Err(Error::BadArgument(format!(
                 "CopyResource between textures of different descriptions: {a:?} and {b:?}"
@@ -562,11 +595,16 @@ fn block_copy_shape(
         format::require(dst.texture.desc().format)?,
     );
     let one = (1, 1);
-    let mixed = sf.planes() == 1
-        && df.planes() == 1
-        && sf.bytes == df.bytes
+    let single = sf.planes() == 1 && df.planes() == 1 && sf.bytes == df.bytes;
+    // A compressed side and an uncompressed one whose texel is its block.
+    let mixed = single
         && ((sf.block == one && df.block == (4, 4)) || (sf.block == (4, 4) && df.block == one));
-    Ok(mixed.then(|| blocks_of(sf, size)))
+    // The same layout in another Metal format (`R8G8B8A8_TYPELESS` to its
+    // sRGB view format): the original API copies the bytes, Metal's blit
+    // wants equal formats.
+    let recast =
+        single && sf.block == df.block && src.texture.pixel_format() != dst.texture.pixel_format();
+    Ok((mixed || recast).then(|| blocks_of(sf, size)))
 }
 
 /// `size` texels of format `f` as blocks (rounded up).
