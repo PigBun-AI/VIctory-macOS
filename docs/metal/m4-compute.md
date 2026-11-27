@@ -49,10 +49,28 @@ trip and rejection tests, `front/tests/indirect.rs`; under Wine
 
 ## The five silent errors
 
-Fixed in the first commits; each is a wrong result without an error code:
-see the commit messages (710ef84 adds `VICTORY_METAL_LOG` naming the command
-that stopped a block and `VICTORY_METAL_TRACE` dumping blocks, which found
-them).
+Wrong results with no error code. Causes and fixes (the diagnostics that
+found them: `VICTORY_METAL_LOG=1` names the command that stopped a block,
+`VICTORY_METAL_TRACE=1` dumps every decoded block, 710ef84):
+
+* `shadow::tests::widened_views_*` (3): one cause. The list's root signature
+  and the pipeline's were made as two objects of the same bytes (D3D12 treats
+  them as compatible); the back compared the objects and refused the dispatch
+  with `INVALID_ARG`, which `ExecuteCommandLists` has no way to return, so
+  the patch passes never ran. Now compatible = same description
+  (`compatible_with`). ab13d64; back test in `exec_compat.rs`.
+* `indirect::tests::hoisted_batch_*`: the front's state tracker sent one
+  barrier for `UNORDERED_ACCESS -> INDIRECT_ARGUMENT -> COPY_SOURCE` (to the
+  indirect stages) and none for the second step, so the copy ran without
+  waiting for the shader's writes. The tracker keeps the stages that wrote a
+  subresource and the stages already made visible, and sends the missing
+  ones on any later transition. b046298; `front/src/state.rs` tests.
+* `draw::a_depth_texture_written_through_unordered_views_reads_as_depth`
+  (stencil reads 0): D3D12's `X32_TYPELESS_G8X24_UINT` view has the stencil in
+  G; Metal's stencil plane view has it in R. A plane-1 SRV now sits under the
+  swizzle `[Zero, R, Zero, One]` and the application's mapping selects from
+  it. 41da51c; back test in `texture_gpu.rs`. (The victory-gpu test then
+  stops at a graphics pipeline with blend factor 0: the render hand's.)
 
 ## ExecuteCommandLists latency
 
