@@ -224,13 +224,14 @@ pub fn rt_pagecache() -> bool {
     switch(crate::emit::live::var_os("VICTORY_RT_PAGECACHE").as_deref(), true)
 }
 
-/// `VICTORY_VIEWADDR_TABLE=1` (default off): the address of a buffer view picked from a heap by an
+/// `VICTORY_VIEWADDR_TABLE=1` (default on in this tree, `=0` turns it off: mac S3): the address of a buffer view picked from a heap by an
 /// index the code computes (the shadow-mask ray programs) is read from the host's address table
 /// (`SLOT_VIEW_ADDRESSES` / `SLOT_TABLE_VIEW_ADDRESSES`), and such programs translate. Off: they are
 /// refused as before. The host keeps the table always, so the switch can change while the title
 /// runs. Part of the translation: the shader cache keys on the effective value.
 pub fn viewaddr_table() -> bool {
-    switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), false)
+    // mac S3: on unless `VICTORY_VIEWADDR_TABLE=0` (the shadow-mask ray programs are refused otherwise)
+    switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), true) // mac S3
 }
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
@@ -622,7 +623,9 @@ pub fn emit(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        let wide_on = wide_option.as_ref().map_or(scene_kernel, |v| v == "1");
+        // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
+        let _ = scene_kernel; // mac S3
+        let wide_on = wide_option.as_ref().map_or(true, |v| v != "0"); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
