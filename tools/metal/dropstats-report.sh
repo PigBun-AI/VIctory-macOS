@@ -414,8 +414,8 @@ def section(run, min_frames, shots):
                 shaders.add(k.split(",")[0])
         add("")
         add(f"**attributeAtVertex pipelines.** The back refused {n_attr_pipes} pipeline creations over the run "
-            f"for `dx.op.attributeAtVertex` ({len(shaders)} distinct mesh/vertex shaders; the lead's 103 is the count of "
-            f"distinct shaders/pipelines in an earlier census, ours counts every creation). In the world they account "
+            f"for `dx.op.attributeAtVertex` ({len(shaders)} distinct mesh/vertex shaders; the task's 103 is a count from another source; ours counts every creation, "
+            f"also the repeated ones). In the world they account "
             f"for **{attr_draws / frames:.0f} draws/frame, {100 * attr_draws / max(1, ran + draws_dropped):.1f} % of the title's draws "
             f"and {100 * attr_draws / max(1, seen):.1f} % of the itemised drops** (estimate).")
         gpu["attr_draws"] = attr_draws
@@ -440,6 +440,13 @@ def section(run, min_frames, shots):
         rows = [(i + 1, c[0], f"`{c[1]}`" if c[1] else "", f"`{c[2]}`" if c[2] else "", c[3], c[4], fmt(c[5], 2))
                 for i, c in enumerate(cand[:20])]
         add("\n".join(table(["#", "layer", "victory-gpu shaders", "our hash", "type", "reason", "per frame"], rows)))
+        ours = sorted(((n / len(fr), h, ty, why) for (h, ty, why), n in per.items()), reverse=True)[:20]
+        add("")
+        add("Top 20 dropped by our back (measured; every one is an indirect geometry-stage draw skipped by `VICTORY_METAL_SKIP_GS_INDIRECT`, "
+            "or whatever the reason column says):")
+        add("")
+        add("\n".join(table(["#", "our hash", "type", "reason", "per frame"],
+                            [(i + 1, f"`{h}`", ty, why, fmt(n, 2)) for i, (n, h, ty, why) in enumerate(ours)] or [("-", "", "", "(none)", "")])))
     else:
         add("No victory-gpu 1 s lines after world frame 1.")
         cand = sorted(((n / len(fr), h, ty, why) for (h, ty, why), n in per.items()), reverse=True)
