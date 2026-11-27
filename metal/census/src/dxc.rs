@@ -18,6 +18,11 @@ use crate::sig::Element;
 
 pub struct Dxc {
     helper: PathBuf,
+    /// The same front end with `-Vd` (no DXC validation), made on first use:
+    /// DXC's validator refuses more than 32 output rows, and a pixel shader
+    /// that reads the three vertices of an attribute as flat inputs
+    /// (docs/metal/attribute-at-vertex.md) has up to 38.
+    helper_vd: Mutex<Option<PathBuf>>,
     lib: PathBuf,
     dir: PathBuf,
     cache: Mutex<HashMap<String, Result<Vec<u8>, String>>>,
@@ -60,15 +65,50 @@ impl Dxc {
         };
         Ok(Dxc {
             helper,
+            helper_vd: Mutex::new(None),
             lib,
             dir,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
+    /// The `-Vd` front end: the repository's script with one more DXC argument.
+    fn unvalidated_helper(&self) -> Result<PathBuf, String> {
+        let mut slot = self.helper_vd.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(h) = slot.as_ref() {
+            return Ok(h.clone());
+        }
+        let h = self.dir.join("dxc-d3dmetal-vd");
+        if !h.exists() {
+            let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/macos/dxc-d3dmetal.sh");
+            let text = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
+            let patched = text.replace("L\"-O3\"}", "L\"-O3\", L\"-Vd\"}");
+            if patched == text {
+                return Err("the DXC front end's argument list changed: no -Vd variant".into());
+            }
+            let tmp = self.dir.join("dxc-d3dmetal-vd.sh");
+            std::fs::write(&tmp, patched).map_err(|e| e.to_string())?;
+            let status = Command::new("/bin/sh")
+                .arg(&tmp)
+                .arg(&h)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err("building the -Vd DXC front end failed".into());
+            }
+        }
+        *slot = Some(h.clone());
+        Ok(h)
+    }
+
     /// DXIL of `hlsl` for `profile`; the same text is compiled once.
     pub fn compile(&self, profile: &str, hlsl: &str) -> Result<Vec<u8>, String> {
-        let key = blake3::hash(format!("{profile}\n{hlsl}").as_bytes()).to_hex()[..16].to_owned();
+        self.compile_with(profile, hlsl, false)
+    }
+
+    /// As [`Dxc::compile`]; `unvalidated`: without DXC's validation (more than 32 signature rows).
+    pub fn compile_with(&self, profile: &str, hlsl: &str, unvalidated: bool) -> Result<Vec<u8>, String> {
+        let key = blake3::hash(format!("{profile}\n{unvalidated}\n{hlsl}").as_bytes()).to_hex()[..16].to_owned();
         if let Some(r) = self
             .cache
             .lock()
@@ -86,9 +126,14 @@ impl Dxc {
                 return Ok(bytes);
             }
             std::fs::write(&src, hlsl).map_err(|e| e.to_string())?;
+            let helper = if unvalidated {
+                self.unvalidated_helper()?
+            } else {
+                self.helper.clone()
+            };
             let run = Command::new("/usr/bin/arch")
                 .arg("-x86_64")
-                .arg(&self.helper)
+                .arg(&helper)
                 .args(["-T", profile, "-E", "main", "-Fo"])
                 .arg(&out)
                 .arg(&src)
@@ -120,6 +165,16 @@ fn comp_type(e: &Element) -> (&'static str, &'static str) {
     }
 }
 
+/// As [`comp_type`], with the components the element really has (its mask's width): Metal counts
+/// the scalars of a stage's varyings (124 at most), so a partner that widens every element to four
+/// would count more than the real stage writes.
+fn exact_type(e: &Element) -> (String, &'static str) {
+    let (ty, interp) = comp_type(e);
+    let base = ty.trim_end_matches('4');
+    let w = e.width();
+    (if w == 1 { base.to_owned() } else { format!("{base}{w}") }, interp)
+}
+
 /// HLSL of a full-screen-triangle vertex shader that writes every ordinary
 /// input the pixel shader reads (`inputs`: its `ISG1`), so that the pair
 /// links. Elements are declared in register order, which is how DXC
@@ -139,6 +194,50 @@ pub fn vertex_for(inputs: &[Element]) -> String {
         s.push_str(&format!("  o.v{i} = {ty}({}, 0, 0, 0);\n", i + 1));
     }
     s.push_str("  return o;\n}\n");
+    s
+}
+
+/// The first semantic index of the flat elements the translator adds for the vertices 1 and 2 of
+/// an attribute (`docs/metal/attribute-at-vertex.md`, "Implementation design"): the mesh stage
+/// writes them per primitive.
+pub const PRIMITIVE_FLAT_BASE: u32 = 64;
+
+/// HLSL of a one-triangle mesh shader that writes every ordinary input the pixel shader reads, as a
+/// partner for pixel shaders whose inputs do not fit a vertex shader's 32 rows: the elements the
+/// translator adds for the vertices 1 and 2 (`TEXCOORD` from [`PRIMITIVE_FLAT_BASE`] on) are
+/// per-primitive outputs, the others per-vertex ones, as the real mesh stage writes them. DXC takes
+/// 32 rows each for the vertices and the primitives, where a vertex shader has 32 in all.
+pub fn mesh_for(inputs: &[Element]) -> String {
+    let mut els: Vec<&Element> = inputs.iter().filter(|e| e.system_value == 0).collect();
+    els.sort_by_key(|e| (e.register, e.index));
+    let per_primitive = |e: &Element| e.name == "TEXCOORD" && e.index >= PRIMITIVE_FLAT_BASE;
+    let mut v = String::from("struct V {\n  float4 pos : SV_Position;\n");
+    let mut p = String::from("struct P {\n");
+    let (mut body_v, mut body_p) = (String::new(), String::new());
+    for (i, e) in els.iter().enumerate() {
+        let (ty, interp) = exact_type(e);
+        let zeros = ", 0".repeat(e.width() as usize - 1);
+        let value = if e.width() == 1 { format!("{}", i + 1) } else { format!("{ty}({}{zeros})", i + 1) };
+        if per_primitive(e) {
+            p.push_str(&format!("  nointerpolation {ty} v{i} : {}{};\n", e.name, e.index));
+            body_p.push_str(&format!("  prims[0].v{i} = {value};\n"));
+        } else {
+            v.push_str(&format!("  {interp}{ty} v{i} : {}{};\n", e.name, e.index));
+            body_v.push_str(&format!("    verts[k].v{i} = {value};\n"));
+        }
+    }
+    v.push_str("};\n");
+    p.push_str("};\n");
+    let mut s = v;
+    s.push_str(&p);
+    s.push_str("[numthreads(1, 1, 1)] [outputtopology(\"triangle\")]\n");
+    s.push_str("void main(out vertices V verts[3], out primitives P prims[1], out indices uint3 tris[1]) {\n");
+    s.push_str("  SetMeshOutputCounts(3, 1);\n  for (uint k = 0; k < 3; k++) {\n");
+    s.push_str("    float2 uv = float2((k << 1) & 2, k & 2);\n    verts[k].pos = float4(uv * 2.0 - 1.0, 0.0, 1.0);\n");
+    s.push_str(&body_v);
+    s.push_str("  }\n");
+    s.push_str(&body_p);
+    s.push_str("  tris[0] = uint3(0, 1, 2);\n}\n");
     s
 }
 
@@ -170,5 +269,20 @@ mod tests {
         assert!(hlsl.contains("nointerpolation uint4 v0 : TEXCOORD0"));
         assert!(hlsl.contains("float4 v1 : TEXCOORD1"));
         assert!(!hlsl.contains("SV_Position :") || hlsl.matches("SV_Position").count() == 1);
+    }
+
+    #[test]
+    fn the_mesh_partner_writes_the_added_flat_elements_per_primitive() {
+        let hlsl = mesh_for(&[
+            el("TEXCOORD", 0, 0, 3, 0),
+            el("TEXCOORD", 64, 0, 3, 1),
+            el("SV_Position", 0, 1, 3, 2),
+        ]);
+        let (vs, ps) = hlsl.split_once("struct P").unwrap();
+        assert!(vs.contains("float4 v0 : TEXCOORD0"));
+        assert!(!vs.contains("TEXCOORD64"));
+        assert!(ps.contains("nointerpolation float4 v1 : TEXCOORD64"));
+        assert!(hlsl.contains("prims[0].v1 = float4(2, 0, 0, 0)"));
+        // (the test elements have all four components)
     }
 }

@@ -217,7 +217,22 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
     row["dxil_bytes"] = json!(s.dxil.len());
     // The partner stage and the render targets.
     let (partner, targets, depth): (Vec<u8>, Vec<Component>, bool) = if kind == "ps" {
-        let vs = match ctx.dxc.compile("vs_6_6", &dxc::vertex_for(&inputs)) {
+        // A vertex shader has 32 signature rows in all. A pixel shader reading the three vertices
+        // of an attribute has more than that once the translator lowers it (the added flat
+        // elements, docs/metal/attribute-at-vertex.md); DXC refuses or aborts on such a vertex
+        // shader even unvalidated. The partner is then a mesh shader, which has 32 rows for its
+        // vertices and 32 for its primitives, and the added elements are what a mesh stage
+        // writes per primitive in the real pipeline too.
+        let hlsl = dxc::vertex_for(&inputs);
+        row["inputs"] = json!(inputs.iter().filter(|e| e.system_value == 0).count());
+        let made = match ctx.dxc.compile("vs_6_6", &hlsl) {
+            Err(_) => {
+                row["partner"] = json!("ms");
+                ctx.dxc.compile_with("ms_6_6", &dxc::mesh_for(&inputs), true)
+            }
+            other => other,
+        };
+        let vs = match made {
             Ok(v) => v,
             Err(why) => {
                 row["ok"] = json!(false);
@@ -297,6 +312,11 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
             ms: Some(&s.dxil),
             ..Stages::default()
         },
+        _ if row["partner"] == "ms" => Stages {
+            ms: Some(&partner),
+            ps: Some(&s.dxil),
+            ..Stages::default()
+        },
         _ => Stages {
             vs: Some(&partner),
             ps: Some(&s.dxil),
@@ -340,6 +360,7 @@ fn items(
         .iter()
         .filter(|r| r["ok"] == true && r["stage"] == want)
         .filter_map(|r| r["hash"].as_str().map(str::to_owned))
+        .filter(|h| only.is_none_or(|o| o.contains(h)))
         .collect();
     hashes.sort();
     if let Some(only) = only {
