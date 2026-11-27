@@ -11,7 +11,7 @@
 #                     outside the repository: game-derived data never goes in it)
 #   --lenient         set VICTORY_METAL_LENIENT=1 (see below)
 #   --keys SPEC       VICTORY_KEYS for this run (default below; `none` = no scripted keys)
-#   --input FILE      VICTORY_INPUT_REPLAY for this run (default: unset; the new base does not read it, see below)
+#   --input FILE      VICTORY_INPUT_REPLAY for this run (default tools/mac/input/world-neutral.txt; `none` = unset)
 #   --exec            no timer, no log files, no summary: `exec` victory.sh as it is
 #                     (what the first version of this script did)
 #
@@ -32,9 +32,14 @@
 #                    instead of failing the list, so the game runs on and the gap list is complete
 #   VICTORY_KEYS=8-900/3:Enter              presses Enter (= pad A through the keyboard's stand-in pad)
 #                    every 3 s from 8 s on, so the intro and account screens go on by themselves
-#                    (expanded to an explicit list, see expand_keys)
-#   VICTORY_INPUT_REPLAY   not set by default: this base (mac/livetr) has no input replay, so there is no
-#                    fixed input in the world yet (tools/metal/input/world-neutral.txt is for bases that have it)
+#                    (the base parses the period form itself since mac/livetr d4e89736)
+#   VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt   the neutral input from the world's first frame
+#                    on (mac/livetr patch I1, docs/mac/PATCHES.md; the world frame is counted by present from
+#                    VICTORY_WORLD_DRAWS=500 draws, the log says which present is world frame 1)
+#   VICTORY_METAL_SKIP_GS_INDIRECT=1   (default here, `VICTORY_METAL_SKIP_GS_INDIRECT=0 run.sh` turns it off)
+#                    the back does not draw indirect geometry-shader draws: with them the picture of the old
+#                    base went black (docs/metal/m5-gs.md "What it does to the picture", docs/metal/m4-newbase.md);
+#                    the cause is not found yet. The code's default is to draw them.
 #   VICTORY_PATCH_MASKED=all VICTORY_FAULT_TRACKING=1   the game flags NOTES-victory-macos.md used
 #                    (a value already in the environment wins)
 # victory.toml (git-ignored, repository root) is written if missing: game dir, cache and data under
@@ -52,7 +57,7 @@ ROOT=$(cd "$here/../.." && pwd)
 . "$here/env.sh"
 
 build=1; timeout=600; out=""; plain=0; lenient=0
-keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-none}"
+keys="${VICTORY_KEYS:-8-900/3:Enter}"; input="${VICTORY_INPUT_REPLAY:-tools/mac/input/world-neutral.txt}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) build=0 ;;
@@ -114,22 +119,10 @@ export WINEDLLPATH="$STAGE${WINEDLLPATH:+:$WINEDLLPATH}"
 export WINEDLLOVERRIDES="d3d12,dxgi=n,b"
 export VICTORY_METAL_LOG=1
 [ "$lenient" = 1 ] && export VICTORY_METAL_LENIENT=1
-# The periodic form FROM-TO/PERIOD:Key (the default) is expanded here into explicit
-# SECONDS:Key,... entries: the base's scripted keys (victory-hle gameinput.rs `scripted()`)
-# know only SECONDS:Key (held 0.2 s) and FROM-TO:Key (held), and drop an entry they cannot read (the account screen
-# then never gets its Enter).
-expand_keys() {
-    echo "$1" | awk -F, '{
-        for (i = 1; i <= NF; i++) {
-            if (match($i, /^[0-9.]+-[0-9.]+\/[0-9.]+:/)) {
-                split($i, kv, ":"); split(kv[1], r, "/"); split(r[1], ft, "-")
-                for (t = ft[1]; t <= ft[2]; t += r[2]) out = out (out == "" ? "" : ",") t ":" kv[2]
-            } else out = out (out == "" ? "" : ",") $i
-        }
-        print out }'
-}
-if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$(expand_keys "$keys")"; fi
+# VICTORY_KEYS: the base reads `<from>-<to>/<every>[+<hold>]:<key>` itself (mac/livetr patch I1).
+if [ "$keys" = none ]; then unset VICTORY_KEYS; else export VICTORY_KEYS="$keys"; fi
 if [ "$input" = none ]; then unset VICTORY_INPUT_REPLAY; else export VICTORY_INPUT_REPLAY="$input"; fi
+export VICTORY_METAL_SKIP_GS_INDIRECT="${VICTORY_METAL_SKIP_GS_INDIRECT:-1}"
 export VICTORY_PATCH_MASKED="${VICTORY_PATCH_MASKED:-all}"
 export VICTORY_FAULT_TRACKING="${VICTORY_FAULT_TRACKING:-1}"
 # upstream's script, untouched; it enters its own checkout (this worktree) and builds victory.exe there

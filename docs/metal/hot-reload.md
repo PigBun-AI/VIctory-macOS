@@ -43,20 +43,19 @@ through a sync op whose arguments are recordable.
 
 Every game run is scripted (`tools/metal/run.sh`). `VICTORY_KEYS` walks the
 intro and the account screen (Enter is pad A through the keyboard's stand-in
-pad). The base's parser (`crates/victory-hle/src/modules/gameinput.rs`,
-`scripted()`) knows `SECONDS:Key` (held 0.2 s) and `FROM-TO:Key` (held), comma
-separated; it drops an entry it cannot read, which is why the old
-`8-900/3:Enter` did nothing there. `run.sh` keeps writing the period form
-`8-900/3:Enter` as its default and expands it to `8:Enter,11:Enter,14:Enter,...`
-(every 3 s from the 8th second to the 900th).
+pad). Since mac/livetr patch I1 (ce8f1ab3, in d4e89736) the base's parser knows
+`SECONDS:Key`, `FROM-TO:Key` and the period form `FROM-TO/EVERY[+HOLD]:Key`, so
+`run.sh` passes its default `8-900/3:Enter` (every 3 s from the 8th second to
+the 900th) as it is; it no longer expands it.
 
-On the new base (mac/livetr) there is no `VICTORY_INPUT_REPLAY`: nothing owns
-the pad once the world is reached, so there is **no fixed input in the world
-yet** and `run.sh` does not set the variable. Fixed-scene recordings and
-benchmarks need that mechanism first (the old base has it in
-`gameinput_script.rs`); until then a recording names its key spec only and the
-scene is whatever the title does by itself. `tools/metal/input/world-neutral.txt`
-stays for bases that read it.
+The world's input is fixed by `VICTORY_INPUT_REPLAY` (jsonl indexed by a *world
+frame*, `VICTORY_INPUT_RECORD` makes one). victory-gpu counts the world frame
+from the title's own draw recordings: it starts at the present where
+`VICTORY_WORLD_DRAWS` (500) draws have been recorded, and the log says which
+present is world frame 1; that number can be given to `VICTORY_CAPTURE_FRAMES`.
+`run.sh` sets `VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt` by
+default (`--input none` unsets it). Fixed-scene recordings and benchmarks name
+this file and the key spec.
 
 ### Frame workbench (extends layer 1; same milestone)
 
