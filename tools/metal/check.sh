@@ -8,7 +8,7 @@
 #        aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnullvm
 #   5. cargo doc of proto with warnings denied (broken links)
 #   6. cargo fmt --check
-#   7. gen-front-stubs.py --check    the generated front shell stubs are current
+#   7. gen-front-stubs.sh --check    the generated front shell stubs are current
 #
 # Every step runs even when an earlier one failed; a passing step prints one
 # line, a failing one prints its whole output. -v prints the output of every step.
@@ -82,7 +82,7 @@ step "cargo doc (proto)"    env RUSTDOCFLAGS="-D warnings" cargo doc -p victory-
 # Not --all: that would also format the upstream crates metal/ depends on by path.
 step "cargo fmt --check"    cargo fmt --check
 cd "$ROOT" || exit 2
-step "front stubs current"  python3 tools/metal/gen-front-stubs.py --check
+step "front stubs current"  tools/metal/gen-front-stubs.sh --check
 
 echo
 if [ -z "$failed_steps" ]; then

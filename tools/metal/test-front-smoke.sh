@@ -15,9 +15,9 @@
 #              the Metal back (WINEDLLPATH=<stage>); then front-e2e.exe (real copies,
 #              barriers, fences, checked against CPU models) runs on that stack too.
 #              Differences that only the real back shows go in
-#              tools/metal/front-smoke-real.known-diff.
+#              tools/metal/front-smoke-real.known-diff.txt.
 #
-# Known, accepted differences are listed in tools/metal/front-smoke.known-diff
+# Known, accepted differences are listed in tools/metal/front-smoke.known-diff.txt
 # (one exact GOLD line per row, "- " builtin side / "+ " ours).
 # Never run next to another Wine test in the same prefix (a lock refuses).
 # Usage: tools/metal/test-front-smoke.sh [--no-build] [--real]
@@ -72,8 +72,8 @@ if ! diff -u "$WORK/recorded.txt" "$WORK/gold.txt" >"$WORK/rec.diff"; then
     cat "$WORK/rec.diff"
 fi
 
-KNOWN="$here/front-smoke.known-diff"
-KNOWN_REAL="$here/front-smoke-real.known-diff"
+KNOWN="$here/front-smoke.known-diff.txt"
+KNOWN_REAL="$here/front-smoke-real.known-diff.txt"
 echo "== diff builtin vs ours (GOLD lines)"
 # Lines that exist only in --ours (bad-input cases) are not in the builtin run.
 diff "$WORK/gold.txt" "$WORK/ours.txt" | grep '^[<>]' | sed 's/^< /- /; s/^> /+ /' >"$WORK/diff.txt" || true

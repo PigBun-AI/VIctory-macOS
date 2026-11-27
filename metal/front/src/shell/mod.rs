@@ -3,7 +3,7 @@
 //! core (`crate::device` and friends); a shell method reads its raw
 //! arguments, calls the core, writes the results.
 //!
-//! * `gen.rs` is generated (`tools/metal/gen-front-stubs.py`): every method
+//! * `gen.rs` is generated (`tools/metal/gen-front-stubs.sh`): every method
 //!   of every claimed interface, calling the `x_<Method>` written by hand in
 //!   the other files, or a stub (`E_NOTIMPL`, no-op).
 //! * `exports.rs` has the DLL entry points (`D3D12CreateDevice`, ...).

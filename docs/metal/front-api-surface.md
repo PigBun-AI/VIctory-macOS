@@ -272,7 +272,7 @@ blocks and go through `Link::call`. The back allocates all handles.
 Tests use `MockLink` (`mock.rs`): it records submitted blocks and sync calls,
 answers with fake handles and `gpu_va`s, can fail the next call of an op, and the
 integration tests (`tests/device.rs`) compare the produced bytes with golden
-proto blocks (`tests/golden/compute-block.vmps`).
+proto blocks (`tests/golden/compute-block.vmps.txt`).
 
 ## 8. COM implementation choice
 
@@ -289,7 +289,7 @@ Reasons:
   e.g. `ID3D12Device_Impl` at line ~9622). Listing the highest version gives QI
   over the whole hierarchy.
 * The cost is that a type implementing `ID3D12Device14` must write every method of
-  all 15 `ID3D12Device*_Impl` traits (~90). `tools/metal/gen-front-stubs.py`
+  all 15 `ID3D12Device*_Impl` traits (~90). `tools/metal/gen-front-stubs.sh`
   generates them (`shell/stubs.rs`): hand-written `x_<Method>` where it exists,
   `E_NOTIMPL` / no-op otherwise. `--check` fails if the generated file is stale.
 * The same crate and types the game side already uses (`victory-gpu` links
