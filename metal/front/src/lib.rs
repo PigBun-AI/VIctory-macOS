@@ -25,6 +25,7 @@ pub mod format;
 pub mod gpu;
 pub mod hresult;
 pub mod mock;
+pub mod library;
 pub mod pso;
 pub mod resource;
 pub mod rootsig;

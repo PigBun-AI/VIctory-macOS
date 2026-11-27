@@ -222,3 +222,8 @@ GOLD allocator Reset: S_OK
 GOLD list Reset: S_OK
 GOLD list Close after Reset: S_OK
 INFO done: ok
+GOLD CreatePipelineLibrary no blob: S_OK
+GOLD library LoadComputePipeline miss: 0x80070057
+GOLD library serialized size > 0: true
+GOLD library Serialize: S_OK
+GOLD CreatePipelineLibrary from its own blob: S_OK

@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Dxgi::*;
 
 use super::device::*;
 use super::dxgi::*;
+use super::library::*;
 use super::list::*;
 use super::objects::*;
 use super::serialize::*;
@@ -357,8 +358,7 @@ impl ID3D12Device_Impl for DeviceObj_Impl {
 
 impl ID3D12Device1_Impl for DeviceObj_Impl {
     fn CreatePipelineLibrary(&self, plibraryblob: *const core::ffi::c_void, bloblength: usize, riid: *const windows::core::GUID, pppipelinelibrary: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device1::CreatePipelineLibrary");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreatePipelineLibrary(plibraryblob, bloblength, riid, pppipelinelibrary)
     }
     fn SetEventOnMultipleFenceCompletion(&self, ppfences: *const Option<ID3D12Fence>, pfencevalues: *const u64, numfences: u32, flags: D3D12_MULTIPLE_FENCE_WAIT_FLAGS, hevent: windows::Win32::Foundation::HANDLE) -> windows::core::Result<()> {
         super::note_notimpl("ID3D12Device1::SetEventOnMultipleFenceCompletion");
@@ -1156,6 +1156,51 @@ impl ID3D12PipelineState_Impl for PsoObj_Impl {
     fn GetCachedBlob(&self) -> windows::core::Result<windows::Win32::Graphics::Direct3D::ID3DBlob> {
         super::note_notimpl("ID3D12PipelineState::GetCachedBlob");
         Err(windows::core::Error::from(E_NOTIMPL))
+    }
+}
+
+impl ID3D12Object_Impl for LibraryObj_Impl {
+    fn GetPrivateData(&self, guid: *const windows::core::GUID, pdatasize: *mut u32, pdata: *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_GetPrivateData(guid, pdatasize, pdata)
+    }
+    fn SetPrivateData(&self, guid: *const windows::core::GUID, datasize: u32, pdata: *const core::ffi::c_void) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateData(guid, datasize, pdata)
+    }
+    fn SetPrivateDataInterface(&self, guid: *const windows::core::GUID, pdata: windows::core::Ref<windows::core::IUnknown>) -> windows::core::Result<()> {
+        self.private.d3d12_SetPrivateDataInterface(guid, pdata)
+    }
+    fn SetName(&self, name: &windows::core::PCWSTR) -> windows::core::Result<()> {
+        self.private.d3d12_SetName(name)
+    }
+}
+
+impl ID3D12DeviceChild_Impl for LibraryObj_Impl {
+    fn GetDevice(&self, riid: *const windows::core::GUID, ppvdevice: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        super::query_device(&self.device_obj, riid, ppvdevice)
+    }
+}
+
+impl ID3D12PipelineLibrary_Impl for LibraryObj_Impl {
+    fn StorePipeline(&self, pname: &windows::core::PCWSTR, ppipeline: windows::core::Ref<ID3D12PipelineState>) -> windows::core::Result<()> {
+        self.x_StorePipeline(pname, ppipeline)
+    }
+    fn LoadGraphicsPipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_LoadGraphicsPipeline(pname, pdesc, riid, pppipelinestate)
+    }
+    fn LoadComputePipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_LoadComputePipeline(pname, pdesc, riid, pppipelinestate)
+    }
+    fn GetSerializedSize(&self) -> usize {
+        self.x_GetSerializedSize()
+    }
+    fn Serialize(&self, pdata: *mut core::ffi::c_void, datasizeinbytes: usize) -> windows::core::Result<()> {
+        self.x_Serialize(pdata, datasizeinbytes)
+    }
+}
+
+impl ID3D12PipelineLibrary1_Impl for LibraryObj_Impl {
+    fn LoadPipeline(&self, pname: &windows::core::PCWSTR, pdesc: *const D3D12_PIPELINE_STATE_STREAM_DESC, riid: *const windows::core::GUID, pppipelinestate: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
+        self.x_LoadPipeline(pname, pdesc, riid, pppipelinestate)
     }
 }
 

@@ -331,6 +331,22 @@ impl DeviceObj_Impl {
         }
     }
 
+    pub(super) fn x_CreatePipelineLibrary(
+        &self,
+        plibraryblob: *const c_void,
+        bloblength: usize,
+        riid: *const GUID,
+        pppipelinelibrary: *mut *mut c_void,
+    ) -> WResult<()> {
+        super::library::LibraryObj::create(
+            self.to_object(),
+            plibraryblob,
+            bloblength,
+            riid,
+            pppipelinelibrary,
+        )
+    }
+
     pub(super) fn x_CreateRootSignature(
         &self,
         _nodemask: u32,
