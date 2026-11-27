@@ -6,6 +6,9 @@ cross-checked against the `windows` 0.62.2 interface tables). Call sites are
 `victory-gpu` as `gpu/…` and `victory-shader` as `shader/…`, line numbers of the
 scanned tree (worktree `m1-front`).
 
+> **New base (mac/livetr):** this survey is of the old base. The calls the new
+> base adds, and what the front answers, are in [m4-newbase.md](m4-newbase.md).
+
 ## 1. Milestone tags
 
 * **M1** compute: buffers, descriptor heaps and tables, root signatures, compute
@@ -152,9 +155,9 @@ nothing else breaks. `EnumAdapters1` end-of-list is `DXGI_ERROR_NOT_FOUND`
 | `CreateHeap` | ID3D12Device | 2 | gpu/alias.rs:389, gpu/placement.rs:141 | done |
 | `CreatePlacedResource` | ID3D12Device | 4 | gpu/resource.rs:1584, gpu/alias.rs:391, gpu/placement.rs:252 | done |
 | `CreatePlacedResource2` | ID3D12Device10 | 1 | gpu/resource.rs:1577 | E_NOTIMPL/no-op |
-| `CreateQueryHeap` | ID3D12Device | 1 | gpu/host.rs:2918 | E_NOTIMPL/no-op |
+| `CreateQueryHeap` | ID3D12Device | 1 | gpu/host.rs:2918 | done (timestamp heaps, approximate ticks: m4-newbase.md) |
 | `CreateReservedResource` | ID3D12Device | 1 | gpu/inplace_probe.rs:790 | E_NOTIMPL/no-op |
-| `EndQuery` | ID3D12GraphicsCommandList | 2 | gpu/host.rs:3013, gpu/host.rs:3555 | E_NOTIMPL/no-op |
+| `EndQuery` | ID3D12GraphicsCommandList | 2 | gpu/host.rs:3013, gpu/host.rs:3555 | done (timestamp only) |
 | `ExecuteIndirect` | ID3D12GraphicsCommandList | 5 | gpu/draw.rs:2711, gpu/indirect.rs:837, gpu/indirect.rs:1291 | E_NOTIMPL/no-op |
 | `GetSerializedSize` | ID3D12PipelineLibrary | 5 | gpu/pipeline/library.rs:727, gpu/pipeline/library.rs:1299, gpu/pipeline/library.rs:1438 | E_NOTIMPL/no-op |
 | `GetTimestampFrequency` | ID3D12CommandQueue | 2 | gpu/host.rs:2273, gpu/host.rs:2279 | done |
@@ -164,7 +167,7 @@ nothing else breaks. `EnumAdapters1` end-of-list is `DXGI_ERROR_NOT_FOUND`
 | `OpenExistingHeapFromAddress` | ID3D12Device3 | 1 | gpu/inplace_probe.rs:102 | E_NOTIMPL/no-op |
 | `OpenExistingHeapFromAddress1` | ID3D12Device13 | 1 | gpu/inplace_probe.rs:105 | E_NOTIMPL/no-op |
 | `OpenExistingHeapFromFileMapping` | ID3D12Device3 | 1 | gpu/inplace_probe.rs:108 | E_NOTIMPL/no-op |
-| `ResolveQueryData` | ID3D12GraphicsCommandList | 1 | gpu/host.rs:3015 | E_NOTIMPL/no-op |
+| `ResolveQueryData` | ID3D12GraphicsCommandList | 1 | gpu/host.rs:3015 | done (timestamp only, `WRITE_IMMEDIATE`) |
 | `Serialize` | ID3D12PipelineLibrary | 4 | gpu/pipeline/library.rs:830, gpu/pipeline/library.rs:843, gpu/pipeline/library.rs:1439 | E_NOTIMPL/no-op |
 | `StorePipeline` | ID3D12PipelineLibrary | 5 | gpu/pipeline/library.rs:635, gpu/pipeline/library.rs:667, gpu/pipeline/library.rs:680 | E_NOTIMPL/no-op |
 | `UpdateTileMappings` | ID3D12CommandQueue | 2 | gpu/inplace_probe.rs:815, gpu/inplace_probe.rs:862 | E_NOTIMPL/no-op |

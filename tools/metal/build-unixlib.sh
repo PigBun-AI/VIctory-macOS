@@ -28,7 +28,7 @@ cd "$ROOT/metal"
 PE=target/x86_64-pc-windows-gnullvm/release
 MACHO=target/x86_64-apple-darwin/release
 
-# PE half and the probe, with the repository's gnullvm linker (.cargo/config.toml).
+# PE half and the probe, with the gnullvm linker (env.sh sets CARGO_TARGET_..._LINKER to tools/macos/gnullvm-cc.sh; mac/livetr has no .cargo/config.toml entry for it).
 cargo build --release --locked --target x86_64-pc-windows-gnullvm \
     -p victory-metal-bridge -p victory-metal-probe \
     -p victory-metal-front-d3d12 -p victory-metal-front-dxgi \

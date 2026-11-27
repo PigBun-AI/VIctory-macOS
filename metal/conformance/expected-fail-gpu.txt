@@ -1,0 +1,32 @@
+# Known differences between Wine + D3DMetal and Wine + our Metal backend on the NEW base (mac/livetr)
+# in `-p victory-shader` and `-p victory-gpu --lib` (tools/metal/compare-tests.sh). TEST | SIDE | REASON
+# SIDE: ours = fails on ours, passes on D3DMetal; d3dmetal = fails on D3DMetal, passes on ours; both = fails on both.
+# Written 2026-11-27 on branch metal-livetr from the first comparison on the new base, run with --test-threads=1:
+#   victory-shader (297 tests): D3DMetal 255 pass / 36 fail / 6 ignored; ours 282 / 8+1 / 6.
+#   victory-gpu (380 tests): both 328 pass / 17 fail / 35 ignored.
+# Not registered (the run itself breaks): victory-shader emit::valu_tests::whole_wave_f64_sum_and_cvt_f32_f64 stops the process in the
+# shader converter (MSC "Unhandled LLVM type for getMinMaxConstants") on our side; victory-gpu host::refresh_tests::refreshed_ranges_hold_title_memory
+# and safecopy::tests::a_merge_into_missing_memory_fails stop the process with a Rosetta error on both sides: skipped with --skip.
+# The reasons are the first panic line of the failing side(s); "both" entries often come from the environment (WARP and the DXC helper are missing).
+# Two files, one per suite (a registered test that is not in a run is STALE): this one is `-p victory-shader`;
+# metal/conformance/expected-fail-gpu.txt is `-p victory-gpu --lib --skip ...` (EXPECTED=<file> tools/metal/compare-tests.sh ...).
+
+resource::tests::a_depth_texture_and_its_twin_copy_into_each_other | ours | assertion `left == right` failed: row 0
+texture::ahead::tests::a_placed_texture_is_filled_ahead_of_the_lists | ours | level 0's blocks
+pipeline::library::tests::a_rejected_blob_gives_an_empty_library | d3dmetal | assertion failed: matches!(library._blob, Blob::None)
+root::tests::malformed_blobs_are_rejected_by_the_host | d3dmetal | assertion `left == right` failed
+ambient::tests::the_passes_build | both | the passes: Error { code: HRESULT(0x80004005), message: "调用失败。" }
+descriptor::host::tests::a_raw_view_is_moved_only_where_its_descriptor_says_where_it_is | both | assertion failed: crate::host::read_into(at.ptr as *const u8, &mut bytes)
+descriptor::host::tests::views_are_made_beside_the_heap_and_copied_in | both | assertion `left != right` failed: another view since
+indirect::tests::argument_clamp_builds | both | assertion failed: super::clamp().is_some()
+indirect::tests::card_runs_wide_indirect_dispatches | both | clamp shader must compile on WARP: Error { code: HRESULT(0x80004005), message: "调用失败。" }
+indirect::tests::host_list_batches | both | worker shader must compile: Error { code: HRESULT(0x80004005), message: "调用失败。" }
+indirect::tests::host_list_budget_starts_empty_at_each_submission | both | worker shader must compile: Error { code: HRESULT(0x80004005), message: "调用失败。" }
+indirect::tests::host_list_reuses_and_grows_scratch_across_submissions | both | called `Option::unwrap()` on a `None` value
+indirect::tests::host_list_window_executions_need_no_barrier_of_their_own | both | worker shader must compile: Error { code: HRESULT(0x80004005), message: "调用失败。" }
+mac::rosetta::tests::the_variable_decides_and_tests_track | both | assertion failed: !rosetta()
+resource::tests::a_depth_planes_twin_is_drawn_into_the_plane | both | called `Result::unwrap()` on an `Err` value: Error { code: HRESULT(0x80070057), message: "无效参数。" }
+titlewrite::decode::tests::stores_do_what_the_processor_does | both | assertion `left == right` failed: [41, f, b0, 13] of 0 with daa66d2c7ddf74bf
+watch::many_askers_tests::holes_are_known_until_the_runtime_tells | both | assertion failed: super::placeholder(at / PAGE) && super::placeholder(at / PAGE + 7) &&
+watch::many_askers_tests::no_mapping_is_lost_between_askers | both | the bits answered none
+watch::tests::what_is_left_alone_is_no_known_hole | both | assertion failed: (0..3).all(known) == holes
