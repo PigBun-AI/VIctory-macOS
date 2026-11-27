@@ -7,7 +7,7 @@ use std::sync::Arc;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::SetEvent;
-use windows::core::{ComObject, Ref, Result as WResult, implement, Interface};
+use windows::core::{ComObject, Interface, Ref, Result as WResult, implement};
 
 use super::device::{DeviceObj, d3d_desc};
 use super::list::ListObj;
@@ -25,17 +25,27 @@ pub struct QueueObj {
 }
 
 impl QueueObj_Impl {
-    pub(super) fn x_ExecuteCommandLists(&self, numcommandlists: u32, ppcommandlists: *const Option<ID3D12CommandList>) {
+    pub(super) fn x_ExecuteCommandLists(
+        &self,
+        numcommandlists: u32,
+        ppcommandlists: *const Option<ID3D12CommandList>,
+    ) {
         if ppcommandlists.is_null() {
             return;
         }
         let mut lists = Vec::with_capacity(numcommandlists as usize);
         for i in 0..numcommandlists as usize {
             // SAFETY: the caller's array of `numcommandlists` interface pointers.
-            let Some(l) = (unsafe { &*ppcommandlists.add(i) }) else { return };
-            let Ok(l) = l.cast_object_ref::<ListObj>() else { return };
+            let Some(l) = (unsafe { &*ppcommandlists.add(i) }) else {
+                return;
+            };
+            let Ok(l) = l.cast_object_ref::<ListObj>() else {
+                return;
+            };
             // A list that is not closed, or that failed while recording, is not executed.
-            let Some(items) = l.closed_items() else { return };
+            let Some(items) = l.closed_items() else {
+                return;
+            };
             lists.push(items);
         }
         let _ = self.queue.execute(&lists);
@@ -43,12 +53,18 @@ impl QueueObj_Impl {
 
     pub(super) fn x_Signal(&self, pfence: Ref<ID3D12Fence>, value: u64) -> WResult<()> {
         let f = pfence.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
-        wres(self.queue.signal(&f.cast_object_ref::<FenceObj>()?.fence, value))
+        wres(
+            self.queue
+                .signal(&f.cast_object_ref::<FenceObj>()?.fence, value),
+        )
     }
 
     pub(super) fn x_Wait(&self, pfence: Ref<ID3D12Fence>, value: u64) -> WResult<()> {
         let f = pfence.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
-        wres(self.queue.wait(&f.cast_object_ref::<FenceObj>()?.fence, value))
+        wres(
+            self.queue
+                .wait(&f.cast_object_ref::<FenceObj>()?.fence, value),
+        )
     }
 
     pub(super) fn x_GetDesc(&self) -> D3D12_COMMAND_QUEUE_DESC {
@@ -126,7 +142,12 @@ pub struct ResourceObj {
 }
 
 impl ResourceObj_Impl {
-    pub(super) fn x_Map(&self, subresource: u32, _preadrange: *const D3D12_RANGE, ppdata: *mut *mut c_void) -> WResult<()> {
+    pub(super) fn x_Map(
+        &self,
+        subresource: u32,
+        _preadrange: *const D3D12_RANGE,
+        ppdata: *mut *mut c_void,
+    ) -> WResult<()> {
         let addr = wres(self.buffer.map(subresource))?;
         if !ppdata.is_null() {
             // SAFETY: the caller's out pointer.
@@ -145,7 +166,11 @@ impl ResourceObj_Impl {
         self.buffer.gpu_va
     }
 
-    pub(super) fn x_GetHeapProperties(&self, pheapproperties: *mut D3D12_HEAP_PROPERTIES, pheapflags: *mut D3D12_HEAP_FLAGS) -> WResult<()> {
+    pub(super) fn x_GetHeapProperties(
+        &self,
+        pheapproperties: *mut D3D12_HEAP_PROPERTIES,
+        pheapflags: *mut D3D12_HEAP_FLAGS,
+    ) -> WResult<()> {
         // SAFETY: optional out pointers.
         unsafe {
             if !pheapproperties.is_null() {
@@ -178,11 +203,15 @@ impl HeapObj_Impl {
     }
 
     pub(super) fn x_GetCPUDescriptorHandleForHeapStart(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
-        D3D12_CPU_DESCRIPTOR_HANDLE { ptr: self.heap.cpu_start() as usize }
+        D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: self.heap.cpu_start() as usize,
+        }
     }
 
     pub(super) fn x_GetGPUDescriptorHandleForHeapStart(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        D3D12_GPU_DESCRIPTOR_HANDLE { ptr: self.heap.gpu_start() }
+        D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: self.heap.gpu_start(),
+        }
     }
 }
 

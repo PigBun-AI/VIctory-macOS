@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use windows::Win32::Foundation::{HWND, LUID};
 use windows::Win32::Graphics::Dxgi::*;
-use windows::core::{BOOL, ComObject, GUID, Interface, Result as WResult, implement, IUnknownImpl};
+use windows::core::{BOOL, ComObject, GUID, IUnknownImpl, Interface, Result as WResult, implement};
 
 use super::private::PrivateData;
 use super::{return_object, werr, wres};
@@ -28,13 +28,20 @@ pub struct AdapterObj {
 impl FactoryObj {
     pub fn create() -> WResult<ComObject<FactoryObj>> {
         let sys = wres(super::system())?;
-        Ok(ComObject::new(FactoryObj { private: PrivateData::default(), sys }))
+        Ok(ComObject::new(FactoryObj {
+            private: PrivateData::default(),
+            sys,
+        }))
     }
 }
 
 impl FactoryObj_Impl {
     fn adapter(&self) -> ComObject<AdapterObj> {
-        ComObject::new(AdapterObj { private: PrivateData::default(), sys: self.sys.clone(), factory: self.to_object() })
+        ComObject::new(AdapterObj {
+            private: PrivateData::default(),
+            sys: self.sys.clone(),
+            factory: self.to_object(),
+        })
     }
 
     pub(super) fn x_EnumAdapters(&self, adapter: u32) -> WResult<IDXGIAdapter> {
@@ -55,7 +62,11 @@ impl FactoryObj_Impl {
         BOOL::from(true)
     }
 
-    pub(super) fn x_MakeWindowAssociation(&self, _windowhandle: HWND, _flags: DXGI_MWA_FLAGS) -> WResult<()> {
+    pub(super) fn x_MakeWindowAssociation(
+        &self,
+        _windowhandle: HWND,
+        _flags: DXGI_MWA_FLAGS,
+    ) -> WResult<()> {
         Ok(())
     }
 
@@ -63,7 +74,12 @@ impl FactoryObj_Impl {
         Ok(HWND::default())
     }
 
-    pub(super) fn x_EnumAdapterByLuid(&self, adapterluid: &LUID, riid: *const GUID, ppvadapter: *mut *mut c_void) -> WResult<()> {
+    pub(super) fn x_EnumAdapterByLuid(
+        &self,
+        adapterluid: &LUID,
+        riid: *const GUID,
+        ppvadapter: *mut *mut c_void,
+    ) -> WResult<()> {
         let a = &self.sys.adapter;
         if adapterluid.LowPart != a.luid_low || adapterluid.HighPart != a.luid_high {
             return Err(werr(Hr::DXGI_ERROR_NOT_FOUND));
@@ -72,7 +88,11 @@ impl FactoryObj_Impl {
     }
 
     /// No software adapter: callers fall back or skip (D3DMetal answers the same).
-    pub(super) fn x_EnumWarpAdapter(&self, _riid: *const GUID, _ppvadapter: *mut *mut c_void) -> WResult<()> {
+    pub(super) fn x_EnumWarpAdapter(
+        &self,
+        _riid: *const GUID,
+        _ppvadapter: *mut *mut c_void,
+    ) -> WResult<()> {
         Err(werr(Hr::DXGI_ERROR_UNSUPPORTED))
     }
 
@@ -96,7 +116,12 @@ impl AdapterObj_Impl {
             return Err(werr(Hr::E_POINTER));
         }
         // SAFETY: `ppparent` is the caller's out pointer.
-        unsafe { self.factory.to_interface::<IDXGIFactory7>().query(riid, ppparent) }.ok()
+        unsafe {
+            self.factory
+                .to_interface::<IDXGIFactory7>()
+                .query(riid, ppparent)
+        }
+        .ok()
     }
 
     pub(super) fn x_EnumOutputs(&self, _output: u32) -> WResult<IDXGIOutput> {
@@ -119,7 +144,10 @@ impl AdapterObj_Impl {
             DedicatedVideoMemory: a.dedicated_video_memory as usize,
             DedicatedSystemMemory: a.dedicated_system_memory as usize,
             SharedSystemMemory: a.shared_system_memory as usize,
-            AdapterLuid: LUID { LowPart: a.luid_low, HighPart: a.luid_high },
+            AdapterLuid: LUID {
+                LowPart: a.luid_low,
+                HighPart: a.luid_high,
+            },
         })
     }
 
@@ -134,8 +162,15 @@ impl AdapterObj_Impl {
             DedicatedVideoMemory: a.dedicated_video_memory as usize,
             DedicatedSystemMemory: a.dedicated_system_memory as usize,
             SharedSystemMemory: a.shared_system_memory as usize,
-            AdapterLuid: LUID { LowPart: a.luid_low, HighPart: a.luid_high },
-            Flags: if a.software { DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 } else { 0 },
+            AdapterLuid: LUID {
+                LowPart: a.luid_low,
+                HighPart: a.luid_high,
+            },
+            Flags: if a.software {
+                DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32
+            } else {
+                0
+            },
         })
     }
 
@@ -150,7 +185,10 @@ impl AdapterObj_Impl {
             DedicatedVideoMemory: a.dedicated_video_memory as usize,
             DedicatedSystemMemory: a.dedicated_system_memory as usize,
             SharedSystemMemory: a.shared_system_memory as usize,
-            AdapterLuid: LUID { LowPart: a.luid_low, HighPart: a.luid_high },
+            AdapterLuid: LUID {
+                LowPart: a.luid_low,
+                HighPart: a.luid_high,
+            },
             Flags: DXGI_ADAPTER_FLAG3_NONE,
             GraphicsPreemptionGranularity: DXGI_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY,
             ComputePreemptionGranularity: DXGI_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY,
@@ -172,7 +210,11 @@ impl AdapterObj_Impl {
             DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL => false,
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
-        let ws = if local { self.sys.limits.working_set } else { 0 };
+        let ws = if local {
+            self.sys.limits.working_set
+        } else {
+            0
+        };
         // SAFETY: non-null out pointer from the caller.
         unsafe {
             *pvideomemoryinfo = DXGI_QUERY_VIDEO_MEMORY_INFO {
@@ -191,6 +233,10 @@ impl AdapterObj_Impl {
         _memorysegmentgroup: DXGI_MEMORY_SEGMENT_GROUP,
         _reservation: u64,
     ) -> WResult<()> {
-        if nodeindex != 0 { Err(werr(Hr::E_INVALIDARG)) } else { Ok(()) }
+        if nodeindex != 0 {
+            Err(werr(Hr::E_INVALIDARG))
+        } else {
+            Ok(())
+        }
     }
 }

@@ -61,11 +61,19 @@ impl ResourceDesc {
 
     /// Array size (1 for 3D textures and buffers).
     pub fn array_size(&self) -> u32 {
-        if self.dimension == DIM_TEXTURE3D || self.is_buffer() { 1 } else { self.depth_or_array as u32 }
+        if self.dimension == DIM_TEXTURE3D || self.is_buffer() {
+            1
+        } else {
+            self.depth_or_array as u32
+        }
     }
 
     pub fn depth(&self) -> u32 {
-        if self.dimension == DIM_TEXTURE3D { self.depth_or_array as u32 } else { 1 }
+        if self.dimension == DIM_TEXTURE3D {
+            self.depth_or_array as u32
+        } else {
+            1
+        }
     }
 
     pub fn planes(&self) -> u32 {
@@ -74,7 +82,11 @@ impl ResourceDesc {
 
     /// `D3D12GetFormatPlaneCount` x mips x array size; 1 for a buffer.
     pub fn subresource_count(&self) -> u32 {
-        if self.is_buffer() { 1 } else { self.mips as u32 * self.array_size() * self.planes() }
+        if self.is_buffer() {
+            1
+        } else {
+            self.mips as u32 * self.array_size() * self.planes()
+        }
     }
 }
 
@@ -90,7 +102,11 @@ pub const STATE_GENERIC_READ: u32 = 0xAC3;
 /// The rules `CreateCommittedResource` enforces on its arguments (checked
 /// against D3DMetal on Wine: the upload/readback state rules, zero size,
 /// descriptor sanity). Returns the description `GetDesc` reports.
-pub fn validate_committed(heap_type: u32, desc: &ResourceDesc, initial_state: u32) -> Result<ResourceDesc> {
+pub fn validate_committed(
+    heap_type: u32,
+    desc: &ResourceDesc,
+    initial_state: u32,
+) -> Result<ResourceDesc> {
     let mut d = *desc;
     match heap_type {
         HEAP_DEFAULT | HEAP_UPLOAD | HEAP_READBACK | HEAP_CUSTOM => {}
@@ -135,7 +151,11 @@ pub fn validate_committed(heap_type: u32, desc: &ResourceDesc, initial_state: u3
                 d.mips = (32 - longest.leading_zeros()) as u16;
             }
             if d.alignment == 0 {
-                d.alignment = if d.sample_count > 1 { MSAA_ALIGNMENT } else { DEFAULT_ALIGNMENT };
+                d.alignment = if d.sample_count > 1 {
+                    MSAA_ALIGNMENT
+                } else {
+                    DEFAULT_ALIGNMENT
+                };
             }
         }
         _ => return Err(Hr::E_INVALIDARG),
@@ -146,7 +166,11 @@ pub fn validate_committed(heap_type: u32, desc: &ResourceDesc, initial_state: u3
         HEAP_UPLOAD if initial_state != STATE_GENERIC_READ => return Err(Hr::E_INVALIDARG),
         HEAP_READBACK if initial_state != STATE_COPY_DEST => return Err(Hr::E_INVALIDARG),
         HEAP_UPLOAD | HEAP_READBACK
-            if d.flags & (FLAG_ALLOW_RENDER_TARGET | FLAG_ALLOW_DEPTH_STENCIL | FLAG_ALLOW_UNORDERED_ACCESS) != 0 =>
+            if d.flags
+                & (FLAG_ALLOW_RENDER_TARGET
+                    | FLAG_ALLOW_DEPTH_STENCIL
+                    | FLAG_ALLOW_UNORDERED_ACCESS)
+                != 0 =>
         {
             return Err(Hr::E_INVALIDARG);
         }
@@ -165,13 +189,33 @@ mod tests {
         let b = ResourceDesc::buffer(4096, 0);
         let ok = validate_committed(HEAP_UPLOAD, &b, STATE_GENERIC_READ).unwrap();
         assert_eq!(ok.alignment, 65536);
-        assert_eq!(validate_committed(HEAP_UPLOAD, &b, STATE_COPY_DEST), Err(Hr::E_INVALIDARG));
-        assert!(validate_committed(HEAP_READBACK, &b, STATE_COPY_DEST).is_ok());
-        assert_eq!(validate_committed(HEAP_READBACK, &b, STATE_GENERIC_READ), Err(Hr::E_INVALIDARG));
-        assert!(validate_committed(HEAP_DEFAULT, &ResourceDesc::buffer(4096, FLAG_ALLOW_UNORDERED_ACCESS), 0).is_ok());
-        assert_eq!(validate_committed(HEAP_DEFAULT, &ResourceDesc::buffer(0, 0), 0), Err(Hr::E_INVALIDARG));
         assert_eq!(
-            validate_committed(HEAP_DEFAULT, &ResourceDesc::buffer(16, FLAG_ALLOW_RENDER_TARGET), 0),
+            validate_committed(HEAP_UPLOAD, &b, STATE_COPY_DEST),
+            Err(Hr::E_INVALIDARG)
+        );
+        assert!(validate_committed(HEAP_READBACK, &b, STATE_COPY_DEST).is_ok());
+        assert_eq!(
+            validate_committed(HEAP_READBACK, &b, STATE_GENERIC_READ),
+            Err(Hr::E_INVALIDARG)
+        );
+        assert!(
+            validate_committed(
+                HEAP_DEFAULT,
+                &ResourceDesc::buffer(4096, FLAG_ALLOW_UNORDERED_ACCESS),
+                0
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            validate_committed(HEAP_DEFAULT, &ResourceDesc::buffer(0, 0), 0),
+            Err(Hr::E_INVALIDARG)
+        );
+        assert_eq!(
+            validate_committed(
+                HEAP_DEFAULT,
+                &ResourceDesc::buffer(16, FLAG_ALLOW_RENDER_TARGET),
+                0
+            ),
             Err(Hr::E_INVALIDARG)
         );
     }

@@ -61,7 +61,10 @@ pub unsafe extern "system" fn D3D12CreateVersionedRootSignatureDeserializer(
 
 /// No debug layers: `DXGI_ERROR_SDK_COMPONENT_MISSING`, which applications treat as "not installed".
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn D3D12GetDebugInterface(_riid: *const GUID, _pp: *mut *mut c_void) -> HRESULT {
+pub unsafe extern "system" fn D3D12GetDebugInterface(
+    _riid: *const GUID,
+    _pp: *mut *mut c_void,
+) -> HRESULT {
     e::d3d12_get_debug_interface()
 }
 
@@ -76,6 +79,10 @@ pub unsafe extern "system" fn D3D12EnableExperimentalFeatures(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn D3D12GetInterface(_clsid: *const GUID, _riid: *const GUID, _pp: *mut *mut c_void) -> HRESULT {
+pub unsafe extern "system" fn D3D12GetInterface(
+    _clsid: *const GUID,
+    _riid: *const GUID,
+    _pp: *mut *mut c_void,
+) -> HRESULT {
     e::d3d12_get_interface()
 }

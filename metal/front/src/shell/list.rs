@@ -5,10 +5,10 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
-use windows::Win32::Graphics::Direct3D12::*;
-use windows::core::{ComObject, Ref, Result as WResult, implement, Interface};
-use victory_metal_proto::types::RootParamKind;
 use victory_metal_proto::ResId;
+use victory_metal_proto::types::RootParamKind;
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::core::{ComObject, Interface, Ref, Result as WResult, implement};
 
 use super::device::DeviceObj;
 use super::objects::*;
@@ -52,7 +52,11 @@ impl ListObj_Impl {
         wres(self.list.lock().unwrap().close().map(|_| ()))
     }
 
-    pub(super) fn x_Reset(&self, pallocator: Ref<ID3D12CommandAllocator>, pinitialstate: Ref<ID3D12PipelineState>) -> WResult<()> {
+    pub(super) fn x_Reset(
+        &self,
+        pallocator: Ref<ID3D12CommandAllocator>,
+        pinitialstate: Ref<ID3D12PipelineState>,
+    ) -> WResult<()> {
         if pallocator.as_ref().is_none() {
             return Err(werr(Hr::E_INVALIDARG));
         }
@@ -65,7 +69,10 @@ impl ListObj_Impl {
     }
 
     pub(super) fn x_ClearState(&self, pinitialstate: Ref<ID3D12PipelineState>) {
-        if let Some(Ok(p)) = pinitialstate.as_ref().map(|p| p.cast_object_ref::<PsoObj>()) {
+        if let Some(Ok(p)) = pinitialstate
+            .as_ref()
+            .map(|p| p.cast_object_ref::<PsoObj>())
+        {
             self.list.lock().unwrap().set_pipeline(&p.pipeline);
         }
     }
@@ -74,10 +81,19 @@ impl ListObj_Impl {
         self.list.lock().unwrap().dispatch(x, y, z);
     }
 
-    pub(super) fn x_CopyBufferRegion(&self, dst: Ref<ID3D12Resource>, dstoffset: u64, src: Ref<ID3D12Resource>, srcoffset: u64, numbytes: u64) {
+    pub(super) fn x_CopyBufferRegion(
+        &self,
+        dst: Ref<ID3D12Resource>,
+        dstoffset: u64,
+        src: Ref<ID3D12Resource>,
+        srcoffset: u64,
+        numbytes: u64,
+    ) {
         let mut l = self.list.lock().unwrap();
         match (resource(&dst), resource(&src)) {
-            (Some(d), Some(s)) => l.copy_buffer_region(&d.buffer, dstoffset, &s.buffer, srcoffset, numbytes),
+            (Some(d), Some(s)) => {
+                l.copy_buffer_region(&d.buffer, dstoffset, &s.buffer, srcoffset, numbytes)
+            }
             _ => l.unsupported(),
         }
     }
@@ -92,13 +108,23 @@ impl ListObj_Impl {
         }
     }
 
-    pub(super) fn x_ResourceBarrier(&self, numbarriers: u32, pbarriers: *const D3D12_RESOURCE_BARRIER) {
+    pub(super) fn x_ResourceBarrier(
+        &self,
+        numbarriers: u32,
+        pbarriers: *const D3D12_RESOURCE_BARRIER,
+    ) {
         let mut l = self.list.lock().unwrap();
         if pbarriers.is_null() {
             return;
         }
         let id = |r: &Option<ID3D12Resource>| -> Option<ResId> {
-            Some(r.as_ref()?.cast_object_ref::<ResourceObj>().ok()?.buffer.res)
+            Some(
+                r.as_ref()?
+                    .cast_object_ref::<ResourceObj>()
+                    .ok()?
+                    .buffer
+                    .res,
+            )
         };
         let mut out = Vec::with_capacity(numbarriers as usize);
         for i in 0..numbarriers as usize {
@@ -107,7 +133,9 @@ impl ListObj_Impl {
             match b.Type {
                 D3D12_RESOURCE_BARRIER_TYPE_TRANSITION => {
                     let t = unsafe { &*b.Anonymous.Transition };
-                    let Some(res) = id(&t.pResource) else { return l.unsupported() };
+                    let Some(res) = id(&t.pResource) else {
+                        return l.unsupported();
+                    };
                     out.push(ResourceBarrier::Transition {
                         res,
                         subresource: t.Subresource,
@@ -118,11 +146,16 @@ impl ListObj_Impl {
                 }
                 D3D12_RESOURCE_BARRIER_TYPE_UAV => {
                     let u = unsafe { &*b.Anonymous.UAV };
-                    out.push(ResourceBarrier::Uav { res: id(&u.pResource) });
+                    out.push(ResourceBarrier::Uav {
+                        res: id(&u.pResource),
+                    });
                 }
                 D3D12_RESOURCE_BARRIER_TYPE_ALIASING => {
                     let a = unsafe { &*b.Anonymous.Aliasing };
-                    out.push(ResourceBarrier::Aliasing { before: id(&a.pResourceBefore), after: id(&a.pResourceAfter) });
+                    out.push(ResourceBarrier::Aliasing {
+                        before: id(&a.pResourceBefore),
+                        after: id(&a.pResourceAfter),
+                    });
                 }
                 _ => return l.unsupported(),
             }
@@ -146,46 +179,82 @@ impl ListObj_Impl {
         }
     }
 
-    pub(super) fn x_SetDescriptorHeaps(&self, numdescriptorheaps: u32, ppdescriptorheaps: *const Option<ID3D12DescriptorHeap>) {
+    pub(super) fn x_SetDescriptorHeaps(
+        &self,
+        numdescriptorheaps: u32,
+        ppdescriptorheaps: *const Option<ID3D12DescriptorHeap>,
+    ) {
         let mut l = self.list.lock().unwrap();
         let mut heaps = Vec::new();
         for i in 0..numdescriptorheaps as usize {
             // SAFETY: the caller's array of interface pointers.
-            let Some(h) = (unsafe { ppdescriptorheaps.add(i).as_ref() }).and_then(|h| h.as_ref()) else { return l.unsupported() };
-            let Ok(h) = h.cast_object_ref::<HeapObj>() else { return l.unsupported() };
+            let Some(h) = (unsafe { ppdescriptorheaps.add(i).as_ref() }).and_then(|h| h.as_ref())
+            else {
+                return l.unsupported();
+            };
+            let Ok(h) = h.cast_object_ref::<HeapObj>() else {
+                return l.unsupported();
+            };
             heaps.push(&h.heap);
         }
         l.set_descriptor_heaps(&heaps);
     }
 
-    pub(super) fn x_SetComputeRootDescriptorTable(&self, idx: u32, base: &D3D12_GPU_DESCRIPTOR_HANDLE) {
-        self.list.lock().unwrap().set_compute_root_table(idx, base.ptr);
+    pub(super) fn x_SetComputeRootDescriptorTable(
+        &self,
+        idx: u32,
+        base: &D3D12_GPU_DESCRIPTOR_HANDLE,
+    ) {
+        self.list
+            .lock()
+            .unwrap()
+            .set_compute_root_table(idx, base.ptr);
     }
 
     pub(super) fn x_SetComputeRoot32BitConstant(&self, idx: u32, srcdata: u32, destoffset: u32) {
-        self.list.lock().unwrap().set_compute_root_constants(idx, destoffset, &[srcdata]);
+        self.list
+            .lock()
+            .unwrap()
+            .set_compute_root_constants(idx, destoffset, &[srcdata]);
     }
 
-    pub(super) fn x_SetComputeRoot32BitConstants(&self, idx: u32, n: u32, psrcdata: *const c_void, destoffset: u32) {
+    pub(super) fn x_SetComputeRoot32BitConstants(
+        &self,
+        idx: u32,
+        n: u32,
+        psrcdata: *const c_void,
+        destoffset: u32,
+    ) {
         let mut l = self.list.lock().unwrap();
         if psrcdata.is_null() || n == 0 {
             return;
         }
         // SAFETY: `n` 32-bit values at `psrcdata` (not necessarily aligned).
-        let values: Vec<u32> = (0..n as usize).map(|i| unsafe { psrcdata.cast::<u32>().add(i).read_unaligned() }).collect();
+        let values: Vec<u32> = (0..n as usize)
+            .map(|i| unsafe { psrcdata.cast::<u32>().add(i).read_unaligned() })
+            .collect();
         l.set_compute_root_constants(idx, destoffset, &values);
     }
 
     pub(super) fn x_SetComputeRootConstantBufferView(&self, idx: u32, va: u64) {
-        self.list.lock().unwrap().set_compute_root_descriptor(idx, RootParamKind::CBV, va);
+        self.list
+            .lock()
+            .unwrap()
+            .set_compute_root_descriptor(idx, RootParamKind::CBV, va);
     }
 
     pub(super) fn x_SetComputeRootShaderResourceView(&self, idx: u32, va: u64) {
-        self.list.lock().unwrap().set_compute_root_descriptor(idx, RootParamKind::SRV, va);
+        self.list
+            .lock()
+            .unwrap()
+            .set_compute_root_descriptor(idx, RootParamKind::SRV, va);
     }
 
     pub(super) fn x_SetComputeRootUnorderedAccessView(&self, idx: u32, va: u64) {
-        self.list.lock().unwrap().set_compute_root_descriptor(idx, RootParamKind::UAV, va);
+        self.list
+            .lock()
+            .unwrap()
+            .set_compute_root_descriptor(idx, RootParamKind::UAV, va);
     }
 
     // Debug markers: accepted, not recorded (queries and labels are M2).

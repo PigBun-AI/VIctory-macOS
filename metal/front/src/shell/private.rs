@@ -46,7 +46,8 @@ impl PrivateData {
             return Err(Error::from(E_INVALIDARG));
         }
         // SAFETY: the caller gives `size` readable bytes at `data`.
-        let bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size as usize) }.to_vec();
+        let bytes =
+            unsafe { std::slice::from_raw_parts(data.cast::<u8>(), size as usize) }.to_vec();
         m.insert(k, Entry::Bytes(bytes));
         Ok(())
     }
@@ -90,8 +91,12 @@ impl PrivateData {
                 }
                 match e {
                     // SAFETY: `cap >= need` bytes writable at `data`.
-                    Entry::Bytes(b) => unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), data.cast::<u8>(), b.len()) },
-                    Entry::Interface(i) => unsafe { data.cast::<*mut c_void>().write(i.clone().into_raw()) },
+                    Entry::Bytes(b) => unsafe {
+                        std::ptr::copy_nonoverlapping(b.as_ptr(), data.cast::<u8>(), b.len())
+                    },
+                    Entry::Interface(i) => unsafe {
+                        data.cast::<*mut c_void>().write(i.clone().into_raw())
+                    },
                 }
                 Ok(())
             }
@@ -102,7 +107,12 @@ impl PrivateData {
     pub fn name(&self) -> Option<String> {
         match self.map.lock().unwrap().get(&NAME_GUID.to_u128())? {
             Entry::Bytes(b) => {
-                let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                let w: Vec<u16> = b
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
+                    .collect();
                 Some(String::from_utf16_lossy(&w))
             }
             _ => None,
@@ -110,13 +120,27 @@ impl PrivateData {
     }
 
     // The generated impls call these two families by name.
-    pub fn d3d12_GetPrivateData(&self, guid: *const GUID, size: *mut u32, data: *mut c_void) -> WResult<()> {
+    pub fn d3d12_GetPrivateData(
+        &self,
+        guid: *const GUID,
+        size: *mut u32,
+        data: *mut c_void,
+    ) -> WResult<()> {
         self.get(guid, size, data)
     }
-    pub fn d3d12_SetPrivateData(&self, guid: *const GUID, size: u32, data: *const c_void) -> WResult<()> {
+    pub fn d3d12_SetPrivateData(
+        &self,
+        guid: *const GUID,
+        size: u32,
+        data: *const c_void,
+    ) -> WResult<()> {
         self.set(guid, size, data)
     }
-    pub fn d3d12_SetPrivateDataInterface(&self, guid: *const GUID, obj: Ref<IUnknown>) -> WResult<()> {
+    pub fn d3d12_SetPrivateDataInterface(
+        &self,
+        guid: *const GUID,
+        obj: Ref<IUnknown>,
+    ) -> WResult<()> {
         self.set_interface(guid, obj)
     }
     pub fn d3d12_SetName(&self, name: &PCWSTR) -> WResult<()> {
@@ -128,13 +152,27 @@ impl PrivateData {
         let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
         self.set(&NAME_GUID, bytes.len() as u32, bytes.as_ptr().cast())
     }
-    pub fn dxgi_GetPrivateData(&self, guid: *const GUID, size: *mut u32, data: *mut c_void) -> WResult<()> {
+    pub fn dxgi_GetPrivateData(
+        &self,
+        guid: *const GUID,
+        size: *mut u32,
+        data: *mut c_void,
+    ) -> WResult<()> {
         self.get(guid, size, data)
     }
-    pub fn dxgi_SetPrivateData(&self, guid: *const GUID, size: u32, data: *const c_void) -> WResult<()> {
+    pub fn dxgi_SetPrivateData(
+        &self,
+        guid: *const GUID,
+        size: u32,
+        data: *const c_void,
+    ) -> WResult<()> {
         self.set(guid, size, data)
     }
-    pub fn dxgi_SetPrivateDataInterface(&self, guid: *const GUID, obj: Ref<IUnknown>) -> WResult<()> {
+    pub fn dxgi_SetPrivateDataInterface(
+        &self,
+        guid: *const GUID,
+        obj: Ref<IUnknown>,
+    ) -> WResult<()> {
         self.set_interface(guid, obj)
     }
 }

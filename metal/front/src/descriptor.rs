@@ -98,7 +98,12 @@ fn round_up(v: u64, a: u64) -> u64 {
 
 impl DescriptorSpace {
     pub fn new() -> Self {
-        DescriptorSpace { next_cpu: CPU_START, next_gpu: GPU_START, next_id: 1, ..Default::default() }
+        DescriptorSpace {
+            next_cpu: CPU_START,
+            next_gpu: GPU_START,
+            next_id: 1,
+            ..Default::default()
+        }
     }
 
     pub fn alloc(&mut self, count: u32, stride: u32, shader_visible: bool) -> HeapRange {
@@ -114,7 +119,13 @@ impl DescriptorSpace {
         } else {
             0
         };
-        let r = HeapRange { id, cpu_base, gpu_base, count, stride };
+        let r = HeapRange {
+            id,
+            cpu_base,
+            gpu_base,
+            count,
+            stride,
+        };
         self.cpu.insert(cpu_base, r);
         if shader_visible {
             self.gpu.insert(gpu_base, r);
@@ -127,7 +138,11 @@ impl DescriptorSpace {
         self.gpu.retain(|_, r| r.id != id);
     }
 
-    fn resolve(map: &BTreeMap<u64, HeapRange>, handle: u64, base: fn(&HeapRange) -> u64) -> Option<(SlotHeap, u32)> {
+    fn resolve(
+        map: &BTreeMap<u64, HeapRange>,
+        handle: u64,
+        base: fn(&HeapRange) -> u64,
+    ) -> Option<(SlotHeap, u32)> {
         let (_, r) = map.range(..=handle).next_back()?;
         let off = handle.checked_sub(base(r))?;
         if off % r.stride as u64 != 0 {
@@ -166,7 +181,11 @@ mod tests {
             assert_eq!(s.resolve_gpu(a.gpu_handle(i)), Some((a.id, i)));
         }
         assert_eq!(s.resolve_cpu(a.cpu_handle(16)), None, "one past the end");
-        assert_eq!(s.resolve_cpu(a.cpu_handle(3) + 1), None, "not on a descriptor");
+        assert_eq!(
+            s.resolve_cpu(a.cpu_handle(3) + 1),
+            None,
+            "not on a descriptor"
+        );
         assert_eq!(s.resolve_cpu(b.cpu_handle(3)), Some((b.id, 3)));
         assert_eq!(s.resolve_gpu(b.cpu_base), None, "not shader visible");
         assert_eq!(s.resolve_cpu(c.cpu_handle(2047)), Some((c.id, 2047)));
@@ -191,12 +210,22 @@ mod tests {
 
     #[test]
     fn heap_description_rules() {
-        let ok = |ty, count, flags| validate_heap_desc(&HeapDesc { ty, count, flags, node_mask: 0 });
+        let ok = |ty, count, flags| {
+            validate_heap_desc(&HeapDesc {
+                ty,
+                count,
+                flags,
+                node_mask: 0,
+            })
+        };
         assert!(ok(TYPE_CBV_SRV_UAV, 16, FLAG_SHADER_VISIBLE).is_ok());
         assert!(ok(TYPE_SAMPLER, 2048, FLAG_SHADER_VISIBLE).is_ok());
         assert!(ok(TYPE_RTV, 2, 0).is_ok());
         assert_eq!(ok(TYPE_RTV, 2, FLAG_SHADER_VISIBLE), Err(Hr::E_INVALIDARG));
-        assert_eq!(ok(TYPE_SAMPLER, 2049, FLAG_SHADER_VISIBLE), Err(Hr::E_INVALIDARG));
+        assert_eq!(
+            ok(TYPE_SAMPLER, 2049, FLAG_SHADER_VISIBLE),
+            Err(Hr::E_INVALIDARG)
+        );
         assert_eq!(ok(TYPE_CBV_SRV_UAV, 0, 0), Err(Hr::E_INVALIDARG));
         assert_eq!(ok(9, 1, 0), Err(Hr::E_INVALIDARG));
     }

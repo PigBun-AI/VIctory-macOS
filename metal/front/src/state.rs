@@ -34,7 +34,11 @@ const _: () = {
     use victory_metal_proto::types::{stage as p, visibility as v};
     assert!(stage::VERTEX == p::VERTEX && stage::FRAGMENT == p::FRAGMENT && stage::TILE == p::TILE);
     assert!(stage::OBJECT == p::OBJECT && stage::MESH == p::MESH && stage::DISPATCH == p::DISPATCH);
-    assert!(stage::BLIT == p::BLIT && stage::RESOURCE_STATE == p::RESOURCE_STATE && stage::ALL == p::ALL);
+    assert!(
+        stage::BLIT == p::BLIT
+            && stage::RESOURCE_STATE == p::RESOURCE_STATE
+            && stage::ALL == p::ALL
+    );
     assert!(visibility::DEVICE == v::DEVICE && visibility::RESOURCE_ALIAS == v::RESOURCE_ALIAS);
 };
 
@@ -80,12 +84,16 @@ pub fn stages_of(state: u32) -> u16 {
         (RAYTRACING_ACCELERATION_STRUCTURE, DISPATCH | BLIT),
         (SHADING_RATE_SOURCE, FRAGMENT),
     ];
-    table.iter().filter(|(bit, _)| state & bit != 0).fold(0, |m, (_, s)| m | s)
+    table
+        .iter()
+        .filter(|(bit, _)| state & bit != 0)
+        .fold(0, |m, (_, s)| m | s)
 }
 
 /// States that write the resource.
 pub fn is_write_state(state: u32) -> bool {
-    state & (RENDER_TARGET | UNORDERED_ACCESS | DEPTH_WRITE | STREAM_OUT | COPY_DEST | RESOLVE_DEST) != 0
+    state & (RENDER_TARGET | UNORDERED_ACCESS | DEPTH_WRITE | STREAM_OUT | COPY_DEST | RESOLVE_DEST)
+        != 0
 }
 
 /// What the back is told: wait for `before` stages, then let `after` stages
@@ -113,12 +121,20 @@ pub fn transition_barrier(before: u32, after: u32) -> Option<StageBarrier> {
     if !is_write_state(before) && !is_write_state(after) {
         return None;
     }
-    Some(StageBarrier { before: b, after: a, visibility: visibility::DEVICE })
+    Some(StageBarrier {
+        before: b,
+        after: a,
+        visibility: visibility::DEVICE,
+    })
 }
 
 /// A UAV barrier: shader writes before, shader accesses after.
 pub fn uav_barrier() -> StageBarrier {
-    StageBarrier { before: stage::SHADERS, after: stage::SHADERS, visibility: visibility::DEVICE }
+    StageBarrier {
+        before: stage::SHADERS,
+        after: stage::SHADERS,
+        visibility: visibility::DEVICE,
+    }
 }
 
 /// An aliasing barrier: everything, including aliased pages.
@@ -155,7 +171,8 @@ pub enum TransitionError {
 
 impl StateTracker {
     pub fn add(&mut self, resource: u32, subresources: u32, initial: u32) {
-        self.resources.insert(resource, vec![initial; subresources.max(1) as usize]);
+        self.resources
+            .insert(resource, vec![initial; subresources.max(1) as usize]);
     }
 
     pub fn remove(&mut self, resource: u32) {
@@ -163,7 +180,10 @@ impl StateTracker {
     }
 
     pub fn state(&self, resource: u32, subresource: u32) -> Option<u32> {
-        self.resources.get(&resource)?.get(subresource as usize).copied()
+        self.resources
+            .get(&resource)?
+            .get(subresource as usize)
+            .copied()
     }
 
     /// Apply a transition and return the barrier to record, if any. `flags`
@@ -177,7 +197,10 @@ impl StateTracker {
         after: u32,
         flags: u32,
     ) -> Result<Option<StageBarrier>, TransitionError> {
-        let subs = self.resources.get_mut(&resource).ok_or(TransitionError::UnknownResource)?;
+        let subs = self
+            .resources
+            .get_mut(&resource)
+            .ok_or(TransitionError::UnknownResource)?;
         if flags & BARRIER_FLAG_BEGIN_ONLY != 0 {
             return Ok(None);
         }
@@ -199,7 +222,11 @@ impl StateTracker {
             // to equal the tracked state).
             if let Some(b) = transition_barrier(before, after) {
                 merged = Some(match merged {
-                    Some(m) => StageBarrier { before: m.before | b.before, after: m.after | b.after, visibility: m.visibility },
+                    Some(m) => StageBarrier {
+                        before: m.before | b.before,
+                        after: m.after | b.after,
+                        visibility: m.visibility,
+                    },
                     None => b,
                 });
             }
@@ -217,7 +244,8 @@ mod tests {
     #[test]
     fn copy_dest_to_srv_waits_for_the_blit() {
         // The case the architecture names: COPY_DEST -> SRV.
-        let b = transition_barrier(COPY_DEST, NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE).unwrap();
+        let b = transition_barrier(COPY_DEST, NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE)
+            .unwrap();
         assert_eq!(b.before, BLIT);
         assert_eq!(b.after, VERTEX | OBJECT | MESH | DISPATCH | FRAGMENT);
         assert_eq!(b.visibility, visibility::DEVICE);
@@ -231,7 +259,10 @@ mod tests {
         assert_eq!(transition_barrier(COPY_SOURCE, PRESENT), None);
         assert_eq!(transition_barrier(COPY_DEST, COPY_DEST), None);
         // Read -> read needs no memory barrier.
-        assert_eq!(transition_barrier(COPY_SOURCE, NON_PIXEL_SHADER_RESOURCE), None);
+        assert_eq!(
+            transition_barrier(COPY_SOURCE, NON_PIXEL_SHADER_RESOURCE),
+            None
+        );
         assert_eq!(transition_barrier(GENERIC_READ, COPY_SOURCE), None);
     }
 
@@ -260,24 +291,40 @@ mod tests {
         let mut t = StateTracker::default();
         t.add(7, 3, COMMON);
         // All subresources at once.
-        let b = t.transition(7, ALL_SUBRESOURCES, COMMON, COPY_DEST, 0).unwrap();
+        let b = t
+            .transition(7, ALL_SUBRESOURCES, COMMON, COPY_DEST, 0)
+            .unwrap();
         assert_eq!(b, None);
         assert_eq!(t.state(7, 2), Some(COPY_DEST));
-        let b = t.transition(7, 1, COPY_DEST, NON_PIXEL_SHADER_RESOURCE, 0).unwrap().unwrap();
+        let b = t
+            .transition(7, 1, COPY_DEST, NON_PIXEL_SHADER_RESOURCE, 0)
+            .unwrap()
+            .unwrap();
         assert_eq!(b.before, BLIT);
         assert_eq!(t.state(7, 1), Some(NON_PIXEL_SHADER_RESOURCE));
         assert_eq!(t.state(7, 0), Some(COPY_DEST));
         // Split barrier: nothing at BEGIN, emitted at END.
-        let begin = t.transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_BEGIN_ONLY).unwrap();
+        let begin = t
+            .transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_BEGIN_ONLY)
+            .unwrap();
         assert_eq!(begin, None);
         assert_eq!(t.state(7, 0), Some(COPY_DEST));
-        let end = t.transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_END_ONLY).unwrap();
+        let end = t
+            .transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_END_ONLY)
+            .unwrap();
         assert!(end.is_some());
         assert_eq!(t.state(7, 0), Some(UNORDERED_ACCESS));
-        assert_eq!(t.transition(8, 0, 0, 1, 0), Err(TransitionError::UnknownResource));
-        assert_eq!(t.transition(7, 3, 0, 1, 0), Err(TransitionError::SubresourceOutOfRange));
+        assert_eq!(
+            t.transition(8, 0, 0, 1, 0),
+            Err(TransitionError::UnknownResource)
+        );
+        assert_eq!(
+            t.transition(7, 3, 0, 1, 0),
+            Err(TransitionError::SubresourceOutOfRange)
+        );
         // A wrong StateBefore is counted, not fatal.
-        t.transition(7, 2, UNORDERED_ACCESS, COPY_SOURCE, 0).unwrap();
+        t.transition(7, 2, UNORDERED_ACCESS, COPY_SOURCE, 0)
+            .unwrap();
         assert_eq!(t.mismatches, 1);
     }
 }

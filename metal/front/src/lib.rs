@@ -16,15 +16,15 @@
 
 pub mod adapter;
 pub mod caps;
-pub mod descriptor;
 pub mod connect;
 pub mod convert;
+pub mod descriptor;
 pub mod device;
-pub mod gpu;
-pub mod mock;
 pub mod footprint;
 pub mod format;
+pub mod gpu;
 pub mod hresult;
+pub mod mock;
 pub mod resource;
 pub mod rootsig;
 pub mod state;

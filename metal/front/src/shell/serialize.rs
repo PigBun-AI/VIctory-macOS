@@ -104,21 +104,36 @@ pub unsafe fn read_1_0(d: &D3D12_ROOT_SIGNATURE_DESC) -> WResult<RootSignatureDe
             rootsig::PARAM_CONSTANTS => {
                 // SAFETY: as above.
                 let c = unsafe { p.Anonymous.Constants };
-                ParamKind::Constants { reg: c.ShaderRegister, space: c.RegisterSpace, num: c.Num32BitValues }
+                ParamKind::Constants {
+                    reg: c.ShaderRegister,
+                    space: c.RegisterSpace,
+                    num: c.Num32BitValues,
+                }
             }
             ty @ (rootsig::PARAM_CBV | rootsig::PARAM_SRV | rootsig::PARAM_UAV) => {
                 // SAFETY: as above.
                 let r = unsafe { p.Anonymous.Descriptor };
-                ParamKind::Descriptor { ty, reg: r.ShaderRegister, space: r.RegisterSpace, flags: 0 }
+                ParamKind::Descriptor {
+                    ty,
+                    reg: r.ShaderRegister,
+                    space: r.RegisterSpace,
+                    flags: 0,
+                }
             }
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
-        params.push(Param { kind, visibility: p.ShaderVisibility.0 as u32 });
+        params.push(Param {
+            kind,
+            visibility: p.ShaderVisibility.0 as u32,
+        });
     }
     Ok(RootSignatureDesc {
         version: Version::V1_0,
         params,
-        samplers: slice(d.pStaticSamplers, d.NumStaticSamplers)?.iter().map(sampler).collect(),
+        samplers: slice(d.pStaticSamplers, d.NumStaticSamplers)?
+            .iter()
+            .map(sampler)
+            .collect(),
         flags: d.Flags.0 as u32,
     })
 }
@@ -150,21 +165,36 @@ pub unsafe fn read_1_1(d: &D3D12_ROOT_SIGNATURE_DESC1) -> WResult<RootSignatureD
             rootsig::PARAM_CONSTANTS => {
                 // SAFETY: as above.
                 let c = unsafe { p.Anonymous.Constants };
-                ParamKind::Constants { reg: c.ShaderRegister, space: c.RegisterSpace, num: c.Num32BitValues }
+                ParamKind::Constants {
+                    reg: c.ShaderRegister,
+                    space: c.RegisterSpace,
+                    num: c.Num32BitValues,
+                }
             }
             ty @ (rootsig::PARAM_CBV | rootsig::PARAM_SRV | rootsig::PARAM_UAV) => {
                 // SAFETY: as above.
                 let r = unsafe { p.Anonymous.Descriptor };
-                ParamKind::Descriptor { ty, reg: r.ShaderRegister, space: r.RegisterSpace, flags: r.Flags.0 as u32 }
+                ParamKind::Descriptor {
+                    ty,
+                    reg: r.ShaderRegister,
+                    space: r.RegisterSpace,
+                    flags: r.Flags.0 as u32,
+                }
             }
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
-        params.push(Param { kind, visibility: p.ShaderVisibility.0 as u32 });
+        params.push(Param {
+            kind,
+            visibility: p.ShaderVisibility.0 as u32,
+        });
     }
     Ok(RootSignatureDesc {
         version: Version::V1_1,
         params,
-        samplers: slice(d.pStaticSamplers, d.NumStaticSamplers)?.iter().map(sampler).collect(),
+        samplers: slice(d.pStaticSamplers, d.NumStaticSamplers)?
+            .iter()
+            .map(sampler)
+            .collect(),
         flags: d.Flags.0 as u32,
     })
 }
@@ -195,7 +225,10 @@ pub fn write_1_0(d: &RootSignatureDesc) -> Box<Desc10> {
     let mut ranges: Vec<Vec<D3D12_DESCRIPTOR_RANGE>> = Vec::new();
     let mut params = Vec::new();
     for p in &d.params {
-        let mut cp = D3D12_ROOT_PARAMETER { ShaderVisibility: D3D12_SHADER_VISIBILITY(p.visibility as i32), ..Default::default() };
+        let mut cp = D3D12_ROOT_PARAMETER {
+            ShaderVisibility: D3D12_SHADER_VISIBILITY(p.visibility as i32),
+            ..Default::default()
+        };
         match &p.kind {
             ParamKind::Table(rs) => {
                 let v: Vec<_> = rs
@@ -209,18 +242,26 @@ pub fn write_1_0(d: &RootSignatureDesc) -> Box<Desc10> {
                     })
                     .collect();
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                cp.Anonymous.DescriptorTable =
-                    D3D12_ROOT_DESCRIPTOR_TABLE { NumDescriptorRanges: v.len() as u32, pDescriptorRanges: v.as_ptr() };
+                cp.Anonymous.DescriptorTable = D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: v.len() as u32,
+                    pDescriptorRanges: v.as_ptr(),
+                };
                 ranges.push(v);
             }
             ParamKind::Constants { reg, space, num } => {
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-                cp.Anonymous.Constants =
-                    D3D12_ROOT_CONSTANTS { ShaderRegister: *reg, RegisterSpace: *space, Num32BitValues: *num };
+                cp.Anonymous.Constants = D3D12_ROOT_CONSTANTS {
+                    ShaderRegister: *reg,
+                    RegisterSpace: *space,
+                    Num32BitValues: *num,
+                };
             }
             ParamKind::Descriptor { ty, reg, space, .. } => {
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE(*ty as i32);
-                cp.Anonymous.Descriptor = D3D12_ROOT_DESCRIPTOR { ShaderRegister: *reg, RegisterSpace: *space };
+                cp.Anonymous.Descriptor = D3D12_ROOT_DESCRIPTOR {
+                    ShaderRegister: *reg,
+                    RegisterSpace: *space,
+                };
             }
         }
         params.push(cp);
@@ -233,7 +274,12 @@ pub fn write_1_0(d: &RootSignatureDesc) -> Box<Desc10> {
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAGS(d.flags as i32),
     };
-    Box::new(Desc10 { _params: params, _ranges: ranges, _samplers: samplers, desc })
+    Box::new(Desc10 {
+        _params: params,
+        _ranges: ranges,
+        _samplers: samplers,
+        desc,
+    })
 }
 
 pub fn write_1_1(d: &RootSignatureDesc) -> Box<Desc11> {
@@ -241,7 +287,10 @@ pub fn write_1_1(d: &RootSignatureDesc) -> Box<Desc11> {
     let mut ranges: Vec<Vec<D3D12_DESCRIPTOR_RANGE1>> = Vec::new();
     let mut params = Vec::new();
     for p in &d.params {
-        let mut cp = D3D12_ROOT_PARAMETER1 { ShaderVisibility: D3D12_SHADER_VISIBILITY(p.visibility as i32), ..Default::default() };
+        let mut cp = D3D12_ROOT_PARAMETER1 {
+            ShaderVisibility: D3D12_SHADER_VISIBILITY(p.visibility as i32),
+            ..Default::default()
+        };
         match &p.kind {
             ParamKind::Table(rs) => {
                 let v: Vec<_> = rs
@@ -256,16 +305,26 @@ pub fn write_1_1(d: &RootSignatureDesc) -> Box<Desc11> {
                     })
                     .collect();
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-                cp.Anonymous.DescriptorTable =
-                    D3D12_ROOT_DESCRIPTOR_TABLE1 { NumDescriptorRanges: v.len() as u32, pDescriptorRanges: v.as_ptr() };
+                cp.Anonymous.DescriptorTable = D3D12_ROOT_DESCRIPTOR_TABLE1 {
+                    NumDescriptorRanges: v.len() as u32,
+                    pDescriptorRanges: v.as_ptr(),
+                };
                 ranges.push(v);
             }
             ParamKind::Constants { reg, space, num } => {
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-                cp.Anonymous.Constants =
-                    D3D12_ROOT_CONSTANTS { ShaderRegister: *reg, RegisterSpace: *space, Num32BitValues: *num };
+                cp.Anonymous.Constants = D3D12_ROOT_CONSTANTS {
+                    ShaderRegister: *reg,
+                    RegisterSpace: *space,
+                    Num32BitValues: *num,
+                };
             }
-            ParamKind::Descriptor { ty, reg, space, flags } => {
+            ParamKind::Descriptor {
+                ty,
+                reg,
+                space,
+                flags,
+            } => {
                 cp.ParameterType = D3D12_ROOT_PARAMETER_TYPE(*ty as i32);
                 cp.Anonymous.Descriptor = D3D12_ROOT_DESCRIPTOR1 {
                     ShaderRegister: *reg,
@@ -284,14 +343,22 @@ pub fn write_1_1(d: &RootSignatureDesc) -> Box<Desc11> {
         pStaticSamplers: samplers.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAGS(d.flags as i32),
     };
-    Box::new(Desc11 { _params: params, _ranges: ranges, _samplers: samplers, desc })
+    Box::new(Desc11 {
+        _params: params,
+        _ranges: ranges,
+        _samplers: samplers,
+        desc,
+    })
 }
 
 /// `D3D12SerializeRootSignature`: a 1.0 description; 1.1 here is `E_INVALIDARG`, as in D3DMetal.
 ///
 /// # Safety
 /// `d` is a valid description.
-pub unsafe fn serialize_1_0(d: &D3D12_ROOT_SIGNATURE_DESC, version: D3D_ROOT_SIGNATURE_VERSION) -> WResult<ID3DBlob> {
+pub unsafe fn serialize_1_0(
+    d: &D3D12_ROOT_SIGNATURE_DESC,
+    version: D3D_ROOT_SIGNATURE_VERSION,
+) -> WResult<ID3DBlob> {
     if version != D3D_ROOT_SIGNATURE_VERSION_1_0 {
         return Err(werr(Hr::E_INVALIDARG));
     }
@@ -344,11 +411,23 @@ impl Versioned {
     pub fn new(d: &RootSignatureDesc) -> Versioned {
         let d10 = write_1_0(d);
         let d11 = write_1_1(d);
-        let mut v10 = D3D12_VERSIONED_ROOT_SIGNATURE_DESC { Version: D3D_ROOT_SIGNATURE_VERSION_1_0, ..Default::default() };
+        let mut v10 = D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
+            Version: D3D_ROOT_SIGNATURE_VERSION_1_0,
+            ..Default::default()
+        };
         v10.Anonymous.Desc_1_0 = d10.desc;
-        let mut v11 = D3D12_VERSIONED_ROOT_SIGNATURE_DESC { Version: D3D_ROOT_SIGNATURE_VERSION_1_1, ..Default::default() };
+        let mut v11 = D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
+            Version: D3D_ROOT_SIGNATURE_VERSION_1_1,
+            ..Default::default()
+        };
         v11.Anonymous.Desc_1_1 = d11.desc;
-        Versioned { v10, v11, _d10: d10, _d11: d11, original_is_1_1: d.version == Version::V1_1 }
+        Versioned {
+            v10,
+            v11,
+            _d10: d10,
+            _d11: d11,
+            original_is_1_1: d.version == Version::V1_1,
+        }
     }
 }
 
@@ -359,7 +438,10 @@ pub struct VersionedDeserializerObj {
 }
 
 impl VersionedDeserializerObj_Impl {
-    pub(super) fn x_GetRootSignatureDescAtVersion(&self, converttoversion: D3D_ROOT_SIGNATURE_VERSION) -> WResult<*mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC> {
+    pub(super) fn x_GetRootSignatureDescAtVersion(
+        &self,
+        converttoversion: D3D_ROOT_SIGNATURE_VERSION,
+    ) -> WResult<*mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC> {
         match converttoversion {
             D3D_ROOT_SIGNATURE_VERSION_1_0 => Ok(&self.desc.v10 as *const _ as *mut _),
             D3D_ROOT_SIGNATURE_VERSION_1_1 => Ok(&self.desc.v11 as *const _ as *mut _),
@@ -367,7 +449,13 @@ impl VersionedDeserializerObj_Impl {
         }
     }
 
-    pub(super) fn x_GetUnconvertedRootSignatureDesc(&self) -> *mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
-        if self.desc.original_is_1_1 { &self.desc.v11 as *const _ as *mut _ } else { &self.desc.v10 as *const _ as *mut _ }
+    pub(super) fn x_GetUnconvertedRootSignatureDesc(
+        &self,
+    ) -> *mut D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
+        if self.desc.original_is_1_1 {
+            &self.desc.v11 as *const _ as *mut _
+        } else {
+            &self.desc.v10 as *const _ as *mut _
+        }
     }
 }

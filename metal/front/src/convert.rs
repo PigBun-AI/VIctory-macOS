@@ -3,7 +3,8 @@
 
 use victory_metal_proto::root::{self, DescriptorRange, RootParam, RootSigDesc, StaticSampler};
 use victory_metal_proto::types::{
-    AddressMode, CompareFunc, Filter, RangeKind, Reduction, RootParamKind, SamplerDesc, ShaderVisibility,
+    AddressMode, CompareFunc, Filter, RangeKind, Reduction, RootParamKind, SamplerDesc,
+    ShaderVisibility,
 };
 
 use crate::hresult::{Hr, Result};
@@ -49,7 +50,13 @@ pub fn filter(f: u32) -> Result<(Filter, Filter, Filter, Reduction)> {
     if f & !0x1d5 != 0 {
         return Err(Hr::E_INVALIDARG);
     }
-    let bit = |b: u32| if f >> b & 1 == 1 { Filter::LINEAR } else { Filter::NEAREST };
+    let bit = |b: u32| {
+        if f >> b & 1 == 1 {
+            Filter::LINEAR
+        } else {
+            Filter::NEAREST
+        }
+    };
     Ok((bit(4), bit(2), bit(0), Reduction((f >> 7 & 3) as u8)))
 }
 
@@ -78,7 +85,11 @@ pub struct SamplerParams {
 pub fn sampler(s: &SamplerParams) -> Result<SamplerDesc> {
     let (min_filter, mag_filter, mip_filter, reduction) = filter(s.filter)?;
     // The comparison function only counts for comparison filters.
-    let compare = if reduction == Reduction::COMPARISON { compare_func(s.comparison)? } else { CompareFunc::NEVER };
+    let compare = if reduction == Reduction::COMPARISON {
+        compare_func(s.comparison)?
+    } else {
+        CompareFunc::NEVER
+    };
     Ok(SamplerDesc {
         min_filter,
         mag_filter,
@@ -187,12 +198,36 @@ mod tests {
     fn filters_decode() {
         // MIN_MAG_MIP_POINT, MIN_MAG_MIP_LINEAR, ANISOTROPIC, COMPARISON_MIN_MAG_MIP_LINEAR, MAXIMUM_MIN_MAG_MIP_POINT
         let f = |v| filter(v).unwrap();
-        assert_eq!(f(0), (Filter::NEAREST, Filter::NEAREST, Filter::NEAREST, Reduction::STANDARD));
-        assert_eq!(f(0x15), (Filter::LINEAR, Filter::LINEAR, Filter::LINEAR, Reduction::STANDARD));
+        assert_eq!(
+            f(0),
+            (
+                Filter::NEAREST,
+                Filter::NEAREST,
+                Filter::NEAREST,
+                Reduction::STANDARD
+            )
+        );
+        assert_eq!(
+            f(0x15),
+            (
+                Filter::LINEAR,
+                Filter::LINEAR,
+                Filter::LINEAR,
+                Reduction::STANDARD
+            )
+        );
         assert_eq!(f(0x55).0, Filter::LINEAR);
         assert_eq!(f(0x95).3, Reduction::COMPARISON);
         assert_eq!(f(0x180).3, Reduction::MAX);
-        assert_eq!(f(0x14), (Filter::LINEAR, Filter::LINEAR, Filter::NEAREST, Reduction::STANDARD));
+        assert_eq!(
+            f(0x14),
+            (
+                Filter::LINEAR,
+                Filter::LINEAR,
+                Filter::NEAREST,
+                Reduction::STANDARD
+            )
+        );
         assert_eq!(filter(0x2), Err(Hr::E_INVALIDARG));
     }
 
@@ -201,12 +236,41 @@ mod tests {
         let d = RootSignatureDesc {
             version: rootsig::Version::V1_1,
             params: vec![
-                Param { kind: ParamKind::Constants { reg: 0, space: 0, num: 4 }, visibility: 0 },
-                Param { kind: ParamKind::Descriptor { ty: rootsig::PARAM_UAV, reg: 1, space: 2, flags: 0 }, visibility: 0 },
+                Param {
+                    kind: ParamKind::Constants {
+                        reg: 0,
+                        space: 0,
+                        num: 4,
+                    },
+                    visibility: 0,
+                },
+                Param {
+                    kind: ParamKind::Descriptor {
+                        ty: rootsig::PARAM_UAV,
+                        reg: 1,
+                        space: 2,
+                        flags: 0,
+                    },
+                    visibility: 0,
+                },
                 Param {
                     kind: ParamKind::Table(vec![
-                        Range { ty: rootsig::RANGE_SRV, num: 4, base: 0, space: 0, flags: 0, offset: u32::MAX },
-                        Range { ty: rootsig::RANGE_UAV, num: u32::MAX, base: 0, space: 1, flags: 0, offset: 4 },
+                        Range {
+                            ty: rootsig::RANGE_SRV,
+                            num: 4,
+                            base: 0,
+                            space: 0,
+                            flags: 0,
+                            offset: u32::MAX,
+                        },
+                        Range {
+                            ty: rootsig::RANGE_UAV,
+                            num: u32::MAX,
+                            base: 0,
+                            space: 1,
+                            flags: 0,
+                            offset: 4,
+                        },
                     ]),
                     visibility: 0,
                 },

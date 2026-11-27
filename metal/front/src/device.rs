@@ -12,12 +12,17 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use victory_metal_proto::cmd::{self, Barrier, BeginList, EndList, QueueSignal, QueueWait, SetDescriptorHeaps};
-use victory_metal_proto::cmd::{CopyBufferRegion, Dispatch, SetPipeline, SetRootDescriptor, SetRootSignature, SetRootTable};
+use victory_metal_proto::cmd::{
+    self, Barrier, BeginList, EndList, QueueSignal, QueueWait, SetDescriptorHeaps,
+};
+use victory_metal_proto::cmd::{
+    CopyBufferRegion, Dispatch, SetPipeline, SetRootDescriptor, SetRootSignature, SetRootTable,
+};
 use victory_metal_proto::sync::*;
 use victory_metal_proto::types::{self as pt, BindPoint, RootParamKind, ViewDesc, ViewKind};
 use victory_metal_proto::{
-    Caps as PCaps, Command, Encoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId, RootSigId, Status,
+    Caps as PCaps, Command, Encoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId,
+    RootSigId, Status,
 };
 
 use crate::adapter::AdapterInfo;
@@ -80,7 +85,11 @@ impl System {
         if limits.descriptor_stride == 0 || limits.sampler_stride == 0 {
             return Err(Hr::E_FAIL);
         }
-        let name_len = hello.device_name.iter().position(|b| *b == 0).unwrap_or(hello.device_name.len());
+        let name_len = hello
+            .device_name
+            .iter()
+            .position(|b| *b == 0)
+            .unwrap_or(hello.device_name.len());
         let mut adapter = AdapterInfo::placeholder();
         adapter.name = String::from_utf8_lossy(&hello.device_name[..name_len]).into_owned();
         adapter.dedicated_video_memory = limits.working_set;
@@ -89,8 +98,18 @@ impl System {
         c.wave_lane_min = limits.simd_width;
         c.wave_lane_max = limits.simd_width;
         c.unified_memory = q.caps.contains(PCaps::UNIFIED_MEMORY);
-        c.mesh_shader_tier = if q.caps.contains(PCaps::MESH_SHADERS) { caps::MESH_SHADER_TIER_1 } else { 0 };
-        Ok(Arc::new(System { gpu, adapter, caps: c, proto_caps: q.caps, limits }))
+        c.mesh_shader_tier = if q.caps.contains(PCaps::MESH_SHADERS) {
+            caps::MESH_SHADER_TIER_1
+        } else {
+            0
+        };
+        Ok(Arc::new(System {
+            gpu,
+            adapter,
+            caps: c,
+            proto_caps: q.caps,
+            limits,
+        }))
     }
 }
 
@@ -118,7 +137,10 @@ impl Device {
     pub fn new(sys: Arc<System>) -> Arc<Device> {
         Arc::new(Device {
             sys,
-            desc: Mutex::new(Descriptors { space: DescriptorSpace::new(), ..Default::default() }),
+            desc: Mutex::new(Descriptors {
+                space: DescriptorSpace::new(),
+                ..Default::default()
+            }),
             tracker: Mutex::new(StateTracker::default()),
             next_list: AtomicU32::new(1),
         })
@@ -195,14 +217,20 @@ impl Device {
         a.kind = kind.0;
         a.priority = priority;
         self.gpu().call(&mut a)?;
-        Ok(Queue { dev: self.clone(), id: a.queue })
+        Ok(Queue {
+            dev: self.clone(),
+            id: a.queue,
+        })
     }
 
     pub fn create_fence(self: &Arc<Self>, initial: u64) -> Result<Fence> {
         let mut a = CreateFenceArgs::new();
         a.initial = initial;
         self.gpu().call(&mut a)?;
-        Ok(Fence { dev: self.clone(), id: a.fence })
+        Ok(Fence {
+            dev: self.clone(),
+            id: a.fence,
+        })
     }
 
     // ---- root signatures and pipelines ---------------------------------
@@ -216,16 +244,28 @@ impl Device {
         a.data_addr = bytes.as_ptr() as u64;
         a.data_len = bytes.len() as u64;
         self.gpu().call(&mut a)?;
-        Ok(RootSignature { dev: self.clone(), id: a.root_sig, blob: blob.to_vec(), desc: d })
+        Ok(RootSignature {
+            dev: self.clone(),
+            id: a.root_sig,
+            blob: blob.to_vec(),
+            desc: d,
+        })
     }
 
-    pub fn create_compute_pipeline(self: &Arc<Self>, rs: &RootSignature, dxil: &[u8]) -> Result<Pipeline> {
+    pub fn create_compute_pipeline(
+        self: &Arc<Self>,
+        rs: &RootSignature,
+        dxil: &[u8],
+    ) -> Result<Pipeline> {
         let mut a = CreateComputePipelineArgs::new();
         a.root_sig = rs.id;
         a.dxil_addr = dxil.as_ptr() as u64;
         a.dxil_len = dxil.len() as u64;
         self.gpu().call(&mut a)?;
-        Ok(Pipeline { dev: self.clone(), id: a.pso })
+        Ok(Pipeline {
+            dev: self.clone(),
+            id: a.pso,
+        })
     }
 
     // ---- descriptors ----------------------------------------------------
@@ -250,13 +290,28 @@ impl Device {
             g.back.insert(r.id, a.heap);
             r
         };
-        Ok(DescriptorHeap { dev: self.clone(), desc: *d, range, back: a.heap })
+        Ok(DescriptorHeap {
+            dev: self.clone(),
+            desc: *d,
+            range,
+            back: a.heap,
+        })
     }
 
     fn create_unbacked_heap(self: &Arc<Self>, d: &HeapDesc) -> Result<DescriptorHeap> {
         let stride = self.sys.limits.descriptor_stride;
-        let range = self.desc.lock().unwrap().space.alloc(d.count, stride, false);
-        Ok(DescriptorHeap { dev: self.clone(), desc: *d, range, back: HeapId::NULL })
+        let range = self
+            .desc
+            .lock()
+            .unwrap()
+            .space
+            .alloc(d.count, stride, false);
+        Ok(DescriptorHeap {
+            dev: self.clone(),
+            desc: *d,
+            range,
+            back: HeapId::NULL,
+        })
     }
 
     fn resolve_cpu(&self, handle: u64) -> Result<(HeapId, u32)> {
@@ -273,7 +328,12 @@ impl Device {
         Ok((*g.back.get(&slot).ok_or(Hr::E_INVALIDARG)?, index))
     }
 
-    fn write_descriptor(&self, cpu_handle: u64, view: ViewDesc, sampler: Option<pt::SamplerDesc>) -> Result<()> {
+    fn write_descriptor(
+        &self,
+        cpu_handle: u64,
+        view: ViewDesc,
+        sampler: Option<pt::SamplerDesc>,
+    ) -> Result<()> {
         let (heap, index) = self.resolve_cpu(cpu_handle)?;
         let mut a = WriteDescriptorArgs::new();
         a.heap = heap;
@@ -288,7 +348,11 @@ impl Device {
 
     /// `CreateConstantBufferView`; a zero `size` or address is a null view.
     pub fn create_cbv(&self, cpu_handle: u64, gpu_va: u64, size: u32) -> Result<()> {
-        let v = if gpu_va == 0 { ViewDesc::null() } else { ViewDesc::cbv(gpu_va, size) };
+        let v = if gpu_va == 0 {
+            ViewDesc::null()
+        } else {
+            ViewDesc::cbv(gpu_va, size)
+        };
         self.write_descriptor(cpu_handle, v, None)
     }
 
@@ -338,14 +402,32 @@ pub struct BufferView {
 
 impl BufferView {
     pub fn to_proto(&self) -> Result<ViewDesc> {
-        let kind = if self.uav { ViewKind::BUFFER_UAV } else { ViewKind::BUFFER_SRV };
-        let Some(res) = self.resource else { return Ok(ViewDesc::null()) };
+        let kind = if self.uav {
+            ViewKind::BUFFER_UAV
+        } else {
+            ViewKind::BUFFER_SRV
+        };
+        let Some(res) = self.resource else {
+            return Ok(ViewDesc::null());
+        };
         let mut v = if self.raw {
             ViewDesc::raw(kind, res, self.first_element, self.num_elements)
         } else if self.structure_stride != 0 {
-            ViewDesc::structured(kind, res, self.structure_stride, self.first_element, self.num_elements)
+            ViewDesc::structured(
+                kind,
+                res,
+                self.structure_stride,
+                self.first_element,
+                self.num_elements,
+            )
         } else if self.format != 0 {
-            ViewDesc::typed(kind, res, self.format, self.first_element, self.num_elements)
+            ViewDesc::typed(
+                kind,
+                res,
+                self.format,
+                self.first_element,
+                self.num_elements,
+            )
         } else {
             return Err(Hr::E_INVALIDARG);
         };
@@ -502,22 +584,33 @@ pub struct Queue {
 impl Queue {
     /// `ExecuteCommandLists`: one block, the lists in order.
     pub fn execute(&self, lists: &[Arc<[Item]>]) -> Result<()> {
-        let block = encode_block(self.dev.sys.proto_caps, self.id, lists, || self.dev.next_list_id())?;
+        let block = encode_block(self.dev.sys.proto_caps, self.id, lists, || {
+            self.dev.next_list_id()
+        })?;
         self.dev.gpu().submit(&block)
     }
 
     /// `ID3D12CommandQueue::Signal`.
     pub fn signal(&self, fence: &Fence, value: u64) -> Result<()> {
         let mut e = Encoder::new(self.dev.sys.proto_caps);
-        e.push(&Command::QueueSignal(QueueSignal { queue: self.id, fence: fence.id, value }))
-            .map_err(|_| Hr::E_FAIL)?;
+        e.push(&Command::QueueSignal(QueueSignal {
+            queue: self.id,
+            fence: fence.id,
+            value,
+        }))
+        .map_err(|_| Hr::E_FAIL)?;
         self.dev.gpu().submit(&e.finish())
     }
 
     /// `ID3D12CommandQueue::Wait`.
     pub fn wait(&self, fence: &Fence, value: u64) -> Result<()> {
         let mut e = Encoder::new(self.dev.sys.proto_caps);
-        e.push(&Command::QueueWait(QueueWait { queue: self.id, fence: fence.id, value })).map_err(|_| Hr::E_FAIL)?;
+        e.push(&Command::QueueWait(QueueWait {
+            queue: self.id,
+            fence: fence.id,
+            value,
+        }))
+        .map_err(|_| Hr::E_FAIL)?;
         self.dev.gpu().submit(&e.finish())
     }
 }
@@ -537,7 +630,12 @@ impl Drop for Queue {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Cmd(Command<'static>),
-    RootConstants { bind_point: BindPoint, root_index: u32, dest_offset: u32, values: Vec<u32> },
+    RootConstants {
+        bind_point: BindPoint,
+        root_index: u32,
+        dest_offset: u32,
+        values: Vec<u32>,
+    },
 }
 
 /// Lists → one block. `new_list_id` hands out ids unique within the block.
@@ -551,16 +649,28 @@ pub fn encode_block(
     let bad = |_| Hr::E_INVALIDARG;
     for items in lists {
         let list = victory_metal_proto::ListId(new_list_id());
-        e.push(&Command::BeginList(BeginList { list, queue, flags: 0, _pad: 0 })).map_err(bad)?;
+        e.push(&Command::BeginList(BeginList {
+            list,
+            queue,
+            flags: 0,
+            _pad: 0,
+        }))
+        .map_err(bad)?;
         for it in items.iter() {
             match it {
                 Item::Cmd(c) => e.push(c).map_err(bad)?,
-                Item::RootConstants { bind_point, root_index, dest_offset, values } => {
-                    e.set_root_constants(*bind_point, *root_index, *dest_offset, values).map_err(bad)?
-                }
+                Item::RootConstants {
+                    bind_point,
+                    root_index,
+                    dest_offset,
+                    values,
+                } => e
+                    .set_root_constants(*bind_point, *root_index, *dest_offset, values)
+                    .map_err(bad)?,
             }
         }
-        e.push(&Command::EndList(EndList { list, _pad: 0 })).map_err(bad)?;
+        e.push(&Command::EndList(EndList { list, _pad: 0 }))
+            .map_err(bad)?;
     }
     Ok(e.finish())
 }
@@ -568,9 +678,20 @@ pub fn encode_block(
 /// `D3D12_RESOURCE_BARRIER`, reduced to buffers.
 #[derive(Clone, Copy, Debug)]
 pub enum ResourceBarrier {
-    Transition { res: ResId, subresource: u32, before: u32, after: u32, flags: u32 },
-    Uav { res: Option<ResId> },
-    Aliasing { before: Option<ResId>, after: Option<ResId> },
+    Transition {
+        res: ResId,
+        subresource: u32,
+        before: u32,
+        after: u32,
+        flags: u32,
+    },
+    Uav {
+        res: Option<ResId>,
+    },
+    Aliasing {
+        before: Option<ResId>,
+        after: Option<ResId>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -593,7 +714,13 @@ pub struct CommandList {
 impl CommandList {
     /// Created in the recording state.
     pub fn new(dev: &Arc<Device>, kind: u32) -> CommandList {
-        CommandList { dev: dev.clone(), kind, items: Vec::new(), state: ListState::Recording, error: None }
+        CommandList {
+            dev: dev.clone(),
+            kind,
+            items: Vec::new(),
+            state: ListState::Recording,
+            error: None,
+        }
     }
 
     fn push(&mut self, c: Command<'static>) {
@@ -630,7 +757,14 @@ impl CommandList {
         self.items.is_empty()
     }
 
-    pub fn copy_buffer_region(&mut self, dst: &Buffer, dst_offset: u64, src: &Buffer, src_offset: u64, size: u64) {
+    pub fn copy_buffer_region(
+        &mut self,
+        dst: &Buffer,
+        dst_offset: u64,
+        src: &Buffer,
+        src_offset: u64,
+        size: u64,
+    ) {
         let fits = |off: u64, b: &Buffer| off.checked_add(size).is_some_and(|e| e <= b.desc.width);
         if !fits(dst_offset, dst) || !fits(src_offset, src) {
             self.fail(Hr::E_INVALIDARG);
@@ -648,8 +782,20 @@ impl CommandList {
     pub fn resource_barrier(&mut self, barriers: &[ResourceBarrier]) {
         for b in barriers {
             match *b {
-                ResourceBarrier::Transition { res, subresource, before, after, flags } => {
-                    let r = self.dev.tracker.lock().unwrap().transition(res.0, subresource, before, after, flags);
+                ResourceBarrier::Transition {
+                    res,
+                    subresource,
+                    before,
+                    after,
+                    flags,
+                } => {
+                    let r = self.dev.tracker.lock().unwrap().transition(
+                        res.0,
+                        subresource,
+                        before,
+                        after,
+                        flags,
+                    );
                     match r {
                         Ok(Some(sb)) => self.push(stage_barrier(sb, res)),
                         Ok(None) => {}
@@ -657,7 +803,10 @@ impl CommandList {
                     }
                 }
                 ResourceBarrier::Uav { res } => {
-                    self.push(stage_barrier(state::uav_barrier(), res.unwrap_or(ResId::NULL)));
+                    self.push(stage_barrier(
+                        state::uav_barrier(),
+                        res.unwrap_or(ResId::NULL),
+                    ));
                 }
                 ResourceBarrier::Aliasing { before, after } => {
                     self.push(Command::Barrier(Barrier::aliasing(
@@ -674,7 +823,10 @@ impl CommandList {
     }
 
     pub fn set_compute_root_signature(&mut self, rs: &RootSignature) {
-        self.push(Command::SetRootSignature(SetRootSignature { bind_point: BindPoint::COMPUTE, root_sig: rs.id }));
+        self.push(Command::SetRootSignature(SetRootSignature {
+            bind_point: BindPoint::COMPUTE,
+            root_sig: rs.id,
+        }));
     }
 
     /// `SetDescriptorHeaps`: at most one CBV/SRV/UAV and one sampler heap.
@@ -695,10 +847,18 @@ impl CommandList {
             }
             *slot = h.back;
         }
-        self.push(Command::SetDescriptorHeaps(SetDescriptorHeaps { cbv_srv_uav: cbv, sampler: smp }));
+        self.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+            cbv_srv_uav: cbv,
+            sampler: smp,
+        }));
     }
 
-    pub fn set_compute_root_constants(&mut self, root_index: u32, dest_offset: u32, values: &[u32]) {
+    pub fn set_compute_root_constants(
+        &mut self,
+        root_index: u32,
+        dest_offset: u32,
+        values: &[u32],
+    ) {
         if values.len() > cmd::MAX_ROOT_CONSTANTS {
             self.fail(Hr::E_INVALIDARG);
             return;
@@ -714,7 +874,12 @@ impl CommandList {
     }
 
     /// `SetComputeRootConstantBufferView` / `ShaderResourceView` / `UnorderedAccessView`.
-    pub fn set_compute_root_descriptor(&mut self, root_index: u32, kind: RootParamKind, gpu_va: u64) {
+    pub fn set_compute_root_descriptor(
+        &mut self,
+        root_index: u32,
+        kind: RootParamKind,
+        gpu_va: u64,
+    ) {
         self.push(Command::SetRootDescriptor(SetRootDescriptor {
             bind_point: BindPoint::COMPUTE,
             root_index,

@@ -11,9 +11,11 @@ use crate::hresult::{Hr, Result};
 pub fn status_to_hr(s: Status) -> Hr {
     match s {
         Status::OK => Hr::S_OK,
-        Status::INVALID_ARG | Status::BAD_VERSION | Status::NOT_FOUND | Status::BAD_STREAM | Status::CONFLICT => {
-            Hr::E_INVALIDARG
-        }
+        Status::INVALID_ARG
+        | Status::BAD_VERSION
+        | Status::NOT_FOUND
+        | Status::BAD_STREAM
+        | Status::CONFLICT => Hr::E_INVALIDARG,
         Status::UNSUPPORTED | Status::UNKNOWN_OP => Hr::E_NOTIMPL,
         Status::OUT_OF_MEMORY => Hr::E_OUTOFMEMORY,
         Status::DEVICE_LOST => Hr::DXGI_ERROR_DEVICE_REMOVED,
@@ -65,7 +67,10 @@ mod tests {
         assert_eq!(status_to_hr(Status::OK), Hr::S_OK);
         assert_eq!(status_to_hr(Status::INVALID_ARG), Hr::E_INVALIDARG);
         assert_eq!(status_to_hr(Status::OUT_OF_MEMORY), Hr::E_OUTOFMEMORY);
-        assert_eq!(status_to_hr(Status::DEVICE_LOST), Hr::DXGI_ERROR_DEVICE_REMOVED);
+        assert_eq!(
+            status_to_hr(Status::DEVICE_LOST),
+            Hr::DXGI_ERROR_DEVICE_REMOVED
+        );
         assert_eq!(status_to_hr(Status::INTERNAL), Hr::E_FAIL);
         assert_eq!(status_to_hr(Status(-99)), Hr::E_FAIL);
     }

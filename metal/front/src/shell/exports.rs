@@ -42,7 +42,8 @@ pub unsafe fn d3d12_create_device(
         if !adapter.is_null() {
             // Any COM object will do as the adapter the application got from us.
             // SAFETY: a COM pointer the caller owns; borrowed, not released.
-            let unk = unsafe { IUnknown::from_raw_borrowed(&adapter) }.ok_or_else(|| werr(Hr::E_POINTER))?;
+            let unk = unsafe { IUnknown::from_raw_borrowed(&adapter) }
+                .ok_or_else(|| werr(Hr::E_POINTER))?;
             if unk.cast_object_ref::<AdapterObj>().is_err() {
                 // An adapter from another implementation: refuse like DXGI would.
                 return Err(werr(Hr::E_INVALIDARG));
@@ -127,7 +128,10 @@ pub unsafe fn d3d12_create_root_signature_deserializer(
 ) -> HRESULT {
     code((|| {
         let d = parse_blob(src, size)?;
-        let obj = ComObject::new(RootSigDeserializerObj { private: PrivateData::default(), desc: serialize::write_1_0(&d) });
+        let obj = ComObject::new(RootSigDeserializerObj {
+            private: PrivateData::default(),
+            desc: serialize::write_1_0(&d),
+        });
         return_object(&obj.to_interface::<IUnknown>(), riid, pp)
     })())
 }
@@ -142,7 +146,10 @@ pub unsafe fn d3d12_create_versioned_root_signature_deserializer(
 ) -> HRESULT {
     code((|| {
         let d = parse_blob(src, size)?;
-        let obj = ComObject::new(VersionedDeserializerObj { private: PrivateData::default(), desc: Versioned::new(&d) });
+        let obj = ComObject::new(VersionedDeserializerObj {
+            private: PrivateData::default(),
+            desc: Versioned::new(&d),
+        });
         return_object(&obj.to_interface::<IUnknown>(), riid, pp)
     })())
 }

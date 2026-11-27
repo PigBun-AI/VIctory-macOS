@@ -8,7 +8,12 @@
 //!   the other files, or a stub (`E_NOTIMPL`, no-op).
 //! * `exports.rs` has the DLL entry points (`D3D12CreateDevice`, ...).
 
-#![allow(non_snake_case)]
+// The shell is the C ABI: methods take raw pointers and many arguments by contract.
+#![allow(
+    non_snake_case,
+    clippy::too_many_arguments,
+    clippy::not_unsafe_ptr_arg_deref
+)]
 
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
@@ -21,12 +26,12 @@ use crate::hresult::{Hr, Result};
 
 mod device;
 mod dxgi;
-mod stubs;
+pub mod exports;
 mod list;
 mod objects;
 mod private;
-pub mod exports;
 mod serialize;
+mod stubs;
 
 pub use private::PrivateData;
 
@@ -43,7 +48,11 @@ pub(crate) fn wres<T>(r: Result<T>) -> WResult<T> {
 /// Hand a new object to an `(riid, ppv)` pair: QueryInterface for `riid` on
 /// it and write the pointer. A null `ppv` means "validate only", as D3D12
 /// allows (the object is dropped).
-pub(crate) fn return_object(obj: &IUnknown, riid: *const GUID, ppv: *mut *mut c_void) -> WResult<()> {
+pub(crate) fn return_object(
+    obj: &IUnknown,
+    riid: *const GUID,
+    ppv: *mut *mut c_void,
+) -> WResult<()> {
     if ppv.is_null() {
         return Ok(());
     }
@@ -55,7 +64,11 @@ pub(crate) fn return_object(obj: &IUnknown, riid: *const GUID, ppv: *mut *mut c_
 }
 
 /// `ID3D12DeviceChild::GetDevice`.
-pub(crate) fn query_device(device: &ComObject<device::DeviceObj>, riid: *const GUID, ppv: *mut *mut c_void) -> WResult<()> {
+pub(crate) fn query_device(
+    device: &ComObject<device::DeviceObj>,
+    riid: *const GUID,
+    ppv: *mut *mut c_void,
+) -> WResult<()> {
     let unk: IUnknown = device.to_interface();
     if ppv.is_null() {
         return Err(Error::from(E_POINTER));

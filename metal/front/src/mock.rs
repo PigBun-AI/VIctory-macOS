@@ -16,7 +16,8 @@ use std::sync::Mutex;
 use victory_metal_proto::sync::*;
 use victory_metal_proto::types::{Caps, SamplerDesc, ViewDesc, ViewKind};
 use victory_metal_proto::{
-    Command, Decoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId, RootSigDesc, RootSigId, Status,
+    Command, Decoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId, RootSigDesc,
+    RootSigId, Status,
 };
 
 const VA_START: u64 = 0x1_0000_0000;
@@ -42,7 +43,11 @@ unsafe impl Send for Buffer {}
 impl Drop for Buffer {
     fn drop(&mut self) {
         // SAFETY: allocated in `create_buffer` as a boxed slice of this length.
-        unsafe { drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(self.ptr, self.size))) };
+        unsafe {
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+                self.ptr, self.size,
+            )))
+        };
     }
 }
 
@@ -105,7 +110,12 @@ impl MockLink {
 
     pub fn with_caps(caps: Caps) -> MockLink {
         MockLink {
-            st: Mutex::new(State { next_id: 1, next_va: VA_START, caps, ..Default::default() }),
+            st: Mutex::new(State {
+                next_id: 1,
+                next_va: VA_START,
+                caps,
+                ..Default::default()
+            }),
         }
     }
 
@@ -119,7 +129,13 @@ impl MockLink {
     }
 
     pub fn calls_of(&self, op: SyncOp) -> usize {
-        self.st.lock().unwrap().calls.iter().filter(|c| c.op == op).count()
+        self.st
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|c| c.op == op)
+            .count()
     }
 
     pub fn rejected(&self) -> Vec<String> {
@@ -156,7 +172,14 @@ impl MockLink {
     }
 
     pub fn descriptor(&self, heap: HeapId, index: u32) -> Option<Descriptor> {
-        self.st.lock().unwrap().heaps.get(&heap.0)?.slots.get(index as usize).copied()
+        self.st
+            .lock()
+            .unwrap()
+            .heaps
+            .get(&heap.0)?
+            .slots
+            .get(index as usize)
+            .copied()
     }
 
     pub fn root_signature(&self, id: RootSigId) -> Option<RootSigDesc> {
@@ -226,7 +249,15 @@ impl State {
         self.next_va += alloc;
         let ptr = Box::into_raw(vec![0u8; a.size as usize].into_boxed_slice()).cast::<u8>();
         let cpu_visible = kind != BufferKind::DEFAULT;
-        self.buffers.insert(id, Buffer { ptr, size: a.size as usize, gpu_va, cpu_visible });
+        self.buffers.insert(
+            id,
+            Buffer {
+                ptr,
+                size: a.size as usize,
+                gpu_va,
+                cpu_visible,
+            },
+        );
         self.by_va.insert(gpu_va, id);
         a.res = ResId(id);
         a.gpu_va = gpu_va;
@@ -251,7 +282,11 @@ impl State {
         if !kind.is_known() || a.capacity == 0 || a.flags > 1 {
             return Status::INVALID_ARG;
         }
-        let stride = if kind == HeapKind::SAMPLER { SAMPLER_STRIDE } else { DESCRIPTOR_STRIDE };
+        let stride = if kind == HeapKind::SAMPLER {
+            SAMPLER_STRIDE
+        } else {
+            DESCRIPTOR_STRIDE
+        };
         let id = self.new_id();
         let size = (a.capacity as u64 * stride as u64).div_ceil(PAGE) * PAGE;
         a.heap = HeapId(id);
@@ -259,13 +294,23 @@ impl State {
         a.gpu_va = self.next_va;
         self.next_va += size;
         a.cpu_addr = 0;
-        self.heaps.insert(id, Heap { kind: a.kind, slots: vec![Descriptor::Empty; a.capacity as usize] });
+        self.heaps.insert(
+            id,
+            Heap {
+                kind: a.kind,
+                slots: vec![Descriptor::Empty; a.capacity as usize],
+            },
+        );
         Status::OK
     }
 
     fn write_descriptor(&mut self, a: &mut WriteDescriptorArgs) -> Status {
-        let Some(h) = self.heaps.get_mut(&a.heap.0) else { return Status::NOT_FOUND };
-        let Some(slot) = h.slots.get_mut(a.index as usize) else { return Status::INVALID_ARG };
+        let Some(h) = self.heaps.get_mut(&a.heap.0) else {
+            return Status::NOT_FOUND;
+        };
+        let Some(slot) = h.slots.get_mut(a.index as usize) else {
+            return Status::INVALID_ARG;
+        };
         if !a.view.is_valid() {
             return Status::INVALID_ARG;
         }
@@ -278,14 +323,17 @@ impl State {
     }
 
     fn copy_descriptors(&mut self, a: &mut CopyDescriptorsArgs) -> Status {
-        let (Some(d), Some(s)) = (self.heaps.get(&a.dst_heap.0), self.heaps.get(&a.src_heap.0)) else {
+        let (Some(d), Some(s)) = (self.heaps.get(&a.dst_heap.0), self.heaps.get(&a.src_heap.0))
+        else {
             return Status::NOT_FOUND;
         };
         if d.kind != s.kind {
             return Status::INVALID_ARG;
         }
         let (di, si, n) = (a.dst_index as usize, a.src_index as usize, a.count as usize);
-        if di.checked_add(n).is_none_or(|e| e > d.slots.len()) || si.checked_add(n).is_none_or(|e| e > s.slots.len()) {
+        if di.checked_add(n).is_none_or(|e| e > d.slots.len())
+            || si.checked_add(n).is_none_or(|e| e > s.slots.len())
+        {
             return Status::INVALID_ARG;
         }
         let copied: Vec<Descriptor> = s.slots[si..si + n].to_vec();
@@ -298,7 +346,8 @@ impl State {
             return Status::INVALID_ARG;
         }
         // SAFETY: the caller promises `[data_addr, +data_len)` is readable for the call.
-        let bytes = unsafe { std::slice::from_raw_parts(a.data_addr as *const u8, a.data_len as usize) };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(a.data_addr as *const u8, a.data_len as usize) };
         match RootSigDesc::decode(bytes) {
             Ok(d) => {
                 let id = self.new_id();
@@ -323,7 +372,8 @@ impl State {
             return Status::INVALID_ARG;
         }
         let id = self.new_id();
-        self.pipelines.insert(id, (a.root_sig.0, a.dxil_len as usize));
+        self.pipelines
+            .insert(id, (a.root_sig.0, a.dxil_len as usize));
         a.pso = PsoId(id);
         Status::OK
     }
@@ -339,7 +389,9 @@ impl State {
         };
         for c in &cmds {
             match c {
-                Command::CopyBufferRegion(c) => self.copy(c.dst, c.dst_offset, c.src, c.src_offset, c.size),
+                Command::CopyBufferRegion(c) => {
+                    self.copy(c.dst, c.dst_offset, c.src, c.src_offset, c.size)
+                }
                 Command::QueueSignal(s) => match self.fences.get_mut(&s.fence.0) {
                     Some(v) => *v = (*v).max(s.value),
                     None => self.rejected.push(format!("{c:?}")),
@@ -357,12 +409,17 @@ impl State {
     fn copy(&mut self, dst: ResId, dst_off: u64, src: ResId, src_off: u64, size: u64) {
         let ok = match (self.buffers.get(&dst.0), self.buffers.get(&src.0)) {
             (Some(d), Some(s)) => {
-                let fits = |off: u64, len: usize| off.checked_add(size).is_some_and(|e| e <= len as u64);
+                let fits =
+                    |off: u64, len: usize| off.checked_add(size).is_some_and(|e| e <= len as u64);
                 if fits(dst_off, d.size) && fits(src_off, s.size) {
                     // SAFETY: both ranges are inside live allocations (checked above); `copy`
                     // allows dst and src to be the same buffer.
                     unsafe {
-                        std::ptr::copy(s.ptr.add(src_off as usize), d.ptr.add(dst_off as usize), size as usize)
+                        std::ptr::copy(
+                            s.ptr.add(src_off as usize),
+                            d.ptr.add(dst_off as usize),
+                            size as usize,
+                        )
                     };
                     true
                 } else {
@@ -372,7 +429,9 @@ impl State {
             _ => false,
         };
         if !ok {
-            self.rejected.push(format!("copy {dst:?}+{dst_off} <- {src:?}+{src_off} x{size}"));
+            self.rejected.push(format!(
+                "copy {dst:?}+{dst_off} <- {src:?}+{src_off} x{size}"
+            ));
         }
     }
 }
@@ -386,6 +445,8 @@ impl Link for MockLink {
         g.submit(block)
     }
 
+    // The trait method is safe by proto's contract (see `Link::call`).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn call(&self, op: SyncOp, args: *mut u8, len: usize) -> Status {
         let mut g = self.st.lock().unwrap();
         let s = &mut *g;
@@ -406,7 +467,10 @@ impl Link for MockLink {
             return st;
         }
         if !s.hello && !matches!(op, SyncOp::NOP | SyncOp::HELLO) {
-            s.calls.push(CallRecord { op, status: Status::NOT_INITIALIZED });
+            s.calls.push(CallRecord {
+                op,
+                status: Status::NOT_INITIALIZED,
+            });
             return Status::NOT_INITIALIZED;
         }
         let status = match op {
@@ -431,26 +495,46 @@ impl Link for MockLink {
             }
             SyncOp::DESTROY_QUEUE => {
                 let a = args!(DestroyQueueArgs);
-                if s.queues.remove(&a.queue.0).is_some() { Status::OK } else { Status::NOT_FOUND }
+                if s.queues.remove(&a.queue.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
             }
             SyncOp::CREATE_BUFFER => s.create_buffer(args!(CreateBufferArgs)),
             SyncOp::DESTROY_BUFFER => s.destroy_buffer(args!(DestroyBufferArgs)),
             SyncOp::CREATE_DESC_HEAP => s.create_desc_heap(args!(CreateDescHeapArgs)),
             SyncOp::DESTROY_DESC_HEAP => {
                 let a = args!(DestroyDescHeapArgs);
-                if s.heaps.remove(&a.heap.0).is_some() { Status::OK } else { Status::NOT_FOUND }
+                if s.heaps.remove(&a.heap.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
             }
             SyncOp::WRITE_DESCRIPTOR => s.write_descriptor(args!(WriteDescriptorArgs)),
             SyncOp::COPY_DESCRIPTORS => s.copy_descriptors(args!(CopyDescriptorsArgs)),
-            SyncOp::CREATE_ROOT_SIGNATURE => s.create_root_signature(args!(CreateRootSignatureArgs)),
+            SyncOp::CREATE_ROOT_SIGNATURE => {
+                s.create_root_signature(args!(CreateRootSignatureArgs))
+            }
             SyncOp::DESTROY_ROOT_SIGNATURE => {
                 let a = args!(DestroyRootSignatureArgs);
-                if s.root_sigs.remove(&a.root_sig.0).is_some() { Status::OK } else { Status::NOT_FOUND }
+                if s.root_sigs.remove(&a.root_sig.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
             }
-            SyncOp::CREATE_COMPUTE_PIPELINE => s.create_compute_pipeline(args!(CreateComputePipelineArgs)),
+            SyncOp::CREATE_COMPUTE_PIPELINE => {
+                s.create_compute_pipeline(args!(CreateComputePipelineArgs))
+            }
             SyncOp::DESTROY_PIPELINE => {
                 let a = args!(DestroyPipelineArgs);
-                if s.pipelines.remove(&a.pso.0).is_some() { Status::OK } else { Status::NOT_FOUND }
+                if s.pipelines.remove(&a.pso.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
             }
             SyncOp::CREATE_FENCE => {
                 let a = args!(CreateFenceArgs);
@@ -461,7 +545,11 @@ impl Link for MockLink {
             }
             SyncOp::DESTROY_FENCE => {
                 let a = args!(DestroyFenceArgs);
-                if s.fences.remove(&a.fence.0).is_some() { Status::OK } else { Status::NOT_FOUND }
+                if s.fences.remove(&a.fence.0).is_some() {
+                    Status::OK
+                } else {
+                    Status::NOT_FOUND
+                }
             }
             SyncOp::FENCE_VALUE => {
                 let a = args!(FenceValueArgs);
@@ -507,13 +595,23 @@ impl Link for MockLink {
 
 impl MockLink {
     pub fn gpu_va(&self, res: ResId) -> Option<u64> {
-        self.st.lock().unwrap().buffers.get(&res.0).map(|b| b.gpu_va)
+        self.st
+            .lock()
+            .unwrap()
+            .buffers
+            .get(&res.0)
+            .map(|b| b.gpu_va)
     }
 }
 
 // Buffers' CPU visibility is part of the mock's contract with tests.
 impl MockLink {
     pub fn is_cpu_visible(&self, res: ResId) -> Option<bool> {
-        self.st.lock().unwrap().buffers.get(&res.0).map(|b| b.cpu_visible)
+        self.st
+            .lock()
+            .unwrap()
+            .buffers
+            .get(&res.0)
+            .map(|b| b.cpu_visible)
     }
 }

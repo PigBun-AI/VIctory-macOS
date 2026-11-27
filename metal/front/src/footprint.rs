@@ -126,7 +126,8 @@ pub fn copyable_footprints(
         l.footprint.offset = base + rel;
         let pitch = l.footprint.row_pitch as u64;
         let slice = l.num_rows as u64 * pitch;
-        let last_end = (l.footprint.depth as u64 - 1) * slice + (l.num_rows as u64 - 1) * pitch + l.row_size;
+        let last_end =
+            (l.footprint.depth as u64 - 1) * slice + (l.num_rows as u64 - 1) * pitch + l.row_size;
         total = rel + last_end;
         rel += l.footprint.depth as u64 * slice;
         out.push(l);
@@ -159,7 +160,10 @@ mod tests {
         // "GOLD footprints NAME: ..." from the D3DMetal run.
         let text = include_str!("../tests/golden/d3dmetal-wine11.txt");
         let key = format!("GOLD footprints {name}: ");
-        text.lines().find_map(|l| l.strip_prefix(&key)).unwrap_or_else(|| panic!("no golden line {name}")).to_string()
+        text.lines()
+            .find_map(|l| l.strip_prefix(&key))
+            .unwrap_or_else(|| panic!("no golden line {name}"))
+            .to_string()
     }
 
     fn render(layouts: &[SubresourceLayout], total: u64) -> String {
@@ -189,8 +193,20 @@ mod tests {
         check("rgba8 64x64 1 mip", tex(t2, 64, 64, 1, 1, 28), 0, 1, 0);
         check("rgba8 4x4 1 mip", tex(t2, 4, 4, 1, 1, 28), 0, 1, 0);
         check("rgba8 64x64 7 mips", tex(t2, 64, 64, 1, 7, 28), 0, 7, 0);
-        check("rgba8 100x37 6 mips x3 layers", tex(t2, 100, 37, 3, 6, 28), 0, 18, 0);
-        check("rgba8 100x37 6 mips x3 layers, subs 4..9 base 768", tex(t2, 100, 37, 3, 6, 28), 4, 5, 768);
+        check(
+            "rgba8 100x37 6 mips x3 layers",
+            tex(t2, 100, 37, 3, 6, 28),
+            0,
+            18,
+            0,
+        );
+        check(
+            "rgba8 100x37 6 mips x3 layers, subs 4..9 base 768",
+            tex(t2, 100, 37, 3, 6, 28),
+            4,
+            5,
+            768,
+        );
         check("rgba32f 33x5 3 mips", tex(t2, 33, 5, 1, 3, 2), 0, 3, 0);
         check("rgb32f 17x3", tex(t2, 17, 3, 1, 1, 6), 0, 1, 0);
         check("r8 5x5 3 mips", tex(t2, 5, 5, 1, 3, 61), 0, 3, 0);
@@ -198,9 +214,27 @@ mod tests {
         check("bc1 13x7 4 mips", tex(t2, 13, 7, 1, 4, 71), 0, 4, 0);
         check("bc7 64x64 7 mips", tex(t2, 64, 64, 1, 7, 98), 0, 7, 0);
         check("bc3 1x1", tex(t2, 1, 1, 1, 1, 77), 0, 1, 0);
-        check("3d rgba8 16x16x8 3 mips", tex(DIM_TEXTURE3D, 16, 16, 8, 3, 28), 0, 3, 0);
-        check("3d r32 5x6x7 3 mips", tex(DIM_TEXTURE3D, 5, 6, 7, 3, 41), 0, 3, 0);
-        check("1d rgba8 100 4 mips x2", tex(DIM_TEXTURE1D, 100, 1, 2, 4, 28), 0, 8, 0);
+        check(
+            "3d rgba8 16x16x8 3 mips",
+            tex(DIM_TEXTURE3D, 16, 16, 8, 3, 28),
+            0,
+            3,
+            0,
+        );
+        check(
+            "3d r32 5x6x7 3 mips",
+            tex(DIM_TEXTURE3D, 5, 6, 7, 3, 41),
+            0,
+            3,
+            0,
+        );
+        check(
+            "1d rgba8 100 4 mips x2",
+            tex(DIM_TEXTURE1D, 100, 1, 2, 4, 28),
+            0,
+            8,
+            0,
+        );
         check("d32 64x64", tex(t2, 64, 64, 1, 1, 40), 0, 1, 0);
         check("r10g10b10a2 9x9 2 mips", tex(t2, 9, 9, 1, 2, 24), 0, 2, 0);
     }
@@ -209,8 +243,12 @@ mod tests {
     fn planar_formats_have_one_footprint_per_plane() {
         // NV12 is the same as D3DMetal gives it; depth-stencil planes are
         // shown in the smoke test but not compared (D3DMetal pads them).
-        let (l, total) = copyable_footprints(&tex(DIM_TEXTURE2D, 64, 48, 1, 1, 103), 0, 2, 0).unwrap();
-        assert_eq!(render(&l, total), "[off=0 fmt=60 64x48x1 pitch=256 rows=48 rowsize=64][off=12288 fmt=48 32x24x1 pitch=256 rows=24 rowsize=64] total=18240");
+        let (l, total) =
+            copyable_footprints(&tex(DIM_TEXTURE2D, 64, 48, 1, 1, 103), 0, 2, 0).unwrap();
+        assert_eq!(
+            render(&l, total),
+            "[off=0 fmt=60 64x48x1 pitch=256 rows=48 rowsize=64][off=12288 fmt=48 32x24x1 pitch=256 rows=24 rowsize=64] total=18240"
+        );
         let (l, _) = copyable_footprints(&tex(DIM_TEXTURE2D, 33, 17, 1, 2, 20), 0, 4, 0).unwrap();
         assert_eq!((l[0].footprint.format, l[2].footprint.format), (39, 60));
         assert_eq!(l[2].row_size, 33);

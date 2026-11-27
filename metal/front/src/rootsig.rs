@@ -71,9 +71,18 @@ pub struct Range {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParamKind {
     Table(Vec<Range>),
-    Constants { reg: u32, space: u32, num: u32 },
+    Constants {
+        reg: u32,
+        space: u32,
+        num: u32,
+    },
     /// `ty` is `PARAM_CBV`, `PARAM_SRV` or `PARAM_UAV`; `flags` is 1.1 only.
-    Descriptor { ty: u32, reg: u32, space: u32, flags: u32 },
+    Descriptor {
+        ty: u32,
+        reg: u32,
+        space: u32,
+        flags: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,11 +130,19 @@ impl RootSignatureDesc {
             match &mut p.kind {
                 ParamKind::Table(ranges) => {
                     for r in ranges {
-                        r.flags = if version == Version::V1_1 { RANGE_FLAGS_FROM_1_0 } else { 0 };
+                        r.flags = if version == Version::V1_1 {
+                            RANGE_FLAGS_FROM_1_0
+                        } else {
+                            0
+                        };
                     }
                 }
                 ParamKind::Descriptor { flags, .. } => {
-                    *flags = if version == Version::V1_1 { ROOT_DESCRIPTOR_FLAGS_FROM_1_0 } else { 0 };
+                    *flags = if version == Version::V1_1 {
+                        ROOT_DESCRIPTOR_FLAGS_FROM_1_0
+                    } else {
+                        0
+                    };
                 }
                 ParamKind::Constants { .. } => {}
             }
@@ -151,7 +168,9 @@ fn validate(d: &RootSignatureDesc) -> Result<()> {
                     return Err(Hr::E_INVALIDARG);
                 }
             }
-            ParamKind::Descriptor { ty, .. } if !matches!(*ty, PARAM_CBV | PARAM_SRV | PARAM_UAV) => {
+            ParamKind::Descriptor { ty, .. }
+                if !matches!(*ty, PARAM_CBV | PARAM_SRV | PARAM_UAV) =>
+            {
                 return Err(Hr::E_INVALIDARG);
             }
             _ => {}
@@ -189,9 +208,7 @@ fn serialize_body(d: &RootSignatureDesc) -> Vec<u8> {
     let mut payloads = W(Vec::new());
     for p in &d.params {
         let (ty, size) = match &p.kind {
-            ParamKind::Table(r) => {
-                (PARAM_TABLE, 8 + r.len() as u32 * if v11 { 24 } else { 20 })
-            }
+            ParamKind::Table(r) => (PARAM_TABLE, 8 + r.len() as u32 * if v11 { 24 } else { 20 }),
             ParamKind::Constants { .. } => (PARAM_CONSTANTS, 12),
             ParamKind::Descriptor { ty, .. } => (*ty, if v11 { 12 } else { 8 }),
         };
@@ -218,7 +235,9 @@ fn serialize_body(d: &RootSignatureDesc) -> Vec<u8> {
                 payloads.u32(*space);
                 payloads.u32(*num);
             }
-            ParamKind::Descriptor { reg, space, flags, .. } => {
+            ParamKind::Descriptor {
+                reg, space, flags, ..
+            } => {
                 payloads.u32(*reg);
                 payloads.u32(*space);
                 if v11 {
@@ -276,7 +295,10 @@ struct R<'a> {
 
 impl R<'_> {
     fn u32(&self, at: usize) -> Result<u32> {
-        let s = self.b.get(at..at.checked_add(4).ok_or(Hr::E_INVALIDARG)?).ok_or(Hr::E_INVALIDARG)?;
+        let s = self
+            .b
+            .get(at..at.checked_add(4).ok_or(Hr::E_INVALIDARG)?)
+            .ok_or(Hr::E_INVALIDARG)?;
         Ok(u32::from_le_bytes(s.try_into().unwrap()))
     }
     fn f32(&self, at: usize) -> Result<f32> {
@@ -306,11 +328,16 @@ pub fn deserialize(blob: &[u8]) -> Result<RootSignatureDesc> {
         }
         if &blob[off..off + 4] == b"RTS0" {
             let size = c.u32(off + 4)? as usize;
-            body = Some(blob.get(off + 8..off.checked_add(8 + size).ok_or(Hr::E_INVALIDARG)?).ok_or(Hr::E_INVALIDARG)?);
+            body = Some(
+                blob.get(off + 8..off.checked_add(8 + size).ok_or(Hr::E_INVALIDARG)?)
+                    .ok_or(Hr::E_INVALIDARG)?,
+            );
             break;
         }
     }
-    let r = R { b: body.ok_or(Hr::E_INVALIDARG)? };
+    let r = R {
+        b: body.ok_or(Hr::E_INVALIDARG)?,
+    };
     let version = match r.u32(0)? {
         1 => Version::V1_0,
         2 => Version::V1_1,
@@ -354,7 +381,11 @@ pub fn deserialize(blob: &[u8]) -> Result<RootSignatureDesc> {
                 }
                 ParamKind::Table(ranges)
             }
-            PARAM_CONSTANTS => ParamKind::Constants { reg: r.u32(p)?, space: r.u32(p + 4)?, num: r.u32(p + 8)? },
+            PARAM_CONSTANTS => ParamKind::Constants {
+                reg: r.u32(p)?,
+                space: r.u32(p + 4)?,
+                num: r.u32(p + 8)?,
+            },
             PARAM_CBV | PARAM_SRV | PARAM_UAV => ParamKind::Descriptor {
                 ty,
                 reg: r.u32(p)?,
@@ -384,7 +415,12 @@ pub fn deserialize(blob: &[u8]) -> Result<RootSignatureDesc> {
             visibility: r.u32(a + 48)?,
         });
     }
-    Ok(RootSignatureDesc { version, params, samplers, flags })
+    Ok(RootSignatureDesc {
+        version,
+        params,
+        samplers,
+        flags,
+    })
 }
 
 // ---- the DXBC digest -----------------------------------------------------
@@ -397,7 +433,7 @@ pub fn dxbc_digest(data: &[u8]) -> [u8; 16] {
     let left = n & 63;
     let full = n - left;
     let mut st: [u32; 4] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
-    for b in data[..full].chunks_exact(64) {
+    for b in data[..full].as_chunks::<64>().0 {
         md5_block(&mut st, b);
     }
     let bits = (n as u32).wrapping_mul(8);
@@ -427,9 +463,9 @@ pub fn dxbc_digest(data: &[u8]) -> [u8; 16] {
 }
 
 const MD5_S: [u32; 64] = [
-    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15,
-    21,
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
+    14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
+    21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
 fn md5_k(i: usize) -> u32 {
@@ -437,13 +473,13 @@ fn md5_k(i: usize) -> u32 {
     ((i as f64 + 1.0).sin().abs() * 4294967296.0) as u32
 }
 
-fn md5_block(st: &mut [u32; 4], b: &[u8]) {
+fn md5_block(st: &mut [u32; 4], b: &[u8; 64]) {
     let mut m = [0u32; 16];
-    for (i, c) in b.chunks_exact(4).enumerate() {
-        m[i] = u32::from_le_bytes(c.try_into().unwrap());
+    for (w, c) in m.iter_mut().zip(b.as_chunks::<4>().0) {
+        *w = u32::from_le_bytes(*c);
     }
     let [mut a, mut bb, mut c, mut d] = *st;
-    for i in 0..64 {
+    for (i, &rot) in MD5_S.iter().enumerate() {
         let (f, g) = match i / 16 {
             0 => ((bb & c) | (!bb & d), i),
             1 => ((d & bb) | (!d & c), (5 * i + 1) % 16),
@@ -454,7 +490,7 @@ fn md5_block(st: &mut [u32; 4], b: &[u8]) {
         a = d;
         d = c;
         c = bb;
-        bb = bb.wrapping_add(f.rotate_left(MD5_S[i]));
+        bb = bb.wrapping_add(f.rotate_left(rot));
     }
     st[0] = st[0].wrapping_add(a);
     st[1] = st[1].wrapping_add(bb);
@@ -467,7 +503,9 @@ mod tests {
     use super::*;
 
     fn unhex(s: &str) -> Vec<u8> {
-        (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
     }
 
     /// (name, blob) of every serialize line in the D3DMetal run that
@@ -521,7 +559,14 @@ mod tests {
     }
 
     fn range(ty: u32, num: u32, base: u32, space: u32, flags: u32, offset: u32) -> Range {
-        Range { ty, num, base, space, flags, offset }
+        Range {
+            ty,
+            num,
+            base,
+            space,
+            flags,
+            offset,
+        }
     }
 
     const APPEND: u32 = 0xffff_ffff;
@@ -531,24 +576,55 @@ mod tests {
         vec![
             range(RANGE_SRV, 2, 0, 0, 0, APPEND),
             range(RANGE_UAV, 4, 1, 3, f(3, 0, 0).0, 8),
-            range(RANGE_SAMPLER, u32::MAX, 0, 1, if v11 { 1 } else { 0 }, APPEND),
+            range(
+                RANGE_SAMPLER,
+                u32::MAX,
+                0,
+                1,
+                if v11 { 1 } else { 0 },
+                APPEND,
+            ),
         ]
     }
 
     fn view(ty: u32, reg: u32, space: u32, flags: u32, vis: u32) -> Param {
-        Param { kind: ParamKind::Descriptor { ty, reg, space, flags }, visibility: vis }
+        Param {
+            kind: ParamKind::Descriptor {
+                ty,
+                reg,
+                space,
+                flags,
+            },
+            visibility: vis,
+        }
     }
     fn consts(reg: u32, space: u32, num: u32, vis: u32) -> Param {
-        Param { kind: ParamKind::Constants { reg, space, num }, visibility: vis }
+        Param {
+            kind: ParamKind::Constants { reg, space, num },
+            visibility: vis,
+        }
     }
     fn table(r: Vec<Range>, vis: u32) -> Param {
-        Param { kind: ParamKind::Table(r), visibility: vis }
+        Param {
+            kind: ParamKind::Table(r),
+            visibility: vis,
+        }
     }
 
     /// The descriptions smoke.rs serializes, by golden name.
     fn cases() -> Vec<(&'static str, RootSignatureDesc)> {
-        let d10 = |params, samplers, flags| RootSignatureDesc { version: Version::V1_0, params, samplers, flags };
-        let d11 = |params, samplers, flags| RootSignatureDesc { version: Version::V1_1, params, samplers, flags };
+        let d10 = |params, samplers, flags| RootSignatureDesc {
+            version: Version::V1_0,
+            params,
+            samplers,
+            flags,
+        };
+        let d11 = |params, samplers, flags| RootSignatureDesc {
+            version: Version::V1_1,
+            params,
+            samplers,
+            flags,
+        };
         let mixed10 = vec![
             table(ranges(false), 0),
             consts(0, 7, 4, 0),
@@ -585,15 +661,42 @@ mod tests {
         vec![
             ("1.0 desc empty -> 1_0", d10(vec![], vec![], 1)),
             ("1.0 desc empty-none -> 1_0", d10(vec![], vec![], 0)),
-            ("1.0 desc mixed -> 1_0", d10(mixed10.clone(), vec![sampler(0), sampler(1)], 0x4)),
-            ("1.0 desc two-tables -> 1_0", d10(two10.clone(), vec![], 0x1 | 0x20)),
-            ("1.0 desc constants-only -> 1_0", d10(vec![mixed10[1].clone()], vec![], 0)),
-            ("1.0 desc samplers-only -> 1_0", d10(vec![], vec![sampler(0), sampler(1)], 0)),
-            ("versioned 1.1 desc mixed", d11(mixed11, vec![sampler(0), sampler(1)], 0x4)),
-            ("versioned 1.1 desc two-tables", d11(two11, vec![sampler(1)], 0x80)),
-            ("versioned 1.1 desc host", d11(host11.clone(), vec![], host_flags)),
-            ("versioned 1.1 desc host-with-sampler", d11(host11, vec![sampler(0)], host_flags)),
-            ("versioned 1.0 desc mixed", d10(mixed10, vec![sampler(0), sampler(1)], 0x4)),
+            (
+                "1.0 desc mixed -> 1_0",
+                d10(mixed10.clone(), vec![sampler(0), sampler(1)], 0x4),
+            ),
+            (
+                "1.0 desc two-tables -> 1_0",
+                d10(two10.clone(), vec![], 0x1 | 0x20),
+            ),
+            (
+                "1.0 desc constants-only -> 1_0",
+                d10(vec![mixed10[1].clone()], vec![], 0),
+            ),
+            (
+                "1.0 desc samplers-only -> 1_0",
+                d10(vec![], vec![sampler(0), sampler(1)], 0),
+            ),
+            (
+                "versioned 1.1 desc mixed",
+                d11(mixed11, vec![sampler(0), sampler(1)], 0x4),
+            ),
+            (
+                "versioned 1.1 desc two-tables",
+                d11(two11, vec![sampler(1)], 0x80),
+            ),
+            (
+                "versioned 1.1 desc host",
+                d11(host11.clone(), vec![], host_flags),
+            ),
+            (
+                "versioned 1.1 desc host-with-sampler",
+                d11(host11, vec![sampler(0)], host_flags),
+            ),
+            (
+                "versioned 1.0 desc mixed",
+                d10(mixed10, vec![sampler(0), sampler(1)], 0x4),
+            ),
         ]
     }
 
@@ -610,7 +713,11 @@ mod tests {
     fn serialization_is_byte_identical_to_d3dmetal() {
         let g = golden();
         for (name, desc) in cases() {
-            let want = &g.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("no golden {name}")).1;
+            let want = &g
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("no golden {name}"))
+                .1;
             let got = serialize(&desc).unwrap();
             assert_eq!(&got, want, "{name}");
         }
@@ -629,13 +736,20 @@ mod tests {
         // "versioned deserialize v10-mixed at 1.1": every range 0x3, root
         // descriptors 0x2.
         let g = golden();
-        let blob = &g.iter().find(|(n, _)| n == "versioned 1.0 desc mixed").unwrap().1;
+        let blob = &g
+            .iter()
+            .find(|(n, _)| n == "versioned 1.0 desc mixed")
+            .unwrap()
+            .1;
         let up = deserialize(blob).unwrap().to_version(Version::V1_1);
         match &up.params[0].kind {
             ParamKind::Table(r) => assert!(r.iter().all(|r| r.flags == 3)),
             _ => panic!(),
         }
-        assert!(matches!(up.params[3].kind, ParamKind::Descriptor { flags: 2, .. }));
+        assert!(matches!(
+            up.params[3].kind,
+            ParamKind::Descriptor { flags: 2, .. }
+        ));
         // And back down drops them again.
         let down = up.to_version(Version::V1_0);
         assert_eq!(serialize(&down).unwrap(), *blob);
@@ -644,7 +758,11 @@ mod tests {
     #[test]
     fn malformed_blobs_are_refused_not_crashed_on() {
         let g = golden();
-        let blob = &g.iter().find(|(n, _)| n == "versioned 1.1 desc mixed").unwrap().1;
+        let blob = &g
+            .iter()
+            .find(|(n, _)| n == "versioned 1.1 desc mixed")
+            .unwrap()
+            .1;
         assert_eq!(deserialize(&[]), Err(Hr::E_INVALIDARG));
         assert_eq!(deserialize(&[0xff; 64]), Err(Hr::E_INVALIDARG));
         // Every truncation.
@@ -665,7 +783,12 @@ mod tests {
 
     #[test]
     fn bad_descriptions_are_refused() {
-        let mut d = RootSignatureDesc { version: Version::V1_0, params: vec![], samplers: vec![], flags: 0 };
+        let mut d = RootSignatureDesc {
+            version: Version::V1_0,
+            params: vec![],
+            samplers: vec![],
+            flags: 0,
+        };
         d.flags = 0x10000;
         assert_eq!(serialize(&d), Err(Hr::E_INVALIDARG));
         d.flags = 0;

@@ -7,7 +7,9 @@ use windows::Win32::Foundation::LUID;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::core::{ComObject, GUID, IUnknown, Ref, Result as WResult, implement, Interface, IUnknownImpl};
+use windows::core::{
+    ComObject, GUID, IUnknown, IUnknownImpl, Interface, Ref, Result as WResult, implement,
+};
 
 use super::list::ListObj;
 use super::objects::*;
@@ -30,7 +32,10 @@ pub struct DeviceObj {
 impl DeviceObj {
     pub fn create() -> WResult<ComObject<DeviceObj>> {
         let sys = wres(super::system())?;
-        Ok(ComObject::new(DeviceObj { private: PrivateData::default(), dev: dv::Device::new(sys) }))
+        Ok(ComObject::new(DeviceObj {
+            private: PrivateData::default(),
+            dev: dv::Device::new(sys),
+        }))
     }
 }
 
@@ -59,7 +64,10 @@ pub(crate) fn d3d_desc(d: &ResourceDesc) -> D3D12_RESOURCE_DESC {
         DepthOrArraySize: d.depth_or_array,
         MipLevels: d.mips,
         Format: DXGI_FORMAT(d.format as i32),
-        SampleDesc: DXGI_SAMPLE_DESC { Count: d.sample_count, Quality: d.sample_quality },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: d.sample_count,
+            Quality: d.sample_quality,
+        },
         Layout: D3D12_TEXTURE_LAYOUT(d.layout as i32),
         Flags: D3D12_RESOURCE_FLAGS(d.flags as i32),
     }
@@ -77,7 +85,10 @@ impl DeviceObj_Impl {
 
     pub(super) fn x_GetAdapterLuid(&self) -> LUID {
         let a = &self.dev.sys.adapter;
-        LUID { LowPart: a.luid_low, HighPart: a.luid_high }
+        LUID {
+            LowPart: a.luid_low,
+            HighPart: a.luid_high,
+        }
     }
 
     pub(super) fn x_GetDeviceRemovedReason(&self) -> WResult<()> {
@@ -101,7 +112,12 @@ impl DeviceObj_Impl {
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
         let queue = wres(self.dev.create_queue(kind, d.Priority as u32))?;
-        let q = ComObject::new(QueueObj { private: PrivateData::default(), device_obj: self.to_object(), queue, desc: *d });
+        let q = ComObject::new(QueueObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            queue,
+            desc: *d,
+        });
         return_object(&q.to_interface::<IUnknown>(), riid, ppcommandqueue)
     }
 
@@ -120,7 +136,11 @@ impl DeviceObj_Impl {
         ) {
             return Err(werr(Hr::E_INVALIDARG));
         }
-        let a = ComObject::new(AllocatorObj { private: PrivateData::default(), device_obj: self.to_object(), ty: r#type });
+        let a = ComObject::new(AllocatorObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            ty: r#type,
+        });
         return_object(&a.to_interface::<IUnknown>(), riid, ppcommandallocator)
     }
 
@@ -139,7 +159,9 @@ impl DeviceObj_Impl {
             D3D12_COMMAND_LIST_TYPE_COPY => 2,
             _ => return Err(werr(Hr::E_INVALIDARG)),
         };
-        let alloc = pcommandallocator.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let alloc = pcommandallocator
+            .as_ref()
+            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
         if alloc.cast_object_ref::<AllocatorObj>()?.ty != r#type {
             return Err(werr(Hr::E_INVALIDARG));
         }
@@ -163,19 +185,33 @@ impl DeviceObj_Impl {
         pppipelinestate: *mut *mut c_void,
     ) -> WResult<()> {
         let d = require(pdesc)?;
-        let rs = d.pRootSignature.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let rs = d
+            .pRootSignature
+            .as_ref()
+            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
         let rs = rs.cast_object_ref::<RootSigObj>()?;
         if d.CS.pShaderBytecode.is_null() || d.CS.BytecodeLength == 0 {
             return Err(werr(Hr::E_INVALIDARG));
         }
         // SAFETY: the application's shader bytecode: `BytecodeLength` readable bytes.
-        let dxil = unsafe { std::slice::from_raw_parts(d.CS.pShaderBytecode.cast::<u8>(), d.CS.BytecodeLength) };
+        let dxil = unsafe {
+            std::slice::from_raw_parts(d.CS.pShaderBytecode.cast::<u8>(), d.CS.BytecodeLength)
+        };
         let pipeline = wres(self.dev.create_compute_pipeline(&rs.root_sig, dxil))?;
-        let p = ComObject::new(PsoObj { private: PrivateData::default(), device_obj: self.to_object(), pipeline });
+        let p = ComObject::new(PsoObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            pipeline,
+        });
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
 
-    pub(super) fn x_CheckFeatureSupport(&self, feature: D3D12_FEATURE, data: *mut c_void, size: u32) -> WResult<()> {
+    pub(super) fn x_CheckFeatureSupport(
+        &self,
+        feature: D3D12_FEATURE,
+        data: *mut c_void,
+        size: u32,
+    ) -> WResult<()> {
         if data.is_null() {
             return Err(werr(Hr::E_INVALIDARG));
         }
@@ -190,9 +226,12 @@ impl DeviceObj_Impl {
                 return Err(werr(Hr::E_INVALIDARG));
             }
             // SAFETY: `NumFeatureLevels` entries at the given pointer.
-            let req = unsafe { std::slice::from_raw_parts(fl.pFeatureLevelsRequested, fl.NumFeatureLevels as usize) };
+            let req = unsafe {
+                std::slice::from_raw_parts(fl.pFeatureLevelsRequested, fl.NumFeatureLevels as usize)
+            };
             let req: Vec<u32> = req.iter().map(|l| l.0 as u32).collect();
-            fl.MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL(wres(caps::max_feature_level(c, &req))? as i32);
+            fl.MaxSupportedFeatureLevel =
+                D3D_FEATURE_LEVEL(wres(caps::max_feature_level(c, &req))? as i32);
             return Ok(());
         }
         // SAFETY: `size` bytes at `data`, the caller's structure.
@@ -207,13 +246,25 @@ impl DeviceObj_Impl {
         ppvheap: *mut *mut c_void,
     ) -> WResult<()> {
         let d = require(pdescriptorheapdesc)?;
-        let hd = HeapDesc { ty: d.Type.0 as u32, count: d.NumDescriptors, flags: d.Flags.0 as u32, node_mask: d.NodeMask };
+        let hd = HeapDesc {
+            ty: d.Type.0 as u32,
+            count: d.NumDescriptors,
+            flags: d.Flags.0 as u32,
+            node_mask: d.NodeMask,
+        };
         let heap = wres(self.dev.create_descriptor_heap(&hd))?;
-        let h = ComObject::new(HeapObj { private: PrivateData::default(), device_obj: self.to_object(), heap });
+        let h = ComObject::new(HeapObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            heap,
+        });
         return_object(&h.to_interface::<IUnknown>(), riid, ppvheap)
     }
 
-    pub(super) fn x_GetDescriptorHandleIncrementSize(&self, descriptorheaptype: D3D12_DESCRIPTOR_HEAP_TYPE) -> u32 {
+    pub(super) fn x_GetDescriptorHandleIncrementSize(
+        &self,
+        descriptorheaptype: D3D12_DESCRIPTOR_HEAP_TYPE,
+    ) -> u32 {
         match descriptorheaptype.0 {
             0..=3 => self.dev.descriptor_increment(descriptorheaptype.0 as u32),
             _ => 0,
@@ -234,11 +285,19 @@ impl DeviceObj_Impl {
         // SAFETY: `bloblength` readable bytes at `pblob`.
         let blob = unsafe { std::slice::from_raw_parts(pblob.cast::<u8>(), bloblength) };
         let root_sig = wres(self.dev.create_root_signature(blob))?;
-        let r = ComObject::new(RootSigObj { private: PrivateData::default(), device_obj: self.to_object(), root_sig });
+        let r = ComObject::new(RootSigObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            root_sig,
+        });
         return_object(&r.to_interface::<IUnknown>(), riid, ppvrootsignature)
     }
 
-    pub(super) fn x_CreateConstantBufferView(&self, pdesc: *const D3D12_CONSTANT_BUFFER_VIEW_DESC, dest: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+    pub(super) fn x_CreateConstantBufferView(
+        &self,
+        pdesc: *const D3D12_CONSTANT_BUFFER_VIEW_DESC,
+        dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) {
         // SAFETY: optional pointer argument.
         let (va, size) = match unsafe { pdesc.as_ref() } {
             Some(d) => (d.BufferLocation, d.SizeInBytes),
@@ -253,9 +312,14 @@ impl DeviceObj_Impl {
         pdesc: *const D3D12_SHADER_RESOURCE_VIEW_DESC,
         dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        let res = presource.as_ref().and_then(|r| r.cast_object_ref::<ResourceObj>().ok()).map(|r| r.buffer.res);
+        let res = presource
+            .as_ref()
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
+            .map(|r| r.buffer.res);
         // SAFETY: optional pointer argument.
-        let Some(d) = (unsafe { pdesc.as_ref() }) else { return };
+        let Some(d) = (unsafe { pdesc.as_ref() }) else {
+            return;
+        };
         if d.ViewDimension != D3D12_SRV_DIMENSION_BUFFER {
             return; // textures: M3
         }
@@ -283,10 +347,18 @@ impl DeviceObj_Impl {
         pdesc: *const D3D12_UNORDERED_ACCESS_VIEW_DESC,
         dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        let res = presource.as_ref().and_then(|r| r.cast_object_ref::<ResourceObj>().ok()).map(|r| r.buffer.res);
-        let counter = pcounterresource.as_ref().and_then(|r| r.cast_object_ref::<ResourceObj>().ok()).map(|r| r.buffer.res);
+        let res = presource
+            .as_ref()
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
+            .map(|r| r.buffer.res);
+        let counter = pcounterresource
+            .as_ref()
+            .and_then(|r| r.cast_object_ref::<ResourceObj>().ok())
+            .map(|r| r.buffer.res);
         // SAFETY: optional pointer argument.
-        let Some(d) = (unsafe { pdesc.as_ref() }) else { return };
+        let Some(d) = (unsafe { pdesc.as_ref() }) else {
+            return;
+        };
         if d.ViewDimension != D3D12_UAV_DIMENSION_BUFFER {
             return;
         }
@@ -324,7 +396,11 @@ impl DeviceObj_Impl {
     ) {
     }
 
-    pub(super) fn x_CreateSampler(&self, pdesc: *const D3D12_SAMPLER_DESC, dest: &D3D12_CPU_DESCRIPTOR_HANDLE) {
+    pub(super) fn x_CreateSampler(
+        &self,
+        pdesc: *const D3D12_SAMPLER_DESC,
+        dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) {
         let Ok(d) = require(pdesc) else { return };
         let _ = self.dev.create_sampler(
             dest.ptr as u64,
@@ -350,7 +426,9 @@ impl DeviceObj_Impl {
         src: &D3D12_CPU_DESCRIPTOR_HANDLE,
         _heaptype: D3D12_DESCRIPTOR_HEAP_TYPE,
     ) {
-        let _ = self.dev.copy_descriptors(dst.ptr as u64, src.ptr as u64, numdescriptors);
+        let _ = self
+            .dev
+            .copy_descriptors(dst.ptr as u64, src.ptr as u64, numdescriptors);
     }
 
     pub(super) fn x_CopyDescriptors(
@@ -365,21 +443,36 @@ impl DeviceObj_Impl {
     ) {
         let inc = self.x_GetDescriptorHandleIncrementSize(heaptype) as u64;
         // SAFETY: the caller's arrays of `n` ranges; null sizes mean "all ones".
-        let ranges = |starts: *const D3D12_CPU_DESCRIPTOR_HANDLE, sizes: *const u32, n: u32| -> Vec<(u64, u32)> {
+        let ranges = |starts: *const D3D12_CPU_DESCRIPTOR_HANDLE,
+                      sizes: *const u32,
+                      n: u32|
+         -> Vec<(u64, u32)> {
             (0..n as usize)
-                .map(|i| unsafe { ((*starts.add(i)).ptr as u64, if sizes.is_null() { 1 } else { *sizes.add(i) }) })
+                .map(|i| unsafe {
+                    (
+                        (*starts.add(i)).ptr as u64,
+                        if sizes.is_null() { 1 } else { *sizes.add(i) },
+                    )
+                })
                 .collect()
         };
         if inc == 0 || dst_starts.is_null() || src_starts.is_null() {
             return;
         }
-        let (d, s) = (ranges(dst_starts, dst_sizes, ndst), ranges(src_starts, src_sizes, nsrc));
+        let (d, s) = (
+            ranges(dst_starts, dst_sizes, ndst),
+            ranges(src_starts, src_sizes, nsrc),
+        );
         let (mut di, mut si) = (0usize, 0usize);
         let (mut doff, mut soff) = (0u32, 0u32);
         while di < d.len() && si < s.len() {
             let n = (d[di].1 - doff).min(s[si].1 - soff);
             if n > 0 {
-                let _ = self.dev.copy_descriptors(d[di].0 + doff as u64 * inc, s[si].0 + soff as u64 * inc, n);
+                let _ = self.dev.copy_descriptors(
+                    d[di].0 + doff as u64 * inc,
+                    s[si].0 + soff as u64 * inc,
+                    n,
+                );
             }
             doff += n;
             soff += n;
@@ -405,11 +498,17 @@ impl DeviceObj_Impl {
             // SAFETY: the caller's array of descriptions.
             let d = core_desc(unsafe { &*presourcedescs.add(i) });
             if !d.is_buffer() {
-                return D3D12_RESOURCE_ALLOCATION_INFO { SizeInBytes: u64::MAX, Alignment: 0 }; // textures: M3
+                return D3D12_RESOURCE_ALLOCATION_INFO {
+                    SizeInBytes: u64::MAX,
+                    Alignment: 0,
+                }; // textures: M3
             }
             size += d.width.div_ceil(resource::DEFAULT_ALIGNMENT) * resource::DEFAULT_ALIGNMENT;
         }
-        D3D12_RESOURCE_ALLOCATION_INFO { SizeInBytes: size, Alignment: resource::DEFAULT_ALIGNMENT }
+        D3D12_RESOURCE_ALLOCATION_INFO {
+            SizeInBytes: size,
+            Alignment: resource::DEFAULT_ALIGNMENT,
+        }
     }
 
     pub(super) fn x_CreateCommittedResource(
@@ -424,7 +523,11 @@ impl DeviceObj_Impl {
     ) -> WResult<()> {
         let hp = require(pheapproperties)?;
         let d = require(pdesc)?;
-        let buffer = wres(self.dev.create_committed_buffer(hp.Type.0 as u32, &core_desc(d), initialresourcestate.0 as u32))?;
+        let buffer = wres(self.dev.create_committed_buffer(
+            hp.Type.0 as u32,
+            &core_desc(d),
+            initialresourcestate.0 as u32,
+        ))?;
         let r = ComObject::new(ResourceObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),
@@ -434,13 +537,27 @@ impl DeviceObj_Impl {
         return_object(&r.to_interface::<IUnknown>(), riidresource, ppvresource)
     }
 
-    pub(super) fn x_CreateFence(&self, initialvalue: u64, _flags: D3D12_FENCE_FLAGS, riid: *const GUID, ppfence: *mut *mut c_void) -> WResult<()> {
+    pub(super) fn x_CreateFence(
+        &self,
+        initialvalue: u64,
+        _flags: D3D12_FENCE_FLAGS,
+        riid: *const GUID,
+        ppfence: *mut *mut c_void,
+    ) -> WResult<()> {
         let fence = Arc::new(wres(self.dev.create_fence(initialvalue))?);
-        let f = ComObject::new(FenceObj { private: PrivateData::default(), device_obj: self.to_object(), fence });
+        let f = ComObject::new(FenceObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            fence,
+        });
         return_object(&f.to_interface::<IUnknown>(), riid, ppfence)
     }
 
-    pub(super) fn x_MakeResident(&self, _n: u32, _objects: *const Option<ID3D12Pageable>) -> WResult<()> {
+    pub(super) fn x_MakeResident(
+        &self,
+        _n: u32,
+        _objects: *const Option<ID3D12Pageable>,
+    ) -> WResult<()> {
         Ok(())
     }
 
@@ -464,8 +581,15 @@ impl DeviceObj_Impl {
         ptotalbytes: *mut u64,
     ) {
         let n = numsubresources as usize;
-        let Ok(d) = require(presourcedesc) else { return };
-        let result = footprint::copyable_footprints(&core_desc(d), firstsubresource, numsubresources, baseoffset);
+        let Ok(d) = require(presourcedesc) else {
+            return;
+        };
+        let result = footprint::copyable_footprints(
+            &core_desc(d),
+            firstsubresource,
+            numsubresources,
+            baseoffset,
+        );
         // SAFETY: each out pointer is optional and, when given, has room for `n` entries.
         unsafe {
             match result {

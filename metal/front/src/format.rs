@@ -25,7 +25,12 @@ pub const P010: u32 = 104;
 pub const P016: u32 = 105;
 
 const fn f(bytes: u8, block_w: u8, block_h: u8, planes: u8) -> Option<FormatInfo> {
-    Some(FormatInfo { bytes, block_w, block_h, planes })
+    Some(FormatInfo {
+        bytes,
+        block_w,
+        block_h,
+        planes,
+    })
 }
 
 /// `None` for formats that have no copyable layout here (UNKNOWN, video
@@ -79,7 +84,14 @@ pub fn plane(format: u32, plane: u32) -> Option<PlaneInfo> {
         return None;
     }
     let p = |format, bytes, sx, sy| {
-        Some(PlaneInfo { format, bytes, block_w: 1, block_h: 1, shift_x: sx, shift_y: sy })
+        Some(PlaneInfo {
+            format,
+            bytes,
+            block_w: 1,
+            block_h: 1,
+            shift_x: sx,
+            shift_y: sy,
+        })
     };
     match (format, plane) {
         (D32_FLOAT_S8X24_UINT | D24_UNORM_S8_UINT, 0) => p(R32_TYPELESS, 4, 0, 0),
@@ -110,6 +122,26 @@ pub fn is_depth(format: u32) -> bool {
 pub fn is_typeless(format: u32) -> bool {
     matches!(
         format,
-        1 | 5 | 9 | 15 | 19 | 23 | 27 | 33 | 39 | 44 | 48 | 53 | 60 | 70 | 73 | 76 | 79 | 82 | 90 | 92 | 94 | 97
+        1 | 5
+            | 9
+            | 15
+            | 19
+            | 23
+            | 27
+            | 33
+            | 39
+            | 44
+            | 48
+            | 53
+            | 60
+            | 70
+            | 73
+            | 76
+            | 79
+            | 82
+            | 90
+            | 92
+            | 94
+            | 97
     )
 }

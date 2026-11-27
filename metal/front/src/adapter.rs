@@ -61,7 +61,10 @@ mod tests {
     fn description_is_nul_terminated_and_truncated() {
         let mut a = AdapterInfo::placeholder();
         let d = a.description_utf16();
-        assert_eq!(String::from_utf16(&d[..d.iter().position(|c| *c == 0).unwrap()]).unwrap(), a.name);
+        assert_eq!(
+            String::from_utf16(&d[..d.iter().position(|c| *c == 0).unwrap()]).unwrap(),
+            a.name
+        );
         a.name = "x".repeat(300);
         let d = a.description_utf16();
         assert_eq!(d[126], b'x' as u16);

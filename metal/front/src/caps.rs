@@ -85,9 +85,15 @@ pub const F_OPTIONS21: u32 = 53;
 
 /// Fixed-size blocks, as D3DMetal answered them (hex of the structure).
 const BLOCKS: &[(u32, &str)] = &[
-    (F_OPTIONS, "000000000100000002000000020000000300000001000000010000000100000000000000400000000000000000000000000000000100000002000000"),
+    (
+        F_OPTIONS,
+        "000000000100000002000000020000000300000001000000010000000100000000000000400000000000000000000000000000000100000002000000",
+    ),
     (F_GPU_VIRTUAL_ADDRESS_SUPPORT, "4000000040000000"),
-    (F_OPTIONS1, "010000002000000020000000000400000100000001000000"),
+    (
+        F_OPTIONS1,
+        "010000002000000020000000000400000100000001000000",
+    ),
     (F_OPTIONS2, "0100000001000000"),
     (F_OPTIONS3, "00000000010000000d0000000200000001000000"),
     (F_EXISTING_HEAPS, "00000000"),
@@ -96,17 +102,26 @@ const BLOCKS: &[(u32, &str)] = &[
     (F_OPTIONS6, "0000000000000000000000000000000001000000"),
     (F_OPTIONS7, "0a00000000000000"),
     (F_OPTIONS8, "00000000"),
-    (F_OPTIONS9, "010000000100000001000000010000000000000000000000"),
+    (
+        F_OPTIONS9,
+        "010000000100000001000000010000000000000000000000",
+    ),
     (F_OPTIONS10, "0000000000000000"),
     (F_OPTIONS11, "01000000"),
     (F_OPTIONS12, "ffffffff0100000000000000"),
-    (F_OPTIONS13, "010000000100000000000000000000000000000000000000"),
+    (
+        F_OPTIONS13,
+        "010000000100000000000000000000000000000000000000",
+    ),
     (F_OPTIONS14, "000000000000000000000000"),
     (F_OPTIONS15, "0000000000000000"),
     (F_OPTIONS16, "0000000001000000"),
     (F_OPTIONS17, "0000000000000000"),
     (F_OPTIONS18, "00000000"),
-    (F_OPTIONS19, "000000000000000001000000000000000000000000000000000800000008000040420f0000000000"),
+    (
+        F_OPTIONS19,
+        "000000000000000001000000000000000000000000000000000800000008000040420f0000000000",
+    ),
     (F_OPTIONS20, "0000000000000000"),
     (F_OPTIONS21, "000000000a0000000100000001000000"),
     // Known, nothing supported.
@@ -117,7 +132,9 @@ const BLOCKS: &[(u32, &str)] = &[
 ];
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+        .collect()
 }
 
 fn put_u32(b: &mut [u8], at: usize, v: u32) {
@@ -159,11 +176,14 @@ pub fn format_support(fmt: u32) -> (u32, u32) {
     if fmt == format::UNKNOWN {
         return (BUFFER, 0);
     }
-    let Some(info) = format::info(fmt) else { return (0, 0) };
+    let Some(info) = format::info(fmt) else {
+        return (0, 0);
+    };
     if format::is_typeless(fmt) {
         return (TEXTURE1D | TEXTURE2D | TEXTURE3D | TEXTURECUBE | MIP, 0);
     }
-    let mut s1 = TEXTURE1D | TEXTURE2D | TEXTURE3D | TEXTURECUBE | SHADER_LOAD | SHADER_SAMPLE | MIP;
+    let mut s1 =
+        TEXTURE1D | TEXTURE2D | TEXTURE3D | TEXTURECUBE | SHADER_LOAD | SHADER_SAMPLE | MIP;
     let mut s2 = 0;
     if format::is_depth(fmt) {
         return (s1 | DEPTH_STENCIL, 0);
@@ -262,7 +282,9 @@ pub fn check_feature_support(caps: &Caps, feature: u32, data: &mut [u8]) -> Resu
             if data.len() != 8 {
                 return Err(Hr::E_INVALIDARG);
             }
-            let planes = format::info(get_u32(data, 0)).ok_or(Hr::E_INVALIDARG)?.planes;
+            let planes = format::info(get_u32(data, 0))
+                .ok_or(Hr::E_INVALIDARG)?
+                .planes;
             data[4] = planes;
             Ok(())
         }
@@ -293,7 +315,12 @@ pub fn check_feature_support(caps: &Caps, feature: u32, data: &mut [u8]) -> Resu
 /// `D3D12_FEATURE_FEATURE_LEVELS`: the highest of the requested levels this
 /// device does; an empty or all-too-high list is `E_INVALIDARG`.
 pub fn max_feature_level(caps: &Caps, requested: &[u32]) -> Result<u32> {
-    requested.iter().copied().filter(|l| *l <= caps.max_feature_level).max().ok_or(Hr::E_INVALIDARG)
+    requested
+        .iter()
+        .copied()
+        .filter(|l| *l <= caps.max_feature_level)
+        .max()
+        .ok_or(Hr::E_INVALIDARG)
 }
 
 #[cfg(test)]
@@ -308,10 +335,22 @@ mod tests {
 
     #[test]
     fn shader_model_is_6_6_and_clamped() {
-        assert_eq!(q(F_SHADER_MODEL, &0x66u32.to_le_bytes()).unwrap(), 0x66u32.to_le_bytes());
-        assert_eq!(q(F_SHADER_MODEL, &0x69u32.to_le_bytes()).unwrap(), 0x66u32.to_le_bytes());
-        assert_eq!(q(F_SHADER_MODEL, &0x60u32.to_le_bytes()).unwrap(), 0x60u32.to_le_bytes());
-        assert_eq!(q(F_SHADER_MODEL, &1u32.to_le_bytes()), Err(Hr::E_INVALIDARG));
+        assert_eq!(
+            q(F_SHADER_MODEL, &0x66u32.to_le_bytes()).unwrap(),
+            0x66u32.to_le_bytes()
+        );
+        assert_eq!(
+            q(F_SHADER_MODEL, &0x69u32.to_le_bytes()).unwrap(),
+            0x66u32.to_le_bytes()
+        );
+        assert_eq!(
+            q(F_SHADER_MODEL, &0x60u32.to_le_bytes()).unwrap(),
+            0x60u32.to_le_bytes()
+        );
+        assert_eq!(
+            q(F_SHADER_MODEL, &1u32.to_le_bytes()),
+            Err(Hr::E_INVALIDARG)
+        );
     }
 
     #[test]
@@ -346,8 +385,14 @@ mod tests {
 
     #[test]
     fn root_signature_highest_is_1_1() {
-        assert_eq!(q(F_ROOT_SIGNATURE, &1u32.to_le_bytes()).unwrap(), 2u32.to_le_bytes());
-        assert_eq!(q(F_ROOT_SIGNATURE, &0u32.to_le_bytes()), Err(Hr::E_INVALIDARG));
+        assert_eq!(
+            q(F_ROOT_SIGNATURE, &1u32.to_le_bytes()).unwrap(),
+            2u32.to_le_bytes()
+        );
+        assert_eq!(
+            q(F_ROOT_SIGNATURE, &0u32.to_le_bytes()),
+            Err(Hr::E_INVALIDARG)
+        );
     }
 
     #[test]
@@ -358,7 +403,10 @@ mod tests {
             assert_ne!(s1 & fmt_support::TYPED_UNORDERED_ACCESS_VIEW, 0, "{fmt}");
             assert_eq!(s2 & 0xc0, 0xc0, "{fmt}");
         }
-        assert_eq!(format_support(42).1 & fmt_support::UAV_ATOMIC_ALL, fmt_support::UAV_ATOMIC_ALL);
+        assert_eq!(
+            format_support(42).1 & fmt_support::UAV_ATOMIC_ALL,
+            fmt_support::UAV_ATOMIC_ALL
+        );
         assert_eq!(format_support(71).1, 0);
     }
 
