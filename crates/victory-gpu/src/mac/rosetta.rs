@@ -95,6 +95,12 @@ mod tests {
         assert!(!decide(Some("0"), true));
         assert!(decide(None, true) && !decide(Some("x"), false));
         assert!(fault_tracking(), "tests keep tracking on");
-        assert!(!rosetta());
+        // Whether this is Rosetta depends on where the tests run (a PC, a
+        // Mac under Wine, natively on macOS): what follows from it must hold
+        // on each. Off Windows it is never Rosetta.
+        let under = rosetta();
+        assert!(!under || cfg!(windows));
+        assert_eq!(stores_need_patching(), under, "tracking is on in tests");
+        assert_eq!(wait_for_overlapped_reads(), under);
     }
 }

@@ -105,6 +105,10 @@ all its `VirtualProtect` calls on views sit behind `guard()`, which only `writes
 users of title-memory protection (`titlewrite.rs`, `shadow.rs`, `inplace.rs`, `safecopy.rs`) were
 read, not run. **First thing to check on a run under Rosetta.**
 
+*Test.* `mac::rosetta::tests::the_variable_decides_and_tests_track` asserted `!rosetta()`, so it always failed
+under Rosetta; it now asserts what follows from `rosetta()` (`stores_need_patching`, `wait_for_overlapped_reads`),
+which holds on a PC, under Wine on a Mac and natively.
+
 *Remove when.* A macOS/Rosetta release resumes such stores (retest with `VICTORY_FAULT_TRACKING=1`
 and without the patches), or the Metal backend replaces the D3D12 path on the Mac.
 
