@@ -11,8 +11,11 @@
 //!   [`record`], [`queue`], [`pipeline`], with the pure pieces
 //!   [`stages`], [`pages`], [`barrier`].
 //!
-//! The API is plain Rust: no wire protocol types. The proto interpreter
-//! maps its handles (`ResId` and friends) to the objects made here.
+//! The API of those modules is plain Rust: no wire protocol types.
+//! [`exec`] is the proto interpreter: the only module that names
+//! `victory-metal-proto`; it maps proto's handles (`ResId` and friends) to
+//! the objects made by the modules above and runs sync calls and command
+//! streams on them.
 
 #[cfg(target_vendor = "apple")]
 pub mod barrier;

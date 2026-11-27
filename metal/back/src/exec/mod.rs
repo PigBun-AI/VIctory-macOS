@@ -26,7 +26,7 @@
 //!   returned.
 //! * **Every `submit` ends with `Device::maintain`** (commit residency
 //!   additions, free what retired work no longer needs).
-//! * Handles are never reused (see [`handles`]).
+//! * Handles are never reused (per-type counters from 1, see `handles.rs`).
 //! * Addresses in sync calls (`CREATE_ROOT_SIGNATURE` bytes, `WRAP_MEMORY`)
 //!   are used as they are: front and back share one address space, which is
 //!   the `Link` contract. `WRAP_MEMORY` still checks that the range is mapped.
