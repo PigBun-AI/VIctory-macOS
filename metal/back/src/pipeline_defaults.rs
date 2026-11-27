@@ -67,7 +67,7 @@ fn vertex_format(c: Component, width: u32) -> MTLVertexFormat {
     }
 }
 
-/// `DXGI_FORMAT_R32*_FLOAT/UINT/SINT` of `width` components.
+/// The format code of the 32-bit float, uint or sint vector of `width` components.
 fn dxgi_format(c: Component, width: u32) -> u32 {
     let w = width.clamp(1, 4) as usize;
     match c {
