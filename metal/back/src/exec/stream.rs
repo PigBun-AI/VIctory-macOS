@@ -278,7 +278,12 @@ impl Run<'_> {
                 .queue
                 .submit(batch.lists)
                 .map(|_| ())
-                .map_err(|e| status_of(&e))
+                .map_err(|e| {
+                    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                        eprintln!("victory-metal back: committing the lists failed: {e}");
+                    }
+                    status_of(&e)
+                })
         };
         // Every submit ends with maintain.
         self.st.device.maintain();
