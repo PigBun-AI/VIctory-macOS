@@ -97,6 +97,13 @@ fn cases() -> Vec<Case> {
             hlsl: "RWTexture2D<uint64_t> t;\n[numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) { InterlockedMax(t[id.xy], (uint64_t)id.x); }",
         },
         Case {
+            name: "atomic64_texture_heap",
+            profile: "cs_6_6",
+            manual: "limited",
+            want: Accepted,
+            hlsl: "cbuffer c { uint i; }\n[numthreads(8,8,1)] void main(uint3 id : SV_DispatchThreadID) { RWTexture2D<uint64_t> t = ResourceDescriptorHeap[i]; InterlockedMax(t[id.xy], (uint64_t)id.x); }",
+        },
+        Case {
             name: "atomic32_groupshared",
             profile: "cs_6_6",
             manual: "yes",

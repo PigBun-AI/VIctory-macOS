@@ -388,3 +388,39 @@ fn a_table_a_root_uav_and_a_static_sampler() {
     assert_eq!(sp.reflection.layout.static_sampler_table, Some(2));
     assert!(!sp.reflection.uses_resource_heap && !sp.reflection.uses_sampler_heap);
 }
+
+/// One `IRCompiler` per call, so conversions from several threads at once
+/// are independent: every thread gets the same bytes.
+#[test]
+fn conversions_from_several_threads_agree() {
+    let Some(dxil) = dxil_or_skip("threads", "cs_6_6", ROOT_CONSTANTS) else {
+        return;
+    };
+    let root = RootSignatureDesc {
+        params: vec![constants(4), root_uav(0)],
+        ..Default::default()
+    };
+    let m = Msc::get().unwrap();
+    let want = m
+        .compile(&dxil, Some(&root), &CompileOptions::default())
+        .unwrap()
+        .metallib;
+    std::thread::scope(|s| {
+        let hs: Vec<_> = (0..8)
+            .map(|_| {
+                s.spawn(|| {
+                    (0..25)
+                        .map(|_| {
+                            m.compile(&dxil, Some(&root), &CompileOptions::default())
+                                .unwrap()
+                                .metallib
+                        })
+                        .all(|got| got == want)
+                })
+            })
+            .collect();
+        for h in hs {
+            assert!(h.join().unwrap());
+        }
+    });
+}
