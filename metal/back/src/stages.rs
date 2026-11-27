@@ -2,7 +2,7 @@
 //!
 //! The masks are **our own** `u16`/`u8` bits (agreed across the layers in
 //! the M1 brief); `proto` carries them, the front end derives them from
-//! D3D12 resource states, and this file is the only place that knows how
+//! the original API's resource states, and this file is the only place that knows how
 //! they map to `MTLStages` and `MTL4VisibilityOptions`.
 
 use objc2_metal::{MTL4VisibilityOptions, MTLStages};
@@ -21,7 +21,7 @@ pub const OBJECT: u16 = 1 << 3;
 pub const MESH: u16 = 1 << 4;
 /// Compute dispatches.
 pub const DISPATCH: u16 = 1 << 5;
-/// Copies and fills (what D3D12 calls the copy queue's work).
+/// Copies and fills (the work of the copy queue).
 pub const BLIT: u16 = 1 << 6;
 /// Sparse / placement mapping updates.
 pub const RESOURCE_STATE: u16 = 1 << 7;

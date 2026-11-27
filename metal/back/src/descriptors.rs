@@ -39,8 +39,6 @@
 //! decode). Buffer length is masked to 32 bits by the header too, so a view
 //! of 4 GiB or more cannot be expressed; [`buffer_metadata`] refuses it.
 
-use std::sync::Arc;
-
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
@@ -231,7 +229,7 @@ impl DescriptorHeap {
     }
 
     /// GPU address of entry `index`: what a root descriptor table holds
-    /// (the table starts at the heap entry the D3D12 handle names).
+    /// (the table starts at the heap entry the front end's handle names).
     pub fn entry_va(&self, index: u32) -> u64 {
         self.buffer.gpu_va() + u64::from(index) * ENTRY_SIZE
     }
@@ -349,7 +347,7 @@ impl RingAlloc {
 
     /// Writes 32-bit root constants at byte `offset` (4-byte aligned).
     pub fn write_u32s(&self, offset: u64, values: &[u32]) -> Result<()> {
-        if offset % 4 != 0 {
+        if !offset.is_multiple_of(4) {
             return Err(Error::BadArgument(
                 "32-bit constants need 4-byte alignment".into(),
             ));
@@ -364,7 +362,7 @@ impl RingAlloc {
     /// Writes a 64-bit value (a root descriptor's GPU address, or the GPU
     /// address of a descriptor table) at byte `offset` (8-byte aligned).
     pub fn write_u64(&self, offset: u64, value: u64) -> Result<()> {
-        if offset % 8 != 0 {
+        if !offset.is_multiple_of(8) {
             return Err(Error::BadArgument(
                 "64-bit values need 8-byte alignment".into(),
             ));
@@ -398,7 +396,7 @@ impl ConstantRing {
     /// A ring of `segments` segments of `segment_bytes` bytes (the latter a
     /// multiple of 256).
     pub fn new(device: &Device, segment_bytes: u64, segments: u32) -> Result<ConstantRing> {
-        if segment_bytes == 0 || segment_bytes % 256 != 0 || segments == 0 {
+        if segment_bytes == 0 || !segment_bytes.is_multiple_of(256) || segments == 0 {
             return Err(Error::BadArgument(
                 "ring segments must be a non-zero multiple of 256 bytes".into(),
             ));
@@ -482,7 +480,7 @@ impl ConstantRing {
 /// An `MTL4ArgumentTable` with the buffer slots the MSC bind points use.
 #[derive(Clone)]
 pub struct ArgumentTable {
-    raw: Arc<Retained<ProtocolObject<dyn MTL4ArgumentTable>>>,
+    raw: Retained<ProtocolObject<dyn MTL4ArgumentTable>>,
     max_buffers: u32,
 }
 
@@ -501,10 +499,7 @@ impl ArgumentTable {
             .raw()
             .newArgumentTableWithDescriptor_error(&descriptor)
             .map_err(|e| Error::Metal(format!("argument table: {}", e.localizedDescription())))?;
-        Ok(ArgumentTable {
-            raw: Arc::new(raw),
-            max_buffers,
-        })
+        Ok(ArgumentTable { raw, max_buffers })
     }
 
     /// `setAddress:atIndex:`.

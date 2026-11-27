@@ -4,7 +4,7 @@
 //! Every buffer made here is put into a residency set at once (see
 //! [`crate::residency`]) and registered in the [`AddressMap`], which lets
 //! the descriptor writers check a raw GPU address the front end hands over
-//! (a D3D12 `BufferLocation`) against live, resident buffers.
+//! (a buffer location of the original API) against live, resident buffers.
 //!
 //! Destruction is automatic and deferred: dropping the last [`Buffer`]
 //! handle retires the resource instead of freeing it; the GPU may still be
@@ -357,7 +357,11 @@ impl Device {
     /// (and, after its last drop, the GPU work that used it) lives.
     pub unsafe fn wrap(&self, ptr: *mut u8, len: usize) -> Result<Buffer> {
         let page = self.inner.caps.page_size as usize;
-        if ptr.is_null() || ptr as usize % page != 0 || len == 0 || len % page != 0 {
+        if ptr.is_null()
+            || !(ptr as usize).is_multiple_of(page)
+            || len == 0
+            || !len.is_multiple_of(page)
+        {
             return Err(Error::BadArgument(format!(
                 "wrap({ptr:p}, {len:#x}) is not aligned to the {page}-byte page"
             )));

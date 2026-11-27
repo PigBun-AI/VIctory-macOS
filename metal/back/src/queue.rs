@@ -5,8 +5,8 @@
 //!   sized by the number of submissions in flight, a constant ring, and a
 //!   private timeline (a `MTLSharedEvent` the queue signals after every
 //!   submission; retirement and allocator reuse wait on it);
-//! * a [`Fence`] is a `MTLSharedEvent` the front end creates for D3D12
-//!   fences; the queue signals it with `signalEvent:value:`, waits for it
+//! * a [`Fence`] is a `MTLSharedEvent` the front end creates for the
+//!   game's fences; the queue signals it with `signalEvent:value:`, waits for it
 //!   with `waitForEvent:value:`, the CPU with
 //!   [`Fence::wait`] (`waitUntilSignaledValue:timeoutMS:`);
 //! * completion news arrives through `MTL4CommitOptions
@@ -145,12 +145,12 @@ unsafe impl Send for Fence {}
 unsafe impl Sync for Fence {}
 
 impl Fence {
-    /// The highest signalled value (D3D12 `GetCompletedValue`).
+    /// The highest signalled value (the front end's `GetCompletedValue`).
     pub fn completed_value(&self) -> u64 {
         self.event.signaledValue()
     }
 
-    /// CPU signal (D3D12 `ID3D12Fence::Signal`).
+    /// CPU signal (the front end's fence `Signal`).
     pub fn signal_cpu(&self, value: u64) {
         self.event.setSignaledValue(value);
     }
@@ -189,7 +189,7 @@ pub struct QueueOptions {
     /// Number of constant-ring segments.
     pub ring_segments: u32,
     /// Insert the conservative all-stage barrier at the end of every list,
-    /// which orders each list after everything committed before it (D3D12
+    /// which orders each list after everything committed before it (the game's API
     /// executes lists of a queue in order; Metal 4 would overlap them).
     pub inter_submit_barrier: bool,
 }

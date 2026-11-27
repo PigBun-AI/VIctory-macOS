@@ -1,4 +1,4 @@
-//! Recording: one D3D12 command list is one `MTL4CommandBuffer`.
+//! Recording: one front-end command list is one `MTL4CommandBuffer`.
 //!
 //! Copies, fills and dispatches share one `MTL4ComputeCommandEncoder` (there
 //! is no blit encoder in Metal 4). Barriers are **deferred**: a barrier is
@@ -239,8 +239,7 @@ impl CommandList {
     }
 
     /// `CopyBufferRegion`: `size` bytes from `src[src_offset..]` to
-    /// `dst[dst_offset..]`. Overlap inside one buffer is refused (D3D12
-    /// leaves it undefined).
+    /// `dst[dst_offset..]`. Overlap inside one buffer is refused (undefined in the original API).
     pub fn copy_buffer(
         &mut self,
         dst: &Buffer,
@@ -407,7 +406,7 @@ impl CommandList {
         self.barrier(stages::ALL, stages::ALL, stages::VIS_RESOURCE_ALIAS)
     }
 
-    /// Start of a split barrier: only recorded (D3D12 `BEGIN_ONLY`; the
+    /// Start of a split barrier: only recorded (`BEGIN_ONLY` of the original API; the
     /// wire protocol sends the barrier at the end point alone, so the
     /// interpreter normally never calls this).
     pub fn split_barrier_begin(&mut self, id: u64, producer: u16, vis: u8) -> Result<()> {
