@@ -122,3 +122,11 @@ pub use watch::{
     title_memory_remapping, title_memory_splitting, title_memory_unmapping, title_memory_written,
     writing as kernel_will_write,
 };
+
+// Mac patch M1 (docs/mac/PATCHES.md): stand-ins for the `cfg(windows)` modules
+// that cross-platform code names by path, so the crate builds natively on macOS.
+#[cfg(not(windows))]
+#[path = "mac/nonwindows.rs"]
+mod nonwindows;
+#[cfg(not(windows))]
+use nonwindows::{host, shader_cache, texture};

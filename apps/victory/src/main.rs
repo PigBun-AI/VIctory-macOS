@@ -9,6 +9,10 @@ mod inspect;
 mod replay;
 mod run;
 mod shader;
+#[cfg(windows)]
+mod translate;
+#[cfg(not(windows))]
+#[path = "mac/translate_stub.rs"]
 mod translate;
 #[cfg(windows)]
 mod warm;
