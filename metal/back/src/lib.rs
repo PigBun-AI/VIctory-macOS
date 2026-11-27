@@ -44,6 +44,8 @@ pub mod record;
 #[cfg(target_vendor = "apple")]
 pub mod residency;
 #[cfg(target_vendor = "apple")]
+pub mod sampler;
+#[cfg(target_vendor = "apple")]
 pub mod stages;
 
 #[cfg(target_vendor = "apple")]

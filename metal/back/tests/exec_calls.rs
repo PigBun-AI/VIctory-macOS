@@ -569,8 +569,15 @@ fn pipelines_from_dxil_check_their_arguments_and_refuse_garbage() {
     assert_eq!(make(sig, 1), Status::INVALID_ARG);
     assert_eq!(make(RootSigId(99), 0), Status::NOT_FOUND);
     assert_eq!(make_at(sig, 0, 0, 4), Status::INVALID_ARG, "no address");
-    assert_eq!(make_at(sig, 0, 8, 4), Status::INVALID_ARG, "unmapped address");
-    assert_eq!(make_at(sig, 0, garbage.as_ptr() as u64, 0), Status::INVALID_ARG);
+    assert_eq!(
+        make_at(sig, 0, 8, 4),
+        Status::INVALID_ARG,
+        "unmapped address"
+    );
+    assert_eq!(
+        make_at(sig, 0, garbage.as_ptr() as u64, 0),
+        Status::INVALID_ARG
+    );
     let mut d = DestroyPipelineArgs::new();
     d.pso = PsoId(5);
     assert_eq!(fx.status(d), Status::NOT_FOUND);

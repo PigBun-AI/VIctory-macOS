@@ -21,10 +21,11 @@ use std::sync::Arc;
 use victory_metal_proto::ids::PsoId;
 use victory_metal_proto::sync::CreateComputePipelineArgs;
 
-use super::tlab::{LayoutError, TlabLayout};
 use super::sync::{exhausted, range_is_mapped};
+use super::tlab::{LayoutError, TlabLayout};
 use super::{Executor, Pso, status_of};
 use crate::msc::{self, CompileOptions, MscError};
+use crate::sampler::SamplerSpec;
 
 /// Largest DXIL container `CREATE_COMPUTE_PIPELINE` takes (the biggest shader
 /// of the VIctory cache is 1.4 MB).
@@ -175,6 +176,53 @@ pub(crate) fn to_msc(desc: &RootSigDesc) -> msc::RootSignatureDesc {
     }
 }
 
+/// A proto sampler as the core's [`SamplerSpec`]. Min/max reduction modes have no
+/// counterpart in the sampler descriptor and read as the standard filter.
+pub(crate) fn sampler_spec(s: &victory_metal_proto::types::SamplerDesc) -> SamplerSpec {
+    use crate::sampler::{Address, Border, Compare, Filter as F};
+    let f = |f: Filter| {
+        if f == Filter::LINEAR {
+            F::Linear
+        } else {
+            F::Nearest
+        }
+    };
+    let a = |m: AddressMode| match m {
+        AddressMode::MIRROR => Address::MirrorRepeat,
+        AddressMode::CLAMP => Address::ClampToEdge,
+        AddressMode::BORDER => Address::ClampToBorder,
+        AddressMode::MIRROR_ONCE => Address::MirrorClampToEdge,
+        _ => Address::Repeat,
+    };
+    let aniso = s.max_anisotropy > 1;
+    let lin = |x: Filter| if aniso { F::Linear } else { f(x) };
+    SamplerSpec {
+        min: lin(s.min_filter),
+        mag: lin(s.mag_filter),
+        mip: Some(lin(s.mip_filter)),
+        address: [a(s.address_u), a(s.address_v), a(s.address_w)],
+        border: match border(s.border_color) {
+            2 => Border::OpaqueWhite,
+            1 => Border::OpaqueBlack,
+            _ => Border::TransparentBlack,
+        },
+        compare: (s.reduction == Reduction::COMPARISON).then_some(match s.compare {
+            CompareFunc::NEVER => Compare::Never,
+            CompareFunc::LESS => Compare::Less,
+            CompareFunc::EQUAL => Compare::Equal,
+            CompareFunc::LESS_EQUAL => Compare::LessEqual,
+            CompareFunc::GREATER => Compare::Greater,
+            CompareFunc::NOT_EQUAL => Compare::NotEqual,
+            CompareFunc::GREATER_EQUAL => Compare::GreaterEqual,
+            _ => Compare::Always,
+        }),
+        min_lod: s.min_lod,
+        max_lod: s.max_lod,
+        max_anisotropy: s.max_anisotropy.max(1),
+        lod_bias: s.mip_lod_bias,
+    }
+}
+
 /// The layout MSC reflection gives for `desc`, validated against it.
 pub(crate) fn layout_from_msc(
     desc: &RootSigDesc,
@@ -245,7 +293,9 @@ impl Executor {
             })?;
         let threads = made.reflection.threadgroup_size;
         if threads.contains(&0) {
-            self.note_error("CREATE_COMPUTE_PIPELINE: the shader reports no thread group size".into());
+            self.note_error(
+                "CREATE_COMPUTE_PIPELINE: the shader reports no thread group size".into(),
+            );
             return Err(Status::INTERNAL);
         }
         // The shader reads its arguments where MSC put them for this root

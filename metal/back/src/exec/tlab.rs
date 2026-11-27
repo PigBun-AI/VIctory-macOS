@@ -226,10 +226,7 @@ impl TlabLayout {
             by_offset.push((at, 8));
         }
         by_offset.sort_by_key(|s| s.0);
-        if by_offset
-            .windows(2)
-            .any(|w| w[0].0 + w[0].1 > w[1].0)
-        {
+        if by_offset.windows(2).any(|w| w[0].0 + w[0].1 > w[1].0) {
             return Err(LayoutError::Invalid("two root parameters overlap".into()));
         }
         Ok(TlabLayout {

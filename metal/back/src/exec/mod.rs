@@ -98,9 +98,11 @@ pub(crate) struct RootSig {
     pub(crate) layout: TlabLayout,
     /// The table of static samplers MSC makes the shader read through a
     /// pointer at the end of the argument buffer (24 bytes per sampler, in
-    /// the heap residency set). Its entries stay zero until the back has
-    /// samplers (textures, M2): no compute shader without textures can use them.
+    /// the heap residency set), entry `i` = static sampler `i` (the order is
+    /// an assumption: no shader in this back samples yet).
     pub(crate) static_table: Option<crate::descriptors::DescriptorHeap>,
+    /// The sampler states behind the table's entries (kept alive here).
+    pub(crate) static_samplers: Vec<crate::sampler::Sampler>,
 }
 
 /// A compute pipeline with what a dispatch needs besides the Metal object.
@@ -226,7 +228,9 @@ impl Executor {
             }
             SyncOp::DESTROY_QUEUE => typed(args, len, |a| self.destroy_queue(a)),
             SyncOp::FENCE_WAIT => typed(args, len, |a| self.fence_wait(a)),
-            SyncOp::CREATE_COMPUTE_PIPELINE => typed(args, len, |a| self.create_compute_pipeline(a)),
+            SyncOp::CREATE_COMPUTE_PIPELINE => {
+                typed(args, len, |a| self.create_compute_pipeline(a))
+            }
             op if op.is_known() => match self.with_state(|st| st.call(op, args, len)) {
                 Ok(s) => s,
                 Err(s) => s,
@@ -297,6 +301,20 @@ impl Executor {
             st.root_sigs
                 .get(root_sig.0)
                 .map(|r| r.layout.clone())
+                .ok_or(Status::NOT_FOUND)
+        })?
+    }
+
+    /// The table of static-sampler descriptors of a root signature, when it
+    /// has static samplers and MSC's layout has the pointer to it (tests, tools).
+    pub fn static_sampler_table(
+        &self,
+        root_sig: RootSigId,
+    ) -> Result<Option<crate::descriptors::DescriptorHeap>, Status> {
+        self.with_state(|st| {
+            st.root_sigs
+                .get(root_sig.0)
+                .map(|r| r.static_table.clone())
                 .ok_or(Status::NOT_FOUND)
         })?
     }

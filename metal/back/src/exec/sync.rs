@@ -345,20 +345,31 @@ impl State {
             Ok(l) => super::dxil::layout_from_msc(&desc, &l).map_err(|_| Status::INVALID_ARG)?,
             Err(_) => TlabLayout::from_desc(&desc).map_err(|_| Status::INVALID_ARG)?,
         };
-        let static_table = if desc.static_samplers.is_empty() || layout.static_table_offset().is_none()
-        {
-            None
-        } else {
-            Some(
-                DescriptorHeap::new(&self.device, desc.static_samplers.len() as u32)
-                    .map_err(|e| status_of(&e))?,
-            )
-        };
+        let (static_table, static_samplers) =
+            if desc.static_samplers.is_empty() || layout.static_table_offset().is_none() {
+                (None, Vec::new())
+            } else {
+                let table = DescriptorHeap::new(&self.device, desc.static_samplers.len() as u32)
+                    .map_err(|e| status_of(&e))?;
+                let mut keep = Vec::new();
+                for (i, s) in desc.static_samplers.iter().enumerate() {
+                    let sampler = self
+                        .device
+                        .create_sampler(&super::dxil::sampler_spec(&s.sampler))
+                        .map_err(|e| status_of(&e))?;
+                    table
+                        .write(i as u32, sampler.entry())
+                        .map_err(|e| status_of(&e))?;
+                    keep.push(sampler);
+                }
+                (Some(table), keep)
+            };
         let sig = Arc::new(RootSig {
             desc,
             msc_desc,
             layout,
             static_table,
+            static_samplers,
         });
         a.root_sig = RootSigId(self.root_sigs.insert(sig).map_err(exhausted)?);
         Ok(())
@@ -436,6 +447,7 @@ impl State {
             msc_desc: old.msc_desc.clone(),
             layout,
             static_table: old.static_table.clone(),
+            static_samplers: old.static_samplers.clone(),
         });
         self.root_sigs.replace(root_sig.0, new);
         Ok(())
