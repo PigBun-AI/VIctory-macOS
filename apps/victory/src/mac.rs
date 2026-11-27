@@ -1,10 +1,10 @@
-//! Mac patches of `victory run` (docs/mac/PATCHES.md, patches L1-L4): what
+//! Mac patches of `victory run` (docs/mac/PATCHES.md, patches L1-L5): what
 //! the Windows exe does at load only when it runs on Wine on a Mac, under
 //! Rosetta 2. `run.rs` calls [`plan`] once after `prepare` and [`apply`] once
 //! after the title's image is mapped; on a PC neither does anything but print
 //! the status lines. Ported from VIctory-macOS `run.rs`.
 
-use victory_loader::mac::{clwb, masked, resolution};
+use victory_loader::mac::{clwb, masked, resolution, watchdog};
 
 /// The build the extra 256-bit-store sites below were found in (Series
 /// 1.0.2.1).
@@ -18,6 +18,9 @@ const BUILD_1_0_2_1_EXTRA: &str = "all,1e09b31,1e09b37,259509f,25950a5,1e759f0,1
 pub struct Plan {
     /// `VICTORY_PATCH_MASKED` as it resolves, and the exe's bytes to scan.
     masked: Option<(String, Vec<u8>)>,
+    /// `VICTORY_MAC_NO_WATCHDOG` (L5): `None` unset (the default), else the
+    /// hash of the exe the sites are compared against.
+    watchdog: Option<String>,
 }
 
 /// Prints the status lines and decides what to patch. Takes the exe's bytes
@@ -49,7 +52,8 @@ pub fn plan(info: &victory_pe::ImageInfo, original: &mut Vec<u8>, hash: &str) ->
         requested = Some(BUILD_1_0_2_1_EXTRA.into());
     }
     let masked = masked::choice(requested, needs_patch).map(|which| (which, std::mem::take(original)));
-    Plan { masked }
+    let watchdog = watchdog::wanted().then(|| hash.to_string());
+    Plan { masked, watchdog }
 }
 
 /// Applies the plan to the image mapped at `image.base()`, before any title
@@ -73,6 +77,19 @@ pub fn apply(plan: Plan, image: &victory_loader::LoadedImage, execute: bool) {
         let size = image.info().size_of_image as usize;
         // SAFETY: the image stays mapped and nothing of it has run yet.
         unsafe { resolution::apply_asked(image.base(), size) };
+    }
+    // The title's hang watchdog off (`VICTORY_MAC_NO_WATCHDOG=1`, L5): off by
+    // default, and not fidelity. Only for the build the sites were read in,
+    // and only if every byte matches; otherwise left on, with the reason.
+    if let (true, Some(hash)) = (execute, &plan.watchdog) {
+        let size = image.info().size_of_image as usize;
+        let done = if hash.eq_ignore_ascii_case(watchdog::BUILD_1_0_2_1) {
+            // SAFETY: the image stays mapped and nothing of it has run yet.
+            unsafe { watchdog::apply(image.base(), size) }
+        } else {
+            Err(format!("build {hash} is not Series 1.0.2.1"))
+        };
+        watchdog::report(&done);
     }
     // Masked stores redone as plain stores Rosetta can resume, so fault
     // tracking (on by default) can run under Rosetta (#50).

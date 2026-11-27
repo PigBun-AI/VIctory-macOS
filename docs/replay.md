@@ -13,7 +13,7 @@ Off unless `VICTORY_RECORD` is set. Build with
 | variable | meaning |
 |---|---|
 | `VICTORY_RECORD=<folder>` | on; the capture goes to `<folder>\capture-<n>` (outside the repository) |
-| `VICTORY_RECORD_AT=<seconds>` or `f<frame>` | when: seconds after the device was made, or a number of presents. Unset: only the trigger file |
+| `VICTORY_RECORD_AT=<seconds>`, `f<frame>` or `w<N>` | when: seconds after the device was made, a number of presents, or (mac, docs/mac/PATCHES.md I2) the N-th world frame after world frame 1 (`w0` is world frame 1; its present number differs from run to run). Unset: only the trigger file |
 | file `<folder>\go` | when it appears, the capture starts (always watched) |
 | `VICTORY_RECORD_FRAMES=<n>` | frames to capture (1) |
 | `VICTORY_RECORD_ALWAYS=1` | record lists from the start: needed only if notes say lists were not recorded (a title that submits old lists again) |
