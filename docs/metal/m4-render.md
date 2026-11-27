@@ -149,3 +149,20 @@ Signatures ending in `DRAW`, `DRAW_INDEXED` or `DISPATCH_MESH` (the game: one `D
 * A bug found on the way: a graphics draw compared the pipeline's root signature to the bound one by
   object identity; two `CreateRootSignature` calls on the same bytes are compatible in D3D12 (m4-compute
   fixed that for dispatch), now for draws too.
+
+## 8. Passes without attachments
+
+A draw with no colour target and no depth-stencil (a pixel shader that only writes through views)
+used to fail the list. `BeginRenderPass` now carries `width` and `height` (`PROTO_VERSION` 4, opcode
+version 2, payload 336 bytes): both are required (1..=16384) when the pass has no attachment, and must
+be 0 when it has one. The front sizes such a pass from the largest area the viewports and scissor
+rectangles set so far reach; the back sets `renderTargetWidth/Height` and a raster sample count of 1 on
+the pass descriptor. Test: `gfx_draw.rs::a_pass_without_attachments_runs_pixel_shaders_that_only_write_through_views`.
+
+## 9. Known gaps after the first full game run
+
+* ExecuteIndirect with a geometry-shader pipeline: `UNSUPPORTED` (the emulation's draw maths need the
+  counts on the CPU; an indirect version would run the emulation's compute pass per record). The game
+  does this about 1000 times in a 400-second run.
+* `COPY_RESOURCE` of a texture onto itself: `INVALID_ARG` (28 times).
+* Frame rate with the loading art on screen: 2-3 fps at ~3300 draws per frame.
