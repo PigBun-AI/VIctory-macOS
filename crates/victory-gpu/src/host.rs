@@ -3739,6 +3739,7 @@ pub(crate) mod indirects;
 mod panel;
 mod place;
 mod send;
+pub(crate) mod programs;
 mod split;
 pub(crate) use send::{goes_as_words, words_under};
 #[cfg(feature = "diagnostics")]
@@ -5761,6 +5762,11 @@ impl Host {
             split::drain(self);
             split::instrument(runs, own.is_some(), card.as_ref().is_some_and(|c| c.check.is_some()), &mut lists, &mut firsts, *submitted + 1);
         }
+        // VICTORY_GPU_PER_PROGRAM: the stamps inside the lists, by program.
+        if programs::on() {
+            programs::drain(self);
+            programs::attach(runs, *submitted + 1);
+        }
         // When it runs on the card, for the timeline.
         #[cfg(feature = "diagnostics")]
         let stamp = stamps::take();
@@ -6348,6 +6354,10 @@ impl HostList {
         let _closing = crate::timeline::span("closing a host list");
         // VICTORY_GPU_SPLIT: where the title's work ends and ours begins.
         split::mark(std::ptr::from_ref(self) as usize, &self.list);
+        // VICTORY_GPU_PER_PROGRAM: the title's last program ends here.
+        if programs::on() {
+            programs::end(self);
+        }
         self.twins_to_depth();
         self.textures_back();
         let scratch = self.indirect_args.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -8826,6 +8836,9 @@ impl Meter {
         crate::descriptor::sync_line(frames);
         late_line(frames);
         split::line(frames);
+        if programs::on() {
+            programs::line(frames);
+        }
         crate::queue::behind_line(frames);
         card_clock_line(frames, ms);
         #[cfg(feature = "diagnostics")]

@@ -1638,6 +1638,10 @@ impl State {
             // The title may release the pipeline before it submits the list.
             list.bind_pipeline(&p.name, &p.pso, &p.root);
         }
+        // VICTORY_GPU_PER_PROGRAM: a change of program starts a new segment.
+        if crate::host::programs::on() {
+            crate::host::programs::switch(list, p, crate::pipeline::is_builder(self.pipeline as This));
+        }
         for stage in &p.stages {
             let t = stage.translated();
             STORES.set(t.stores);
@@ -3160,6 +3164,9 @@ impl State {
         });
         self.buffers_written();
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        if crate::host::programs::on() {
+            crate::host::programs::work(list);
+        }
         if let Some(role) = p.stages.first().and_then(|s| s.shader.ambient)
             && crate::ambient::on()
             && self.ambient(list, p, role)
@@ -3508,6 +3515,9 @@ impl State {
                     self.drew(crate::pipeline::host_pipeline(self.pipeline as This));
                     self.mesh_scissor(list, false);
                     DRAWN.fetch_add(1, Ordering::Relaxed);
+            if crate::host::programs::on() {
+                crate::host::programs::work(list);
+            }
                     true
                 }
                 Err(_) => false,
@@ -3982,6 +3992,9 @@ impl State {
             };
             self.drew(crate::pipeline::host_pipeline(self.pipeline as This));
             DRAWN.fetch_add(1, Ordering::Relaxed);
+            if crate::host::programs::on() {
+                crate::host::programs::work(list);
+            }
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -4087,6 +4100,9 @@ impl State {
             };
             self.drew(crate::pipeline::host_pipeline(self.pipeline as This));
             DRAWN.fetch_add(1, Ordering::Relaxed);
+            if crate::host::programs::on() {
+                crate::host::programs::work(list);
+            }
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -4378,6 +4394,9 @@ impl State {
         if kind == MESH {
             self.mesh_scissor(list, false);
         }
+        if crate::host::programs::on() {
+            crate::host::programs::work(list);
+        }
         if kind == DISPATCH {
             self.buffers_written();
         } else {
@@ -4390,6 +4409,9 @@ impl State {
             DISPATCHED.fetch_add(1, Ordering::Relaxed);
         } else {
             DRAWN.fetch_add(1, Ordering::Relaxed);
+            if crate::host::programs::on() {
+                crate::host::programs::work(list);
+            }
         }
         true
     }

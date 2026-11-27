@@ -28,7 +28,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 
 /// The stamps of a ring: a submission of 600 lists takes some 1,500.
-const RING: usize = 8192;
+pub(super) const RING: usize = 8192;
+/// Slots of the query heap and buffer: the split's [`RING`] first, then the
+/// ones of `programs.rs` (`VICTORY_GPU_PER_PROGRAM`), which stamp inside open lists.
+pub(super) const TOTAL: usize = 65536;
 
 pub(super) const TITLE: u8 = 0;
 pub(super) const TAIL: u8 = 1;
@@ -42,13 +45,13 @@ pub(super) fn on() -> bool {
     *ON.get_or_init(|| crate::switch::on("VICTORY_GPU_SPLIT"))
 }
 
-struct Ring {
+pub(super) struct Ring {
     /// By slot, the closed list that stamps it.
     lists: Vec<ID3D12CommandList>,
-    heap: ID3D12QueryHeap,
-    buffer: ID3D12Resource,
+    pub(super) heap: ID3D12QueryHeap,
+    pub(super) buffer: ID3D12Resource,
     /// The mapping of the buffer, a tick count a slot.
-    back: usize,
+    pub(super) back: usize,
     _allocator: ID3D12CommandAllocator,
 }
 
@@ -97,14 +100,14 @@ pub(super) fn refused(why: &'static str) {
     *REFUSED.lock().unwrap_or_else(|e| e.into_inner()).entry(why).or_insert(0) += 1;
 }
 
-fn ring() -> Option<&'static Ring> {
+pub(super) fn ring() -> Option<&'static Ring> {
     RING_STATE
         .get_or_init(|| {
             let host = host()?;
             match host.make_ring() {
                 Ok(ring) => Some(ring),
                 Err(e) => {
-                    tracing::warn!(error = %e, "VICTORY_GPU_SPLIT: no timestamps, the split is off");
+                    tracing::warn!(error = %e, "VICTORY_GPU_SPLIT/VICTORY_GPU_PER_PROGRAM: no timestamps, they are off");
                     None
                 }
             }
@@ -114,15 +117,15 @@ fn ring() -> Option<&'static Ring> {
 
 impl Host {
     fn make_ring(&self) -> windows::core::Result<Ring> {
-        let Some((buffer, back)) = self.shared_buffer(8 * RING as u64) else {
+        let Some((buffer, back)) = self.shared_buffer(8 * TOTAL as u64) else {
             return Err(windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY));
         };
         // SAFETY: plain object creation; a fresh mapping of that size.
         unsafe {
-            std::ptr::write_bytes(back, 0, 8 * RING);
+            std::ptr::write_bytes(back, 0, 8 * TOTAL);
             let mut heap: Option<ID3D12QueryHeap> = None;
             self.device.CreateQueryHeap(
-                &D3D12_QUERY_HEAP_DESC { Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count: RING as u32, NodeMask: 0 },
+                &D3D12_QUERY_HEAP_DESC { Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count: TOTAL as u32, NodeMask: 0 },
                 &mut heap,
             )?;
             let heap = heap.ok_or_else(windows::core::Error::empty)?;

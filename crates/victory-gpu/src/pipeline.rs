@@ -139,6 +139,8 @@ pub(crate) struct Translated {
     /// Whether it stores through a view it picks from the heap by an index,
     /// once asked (`crate::picked`).
     pub(crate) picks: std::sync::atomic::AtomicU8,
+    /// Whether its code has image_bvh_intersect_ray or image_bvh64_intersect_ray`n    /// (the software ray tracing's node test): for VICTORY_GPU_PER_PROGRAM.
+    pub(crate) uses_bvh_intersect: bool,
 }
 
 #[cfg(windows)]
@@ -213,6 +215,7 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         _ => None,
     });
     let stores_by_address = programs.is_empty() || programs.iter().any(stores_by_address);
+    let uses_bvh_intersect = programs.iter().any(uses_bvh_intersect);
     let used = programs
         .into_iter()
         .find(|p| {
@@ -232,6 +235,7 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         stores,
         stores_by_address,
         picks: Default::default(),
+        uses_bvh_intersect,
     })
 }
 
@@ -404,6 +408,15 @@ fn stores_by_address(program: &victory_shader::NativeProgram) -> bool {
             && i.name()
                 .is_none_or(|n| (n.contains("store") || n.contains("atomic")) && !n.contains("scratch"))
     })
+}
+
+/// Whether a console program has image_bvh_intersect_ray or
+/// image_bvh64_intersect_ray (ictory_shader::emit::intersect).
+#[cfg(windows)]
+fn uses_bvh_intersect(program: &victory_shader::NativeProgram) -> bool {
+    use victory_shader::gfx10::decode;
+    decode(&program.code)
+        .is_ok_and(|code| code.iter().any(|i| i.name().is_some_and(|n| n.starts_with("image_bvh") && n.ends_with("intersect_ray"))))
 }
 
 #[repr(C)]
