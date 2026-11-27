@@ -24,6 +24,8 @@ pub mod runtime;
 pub use host::HostPolicy;
 pub use registry::{HleExport, HleModule, registry};
 pub use victory_gpu::console;
+// Mac patches (docs/mac/PATCHES.md): for `apps/victory/src/mac.rs`.
+pub use victory_gpu::mac::rosetta;
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use victory_gpu::replay;
 

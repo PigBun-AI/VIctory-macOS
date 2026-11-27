@@ -545,6 +545,17 @@ pub extern "system" fn ReadFile(
     // shortcut: a read that goes on after the call (overlapped) is written
     // into pages the kernel has locked by now: it lands all the same, but a
     // refresh that guards its blocks before it does will not see it.
+    if done == 0
+        && error == windows_sys::Win32::Foundation::ERROR_IO_PENDING
+        && !overlapped.is_null()
+        && victory_gpu::mac::rosetta::wait_for_overlapped_reads()
+    {
+        // Mac patch G2: a kernel write into a guarded block under Wine on
+        // Rosetta stops the process for good (VIctory-macOS #50).
+        let mut n = 0u32;
+        // SAFETY: the file and overlapped block the title passed.
+        unsafe { windows_sys::Win32::System::IO::GetOverlappedResult(file as _, overlapped.cast(), &mut n, 1) };
+    }
     if done == 0 && error == windows_sys::Win32::Foundation::ERROR_IO_PENDING {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| tracing::info!(len, "ReadFile: a read of the title's goes on after the call"));

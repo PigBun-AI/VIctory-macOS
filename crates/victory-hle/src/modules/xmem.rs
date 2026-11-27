@@ -133,7 +133,8 @@ pub extern "system" fn XMemVirtualAlloc(
         // The GPU side copies only the pages the title wrote since its last
         // copy (`victory_gpu`, decision 0007); placeholders cannot be
         // watched (their physical-page views are copied whole).
-        if kind & MEM_RESERVE_PLACEHOLDER == 0 {
+        // (Not under Rosetta unless asked: Mac patch G2.)
+        if kind & MEM_RESERVE_PLACEHOLDER == 0 && victory_gpu::mac::rosetta::fault_tracking() {
             kind |= MEM_WRITE_WATCH;
         }
     }

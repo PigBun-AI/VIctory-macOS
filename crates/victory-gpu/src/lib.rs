@@ -123,10 +123,9 @@ pub use watch::{
     writing as kernel_will_write,
 };
 
-// Mac patch M1 (docs/mac/PATCHES.md): stand-ins for the `cfg(windows)` modules
-// that cross-platform code names by path, so the crate builds natively on macOS.
+// Mac patches (docs/mac/PATCHES.md): Rosetta/Wine decisions, and stand-ins for
+// the `cfg(windows)` modules that cross-platform code names by path, so the
+// crate builds natively on macOS.
+pub mod mac;
 #[cfg(not(windows))]
-#[path = "mac/nonwindows.rs"]
-mod nonwindows;
-#[cfg(not(windows))]
-use nonwindows::{host, shader_cache, texture};
+use mac::nonwindows::{host, shader_cache, texture};
