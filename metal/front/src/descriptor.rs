@@ -1,4 +1,4 @@
-//! Descriptor heaps: handle arithmetic and the CPU-side contents.
+//! Descriptor heaps: handle arithmetic.
 //!
 //! D3D12 hands out `CPU_DESCRIPTOR_HANDLE` / `GPU_DESCRIPTOR_HANDLE` as plain
 //! integers and applications do their own arithmetic on them
@@ -19,15 +19,12 @@ pub const TYPE_DSV: u32 = 3;
 
 pub const FLAG_SHADER_VISIBLE: u32 = 1;
 
-/// Handle increment sizes reported to applications. One size for every type;
-/// what the back needs per descriptor is its own business.
-pub const INCREMENT: u32 = 32;
-
 /// `D3D12_MAX_...`: bounds D3D12 documents for shader-visible heaps.
 pub const MAX_SHADER_VISIBLE_CBV_SRV_UAV: u32 = 1_000_000;
 pub const MAX_SHADER_VISIBLE_SAMPLERS: u32 = 2048;
 
-pub type HeapId = u32;
+/// A key into the space: the front's own number for a heap (not the back's `SlotHeap`).
+pub type SlotHeap = u32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapDesc {
@@ -65,19 +62,20 @@ pub fn validate_heap_desc(d: &HeapDesc) -> Result<()> {
 /// Where a heap lives in handle space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapRange {
-    pub id: HeapId,
+    pub id: SlotHeap,
     pub cpu_base: u64,
     /// 0 for a heap that is not shader visible.
     pub gpu_base: u64,
     pub count: u32,
+    pub stride: u32,
 }
 
 impl HeapRange {
     pub fn cpu_handle(&self, index: u32) -> u64 {
-        self.cpu_base + index as u64 * INCREMENT as u64
+        self.cpu_base + index as u64 * self.stride as u64
     }
     pub fn gpu_handle(&self, index: u32) -> u64 {
-        self.gpu_base + index as u64 * INCREMENT as u64
+        self.gpu_base + index as u64 * self.stride as u64
     }
 }
 
@@ -89,7 +87,7 @@ const GAP: u64 = 4096;
 pub struct DescriptorSpace {
     next_cpu: u64,
     next_gpu: u64,
-    next_id: HeapId,
+    next_id: SlotHeap,
     cpu: BTreeMap<u64, HeapRange>,
     gpu: BTreeMap<u64, HeapRange>,
 }
@@ -103,8 +101,8 @@ impl DescriptorSpace {
         DescriptorSpace { next_cpu: CPU_START, next_gpu: GPU_START, next_id: 1, ..Default::default() }
     }
 
-    pub fn alloc(&mut self, count: u32, shader_visible: bool) -> HeapRange {
-        let span = round_up(count as u64 * INCREMENT as u64, GAP) + GAP;
+    pub fn alloc(&mut self, count: u32, stride: u32, shader_visible: bool) -> HeapRange {
+        let span = round_up(count as u64 * stride as u64, GAP) + GAP;
         let id = self.next_id;
         self.next_id += 1;
         let cpu_base = self.next_cpu;
@@ -116,7 +114,7 @@ impl DescriptorSpace {
         } else {
             0
         };
-        let r = HeapRange { id, cpu_base, gpu_base, count };
+        let r = HeapRange { id, cpu_base, gpu_base, count, stride };
         self.cpu.insert(cpu_base, r);
         if shader_visible {
             self.gpu.insert(gpu_base, r);
@@ -124,97 +122,29 @@ impl DescriptorSpace {
         r
     }
 
-    pub fn free(&mut self, id: HeapId) {
+    pub fn free(&mut self, id: SlotHeap) {
         self.cpu.retain(|_, r| r.id != id);
         self.gpu.retain(|_, r| r.id != id);
     }
 
-    fn resolve(map: &BTreeMap<u64, HeapRange>, handle: u64, base: fn(&HeapRange) -> u64) -> Option<(HeapId, u32)> {
+    fn resolve(map: &BTreeMap<u64, HeapRange>, handle: u64, base: fn(&HeapRange) -> u64) -> Option<(SlotHeap, u32)> {
         let (_, r) = map.range(..=handle).next_back()?;
         let off = handle.checked_sub(base(r))?;
-        if off % INCREMENT as u64 != 0 {
+        if off % r.stride as u64 != 0 {
             return None;
         }
-        let index = off / INCREMENT as u64;
+        let index = off / r.stride as u64;
         (index < r.count as u64).then_some((r.id, index as u32))
     }
 
     /// `(heap, index)` of a CPU handle; `None` for a handle that is not
     /// exactly on a descriptor of a live heap.
-    pub fn resolve_cpu(&self, handle: u64) -> Option<(HeapId, u32)> {
+    pub fn resolve_cpu(&self, handle: u64) -> Option<(SlotHeap, u32)> {
         Self::resolve(&self.cpu, handle, |r| r.cpu_base)
     }
 
-    pub fn resolve_gpu(&self, handle: u64) -> Option<(HeapId, u32)> {
+    pub fn resolve_gpu(&self, handle: u64) -> Option<(SlotHeap, u32)> {
         Self::resolve(&self.gpu, handle, |r| r.gpu_base)
-    }
-}
-
-/// What one descriptor holds, as the front tracks it. Buffer views carry the
-/// `ResourceId`, not a pointer: a copy of the descriptor keeps pointing at
-/// the same resource, as it would in D3D12.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Entry {
-    Empty,
-    /// A null view of a type: reads give zero, writes are dropped.
-    Null { ty: ViewType },
-    Cbv { gpu_va: u64, size: u32 },
-    BufferView(BufferView),
-    Sampler(SamplerDesc),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ViewType {
-    Srv,
-    Uav,
-    Cbv,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BufferView {
-    pub is_uav: bool,
-    pub resource: u32,
-    pub first_element: u64,
-    pub num_elements: u32,
-    /// Bytes per element of a structured buffer; 0 otherwise.
-    pub structure_stride: u32,
-    /// DXGI format of a typed view; `R32_TYPELESS` with `raw` for raw views.
-    pub format: u32,
-    pub raw: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SamplerDesc {
-    pub filter: u32,
-    pub address_u: u32,
-    pub address_v: u32,
-    pub address_w: u32,
-    pub mip_lod_bias: f32,
-    pub max_anisotropy: u32,
-    pub comparison: u32,
-    pub border_color: [f32; 4],
-    pub min_lod: f32,
-    pub max_lod: f32,
-}
-
-pub struct Heap {
-    pub range: HeapRange,
-    pub desc: HeapDesc,
-    entries: Vec<Entry>,
-}
-
-impl Heap {
-    pub fn new(range: HeapRange, desc: HeapDesc) -> Heap {
-        Heap { range, desc, entries: vec![Entry::Empty; desc.count as usize] }
-    }
-
-    pub fn get(&self, index: u32) -> Option<Entry> {
-        self.entries.get(index as usize).copied()
-    }
-
-    pub fn set(&mut self, index: u32, e: Entry) -> Result<()> {
-        *self.entries.get_mut(index as usize).ok_or(Hr::E_INVALIDARG)? = e;
-        Ok(())
     }
 }
 
@@ -225,9 +155,9 @@ mod tests {
     #[test]
     fn handles_resolve_to_heap_and_index() {
         let mut s = DescriptorSpace::new();
-        let a = s.alloc(16, true);
-        let b = s.alloc(4, false);
-        let c = s.alloc(2048, true);
+        let a = s.alloc(16, 32, true);
+        let b = s.alloc(4, 64, false);
+        let c = s.alloc(2048, 16, true);
         assert_ne!(a.cpu_base, 0);
         assert_ne!(a.gpu_base, 0);
         assert_eq!(b.gpu_base, 0);
@@ -242,19 +172,19 @@ mod tests {
         assert_eq!(s.resolve_cpu(c.cpu_handle(2047)), Some((c.id, 2047)));
         assert_eq!(s.resolve_cpu(0), None);
         // Application-style arithmetic: start + n * increment.
-        let n = 5u64;
-        assert_eq!(s.resolve_cpu(a.cpu_base + n * INCREMENT as u64), Some((a.id, 5)));
+        assert_eq!(s.resolve_cpu(a.cpu_base + 5 * 32), Some((a.id, 5)));
+        assert_eq!(s.resolve_cpu(b.cpu_base + 2 * 64), Some((b.id, 2)));
         assert_ne!(a.cpu_base, a.gpu_base);
     }
 
     #[test]
     fn freed_heaps_stop_resolving_and_ids_are_not_reused() {
         let mut s = DescriptorSpace::new();
-        let a = s.alloc(8, true);
+        let a = s.alloc(8, 32, true);
         s.free(a.id);
         assert_eq!(s.resolve_cpu(a.cpu_base), None);
         assert_eq!(s.resolve_gpu(a.gpu_base), None);
-        let b = s.alloc(8, true);
+        let b = s.alloc(8, 32, true);
         assert_ne!(a.id, b.id);
         assert_ne!(a.cpu_base, b.cpu_base);
     }
@@ -269,17 +199,5 @@ mod tests {
         assert_eq!(ok(TYPE_SAMPLER, 2049, FLAG_SHADER_VISIBLE), Err(Hr::E_INVALIDARG));
         assert_eq!(ok(TYPE_CBV_SRV_UAV, 0, 0), Err(Hr::E_INVALIDARG));
         assert_eq!(ok(9, 1, 0), Err(Hr::E_INVALIDARG));
-    }
-
-    #[test]
-    fn heap_contents() {
-        let mut s = DescriptorSpace::new();
-        let d = HeapDesc { ty: TYPE_CBV_SRV_UAV, count: 4, flags: 0, node_mask: 0 };
-        let mut h = Heap::new(s.alloc(4, false), d);
-        assert_eq!(h.get(0), Some(Entry::Empty));
-        h.set(2, Entry::Cbv { gpu_va: 0x1000, size: 256 }).unwrap();
-        assert_eq!(h.get(2), Some(Entry::Cbv { gpu_va: 0x1000, size: 256 }));
-        assert_eq!(h.set(4, Entry::Empty), Err(Hr::E_INVALIDARG));
-        assert_eq!(h.get(4), None);
     }
 }

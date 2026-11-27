@@ -11,6 +11,9 @@ description = "D3D12/DXGI front end of the Metal backend: D3D12 semantics (pure 
 # dlls are the cdylib crates `front/d3d12` and `front/dxgi`, which export
 # the entry points and call into this one.
 
+[dependencies]
+victory-metal-proto = { path = "../proto" }
+
 # windows 0.62.2 / windows-core 0.62.2: the versions of the root Cargo.lock
 # (crates.io latest of `windows`, checked 2026-11-27). Types and the
 # `#[implement]` macro only; no linking to anything beyond kernel32.
