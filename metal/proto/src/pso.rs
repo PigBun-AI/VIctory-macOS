@@ -216,7 +216,11 @@ impl InputElement {
 
     /// The semantic name (up to the first NUL).
     pub fn name(&self) -> &str {
-        let end = self.semantic.iter().position(|&b| b == 0).unwrap_or(self.semantic.len());
+        let end = self
+            .semantic
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.semantic.len());
         core::str::from_utf8(&self.semantic[..end]).unwrap_or("")
     }
 }
@@ -386,7 +390,11 @@ impl GraphicsPsoDesc {
     /// The pipeline kind the stages say, or `None` for a combination that
     /// is no pipeline.
     pub fn kind(&self) -> Option<PsoKind> {
-        match (self.vs.is_present(), self.amp.is_present(), self.ms.is_present()) {
+        match (
+            self.vs.is_present(),
+            self.amp.is_present(),
+            self.ms.is_present(),
+        ) {
             (true, false, false) => Some(PsoKind::Vertex),
             (false, _, true) => Some(PsoKind::Mesh),
             _ => None,
@@ -435,7 +443,10 @@ impl GraphicsPsoDesc {
         if self.rt_count as usize > MAX_RENDER_TARGETS {
             return Err(bad("rt_count"));
         }
-        if self.rt_formats[self.rt_count as usize..].iter().any(|&f| f != 0) {
+        if self.rt_formats[self.rt_count as usize..]
+            .iter()
+            .any(|&f| f != 0)
+        {
             return Err(bad("rt format past the count"));
         }
         if !self.topology.is_known() || !self.strip_cut.is_known() {

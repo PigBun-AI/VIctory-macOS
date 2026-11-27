@@ -197,8 +197,14 @@ fn synthetic_graphics_pipeline() -> CreateGraphicsPipelineArgs {
     a.root_sig = RootSigId(3);
     let d = &mut a.desc;
     *d = GraphicsPsoDesc::new();
-    d.vs = StageCode { addr: 0x1000, len: 0x200 };
-    d.ps = StageCode { addr: 0x2000, len: 0x100 };
+    d.vs = StageCode {
+        addr: 0x1000,
+        len: 0x200,
+    };
+    d.ps = StageCode {
+        addr: 0x2000,
+        len: 0x100,
+    };
     d.input_count = 2;
     d.inputs[0] = InputElement::new("POSITION", 0, format::R32G32B32_FLOAT, 0, 0);
     let mut uv = InputElement::new("TEXCOORD", 1, format::R16G16_FLOAT, 1, APPEND_ALIGNED);
@@ -228,7 +234,10 @@ fn a_graphics_pipeline_block_is_byte_for_byte_stable() {
     assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 1);
     assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
     // desc starts at 24: vs address, then length.
-    assert_eq!(u64::from_le_bytes(bytes[24..32].try_into().unwrap()), 0x1000);
+    assert_eq!(
+        u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        0x1000
+    );
     let back = CreateGraphicsPipelineArgs::get(&mut victory_metal_proto::wire::Reader::new(&bytes))
         .unwrap();
     assert_eq!(back, a);

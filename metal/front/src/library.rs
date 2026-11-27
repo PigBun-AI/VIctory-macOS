@@ -4,8 +4,8 @@
 //! serializes to a small valid blob that creating a library from it accepts.
 //! The game layer's fallback (`victory-gpu`, `pipeline/library.rs`) then
 //! makes the pipeline and stores it again, as it does for an empty library on
-//! any driver. A persistent pipeline cache belongs to the back (MTL4Archive,
-//! later) and would replace this.
+//! any driver. A persistent pipeline cache belongs to the back and would
+//! replace this.
 //!
 //! Pure Rust: the shell object is in `shell/library.rs`.
 

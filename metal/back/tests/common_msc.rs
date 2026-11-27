@@ -25,8 +25,11 @@ pub fn dxil(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
 pub fn dxil_result(name: &str, profile: &str, hlsl: &str) -> Option<Result<Vec<u8>, String>> {
     let helper = std::env::var_os("VICTORY_HELPER_DXC")?;
     std::env::var_os("DXC_LIB")?;
+    // Tests run in parallel and may reuse a name: the folder is unique per call.
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir: PathBuf =
-        std::env::temp_dir().join(format!("victory-msc-{}-{name}", std::process::id()));
+        std::env::temp_dir().join(format!("victory-msc-{}-{n}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join(format!("{name}.hlsl"));
     let out = dir.join(format!("{name}.dxil"));
@@ -71,8 +74,10 @@ pub fn dxbc_or_skip(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
         eprintln!("SKIPPED {name}: VICTORY_DXBC_TOOL (tools/metal/dxbc-compile.sh) is not set");
         return None;
     };
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir: PathBuf =
-        std::env::temp_dir().join(format!("victory-dxbc-{}-{name}", std::process::id()));
+        std::env::temp_dir().join(format!("victory-dxbc-{}-{n}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join(format!("{name}.hlsl"));
     let out = dir.join(format!("{name}.dxbc"));
