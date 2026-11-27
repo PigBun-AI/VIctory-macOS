@@ -190,10 +190,10 @@ return: they pass without comparing anything.
 
 `victory-shader` (255 pass, 36 fail, 6 ignored of 297): the same 36 with or without the DXC front end, so
 none is the missing helper. They are results of the shader on the hardware device that differ from what the
-test wants (zeros or wrong values), with no WARP reference to compare: f16 and min-precision forms (11),
-wave/permlane/wave64 (9), unorm and typed buffer formats (5), f64/i64 (4), float edge cases of v_fract, v_med3,
+test wants (zeros or wrong values), with no WARP reference to compare: f16 and d16 forms (7), wave, permlane
+and quad masks (7), unorm and typed buffer formats (4), f64/i64 (3), float edge cases of v_fract, v_med3,
 v_min3, v_sin/v_cos, v_cvt_off, ds_min/max (7), pixel shader tests that draw (barycentric, edge flags, quad
-neighbours: 3), the rest accepting an unsigned DXIL (`stub_pipeline_is_created`; there is no `dxil.dll`),
+neighbours: 3), one accepting an unsigned DXIL (`stub_pipeline_is_created`; there is no `dxil.dll`), and
 raw twins / counter texture / waterfall / page cache (4). D3DMetal's DXIL-to-Metal compiler, not the Mac layer.
 `whole_wave_f64_sum_and_cvt_f32_f64` is the one that ends the Metal backend's MSC (skipped there).
 
