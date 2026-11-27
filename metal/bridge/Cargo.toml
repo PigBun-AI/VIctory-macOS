@@ -6,6 +6,9 @@ license = "GPL-3.0-or-later"
 publish = false
 description = "Wine unixlib bridge: PE half (x86_64-pc-windows-gnullvm) and Mach-O half (darwin)"
 
+[dependencies]
+victory-metal-proto = { path = "../proto" }
+
 [lib]
 # cdylib: the PE half becomes the Wine-marked anchor dll, the Mach-O half the
 # unixlib next to it. rlib: the probe links the PE client half.

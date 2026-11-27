@@ -19,6 +19,9 @@ victory-metal-proto = { path = "../proto" }
 # `#[implement]` macro only; no linking to anything beyond kernel32.
 [target.'cfg(windows)'.dependencies]
 windows-core = "0.62.2"
+# The PE half of the bridge (WineUnixlib, a proto Link). Windows targets only: on
+# macOS the bridge pulls in the back, which the front must not depend on.
+victory-metal-bridge = { path = "../bridge" }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",

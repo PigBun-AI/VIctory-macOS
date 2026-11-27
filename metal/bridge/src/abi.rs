@@ -3,9 +3,15 @@
 //! Every block is `repr(C)`, made of fixed-width integers, floats and byte
 //! arrays, and has the same layout in the PE (x86-64 Windows ABI) and in the
 //! Mach-O half (x86-64 or arm64 SysV ABI): that is the whole contract.
-//! `Link` moves into `victory-metal-proto` with M1.
+//!
+//! Two groups of call codes: the M0 measurement ops (`OP_NOP` .. `OP_PRESENT_CLEAR`,
+//! reached through [`RawLink`]) and the two that carry the proto (`OP_PROTO_SUBMIT`,
+//! `OP_PROTO_CALL`), reached through `victory_metal_proto::Link`, which both halves
+//! implement on top of the raw call.
 
 use std::ffi::c_void;
+
+use victory_metal_proto::Status;
 
 pub const OP_NOP: u32 = 0;
 /// Args: [`Args256`]. The unixlib reads all 256 words.
@@ -32,8 +38,12 @@ pub const OP_LAYER_ACQUIRE: u32 = 10;
 pub const OP_LAYER_RELEASE: u32 = 11;
 /// Args: [`PresentArgs`].
 pub const OP_PRESENT_CLEAR: u32 = 12;
+/// Args: [`SubmitArgs`]. One `Link::submit`.
+pub const OP_PROTO_SUBMIT: u32 = 13;
+/// Args: [`CallArgs`]. One `Link::call`.
+pub const OP_PROTO_CALL: u32 = 14;
 /// Number of call codes; the size of the unixlib table.
-pub const OP_COUNT: usize = 13;
+pub const OP_COUNT: usize = 15;
 
 /// `NTSTATUS` values, as Wine returns them to the PE.
 pub const STATUS_SUCCESS: i32 = 0;
@@ -50,11 +60,57 @@ pub const RES_BUILD: u32 = 0;
 pub const RES_STATE: u32 = 1;
 pub const RES_USE: u32 = 2;
 
-/// How a PE reaches the Metal side. `Link` for Wine is `pe::WineUnixlib`;
-/// the in-process one is `unix::InProcess`.
-pub trait Link {
+/// The raw channel: how a PE reaches the Metal side, one call code and one
+/// argument block at a time, answered with an `NTSTATUS`. For Wine it is
+/// `pe::WineUnixlib`, the in-process one is `unix::InProcess`. The M0 probe
+/// uses it directly; the front uses the proto `Link` built on it.
+pub trait RawLink {
     /// Calls `op` with a pointer to its argument block; returns an `NTSTATUS`.
     fn call(&self, op: u32, args: *mut c_void) -> i32;
+}
+
+/// `OP_PROTO_SUBMIT`: a block of commands (`victory_metal_proto::Encoder::finish`).
+#[repr(C)]
+pub struct SubmitArgs {
+    /// Address of the first byte; valid in both halves (same process).
+    pub block: u64,
+    pub len: u64,
+}
+
+/// `OP_PROTO_CALL`: one synchronous proto call.
+#[repr(C)]
+pub struct CallArgs {
+    /// `SyncOp` number.
+    pub op: u32,
+    pub _pad: u32,
+    /// Address of the op's argument block, which the back reads and writes.
+    pub args: u64,
+    pub len: u64,
+}
+
+/// A proto `Status` as the `NTSTATUS` the unixlib returns. 0 stays 0 and the
+/// others become customer-defined errors (`0xE4D5_xxxx`, facility "VM" = 0x4D5)
+/// holding `-status`, which Wine hands back to the PE unchanged.
+pub fn status_to_nt(s: Status) -> i32 {
+    match s.0 {
+        0 => STATUS_SUCCESS,
+        n if (-0xffff..0).contains(&n) => (0xE4D5_0000u32 | (-n) as u32) as i32,
+        _ => (0xE4D5_0000u32 | 12) as i32, // INTERNAL
+    }
+}
+
+/// The inverse of [`status_to_nt`]. A plain NT error the unixlib returned on
+/// its own (`STATUS_INVALID_PARAMETER`, `STATUS_NOT_SUPPORTED`, ...) maps to the
+/// nearest proto status; any other failure is `INTERNAL`.
+pub fn nt_to_status(nt: i32) -> Status {
+    let u = nt as u32;
+    match u {
+        0 => Status::OK,
+        _ if u >> 16 == 0xE4D5 => Status(-((u & 0xffff) as i32)),
+        _ if nt == STATUS_INVALID_PARAMETER => Status::INVALID_ARG,
+        _ if nt == STATUS_NOT_SUPPORTED => Status::UNSUPPORTED,
+        _ => Status::INTERNAL,
+    }
 }
 
 #[repr(C)]
@@ -191,9 +247,40 @@ mod tests {
         assert_eq!(size_of::<ResidencyArgs>(), 24 + 32);
         assert_eq!(size_of::<LayerArgs>(), 40);
         assert_eq!(size_of::<PresentArgs>(), 8 + 32 + 24 + 160);
+        assert_eq!(size_of::<SubmitArgs>(), 16);
+        assert_eq!(size_of::<CallArgs>(), 24);
+        assert_eq!(offset_of!(CallArgs, args), 8);
         assert_eq!(offset_of!(WrapArgs, handle), 16);
         assert_eq!(offset_of!(BwArgs, gpu_ns), 16);
         assert_eq!(offset_of!(PresentArgs, error), 8 + 32 + 24);
+    }
+
+    #[test]
+    fn proto_status_round_trips_through_ntstatus() {
+        for s in [
+            Status::OK,
+            Status::INVALID_ARG,
+            Status::BAD_VERSION,
+            Status::UNKNOWN_OP,
+            Status::UNSUPPORTED,
+            Status::BAD_STREAM,
+            Status::NOT_FOUND,
+            Status::OUT_OF_MEMORY,
+            Status::DEVICE_LOST,
+            Status::DEVICE_HUNG,
+            Status::TIMEOUT,
+            Status::NOT_INITIALIZED,
+            Status::INTERNAL,
+            Status::CONFLICT,
+        ] {
+            assert_eq!(nt_to_status(status_to_nt(s)), s, "{s:?}");
+            // An NTSTATUS error has the severity bits set, so the PE never mistakes it for success.
+            assert_eq!(status_to_nt(s) < 0, s.is_err());
+        }
+        assert_eq!(nt_to_status(STATUS_INVALID_PARAMETER), Status::INVALID_ARG);
+        assert_eq!(nt_to_status(STATUS_NOT_SUPPORTED), Status::UNSUPPORTED);
+        assert_eq!(nt_to_status(STATUS_UNSUCCESSFUL), Status::INTERNAL);
+        assert_eq!(status_to_nt(Status(1)), status_to_nt(Status::INTERNAL));
     }
 
     #[test]

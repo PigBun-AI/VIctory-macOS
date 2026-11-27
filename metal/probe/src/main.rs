@@ -6,7 +6,8 @@
 //! test), `--hold-ms N` (keep the layer window up), `--which NAME.dll`
 //! (Wine only; add `--system32` to load with LOAD_LIBRARY_SEARCH_SYSTEM32;
 //! load that dll and say whether it is our stand-in, which
-//! exports `victory_metal_bridge_anchor`; used for the DLL override test).
+//! exports `victory_metal_bridge_anchor`; used for the DLL override test),
+//! `--proto` (Wine only: the proto `Link` over the unixlib, status mapping).
 
 use victory_metal_probe::suite::{Config, run};
 
@@ -17,6 +18,10 @@ fn main() {
         let name = args.get(i + 1).map(String::as_str).unwrap_or("d3d12.dll");
         let system32 = args.iter().any(|a| a == "--system32");
         std::process::exit(which(name, system32));
+    }
+    #[cfg(windows)]
+    if args.iter().any(|a| a == "--proto") {
+        std::process::exit(proto_check());
     }
     let quick = args.iter().any(|a| a == "--quick");
     let cfg = if quick {
@@ -112,4 +117,63 @@ fn which(name: &str, system32: bool) -> i32 {
         );
         0
     }
+}
+
+/// The proto `Link` of the PE half, against whatever executor the unixlib has:
+/// with none installed `NOP` answers OK, everything else `NOT_INITIALIZED`, and
+/// an unknown op number is refused. Exercises both entry points and the
+/// `NTSTATUS` mapping through Wine.
+#[cfg(windows)]
+fn proto_check() -> i32 {
+    use victory_metal_bridge::pe::WineUnixlib;
+    use victory_metal_proto::{
+        Link, LinkExt, Status,
+        sync::{HelloArgs, NopArgs},
+    };
+
+    let link = match WineUnixlib::load("victory_metal_bridge.dll") {
+        Ok(l) => l,
+        Err(e) => {
+            println!("CHECK  FAIL unixlib connected: {e}");
+            return 1;
+        }
+    };
+    let mut failures = 0;
+    let mut check = |name: &str, got: Status, want: Status| {
+        let ok = got == want;
+        println!(
+            "CHECK  {} proto {name}: {got:?} (want {want:?})",
+            if ok { "PASS" } else { "FAIL" }
+        );
+        failures += i32::from(!ok);
+    };
+    check("call NOP", link.call_args(&mut NopArgs::new()), Status::OK);
+    check(
+        "call HELLO, no executor",
+        link.call_args(&mut HelloArgs::new()),
+        Status::NOT_INITIALIZED,
+    );
+    let block = [0u8; 16];
+    check(
+        "submit, no executor",
+        link.submit(&block),
+        Status::NOT_INITIALIZED,
+    );
+    check(
+        "submit, empty block",
+        link.submit(&[]),
+        Status::NOT_INITIALIZED,
+    );
+    let mut junk = [0u8; 16];
+    check(
+        "call unknown op",
+        link.call(
+            victory_metal_proto::SyncOp(0x7777),
+            junk.as_mut_ptr(),
+            junk.len(),
+        ),
+        Status::NOT_INITIALIZED,
+    );
+    println!("checks failed: {failures}");
+    failures
 }

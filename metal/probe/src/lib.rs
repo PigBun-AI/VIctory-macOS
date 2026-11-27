@@ -1,5 +1,5 @@
 //! M0 probe: the measurements of `docs/metal/m0-results.md`, written once
-//! against `victory_metal_bridge::abi::Link`.
+//! against `victory_metal_bridge::abi::RawLink`.
 
 pub mod platform;
 pub mod stats;

@@ -196,6 +196,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "victory-metal-back",
+ "victory-metal-proto",
  "windows-sys",
 ]
 
@@ -203,6 +204,7 @@ dependencies = [
 name = "victory-metal-front"
 version = "0.1.0"
 dependencies = [
+ "victory-metal-bridge",
  "victory-metal-proto",
  "windows",
  "windows-core",
@@ -239,6 +241,7 @@ dependencies = [
  "victory-formats",
  "victory-metal-back",
  "victory-metal-bridge",
+ "victory-metal-proto",
  "windows-sys",
 ]
 

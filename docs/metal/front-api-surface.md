@@ -312,3 +312,25 @@ crate, so each dll exports only its own names.
 * `ID3D12Fence::SetEventOnCompletion` with an event handle spawns a waiting thread
   per call.
 * D3D12 hull/domain/geometry visibility in root signatures → `E_NOTIMPL`.
+
+## 10. The bridge carries the proto
+
+`metal/bridge` has two more call codes: `OP_PROTO_SUBMIT` (args `SubmitArgs{block, len}`)
+and `OP_PROTO_CALL` (`CallArgs{op, args, len}`), both by address (same process).
+`pe::WineUnixlib` implements `victory_metal_proto::Link` on top of its raw call
+(`abi::RawLink`, the old M0 `Link`, which the M0 probe still uses). The proto
+`Status` crosses the line as an `NTSTATUS` (`abi::status_to_nt` / `nt_to_status`:
+0 is 0, an error is `0xE4D5_xxxx` holding `-status`; plain NT errors the unixlib
+returns itself map to the nearest status, anything else to `INTERNAL`).
+
+On the Mach-O side the entries hand the blocks to a replaceable executor:
+`unix::set_executor(Arc<dyn Link>)` — the back's interpreter implements the proto
+`Link` and installs itself there. Until it does, `NOP` answers `OK` and every
+other call `NOT_INITIALIZED`. `unix::InProcess` is also a proto `Link` over the
+same executor (native tests, Route B).
+
+The front gets its `Link` from `connect::link()`: `VICTORY_METAL_LINK=mock` →
+`MockLink`; else on Windows targets `WineUnixlib::load("victory_metal_bridge.dll")`.
+Tests: native `cargo test -p victory-metal-bridge` (executor round trip through the
+table entries, status mapping), and under Wine `tools/metal/test-bridge-proto.sh`.
+Not done: the `SurfaceProvider` (Wine window → layer) and the back's interpreter.

@@ -29,7 +29,7 @@ fn pump(duration: Duration) {
 
 /// Opens a window, asks the unixlib for its layer, clears and presents it.
 /// `hold` keeps the window up afterwards (for a screenshot).
-pub fn run<L: Link>(link: &L, hold: Duration) -> Report {
+pub fn run<L: RawLink>(link: &L, hold: Duration) -> Report {
     let mut r = Report::default();
     r.section("Metal layer from winemac.drv");
     let class: Vec<u16> = "STATIC\0".encode_utf16().collect();

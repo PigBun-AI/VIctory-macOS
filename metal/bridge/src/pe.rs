@@ -13,7 +13,9 @@ use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-use crate::abi::Link;
+use victory_metal_proto::{Link, Status, SyncOp};
+
+use crate::abi::{CallArgs, OP_PROTO_CALL, OP_PROTO_SUBMIT, RawLink, SubmitArgs, nt_to_status};
 
 /// `MemoryWineUnixFuncs` in `winternl.h`.
 const MEMORY_WINE_UNIX_FUNCS: u32 = 1000;
@@ -88,8 +90,36 @@ impl WineUnixlib {
     }
 }
 
+// SAFETY: the module handle is process-global and never freed here, the
+// dispatcher is a plain function, and the unixlib entries are re-entrant.
+unsafe impl Send for WineUnixlib {}
+unsafe impl Sync for WineUnixlib {}
+
+/// The proto over the unixlib: a block or an argument block goes by address
+/// (the PE and the unixlib share the process), the status comes back as an
+/// `NTSTATUS` that `nt_to_status` reads.
 impl Link for WineUnixlib {
-    // `Link::call` is the safe face of an FFI boundary: the pointer is only
+    fn submit(&self, block: &[u8]) -> Status {
+        let mut a = SubmitArgs {
+            block: block.as_ptr() as u64,
+            len: block.len() as u64,
+        };
+        nt_to_status(RawLink::call(self, OP_PROTO_SUBMIT, (&raw mut a).cast()))
+    }
+
+    fn call(&self, op: SyncOp, args: *mut u8, len: usize) -> Status {
+        let mut a = CallArgs {
+            op: op.0,
+            _pad: 0,
+            args: args as u64,
+            len: len as u64,
+        };
+        nt_to_status(RawLink::call(self, OP_PROTO_CALL, (&raw mut a).cast()))
+    }
+}
+
+impl RawLink for WineUnixlib {
+    // `RawLink::call` is the safe face of an FFI boundary: the pointer is only
     // handed on, never read here, and the trait cannot be `unsafe` per call.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     #[inline(always)]
