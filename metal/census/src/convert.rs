@@ -7,7 +7,7 @@
 //! | `vs` | vertex shader + default pixel shader (one constant output): render pipeline |
 //! | `ps` | pixel shader + a full-screen-triangle vertex shader that writes the pixel shader's inputs: render pipeline, targets as the pixel shader writes them |
 //! | `ms` | mesh shader + the default pixel shader: mesh render pipeline (no amplification program exists in the package) |
-//! | `gs` | the translator's rectangle-list geometry shader for each vertex shader: MSC and library load (the back has no geometry pipeline) |
+//! | `gs` | vertex shader + the translator's rectangle-list geometry shader (`rect_list_gs`) + default pixel shader: geometry pipeline (the back emulates it with an object and a mesh stage) |
 //!
 //! Rows go to `convert-<kind>.jsonl` under `--out`.
 
@@ -241,7 +241,7 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
     };
     row["targets"] = json!(targets.len());
     // Vertex inputs (vertex shaders): typed as the signature says.
-    let vs_inputs: Vec<DefaultInput> = if kind == "vs" {
+    let vs_inputs: Vec<DefaultInput> = if kind == "vs" || kind == "gs" {
         inputs
             .iter()
             .filter(|e| e.system_value == 0)
@@ -255,22 +255,46 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
     } else {
         Vec::new()
     };
+    // The translator's rectangle-list geometry shader of this vertex shader.
+    let rect_gs = if kind == "gs" {
+        let started = Instant::now();
+        let made = victory_shader::emit::rect_list_gs(&s.dxil, None);
+        row["gen_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+        match made {
+            Ok(g) => Some(g),
+            Err(e) => {
+                row["ok"] = json!(false);
+                row["fail_stage"] = json!("translate");
+                row["fail_class"] = json!("RectListGs");
+                row["error"] = json!(one_line(&e.to_string()));
+                return row;
+            }
+        }
+    } else {
+        None
+    };
     let root = root_signature(&[(s, visibility(s.stage))], false);
     let stages = match kind {
         "vs" => Stages {
             vs: Some(&s.dxil),
             ps: Some(&partner),
-            ms: None,
+            ..Stages::default()
+        },
+        "gs" => Stages {
+            vs: Some(&s.dxil),
+            ps: Some(&partner),
+            gs: rect_gs.as_deref(),
+            ..Stages::default()
         },
         "ms" => Stages {
-            vs: None,
             ps: Some(&partner),
             ms: Some(&s.dxil),
+            ..Stages::default()
         },
         _ => Stages {
             vs: Some(&partner),
             ps: Some(&s.dxil),
-            ms: None,
+            ..Stages::default()
         },
     };
     let mut desc = default_graphics(&root, stages, &vs_inputs, &targets, depth, ctx.variant);
@@ -294,57 +318,6 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
             t.put(&mut row);
         }
         Err(e) => fail(&mut row, &t, &e),
-    }
-    row
-}
-
-/// Geometry: the translator's rectangle-list geometry shader of each vertex
-/// shader through MSC and into a Metal library.
-fn geometry(ctx: &Ctx, hash: &str, s: &HostShader) -> Value {
-    let mut row = json!({"hash": hash, "kind": "gs"});
-    let mut t = Timing {
-        msc: 0.0,
-        lib: 0.0,
-        pso: 0.0,
-    };
-    let started = Instant::now();
-    let gs = victory_shader::emit::rect_list_gs(&s.dxil, None);
-    row["gen_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
-    let gs = match gs {
-        Ok(g) => g,
-        Err(e) => {
-            row["ok"] = json!(false);
-            row["fail_stage"] = json!("translate");
-            row["fail_class"] = json!("RectListGs");
-            row["error"] = json!(one_line(&e.to_string()));
-            return row;
-        }
-    };
-    row["dxil_bytes"] = json!(gs.len());
-    let root = root_signature(&[(s, victory_metal_back::msc::Visibility::All)], false);
-    let started = Instant::now();
-    let converted = ctx
-        .msc
-        .compile(&gs, Some(&root), &CompileOptions::default());
-    t.msc = started.elapsed().as_secs_f64() * 1000.0;
-    let converted = match converted {
-        Ok(c) => c,
-        Err(e) => {
-            fail(&mut row, &t, &e);
-            return row;
-        }
-    };
-    row["metallib_bytes"] = json!(converted.metallib.len());
-    row["msc_stage"] = json!(format!("{:?}", converted.reflection.stage));
-    let started = Instant::now();
-    let lib = ctx.device.library_from_metallib(&converted.metallib);
-    t.lib = started.elapsed().as_secs_f64() * 1000.0;
-    match lib {
-        Ok(_) => {
-            row["ok"] = json!(true);
-            t.put(&mut row);
-        }
-        Err(e) => fail(&mut row, &t, &MscError::Metal(e)),
     }
     row
 }
@@ -374,6 +347,54 @@ fn items(
         .collect()
 }
 
+/// Runs the conversion in a child process (one thread), and when Metal
+/// aborts the child on an assertion (it does not return an error), records
+/// the shader it was on as a failure and starts again after it.
+fn isolate(args: &[String], out: &std::path::Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let kind = arg(args, "--kind").ok_or("--isolate needs one --kind")?;
+    let tag = arg(args, "--tag").unwrap_or_default();
+    let rows_path = out.join(format!("convert-{kind}{tag}.jsonl"));
+    let mark = out.join(format!("current-{kind}{tag}.txt"));
+    let _ = std::fs::write(&rows_path, "");
+    let mut crashes = 0;
+    loop {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg("convert");
+        let mut skip = false;
+        for a in args {
+            if skip {
+                skip = false;
+            } else if a == "--isolate" || a == "--jobs" {
+                skip = a == "--jobs";
+            } else {
+                cmd.arg(a);
+            }
+        }
+        cmd.args(["--jobs", "1", "--resume", "--mark"]).arg(&mark);
+        let _ = std::fs::remove_file(&mark);
+        let status = cmd.status().map_err(|e| e.to_string())?;
+        if status.success() {
+            break;
+        }
+        let Ok(hash) = std::fs::read_to_string(&mark) else {
+            return Err(format!(
+                "the child failed without naming a shader: {status}"
+            ));
+        };
+        crashes += 1;
+        let rows = jsonl::Appender::open(&rows_path)?;
+        rows.push(&json!({
+            "hash": hash.trim(), "kind": kind, "ok": false, "fail_stage": "metal-abort",
+            "fail_class": "ProcessAbort",
+            "error": format!("the process aborted ({status}) while building this pipeline"),
+        }));
+        rows.flush();
+    }
+    println!("isolate {kind}: {crashes} aborts recorded");
+    Ok(())
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let out = out_dir(args);
     let kinds: Vec<String> = match arg(args, "--kind").as_deref() {
@@ -385,6 +406,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
             return Err(format!("unknown kind `{k}`"));
         }
     }
+    if flag(args, "--isolate") {
+        return isolate(args, &out);
+    }
+    let resume = flag(args, "--resume");
+    let mark = arg(args, "--mark").map(PathBuf::from);
     let threads = jobs(args);
     let limit: usize = arg(args, "--limit")
         .and_then(|l| l.parse().ok())
@@ -452,9 +478,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     );
     for kind in &kinds {
-        let all = items(&out, kind, limit, every);
+        let mut all = items(&out, kind, limit, every);
         let rows_path = out.join(format!("convert-{kind}{tag}.jsonl"));
-        std::fs::write(&rows_path, "").map_err(|e| e.to_string())?;
+        if resume {
+            let done = jsonl::seen(&rows_path, "hash");
+            all.retain(|(h, _)| !done.contains(h));
+        } else {
+            std::fs::write(&rows_path, "").map_err(|e| e.to_string())?;
+        }
         let rows = jsonl::Appender::open(&rows_path)?;
         let next = AtomicUsize::new(0);
         let started = Instant::now();
@@ -462,9 +493,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
             for _ in 0..threads.min(all.len().max(1)) {
                 s.spawn(|| {
                     while let Some((hash, shader)) = all.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        if let Some(m) = &mark {
+                            let _ = std::fs::write(m, hash);
+                        }
                         let row = match kind.as_str() {
                             "cs" => compute(&ctx, hash, shader),
-                            "gs" => geometry(&ctx, hash, shader),
                             k => graphics(&ctx, k, hash, shader),
                         };
                         rows.push(&row);

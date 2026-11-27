@@ -56,11 +56,11 @@ Measured on an Apple M5 Max, macOS 27, SDK 27.2 (2026-11-27):
 * One archive for all 20 391 pipelines fails at the flush: `MDB_MAP_FULL: Environment mapsize limit reached`
   (the archive is an LMDB database). Per kind it works, so the warm-up set is four archives:
   compute 796 MB (2 732 pipelines), vertex 51 MB (2 192), pixel 297 MB (7 214), mesh 360 MB (8 245), about
-  1.5 GB in all; open takes 23 to 285 ms each (by size). About 300 KB per compute pipeline, less for the
-  graphics ones (the pixel and vertex stages are shared between pipelines).
+  1.5 GB in all; open takes 11 to 100 ms each (by size). Flushing takes 2 to 10 s.
 * Cold compile against archive, serial, 801 pipelines of all four kinds that no earlier run had built
-  (`--compat bounds`, every 25th shader): cold 72 s in total (median 26 ms, p95 318 ms, max 1.7 s), the same
-  pipelines again without an archive 100 s (the system cache did not help), from the archive 0.28 s in total
-  (median 0.24 ms, max 11 ms): about 250 times faster.
-* Pipelines built before by an identical metallib are served by Metal's own cache at about 0.3 ms median; the
-  archive does not need it.
+  (`--compat bounds`, every 25th shader): cold (with the serializer capturing) 158 s in total (median 65 ms,
+  p95 869 ms, max 4.5 s), the same pipelines again without an archive 143 s (median 24 ms: Metal's own cache
+  helps a little, the long tail is compiled again), from the archive 0.30 s in total (median 0.31 ms, p95
+  0.65 ms, max 16 ms): about 500 times faster in total.
+* The full archives answer every pipeline of the census in 0.4 to 3 s per kind (serial), median 0.15 to 0.31 ms,
+  against 3 671 s (compute), 871 s (mesh), 739 s (pixel), 52 s (vertex) of pipeline compile time cold on 18 threads.

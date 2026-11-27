@@ -67,12 +67,24 @@ fn vertex_format(c: Component, width: u32) -> MTLVertexFormat {
     }
 }
 
+/// `DXGI_FORMAT_R32*_FLOAT/UINT/SINT` of `width` components.
+fn dxgi_format(c: Component, width: u32) -> u32 {
+    let w = width.clamp(1, 4) as usize;
+    match c {
+        Component::Float => [41, 16, 6, 2][w - 1],
+        Component::Uint => [42, 17, 7, 3][w - 1],
+        Component::Sint => [43, 18, 8, 4][w - 1],
+    }
+}
+
 /// The DXIL containers of a pipeline's stages.
 #[derive(Clone, Copy, Default)]
 pub struct Stages<'a> {
     pub vs: Option<&'a [u8]>,
     pub ps: Option<&'a [u8]>,
     pub ms: Option<&'a [u8]>,
+    /// A geometry stage (with `vs`).
+    pub gs: Option<&'a [u8]>,
 }
 
 /// A pipeline description with the given stages, inputs (each at the next
@@ -85,7 +97,7 @@ pub fn default_graphics<'a>(
     depth_output: bool,
     variant: Variant,
 ) -> GraphicsDesc<'a> {
-    let Stages { vs, ps, ms } = stages;
+    let Stages { vs, ps, ms, gs } = stages;
     let blended = variant == Variant::Blended;
     let keep = StencilFace {
         fail: MTLStencilOperation::Keep,
@@ -121,6 +133,7 @@ pub fn default_graphics<'a>(
         ps,
         amp: None,
         ms,
+        gs,
         root,
         inputs: inputs
             .iter()
@@ -129,6 +142,7 @@ pub fn default_graphics<'a>(
                 semantic: e.semantic.clone(),
                 semantic_index: e.index,
                 format: vertex_format(e.component, e.width),
+                dxgi_format: dxgi_format(e.component, e.width),
                 slot: 0,
                 offset: 16 * i as u32,
                 per_instance: false,

@@ -27,6 +27,8 @@ impl Appender {
     pub fn push(&self, row: &Value) {
         let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
         let _ = writeln!(f, "{row}");
+        // A Metal assertion aborts the process: the rows so far must be on disk.
+        let _ = f.flush();
     }
 
     pub fn flush(&self) {
