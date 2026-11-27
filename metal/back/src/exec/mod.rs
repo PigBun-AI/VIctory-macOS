@@ -107,6 +107,17 @@ pub(crate) struct RootSig {
     pub(crate) static_samplers: Vec<crate::sampler::Sampler>,
 }
 
+impl RootSig {
+    /// D3D12's rule for a pipeline and a bound root signature: the same
+    /// object, or one with an identical description (two `CreateRootSignature`
+    /// calls on the same bytes give two objects, and a pipeline made with one
+    /// runs under the other). The argument buffer layout must agree too: it
+    /// is what the compiled shader reads.
+    pub(crate) fn compatible_with(self: &Arc<Self>, other: &Arc<RootSig>) -> bool {
+        Arc::ptr_eq(self, other) || (self.desc == other.desc && self.layout == other.layout)
+    }
+}
+
 /// A pipeline state: compute or graphics (vertex or mesh), made for one
 /// root signature.
 pub(crate) struct Pso {

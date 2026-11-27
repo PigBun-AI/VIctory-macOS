@@ -461,9 +461,9 @@ impl Run<'_> {
             // A dispatch needs a compute pipeline.
             return Err(Status::INVALID_ARG);
         };
-        // The pipeline was made for one root signature; its argument buffer
-        // layout is what the shader reads.
-        if !Arc::ptr_eq(&pso.root_sig, &sig) {
+        // The pipeline was made for one root signature (or an identical
+        // one); its argument buffer layout is what the shader reads.
+        if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
         if bound.dirty && !bound.shadow.is_empty() {
