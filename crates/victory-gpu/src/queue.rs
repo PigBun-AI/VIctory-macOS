@@ -1069,6 +1069,9 @@ struct Shown {
     resource: usize,
 }
 
+#[cfg(windows)]
+mod frametime_log;
+
 /// Shows `texture` (with optional `overlay` plane blended over it) in our window.
 #[cfg(windows)]
 fn show_planes(
@@ -1081,6 +1084,7 @@ fn show_planes(
         return;
     };
     let shown = host.present_planes(texture, state, overlay, what.frame);
+    frametime_log::present(what.frame, shown.is_some());
     #[cfg(feature = "diagnostics")]
     blinks(what.frame, what.resource as This, state, shown);
     #[cfg(not(feature = "diagnostics"))]
