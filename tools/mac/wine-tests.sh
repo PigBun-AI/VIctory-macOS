@@ -3,6 +3,7 @@
 # tools/macos/test-wine.sh) with what the helper-shader tests need:
 #
 #   tools/mac/wine-tests.sh [cargo test arguments]     e.g.  -p victory-gpu
+#   tools/mac/wine-tests.sh --rosetta-probe [quick|full]   the x86 instruction probe under Wine (below)
 #
 # - The DXC front end over D3DMetal's libdxcompiler.dylib (tools/macos/dxc-d3dmetal.sh) is
 #   built once into target/dxc-d3dmetal and named by VICTORY_DXC_HELPER / DXC_LIB /
@@ -18,6 +19,9 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# --rosetta-probe: not a cargo test. Cross-builds tools/mac/rosetta-probe/probe-wine.c and runs it with a vectored
+# exception handler in its own prefix target/wineprefix-probe (CPU only, no game); see tools/mac/rosetta-probe-wine.sh.
+if [ "${1:-}" = "--rosetta-probe" ]; then shift; exec sh tools/mac/rosetta-probe-wine.sh "$@"; fi
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
 WDIR="${VICTORY_MAC_WINE_DIR:-$ROOT/../VIctory-macOS/target/wine-cx}"
 [ -x "$WDIR/bin/wine" ] || WDIR="$HOME/Library/Caches/victory-macos/target/wine-cx"
