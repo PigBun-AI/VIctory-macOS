@@ -134,9 +134,13 @@ fn counted_in_threads(parts: &Parts) -> bool {
 /// bc3cd4b0, which does so for two of the programs by their digests).
 pub(super) fn lower_counted(parts: &Parts, counted: bool) -> Result<Lowered, ShaderError> {
     let mut bad = HashMap::new();
+    vertex_flat::clear_asked(); // mac S1
+    let mut again = 0; // mac S1
     loop {
         match Lower::new(parts, &bad).run(counted) {
             Ok(l) => return Ok(l),
+            // mac S1: reads the layout lacked were asked for: once more with them.
+            Err(Stop::Fail(ShaderError::Unsupported { what, .. })) if what == vertex_flat::MORE && again < 8 => again += 1,
             Err(Stop::Retry(v, why)) => {
                 if bad.insert(v, why).is_some() {
                     return Err(ShaderError::Unsupported {
@@ -1500,6 +1504,8 @@ impl<'a> Lower<'a> {
         match x.native.stage {
             HwStage::Ps if !super::host_attribute_at_vertex() => {
                 vreads = vertex_flat::pixel_reads(x.io, &x.inputs);
+                vreads.extend(vertex_flat::asked());
+                vreads = vertex_flat::canonical(vreads);
                 let row = vertex_flat::first_row(&x.inputs);
                 s.inputs.extend(vertex_flat::elements(&vreads, Some(row)));
             }
@@ -2567,6 +2573,9 @@ impl<'a> Lower<'a> {
             self.exit(b)?;
         }
         self.vtx_epilogue(); // mac S1
+        if !vertex_flat::covers(&self.vreads) {
+            return Err(unsupported(0, vertex_flat::MORE)); // mac S1
+        }
         self.fill_phis()?;
         let user_data = self.user_reads.values().copied().collect();
         self.s.samplers = self.samplers.len() as u32;
@@ -11003,9 +11012,12 @@ impl<'a> Lower<'a> {
                 (id, col)
             } else {
                 let e = &self.s.inputs[id];
-                let read = vertex_flat::find(&self.vreads, &e.name, e.index, e.col + col)
-                    .ok_or("a per-vertex value the layout lacks")?;
-                let (n, comp) = vertex_flat::slot(&self.vreads, read, k).ok_or("a per-vertex value the layout lacks")?;
+                let found = vertex_flat::find(&self.vreads, &e.name, e.index, e.col + col)
+                    .and_then(|read| vertex_flat::slot(&self.vreads, read, k));
+                let Some((n, comp)) = found else {
+                    vertex_flat::ask(VertexRead { name: e.name.clone(), index: e.index, channel: e.col + col, vertices: 1 << (k - 1) });
+                    return Err(vertex_flat::MORE);
+                };
                 (self.vflat_id + n, comp)
             };
             return match self.load_any_input(id, col) {

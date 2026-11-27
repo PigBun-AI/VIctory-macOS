@@ -191,6 +191,40 @@ pub(crate) fn pixel_reads(io: &Io, inputs: &[SigElement]) -> Vec<VertexRead> {
 thread_local! {
     /// What the mesh stage being translated must hand on ([`with_reads`]).
     static READS: RefCell<Vec<VertexRead>> = const { RefCell::new(Vec::new()) };
+    /// Reads the lowering of the pixel program in progress found that [`pixel_reads`] did not list (16-bit
+    /// inputs read other channels than the instruction names): asked for, and the lowering run again.
+    static ASKED: RefCell<Vec<VertexRead>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The refusal that makes the lowering start again with the reads asked for so far.
+pub(crate) const MORE: &str = "a per-vertex value the layout lacks";
+
+/// Forgets what was asked for (a new translation).
+pub(crate) fn clear_asked() {
+    ASKED.with(|a| a.borrow_mut().clear());
+}
+
+/// Asks for a read the layout lacks.
+pub(crate) fn ask(read: VertexRead) {
+    ASKED.with(|a| {
+        let mut a = a.borrow_mut();
+        a.push(read);
+        *a = canonical(std::mem::take(&mut *a));
+    });
+}
+
+/// What was asked for.
+pub(crate) fn asked() -> Vec<VertexRead> {
+    ASKED.with(|a| a.borrow().clone())
+}
+
+/// Whether `reads` hold everything that was asked for.
+pub(crate) fn covers(reads: &[VertexRead]) -> bool {
+    asked().iter().all(|a| {
+        reads
+            .iter()
+            .any(|r| (&r.name, r.index, r.channel) == (&a.name, a.index, a.channel) && r.vertices & a.vertices == a.vertices)
+    })
 }
 
 /// Runs `f` (a translation) with `reads` as what the mesh stage hands to the pixel stage.
