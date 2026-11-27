@@ -362,7 +362,7 @@ fn a_table_a_root_uav_and_a_static_sampler() {
             root_uav(0),
         ],
         static_samplers: vec![StaticSampler {
-            filter: 0x15, // D3D12_FILTER_MIN_MAG_MIP_LINEAR
+            filter: 0x15, // min/mag/mip linear (IRFilterMinMagMipLinear)
             address: [1, 1, 1],
             mip_lod_bias: 0.0,
             max_anisotropy: 0,
