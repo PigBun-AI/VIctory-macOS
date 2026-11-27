@@ -653,6 +653,28 @@ draws (`VICTORY_WORLD_DRAWS`); with `w<N>` and no world ever reached, nothing tr
 *Fidelity.* None affected: it only chooses which frame is recorded or saved. *Remove when* the Windows line's
 recorder names world frames itself (then drop `frames.rs` and the three hooks; `world.rs` stays for I1).
 
+### P4 — the title window's client area is the size the title asks for (`victory-hle/src/modules/lifecycle.rs`, shared layer)
+
+*What.* A console title passes its picture size (3840x2160, or 1280x720 with L3) to `CreateWindowEx`, which on a PC
+is the size of the OUTER frame. Wine took the caption and borders off it: 1280x720 became a 1272x686 point client
+area (1.854:1), into which the 16:9 swap chain was stretched (4.3% vertical squash; Metal back, `present-size-20261127`).
+`fit()` now adds the frame (`AdjustWindowRectEx` with the window's own style, ex style and menu flag) to the asked
+size, shrinks the CLIENT size to what the work area (and `VICTORY_WINDOW_MAX`, which stays a limit of the outer frame)
+leaves after the frame, keeping its proportions, and creates the window with the outer size. Child windows and
+`CW_USEDEFAULT` are untouched. Log: `title window created asked=... outer=... client=...` for every top-level
+window (the client size must equal the asked one unless it was fitted to the screen), and the existing
+`title window fitted to the screen` now also names the frame.
+
+*Shared layer, no Mac condition.* The host's own window (`victory-gpu` `host.rs`) already does this with
+`AdjustWindowRect`; the title window did not, so on Windows the same code also made a client area that is smaller than
+the swap chain by the frame. Not a Wine quirk.
+
+*Test.* `lifecycle::tests::the_frame_is_added_to_the_client_size_the_title_asks_for`,
+`a_shrunk_window_keeps_a_16_by_9_client_area` (rules), `a_framed_title_window_has_the_client_area_the_title_asked_for`
+(a real framed window, client area 640x360); `lifecycle` is Windows-only, so run them with
+`tools/mac/wine-tests.sh -p victory-hle lifecycle`.
+*Remove when.* Never needed again: it is the right behaviour on every host.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

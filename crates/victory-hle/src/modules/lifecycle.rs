@@ -110,13 +110,26 @@ pub extern "system" fn CreateWindowExW(
     instance: HINSTANCE,
     param: *const c_void,
 ) -> HWND {
-    let (x, y, width, height) = fit(parent, x, y, width, height);
+    let (x, y, outer_width, outer_height) =
+        fit(parent, !menu.is_null(), style, ex_style, x, y, width, height);
     // SAFETY: the title's own arguments, forwarded (the size fitted).
     let hwnd = unsafe {
         wm::CreateWindowExW(
-            ex_style, class, name, style, x, y, width, height, parent, menu, instance, param,
+            ex_style,
+            class,
+            name,
+            style,
+            x,
+            y,
+            outer_width,
+            outer_height,
+            parent,
+            menu,
+            instance,
+            param,
         )
     };
+    log_client_area(hwnd, parent, (width, height), (outer_width, outer_height));
     hook(hwnd);
     hwnd
 }
@@ -136,38 +149,135 @@ pub extern "system" fn CreateWindowExA(
     instance: HINSTANCE,
     param: *const c_void,
 ) -> HWND {
-    let (x, y, width, height) = fit(parent, x, y, width, height);
+    let (x, y, outer_width, outer_height) =
+        fit(parent, !menu.is_null(), style, ex_style, x, y, width, height);
     // SAFETY: the title's own arguments, forwarded (the size fitted).
     let hwnd = unsafe {
         wm::CreateWindowExA(
-            ex_style, class, name, style, x, y, width, height, parent, menu, instance, param,
+            ex_style,
+            class,
+            name,
+            style,
+            x,
+            y,
+            outer_width,
+            outer_height,
+            parent,
+            menu,
+            instance,
+            param,
         )
     };
+    log_client_area(hwnd, parent, (width, height), (outer_width, outer_height));
     hook(hwnd);
     hwnd
 }
 
-/// A console title sizes its window to its render target (
-/// the title: 3840x2160 on a Series X), which can exceed the host's screen.
+/// A console title sizes its window to its render target (3840x2160 for
+/// the title on a Series X): the size it passes is the size of the picture,
+/// that is of the CLIENT area. On a PC the size of `CreateWindowEx` is the
+/// outer frame, so the frame (caption, borders; `AdjustWindowRectEx`) is
+/// added to it here, else the picture is stretched into a client area that
+/// is not 16:9 (1280x720 outer frame: 1272x686 inside on a Mac).
+///
 /// A top-level window larger than the work area is shrunk to fit, keeping
-/// its proportions, and centred; what it shows is scaled to it (the swap
-/// chain stretches). `VICTORY_WINDOW_MAX=WIDTHxHEIGHT` applies a smaller
-/// limit without changing the title's render targets.
-fn fit(parent: HWND, x: i32, y: i32, width: i32, height: i32) -> (i32, i32, i32, i32) {
+/// the proportions of the client area, and centred; what it shows is
+/// scaled to it (the swap chain stretches). `VICTORY_WINDOW_MAX=WIDTHxHEIGHT`
+/// applies a smaller limit (to the outer frame) without changing the title's
+/// render targets. Returns the position and the OUTER size to create it with.
+fn fit(
+    parent: HWND,
+    menu: bool,
+    style: u32,
+    ex_style: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> (i32, i32, i32, i32) {
+    if !parent.is_null() {
+        return (x, y, width, height);
+    }
     let mut area = RECT::default();
     // SAFETY: `area` receives the primary monitor's work area.
     let known =
         unsafe { wm::SystemParametersInfoW(wm::SPI_GETWORKAREA, 0, (&raw mut area).cast(), 0) };
+    let extras = frame_extras(style, ex_style, menu);
     let limit = window_limit();
-    let fitted = fit_with_limit(&area, width, height, limit);
-    if !parent.is_null() || known == 0 || fitted == (width, height) {
-        return (x, y, width, height);
+    if known == 0 {
+        let (w, h) = client_to_outer((width, height), extras);
+        return (x, y, w, h);
     }
-    tracing::info!(width, height, to = ?fitted, ?limit, "title window fitted to the screen");
-    let (w, h) = fitted;
-    let left = area.left + (area.right - area.left - w) / 2;
-    let top = area.top + (area.bottom - area.top - h) / 2;
-    (left, top, w, h)
+    let client = fit_client(&area, extras, limit, width, height);
+    let outer = client_to_outer(client, extras);
+    if client != (width, height) {
+        tracing::info!(width, height, to = ?client, ?extras, ?limit, "title window fitted to the screen");
+        let left = area.left + (area.right - area.left - outer.0) / 2;
+        let top = area.top + (area.bottom - area.top - outer.1) / 2;
+        return (left, top, outer.0, outer.1);
+    }
+    (x, y, outer.0, outer.1)
+}
+
+/// What the frame adds to the client area, width and height.
+fn frame_extras(style: u32, ex_style: u32, menu: bool) -> (i32, i32) {
+    let mut frame = RECT::default();
+    // SAFETY: `frame` is an empty rectangle the frame is added to.
+    let ok = unsafe { wm::AdjustWindowRectEx(&mut frame, style, i32::from(menu), ex_style) };
+    if ok == 0 {
+        return (0, 0);
+    }
+    (frame.right - frame.left, frame.bottom - frame.top)
+}
+
+/// The outer size for a client size; `CW_USEDEFAULT` and other sizes that are
+/// not sizes stay as they are.
+fn client_to_outer(client: (i32, i32), extras: (i32, i32)) -> (i32, i32) {
+    if client.0 <= 0 || client.1 <= 0 {
+        return client;
+    }
+    (client.0 + extras.0, client.1 + extras.1)
+}
+
+/// The client size to create a window with for the client size the title
+/// asked for: shrunk to what the work area (and the limit, both of the outer
+/// frame) leaves after the frame, proportions kept.
+fn fit_client(
+    area: &RECT,
+    extras: (i32, i32),
+    limit: Option<(i32, i32)>,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    if width <= 0 || height <= 0 {
+        return (width, height);
+    }
+    let inside = RECT {
+        left: area.left,
+        top: area.top,
+        right: area.right - extras.0,
+        bottom: area.bottom - extras.1,
+    };
+    let limit = limit.map(|(w, h)| ((w - extras.0).max(1), (h - extras.1).max(1)));
+    fit_with_limit(&inside, width, height, limit)
+}
+
+/// Logs the client area of a window the title made, next to the size it
+/// asked for: they are equal when the frame was accounted for.
+fn log_client_area(hwnd: HWND, parent: HWND, asked: (i32, i32), outer: (i32, i32)) {
+    if hwnd.is_null() || !parent.is_null() {
+        return;
+    }
+    let mut client = RECT::default();
+    // SAFETY: a window this thread just created.
+    if unsafe { wm::GetClientRect(hwnd, &mut client) } != 0 {
+        tracing::info!(
+            asked = ?asked,
+            outer = ?outer,
+            client = ?(client.right - client.left, client.bottom - client.top),
+            "title window created"
+        );
+    }
 }
 
 fn parse_window_limit(value: &str) -> Option<(i32, i32)> {
@@ -475,6 +585,43 @@ mod tests {
     }
 
     #[test]
+    fn the_frame_is_added_to_the_client_size_the_title_asks_for() {
+        let area = RECT { left: 0, top: 0, right: 2560, bottom: 1440 };
+        // a caption of 32 and borders of 4 (a 720p client area inside 1288x759)
+        let extras = (8, 39);
+        assert_eq!(fit_client(&area, extras, None, 1280, 720), (1280, 720));
+        assert_eq!(client_to_outer((1280, 720), extras), (1288, 759));
+        // no frame (a popup): nothing added
+        assert_eq!(client_to_outer((1280, 720), (0, 0)), (1280, 720));
+        assert_eq!(
+            client_to_outer((wm::CW_USEDEFAULT, 0), extras),
+            (wm::CW_USEDEFAULT, 0)
+        );
+    }
+
+    #[test]
+    fn a_shrunk_window_keeps_a_16_by_9_client_area() {
+        let area = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
+        let extras = (16, 39);
+        let client = fit_client(&area, extras, None, 3840, 2160);
+        // the frame and the client together fit the work area
+        let outer = client_to_outer(client, extras);
+        assert!(outer.0 <= 1920 && outer.1 <= 1040, "{outer:?}");
+        // the client keeps 16:9 to a pixel (what the picture is stretched into)
+        assert!((client.0 * 9 - client.1 * 16).abs() <= 16, "{client:?}");
+        // the limit is a limit of the outer frame
+        let limited = fit_client(&area, extras, Some((1280, 720)), 3840, 2160);
+        let outer = client_to_outer(limited, extras);
+        assert!(outer.0 <= 1280 && outer.1 <= 720, "{outer:?}");
+        assert!((limited.0 * 9 - limited.1 * 16).abs() <= 16, "{limited:?}");
+        // CW_USEDEFAULT is left to the system
+        assert_eq!(
+            fit_client(&area, extras, None, wm::CW_USEDEFAULT, 0),
+            (wm::CW_USEDEFAULT, 0)
+        );
+    }
+
+    #[test]
     fn configured_window_limit_fits_4k_into_1080p() {
         let area = RECT {
             left: 100,
@@ -529,6 +676,34 @@ mod tests {
         ] {
             assert_eq!(parse_window_limit(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_framed_title_window_has_the_client_area_the_title_asked_for() {
+        let null = std::ptr::null_mut();
+        let hwnd = CreateWindowExW(
+            0,
+            w!("STATIC"),
+            w!("framed"),
+            wm::WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            640,
+            360,
+            null,
+            null,
+            null,
+            std::ptr::null(),
+        );
+        assert!(!hwnd.is_null());
+        let mut client = RECT::default();
+        // SAFETY: our window.
+        unsafe {
+            assert_ne!(wm::GetClientRect(hwnd, &mut client), 0);
+            wm::DestroyWindow(hwnd);
+        }
+        // the frame is outside the 640x360 the title asked for
+        assert_eq!((client.right - client.left, client.bottom - client.top), (640, 360));
     }
 
     #[test]
