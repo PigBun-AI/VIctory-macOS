@@ -125,6 +125,8 @@ pub struct PassSpec {
     /// Slot `i` is attachment `i`; `None` is an unused slot.
     pub colors: Vec<Option<ColorAttachment>>,
     pub depth: Option<DepthAttachment>,
+    /// The size of a pass with no attachment at all.
+    pub empty_size: Option<[u32; 2]>,
 }
 
 /// What a pass ends with: which stores can be skipped.
@@ -456,9 +458,9 @@ impl crate::record::CommandList {
             depth = Some(v);
         }
         if size[0] == u32::MAX {
-            return Err(Error::BadArgument(
-                "a render pass without attachments".into(),
-            ));
+            size = spec.empty_size.ok_or_else(|| {
+                Error::BadArgument("a render pass without attachments or a size".into())
+            })?;
         }
         self.pass = Some(Pass {
             spec,
@@ -572,6 +574,12 @@ impl crate::record::CommandList {
         }
         if pass.layers > 1 {
             desc.setRenderTargetArrayLength(pass.layers as usize);
+        }
+        if pass.spec.empty_size.is_some() {
+            desc.setRenderTargetWidth(pass.size[0] as usize);
+            desc.setRenderTargetHeight(pass.size[1] as usize);
+            // SAFETY: a plain count, 1 is always valid.
+            unsafe { desc.setDefaultRasterSampleCount(1) };
         }
         pass.opened = true;
         let encoder = self

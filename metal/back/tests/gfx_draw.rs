@@ -1496,3 +1496,53 @@ fn an_indirect_mesh_dispatch_reads_its_groups_and_the_count_buffer() {
         );
     }
 }
+
+const PS_UAV_ONLY: &str = "struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+RWByteAddressBuffer bits : register(u1);\n\
+void main(VSOut i) { bits.Store(0, 0x4321); }\n";
+
+#[test]
+fn a_pass_without_attachments_runs_pixel_shaders_that_only_write_through_views() {
+    let Some(ps) = dxil_or_skip("draw_ps_uav_only", "ps_6_6", PS_UAV_ONLY) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.ps = ps;
+    let mut rd = RootSigDesc::default();
+    let mut p = descriptor_param(RootParamKind::UAV);
+    p.shader_register = 1;
+    rd.params.push(p);
+    g.sig = g.fx.root_sig(&rd);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0; 8]);
+    let mut desc = g.desc();
+    desc.rt_count = 0;
+    desc.rt_formats[0] = 0;
+    let pso = g.pso(desc);
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let mut cmds = vec![begin(1, g.q)];
+    cmds.extend(g.state(pso, va, 3 * STRIDE));
+    cmds.push(root_va_graphics(0, RootParamKind::UAV, out.gpu_va));
+    cmds.push(fill(out.res, 0, 0, 256));
+    let mut b = <BeginRenderPass as Wire>::ZERO;
+    b.width = W;
+    b.height = H;
+    cmds.push(Command::BeginRenderPass(b));
+    cmds.push(draw(3));
+    cmds.push(Command::Barrier(Barrier::memory(
+        stage::FRAGMENT,
+        stage::BLIT,
+    )));
+    cmds.push(end_pass());
+    cmds.push(copy(rb.res, out.res, 256));
+    cmds.push(end(1));
+    assert_eq!(
+        g.fx.submit(&cmds),
+        Status::OK,
+        "{:?}",
+        g.fx.executor().last_error()
+    );
+    g.settle();
+    assert_eq!(cpu_read(rb.cpu_addr, 1)[0], 0x4321);
+}

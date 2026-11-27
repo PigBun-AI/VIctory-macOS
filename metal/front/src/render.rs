@@ -74,6 +74,9 @@ pub struct RenderRec {
     pending_stencil: Option<u32>,
     window: Option<EndWindow>,
     discarded: HashSet<u32>,
+    /// The largest area the viewports and scissor rectangles set so far
+    /// reach: the size of a pass with no attachments.
+    extent: [u32; 2],
 }
 
 impl RenderRec {
@@ -188,13 +191,15 @@ impl CommandList {
             return true;
         }
         let n = self.render.rt_count();
-        if n == 0 && self.render.ds.is_none() {
-            self.unsupported();
-            return false;
-        }
         let r = &mut self.render;
         let mut b = <BeginRenderPass as Wire>::ZERO;
         b.rt_count = n as u32;
+        if n == 0 && r.ds.is_none() {
+            // Draws that only write through resource views: Metal needs the
+            // size of the pass said, the area the viewports reach is it.
+            b.width = r.extent[0].clamp(1, 16384);
+            b.height = r.extent[1].clamp(1, 16384);
+        }
         let mut open = OpenPass::default();
         for i in 0..n {
             let Some(tv) = r.rt[i] else { continue };
@@ -422,6 +427,11 @@ impl CommandList {
         if v.len() > MAX_VIEWPORTS {
             return self.fail(Hr::E_INVALIDARG);
         }
+        for vp in v {
+            let reach = |o: f32, size: f32| (o.max(0.0) + size.max(0.0)).ceil().min(16384.0) as u32;
+            self.render.extent[0] = self.render.extent[0].max(reach(vp.x, vp.width));
+            self.render.extent[1] = self.render.extent[1].max(reach(vp.y, vp.height));
+        }
         self.push_raw(Command::SetViewports(SetViewports::from_slice(v)));
     }
 
@@ -429,6 +439,10 @@ impl CommandList {
     pub fn set_scissors(&mut self, r: &[[i32; 4]]) {
         if r.len() > MAX_VIEWPORTS {
             return self.fail(Hr::E_INVALIDARG);
+        }
+        for e in r {
+            self.render.extent[0] = self.render.extent[0].max(e[2].clamp(0, 16384) as u32);
+            self.render.extent[1] = self.render.extent[1].max(e[3].clamp(0, 16384) as u32);
         }
         let rs: Vec<Rect> = r
             .iter()

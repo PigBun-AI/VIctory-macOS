@@ -169,11 +169,17 @@ wire_struct! {
     /// Starts a render pass (an encoder). `rt_count` is the highest used
     /// slot + 1. All attachments must agree on sample count and size
     /// (`INVALID_ARG`). Only the load actions are here; stores come with the end.
+    ///
+    /// A pass with no attachment at all (draws that only write through
+    /// resource views) gives its size in `width` and `height` (1..=16384);
+    /// with attachments both are 0 and the attachments' size is the pass's.
     pub struct BeginRenderPass {
         rt_count: u32,
         flags: u32,
         rt: [RenderAttachment; 8],
         ds: DepthAttachment,
+        width: u32,
+        height: u32,
     }
 }
 

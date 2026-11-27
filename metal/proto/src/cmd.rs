@@ -554,6 +554,18 @@ fn check_begin_pass(op: Opcode, c: &BeginRenderPass) -> Result<(), Error> {
         }
     }
     let d = &c.ds;
+    let attachments =
+        c.rt.iter()
+            .take(c.rt_count as usize)
+            .any(|a| !a.res.is_null());
+    let sized = c.width != 0 || c.height != 0;
+    if attachments || !d.res.is_null() {
+        if sized {
+            return Err(bad(op, "a size with attachments"));
+        }
+    } else if !(1..=16384).contains(&c.width) || !(1..=16384).contains(&c.height) {
+        return Err(bad(op, "size of a pass without attachments"));
+    }
     if d.clear_depth.is_nan() {
         return Err(bad(op, "clear depth"));
     }

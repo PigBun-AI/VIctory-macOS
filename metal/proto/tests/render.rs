@@ -26,7 +26,7 @@ fn decodes(c: Command<'_>) -> bool {
 fn sizes_are_what_the_docs_say() {
     assert_eq!(<RenderAttachment as Wire>::SIZE, 36);
     assert_eq!(<DepthAttachment as Wire>::SIZE, 32);
-    assert_eq!(<BeginRenderPass as Wire>::SIZE, 8 + 8 * 36 + 32);
+    assert_eq!(<BeginRenderPass as Wire>::SIZE, 8 + 8 * 36 + 32 + 8);
     assert_eq!(<EndRenderPass as Wire>::SIZE, 16);
     assert_eq!(<SetViewports as Wire>::SIZE, 8 + 16 * 24);
     assert_eq!(<SetScissors as Wire>::SIZE, 8 + 16 * 16);
@@ -133,4 +133,22 @@ fn slices_of_the_state_commands_hand_back_what_was_put_in() {
         }; 20],
     );
     assert_eq!(big.views().len(), MAX_VERTEX_BUFFERS);
+}
+
+#[test]
+fn a_pass_without_attachments_says_its_size_and_one_with_attachments_does_not() {
+    // No attachment: the size is required.
+    let mut b = <BeginRenderPass as Wire>::ZERO;
+    assert!(!decodes(Command::BeginRenderPass(b)));
+    b.width = 64;
+    assert!(!decodes(Command::BeginRenderPass(b)));
+    b.height = 32;
+    assert!(decodes(Command::BeginRenderPass(b)));
+    b.height = 16385;
+    assert!(!decodes(Command::BeginRenderPass(b)));
+    // Attachments: the size must stay 0.
+    let mut b = sample_begin_pass();
+    b.width = 8;
+    b.height = 8;
+    assert!(!decodes(Command::BeginRenderPass(b)));
 }

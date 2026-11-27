@@ -80,6 +80,9 @@ impl Run<'_> {
             })
         };
         let mut spec = PassSpec::default();
+        if c.width != 0 {
+            spec.empty_size = Some([c.width, c.height]);
+        }
         for a in c.attachments() {
             if a.res.is_null() {
                 spec.colors.push(None);

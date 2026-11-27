@@ -350,11 +350,8 @@ fn a_discard_after_the_pass_turns_the_store_into_dont_care_and_the_next_load_too
 }
 
 #[test]
-fn draws_without_targets_and_bad_arguments_fail_the_list() {
+fn bad_arguments_fail_the_list() {
     let (_l, dev) = setup();
-    let mut l = list(&dev);
-    l.draw(3, 1, 0, 0);
-    assert!(l.close().is_err());
     let mut l = list(&dev);
     l.set_topology(12);
     assert!(l.close().is_err());
@@ -448,4 +445,16 @@ fn an_indirect_draw_is_render_work_and_an_indirect_dispatch_ends_the_pass() {
     l.set_render_targets(rts(v), None);
     l.execute_indirect(&draw, 1, &args, 0, None);
     assert_eq!(names(&l.close().unwrap()), ["begin", "indirect", "end"]);
+}
+
+#[test]
+fn draws_without_targets_begin_a_pass_sized_by_the_viewport() {
+    let (_l, dev) = setup();
+    let mut l = list(&dev);
+    l.set_viewports(&[Viewport::new(0.0, 0.0, 64.5, 32.0)]);
+    l.draw(3, 1, 0, 0);
+    let items = l.close().unwrap();
+    assert_eq!(names(&items), ["viewports", "begin", "draw", "end"]);
+    let b = begin_of(&items, 0);
+    assert_eq!((b.rt_count, b.width, b.height), (0, 65, 32));
 }
