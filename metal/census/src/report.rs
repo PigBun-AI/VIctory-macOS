@@ -411,6 +411,10 @@ fn note(key: &str, example: &str) -> Option<&'static str> {
         Some(
             "Cause: a 64-bit atomic on a buffer the converter does not take (known: i64 atomics on a heap buffer). Windows is not affected.",
         )
+    } else if key.contains("ProcessAbort") {
+        Some(
+            "Cause: Metal asserts (SIGABRT, not an error return) while building the geometry-emulation pipeline of the rectangle-list geometry shader for these vertex shaders; the assertion text is `Mesh Render Pipeline Descriptor Validation: meshFunction must not be nil`. Found by running the census with `--isolate`. A defect in the back's geometry pipeline path (`render.rs`, `Kind::Geometry`), to be reduced to a test by whoever owns it.",
+        )
     } else if key.contains("total-mesh-size") {
         Some(
             "Cause: Metal caps the total threadgroup memory of a mesh pipeline (vertices, primitives and payload) at 32768 bytes; these D3D12 mesh shaders declare more output. A hardware limit: the fix is splitting the work across more groups, which changes the shader. Windows is not affected.",
