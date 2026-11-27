@@ -46,9 +46,9 @@
 mod dxil;
 mod gfx;
 mod handles;
+mod indirect;
 mod present;
 mod render_cmds;
-mod indirect;
 mod stream;
 mod sync;
 pub mod tlab;

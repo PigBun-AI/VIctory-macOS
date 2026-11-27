@@ -26,6 +26,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
+use objc2::Message;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -219,16 +220,19 @@ impl Default for QueueOptions {
 /// One thing for the queue's submit thread to do, in the order the calls
 /// that made it were made.
 enum Job {
-    /// Commit these command buffers, then signal the queue's timeline.
+    /// Commit these command buffers, then signal the queue's timeline. With
+    /// a `drawable`, the queue waits for it before the buffers and signals
+    /// it after the commit.
     Commit {
         buffers: Vec<Retained<ProtocolObject<dyn MTL4CommandBuffer>>>,
+        drawable: Option<Retained<ProtocolObject<dyn MTLDrawable>>>,
         timeline: Arc<Timeline>,
         value: u64,
         sink: Arc<Sink>,
-        /// A drawable the buffers write: the queue waits for it before the
-        /// commit and signals it after.
-        drawable: Option<(Retained<ProtocolObject<dyn MTLDrawable>>, bool)>,
     },
+    /// `present` of a drawable that an earlier commit signaled: it must come
+    /// after that job's `signalDrawable`, so it is made by the same thread.
+    Present(Retained<ProtocolObject<dyn MTLDrawable>>),
     /// `signalEvent:value:` of a fence.
     Signal {
         event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
@@ -353,16 +357,16 @@ impl Submitter {
         match job {
             Job::Commit {
                 mut buffers,
+                drawable,
                 timeline,
                 value,
                 sink,
-                drawable,
             } => {
-                if let Some((d, _)) = &drawable {
-                    raw.waitForDrawable(d);
-                }
                 let mut ptrs: Vec<NonNull<ProtocolObject<dyn MTL4CommandBuffer>>> =
                     buffers.iter_mut().map(|b| NonNull::from(&**b)).collect();
+                if let Some(d) = &drawable {
+                    raw.waitForDrawable(d);
+                }
                 // SAFETY: `ptrs` holds valid, ended command buffers that
                 // `buffers` keeps alive for the call.
                 unsafe {
@@ -372,17 +376,14 @@ impl Submitter {
                         &commit_options(&sink),
                     );
                 }
-                if let Some((d, present)) = &drawable {
+                if let Some(d) = &drawable {
                     raw.signalDrawable(d);
-                    // Presented here, after the commit and the signal.
-                    if *present {
-                        d.present();
-                    }
                 }
                 let event: &ProtocolObject<dyn MTLEvent> =
                     ProtocolObject::from_ref(&*timeline.event);
                 raw.signalEvent_value(event, value);
             }
+            Job::Present(d) => d.present(),
             Job::Signal { event, value } => {
                 raw.signalEvent_value(ProtocolObject::from_ref(&*event), value)
             }
@@ -754,23 +755,26 @@ impl Queue {
 
     /// [`Queue::submit`] for lists that write `drawable`: the queue waits
     /// for the display to be done with the drawable before the lists run
-    /// and signals it after the commit. The queue's submit thread commits,
-    /// so the drawable is presented there too, after the signal, when
-    /// `present` is set; otherwise the caller must present it after the
-    /// returned value is reached.
+    /// and signals it after the commit (the caller then presents it).
     pub fn submit_drawable(
         &self,
         lists: Vec<CommandList>,
         drawable: &ProtocolObject<dyn MTLDrawable>,
-        present: bool,
     ) -> Result<u64> {
-        self.submit_with(lists, Some((drawable, present)))
+        self.submit_with(lists, Some(drawable))
+    }
+
+    /// `drawable.present()` for a drawable that [`Queue::submit_drawable`]
+    /// took: made by the submit thread right after that commit's
+    /// `signalDrawable`, which the display needs to have seen first.
+    pub fn present_drawable(&self, drawable: &ProtocolObject<dyn MTLDrawable>) {
+        self.inner.submitter.push(Job::Present(drawable.retain()));
     }
 
     fn submit_with(
         &self,
         lists: Vec<CommandList>,
-        drawable: Option<(&ProtocolObject<dyn MTLDrawable>, bool)>,
+        drawable: Option<&ProtocolObject<dyn MTLDrawable>>,
     ) -> Result<u64> {
         self.check()?;
         if lists.is_empty() {
@@ -801,10 +805,10 @@ impl Queue {
             .collect();
         self.inner.submitter.push(Job::Commit {
             buffers,
+            drawable: drawable.map(|d| d.retain()),
             timeline: self.inner.timeline.clone(),
             value,
             sink: self.inner.sink.clone(),
-            drawable: drawable.map(|(d, p)| (objc2::Message::retain(d), p)),
         });
         lock(&self.inner.ring).seal(value);
         self.inner.submissions.fetch_add(1, Ordering::Relaxed);

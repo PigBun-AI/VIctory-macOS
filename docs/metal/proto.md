@@ -1,7 +1,7 @@
 # victory-metal-proto: the contract between front and back (seam B)
 
-Crate `metal/proto` (`victory-metal-proto`), protocol **version 2** (version 1 was M1: buffers and compute; version 2 adds
-textures, placement heaps and texture copies, see sections 3 and 4, and graphics pipelines, see section 5b), written
+Crate `metal/proto` (`victory-metal-proto`), protocol **version 3** (version 1 was M1: buffers and compute; version 2 adds
+textures, placement heaps and texture copies, see sections 3 and 4, and graphics pipelines, see section 5b; version 3 adds swap chains and present, see section 3), written
 2026-11-27 (Asia/Shanghai). `no_std` + `alloc`, no dependencies, builds for
 `x86_64-pc-windows-gnullvm` and for both Apple targets. It names no D3D12,
 DXGI or Metal type: layering rule 3 (`tools/metal/check-layers.sh` enforces it).
@@ -41,8 +41,11 @@ pub trait SurfaceProvider { fn layer_for(&self, window: WindowRef) -> *mut c_voi
 ```
 
 `SurfaceProvider::layer_for` is `metal_layer_for` in the architecture note
-(section 2.4); the name changed because proto does not name Metal. Install it
-in the back through the bridge; it is only used by `GET_SURFACE_LAYER` (M3).
+(section 2.4); the name changed because proto does not name Metal. The bridge
+installs it in the back (`Executor::set_surface_provider`); the back asks it
+for the layer of a window in `CREATE_SWAPCHAIN` and gives it back with
+`release_layer` in `DESTROY_SWAPCHAIN`. The layer never crosses the seam, so
+`GET_SURFACE_LAYER` stays a placeholder (the back answers `UNSUPPORTED`).
 
 ## 3. Sync calls (`Link::call`)
 
@@ -70,6 +73,7 @@ Notes the table cannot hold:
 * `WRITE_DESCRIPTOR` (block version 2) texture views: `kind` `TEXTURE_SRV` / `TEXTURE_UAV`, `resource` a texture, `format` the view format (`UNKNOWN` = the texture's own; a different one needs the texture to be typeless or of the same family), `dimension` (`TexViewDim`), `plane` (depth-stencil: 0 depth, 1 stencil), `swizzle` (component sources, `[R,G,B,A]` = none), `mip_first`/`mip_count` and `slice_first`/`slice_count` (0 = all that remain), `min_lod` (SRV `ResourceMinLODClamp`). RTV/DSV have no descriptors in the back: the front keeps `(res, mip, slice, format)` records itself.
 * `CREATE_COMPUTE_PIPELINE`: `dxil_addr/dxil_len` is the DXIL container, valid for the call. The conversion (Metal Shader Converter) is not part of this milestone's proto work: until the back has it the call may answer `UNSUPPORTED`.
 * `CREATE_GRAPHICS_PIPELINE` (version 2, number 0x50): see section 5b. The description is a fixed-size POD, not a D3D12 struct. `DESTROY_PIPELINE` frees the result.
+* Swap chains (version 3, `0x60-0x65`). `CREATE_SWAPCHAIN` binds a window (`WindowRef` = the HWND) to a surface and makes `buffer_count` back buffers as ordinary textures (their `ResId`s come back in `buffers`; destroy them with `DESTROY_TEXTURE`, the swap chain keeps no reference), so rendering into a back buffer is rendering into a texture. `PRESENT{queue, swapchain, buffer, sync_interval, flags}` is a **sync call, not a stream command**: the front makes it after the `submit` of the work it should show, and the back orders it after everything already committed to `queue`; it copies the buffer into the surface's next drawable (a compute kernel: format conversion, nearest-neighbour scaling when the sizes differ), waits for the drawable with the queue (`waitForDrawable`) before and signals it (`signalDrawable`) after, then presents; `max_latency` presents in flight at most (the call blocks beyond that). `RESIZE_SWAPCHAIN` makes new back buffers and sets the surface size; the caller destroyed the old ones first. `SWAPCHAIN_INFO` reports drawable size, counters and, for a swap chain made with `swapchain_flags::PROBE`, one texel read back from the drawable after each present (tests; it also waits for the GPU). The opcode range 0x0700-0x07FF stays unused.
 * `FENCE_WAIT`: `timeout_ms == u64::MAX` waits forever; `TIMEOUT` when it runs out. `FENCE_VALUE` reads the completed value. The queue-side signal/wait are stream commands.
 * `DEVICE_STATUS.state`: 0 fine, 1 hung, 2 removed (front's `GetDeviceRemovedReason`).
 

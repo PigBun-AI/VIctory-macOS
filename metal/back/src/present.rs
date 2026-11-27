@@ -11,7 +11,9 @@
 //!    an RGBA8 back buffer into a BGRA8 drawable needs no swizzle; sizes that
 //!    differ are scaled nearest-neighbour);
 //! 4. `queue.waitForDrawable(drawable)`, commit the list, `queue.signalDrawable(drawable)`
-//!    ([`Queue::submit_drawable`]), then `drawable.present()`.
+//!    ([`Queue::submit_drawable`]), then `drawable.present()`
+//!    ([`Queue::present_drawable`]: the submit thread makes it right after
+//!    `signalDrawable`).
 //!
 //! The layer's `residencySet` (it holds the drawables' memory) is attached to
 //! every queue that presents to it, once. The layer is set to
@@ -288,15 +290,13 @@ impl Swapchain {
         list.dispatch(&kernel, [dw.div_ceil(8), dh.div_ceil(8), 1], [8, 8, 1])?;
         list.end()?;
         let as_drawable: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*drawable);
-        // The queue's submit thread presents it after the commit; with the
-        // probe on, the texel is read first, so the present is ours.
-        let value = queue.submit_drawable(vec![list], as_drawable, !self.probe)?;
+        let value = queue.submit_drawable(vec![list], as_drawable)?;
         if self.probe {
             // Read before the present hands the drawable to the display.
             queue.wait_for(value, 5_000)?;
             self.last_probe = Some(read_texel(&target, dw / 2, dh / 2));
-            as_drawable.present();
         }
+        queue.present_drawable(as_drawable);
         self.presents += 1;
         self.in_flight
             .push_back((key, queue.timeline().clone(), value));
