@@ -1425,6 +1425,264 @@ fn indirect_indexed_draws_use_the_index_buffer_of_the_list() {
     );
 }
 
+/// An indirect draw through a geometry shader is the direct draw whose
+/// arguments the GPU reads: the pixels are the direct draw's.
+#[test]
+fn indirect_draws_through_a_geometry_shader_match_the_direct_ones() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour3", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let mut v = TRI_A.vertices().to_vec();
+    v.extend(TRI_B.vertices());
+    let (_vb, va) = g.vertex_buffer(&v);
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let red = |t: Tri| Tri {
+        c: [1.0, 0.0, 0.0, 1.0],
+        ..t
+    };
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // {vertex count, instance count, start vertex, start instance}: the
+    // second record has two instances (the same pixels twice) and a count
+    // of 4, which is one triangle and a vertex over.
+    cpu_write(args.cpu_addr, &[3, 1, 0, 0, 4, 2, 3, 0]);
+    let count = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    for (n, want) in [
+        (None, vec![red(TRI_A), red(TRI_B)]),
+        (Some(1u32), vec![red(TRI_A)]),
+        (Some(0), vec![]),
+    ] {
+        if let Some(n) = n {
+            cpu_write(count.cpu_addr, &[n]);
+        }
+        let mut direct = g.state(pso, va, 6 * STRIDE);
+        direct.push(begin_pass(t, LoadAction::CLEAR, bg));
+        if n != Some(0) {
+            direct.push(draw(3));
+        }
+        if n.is_none() {
+            direct.push(Command::Draw(Draw {
+                vertex_count: 4,
+                instance_count: 2,
+                start_vertex: 3,
+                start_instance: 0,
+            }));
+        }
+        direct.push(end_pass());
+        let by_draw = g.read(t, direct);
+        let mut cmds = g.state(pso, va, 6 * STRIDE);
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 2, args.res, n.map(|_| count.res)));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        assert_image(
+            &got,
+            &reference(bg, &want),
+            &format!("indirect gs draws, count {n:?}"),
+        );
+        assert_eq!(got, by_draw, "indirect and direct, count {n:?}");
+    }
+}
+
+#[test]
+fn indirect_indexed_draws_through_a_geometry_shader_match_the_direct_ones_and_stay_in_the_buffer() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour4", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let c = [0.0, 1.0, 0.0, 1.0];
+    let z = 0.5;
+    let quad: Vec<Vtx> = vec![
+        ([0.0; 3], [0.0; 4]),
+        ([0.0; 3], [0.0; 4]),
+        ([-0.83, -0.77, z], c),
+        ([0.71, -0.77, z], c),
+        ([0.71, 0.69, z], c),
+        ([-0.83, 0.69, z], c),
+    ];
+    let (_vb, va) = g.vertex_buffer(&quad);
+    let ib = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    let idx: [u16; 9] = [0, 0, 0, 0, 1, 2, 0, 2, 3];
+    let words: Vec<u32> = idx
+        .chunks(2)
+        .map(|p| u32::from(p[0]) | (u32::from(*p.get(1).unwrap_or(&0)) << 16))
+        .collect();
+    cpu_write(ib.cpu_addr, &words);
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let ib_cmd = Command::SetIndexBuffer(SetIndexBuffer {
+        va: ib.gpu_va,
+        size: 18,
+        format: IndexFormat::U16,
+    });
+    let mut direct = g.state(pso, va, 6 * STRIDE);
+    direct.push(ib_cmd);
+    direct.push(begin_pass(t, LoadAction::CLEAR, bg));
+    direct.push(Command::DrawIndexed(DrawIndexed {
+        index_count: 6,
+        instance_count: 1,
+        start_index: 3,
+        base_vertex: 2,
+        start_instance: 0,
+        _pad: 0,
+    }));
+    direct.push(end_pass());
+    let by_draw = g.read(t, direct);
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let t1 = Tri {
+        p: [[-0.83, -0.77], [0.71, -0.77], [0.71, 0.69]],
+        z,
+        c: red,
+    };
+    let t2 = Tri {
+        p: [[-0.83, -0.77], [0.71, 0.69], [-0.83, 0.69]],
+        z,
+        c: red,
+    };
+    assert_image(
+        &by_draw,
+        &reference(bg, &[t1, t2]),
+        "direct gs indexed quad",
+    );
+    // {index count, instance count, start index, base vertex, start instance}.
+    // The count of 600 runs past the 9 indices: the expansion clamps it to
+    // the 6 that are there, so the draw is the direct one.
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    for (n, what) in [(6u32, "exact"), (600, "clamped")] {
+        cpu_write(args.cpu_addr, &[n, 1, 3, 2, 0]);
+        let mut cmds = g.state(pso, va, 6 * STRIDE);
+        cmds.push(ib_cmd);
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(g.execute_indirect(IndirectArgKind::DRAW_INDEXED, 20, 1, args.res, None));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        assert_eq!(got, by_draw, "indirect indexed gs draw, {what}");
+    }
+}
+
+#[test]
+fn indirect_strip_draws_through_a_geometry_shader_match_the_direct_ones() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour5", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let c = [0.0, 1.0, 0.0, 1.0];
+    let z = 0.5;
+    // Four vertices of a strip: two triangles of a quad.
+    let strip: Vec<Vtx> = vec![
+        ([-0.83, -0.77, z], c),
+        ([-0.83, 0.69, z], c),
+        ([0.71, -0.77, z], c),
+        ([0.71, 0.69, z], c),
+    ];
+    let (_vb, va) = g.vertex_buffer(&strip);
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let topology = Command::SetPrimitiveTopology(SetPrimitiveTopology {
+        topology: Topology::TRIANGLE_STRIP,
+        _pad: 0,
+    });
+    let mut direct = g.state(pso, va, 4 * STRIDE);
+    direct[2] = topology;
+    direct.push(begin_pass(t, LoadAction::CLEAR, bg));
+    direct.push(draw(4));
+    direct.push(end_pass());
+    let by_draw = g.read(t, direct);
+    let drawn = by_draw
+        .iter()
+        .filter(|&&p| p == pack([1.0, 0.0, 0.0, 1.0]))
+        .count();
+    assert!(drawn > 20, "the strip drew {drawn} red pixels");
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    cpu_write(args.cpu_addr, &[4, 1, 0, 0]);
+    let mut cmds = g.state(pso, va, 4 * STRIDE);
+    cmds[2] = topology;
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 1, args.res, None));
+    cmds.push(end_pass());
+    assert_eq!(g.read(t, cmds), by_draw, "indirect strip gs draw");
+
+    // A zigzag of 300 vertices: more than one object threadgroup takes.
+    let n = 300u32;
+    let zig: Vec<Vtx> = (0..n)
+        .map(|i| {
+            let x = -0.95 + 1.9 * i as f32 / (n - 1) as f32;
+            ([x, if i % 2 == 0 { -0.8 } else { 0.8 }, z], c)
+        })
+        .collect();
+    let big = g.fx.buffer(BufferKind::UPLOAD, 16384);
+    cpu_write(big.cpu_addr, &vertex_words(&zig));
+    let mut direct = g.state(pso, big.gpu_va, n * STRIDE);
+    direct[2] = Command::SetPrimitiveTopology(SetPrimitiveTopology {
+        topology: Topology::TRIANGLE_STRIP,
+        _pad: 0,
+    });
+    direct.push(begin_pass(t, LoadAction::CLEAR, bg));
+    direct.push(draw(n));
+    direct.push(end_pass());
+    let by_draw = g.read(t, direct);
+    assert!(
+        by_draw
+            .iter()
+            .filter(|&&p| p == pack([1.0, 0.0, 0.0, 1.0]))
+            .count()
+            > 20
+    );
+    cpu_write(args.cpu_addr, &[n, 1, 0, 0]);
+    let mut cmds = g.state(pso, big.gpu_va, n * STRIDE);
+    cmds[2] = Command::SetPrimitiveTopology(SetPrimitiveTopology {
+        topology: Topology::TRIANGLE_STRIP,
+        _pad: 0,
+    });
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 1, args.res, None));
+    cmds.push(end_pass());
+    assert_eq!(g.read(t, cmds), by_draw, "indirect long strip gs draw");
+}
+
+/// What was drawn before and after an indirect geometry draw is kept: the pass
+/// is suspended for the expansion and resumed with its contents.
+#[test]
+fn a_pass_keeps_what_was_drawn_around_indirect_geometry_draws() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour6", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let mut v = TRI_A.vertices().to_vec();
+    v.extend(TRI_B.vertices());
+    let (_vb, va) = g.vertex_buffer(&v);
+    let plain = g.pso(g.desc());
+    let geo = geometry_pso(&g, &gs);
+    let bg = [0.25, 0.0, 0.25, 1.0];
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    cpu_write(args.cpu_addr, &[3, 1, 3, 0, 3, 1, 0, 0]);
+    let set = |pso| Command::SetPipeline(SetPipeline { pso, _pad: 0 });
+    let mut cmds = g.state(plain, va, 6 * STRIDE);
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(draw_from(0, 3));
+    cmds.push(set(geo));
+    cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 1, args.res, None));
+    cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 1, args.res, None));
+    cmds.push(set(plain));
+    cmds.push(draw_from(3, 3));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    let red = |t: Tri| Tri {
+        c: [1.0, 0.0, 0.0, 1.0],
+        ..t
+    };
+    // A plain, then the indirect record (B, recoloured) twice, then B plain
+    // again over it (blue); the indirect draw of vertices 3..6 is B too, so
+    // the only red left is where A shows.
+    let want = reference(bg, &[TRI_A, red(TRI_B), red(TRI_B), TRI_B]);
+    assert_image(&got, &want, "the pass around indirect geometry draws");
+}
+
 #[test]
 fn an_indirect_mesh_dispatch_reads_its_groups_and_the_count_buffer() {
     let Some(ms) = dxil_or_skip("draw_ms", "ms_6_6", MS) else {

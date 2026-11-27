@@ -745,11 +745,30 @@ fn copies_with_a_wrong_argument_are_errors_not_silent() {
         .create_texture(&TextureDesc::tex2d(dxgi::R8G8B8A8_UNORM, 4, 4, SRV))
         .unwrap();
     bad(l.copy_texture_resource(&other, &t), "different sizes");
-    bad(l.copy_texture_resource(&t, &t), "onto itself");
     // A list that took only errors still ends and runs; nothing was encoded.
     assert_eq!(l.stats().copies, 0);
     l.end().unwrap();
     run(&q, l);
+}
+
+/// `CopyResource` of a texture onto itself changes nothing: accepted, nothing
+/// encoded, the contents stay (the game does it with whole resources).
+#[test]
+fn copy_resource_of_a_texture_onto_itself_is_accepted_and_does_nothing() {
+    let (_g, d, q) = setup();
+    for format in [dxgi::R8G8B8A8_UNORM, dxgi::R8G8B8A8_TYPELESS] {
+        let t = d
+            .create_texture(&TextureDesc::tex2d(format, 4, 4, SRV))
+            .unwrap();
+        let data = pattern(64, 7);
+        upload(&d, &q, &t, 0, 0, &data, 16);
+        let mut l = q.begin_list().unwrap();
+        l.copy_texture_resource(&t, &t).unwrap();
+        assert_eq!(l.stats().copies, 0);
+        l.end().unwrap();
+        run(&q, l);
+        assert_eq!(download(&d, &q, &t, 0, 0, 16), data);
+    }
 }
 
 #[test]

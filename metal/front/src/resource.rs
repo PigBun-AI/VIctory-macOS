@@ -216,6 +216,30 @@ pub const STATE_COMMON: u32 = 0;
 pub const STATE_COPY_DEST: u32 = 0x400;
 pub const STATE_GENERIC_READ: u32 = 0xAC3;
 
+/// The block-format family (BC1 .. BC7: the typeless row and its two typed
+/// formats) of a DXGI number, or `None` for any other format.
+fn block_family(format: u32) -> Option<u32> {
+    match format {
+        70..=84 => Some(70 + (format - 70) / 3 * 3),
+        94..=99 => Some(94 + (format - 94) / 3 * 3),
+        _ => None,
+    }
+}
+
+/// Whether Metal can show a texture of `format` in every format of `castable`
+/// (the list of `CreateCommittedResource3` / `CreatePlacedResource2`). Between
+/// uncompressed formats of one size it can. A block format can only be seen as
+/// its own family (BC1 and its sRGB twin): Metal makes no view of BC7 as BC5
+/// or of BC1 as BC4 (the framework aborts on it), so a list that names another
+/// block format is refused, and a caller that falls back (`victory-gpu` gives
+/// a texture of one memory in another format its own host texture) does.
+pub fn castable_formats_supported(format: u32, castable: &[u32]) -> bool {
+    match block_family(format) {
+        Some(f) => castable.iter().all(|&c| block_family(c) == Some(f)),
+        None => !castable.iter().any(|&c| block_family(c).is_some()),
+    }
+}
+
 /// The rules `CreateCommittedResource` enforces on its arguments (checked
 /// against D3DMetal on Wine: the upload/readback state rules, zero size,
 /// descriptor sanity). Returns the description `GetDesc` reports.
@@ -300,6 +324,20 @@ pub fn validate_committed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn castable_lists_of_block_formats_stay_in_their_family() {
+        // BC1 (70..72) with BC4 (79): refused; with its sRGB twin: fine.
+        assert!(!castable_formats_supported(71, &[72, 79, 80]));
+        assert!(castable_formats_supported(71, &[72]));
+        assert!(!castable_formats_supported(98, &[83, 77]));
+        assert!(!castable_formats_supported(83, &[98]));
+        // Uncompressed lists with a block format, and the reverse: refused.
+        assert!(!castable_formats_supported(28, &[80]));
+        assert!(!castable_formats_supported(71, &[28]));
+        assert!(castable_formats_supported(28, &[41, 31]));
+        assert!(castable_formats_supported(28, &[]));
+    }
 
     #[test]
     fn buffers_follow_the_heap_rules() {

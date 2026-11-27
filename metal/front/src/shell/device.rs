@@ -494,6 +494,15 @@ impl DeviceObj_Impl {
                 Some(d) => view::srv(id, rd, &srv_params(d)?),
                 None => Ok(view::default_view(rd, id, false)),
             });
+            if r.is_err() && super::log_errors() {
+                // The view that was refused, in the terms of the API (a view
+                // that fails 115 times in a run is found from this line).
+                let resource = robj.as_ref().map(|r| r.resource.desc);
+                eprintln!(
+                    "victory-metal front: CreateShaderResourceView refused: resource {resource:?}, view {:?}",
+                    d.map(|d| srv_params(d).map_err(|h| h.0))
+                );
+            }
             return view_result("CreateShaderResourceView", d.map_or(0, |d| d.Format.0), r);
         }
         let Some(d) = d else { return };
@@ -904,7 +913,7 @@ impl DeviceObj_Impl {
         _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
         _pprotectedsession: Ref<ID3D12ProtectedResourceSession>,
         numcastableformats: u32,
-        _pcastableformats: *const DXGI_FORMAT,
+        pcastableformats: *const DXGI_FORMAT,
         riidresource: *const GUID,
         ppvresource: *mut *mut c_void,
     ) -> WResult<()> {
@@ -914,6 +923,7 @@ impl DeviceObj_Impl {
         let d = core_desc1(d1);
         let state =
             self.state_of_initial_layout(WHAT, core_props(hp).ty, d.is_buffer(), initiallayout)?;
+        castable_check(WHAT, &d, numcastableformats, pcastableformats)?;
         let resource =
             match self
                 .dev
@@ -940,7 +950,7 @@ impl DeviceObj_Impl {
         initiallayout: D3D12_BARRIER_LAYOUT,
         _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
         numcastableformats: u32,
-        _pcastableformats: *const DXGI_FORMAT,
+        pcastableformats: *const DXGI_FORMAT,
         riid: *const GUID,
         ppvresource: *mut *mut c_void,
     ) -> WResult<()> {
@@ -951,6 +961,7 @@ impl DeviceObj_Impl {
         let d = core_desc1(d1);
         let state =
             self.state_of_initial_layout(WHAT, heap.heap.props.ty, d.is_buffer(), initiallayout)?;
+        castable_check(WHAT, &d, numcastableformats, pcastableformats)?;
         let resource = match self.dev.create_placed_cast(
             &heap.heap,
             heapoffset,
@@ -1088,6 +1099,41 @@ fn view_result(what: &str, format: i32, r: crate::hresult::Result<()>) {
             eprintln!("victory-metal front: {what} failed: {:#010x}", h.0 as u32);
         }
     }
+}
+
+/// A list of castable formats Metal cannot honour (`castable_formats_supported`)
+/// is refused with `E_INVALIDARG`; the caller makes the texture without it.
+fn castable_check(
+    what: &str,
+    d: &ResourceDesc,
+    count: u32,
+    list: *const DXGI_FORMAT,
+) -> WResult<()> {
+    if count == 0 || list.is_null() || d.is_buffer() {
+        return Ok(());
+    }
+    // SAFETY: the API's pair of count and array.
+    let formats: Vec<u32> = unsafe { std::slice::from_raw_parts(list, count as usize) }
+        .iter()
+        .map(|f| f.0 as u32)
+        .collect();
+    if crate::resource::castable_formats_supported(d.format, &formats) {
+        return Ok(());
+    }
+    if super::log_errors() {
+        // Thousands of textures ask the same: each distinct list is said once.
+        static SEEN: std::sync::Mutex<Vec<(u32, Vec<u32>)>> = std::sync::Mutex::new(Vec::new());
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (d.format, formats.clone());
+        if !seen.contains(&key) {
+            seen.push(key);
+            eprintln!(
+                "victory-metal front: {what}: castable formats {formats:?} of format {} refused (Metal views a block format only as its own family; the caller makes the texture without the list), said once per list",
+                d.format
+            );
+        }
+    }
+    Err(werr(Hr::E_INVALIDARG))
 }
 
 fn core_props(p: &D3D12_HEAP_PROPERTIES) -> HeapProps {

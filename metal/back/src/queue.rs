@@ -459,6 +459,16 @@ fn commit_options(sink: &Arc<Sink>) -> Retained<MTL4CommitOptions> {
                 message: e.localizedDescription().to_string(),
             }
         });
+        if let Some(f) = &failure {
+            // `VICTORY_METAL_LOG=1`: a command buffer that failed (its work is
+            // lost; nothing else says so).
+            if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                eprintln!(
+                    "victory-metal back: a submission failed: {} {}: {}",
+                    f.domain, f.code, f.message
+                );
+            }
+        }
         sink.record(failure, gpu_ns);
     });
     // SAFETY: the block is valid; Metal copies it.

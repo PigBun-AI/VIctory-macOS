@@ -108,8 +108,8 @@ on arm64 and Rosetta.
 * Partial (rectangle) clears of integer render targets are refused by the back.
 * Layered rendering into 3D textures is limited to one depth plane per pass.
 * Hull/domain shaders and stream output: not carried (E_NOTIMPL).
-* `ExecuteIndirect` with a vertex buffer or index buffer view in the record, and with a geometry
-  shader pipeline: refused (section 7).
+* `ExecuteIndirect` with a vertex buffer or index buffer view in the record: refused (section 7).
+  With a geometry-shader pipeline it runs since `m5-gs` (`docs/metal/m5-gs.md`).
 * The `early_depth` victory-shader test is registered as a test bug in
   `conformance/expected-fail.txt`.
 
@@ -138,8 +138,7 @@ Signatures ending in `DRAW`, `DRAW_INDEXED` or `DISPATCH_MESH` (the game: one `D
     kernel keeps every pipeline as it is.
 * Refused, `UNSUPPORTED` (before anything runs): vertex or index buffer views in a record (the table's
   vertex addresses are written by the CPU; Metal's indirect indexed draw takes the index buffer at
-  encode time), ray dispatch; `UNSUPPORTED` at run time: a geometry-shader pipeline (the draw maths of
-  the emulation need the counts on the CPU). A graphics action with only a compute pipeline bound (or
+  encode time), ray dispatch. A graphics action with only a compute pipeline bound (or
   the reverse) is `INVALID_ARG`.
 * Argument and count buffers are in the residency set (the buffer table); the list keeps them alive.
 * Tests: `gfx_draw.rs` `indirect_draws_run_the_records_a_count_buffer_allows`,
@@ -161,8 +160,6 @@ the pass descriptor. Test: `gfx_draw.rs::a_pass_without_attachments_runs_pixel_s
 
 ## 9. Known gaps after the first full game run
 
-* ExecuteIndirect with a geometry-shader pipeline: `UNSUPPORTED` (the emulation's draw maths need the
-  counts on the CPU; an indirect version would run the emulation's compute pass per record). The game
-  does this about 1000 times in a 400-second run.
-* `COPY_RESOURCE` of a texture onto itself: `INVALID_ARG` (28 times).
+* (Closed by `m5-gs`, `docs/metal/m5-gs.md`: ExecuteIndirect with a geometry-shader pipeline,
+  `COPY_RESOURCE` of a texture onto itself, 115 refused shader resource views.)
 * Frame rate with the loading art on screen: 2-3 fps at ~3300 draws per frame.

@@ -1090,6 +1090,10 @@ mod tests {
         // Not across sizes, nor to or from depth or block-compressed formats.
         assert!(view_pixel_format(d::R32_UINT, d::R16_UNORM, USAGE_SRV | USAGE_CAST).is_err());
         assert!(view_pixel_format(d::R32_UINT, d::BC1_UNORM, USAGE_SRV | USAGE_CAST).is_err());
+        // Metal makes no view of one block format as another (BC1 as BC4 is an
+        // assertion failure in the framework): refused here, before it is asked.
+        assert!(view_pixel_format(d::BC5_UNORM, d::BC7_UNORM, USAGE_SRV | USAGE_CAST).is_err());
+        assert!(view_pixel_format(d::BC1_UNORM, d::BC4_UNORM, USAGE_SRV | USAGE_CAST).is_err());
         assert!(
             view_pixel_format(d::R32_UINT, d::D24_UNORM_S8_UINT, USAGE_SRV | USAGE_CAST).is_err()
         );

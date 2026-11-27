@@ -304,15 +304,15 @@ fn copy_resource_copies_textures_and_buffers_and_refuses_mixes() {
     w.settle();
     assert_eq!(cpu_read(rb.cpu_addr, 16), (100..116).collect::<Vec<u32>>());
     // Refusals leave the executor working.
-    for bad in [
-        cr(b.res, other.res),
-        cr(a.res, up.res),
-        cr(up.res, a.res),
-        cr(a.res, a.res),
-    ] {
+    for bad in [cr(b.res, other.res), cr(a.res, up.res), cr(up.res, a.res)] {
         let st = w.fx.submit(&[begin(2, w.q), bad, end(2)]);
         assert_eq!(st, Status::INVALID_ARG);
     }
+    // A texture onto itself changes nothing and is accepted (the game does it).
+    assert_eq!(
+        w.fx.submit(&[begin(2, w.q), cr(a.res, a.res), end(2)]),
+        Status::OK
+    );
     let buf = w.fx.buffer(BufferKind::SHARED, 256);
     assert_eq!(
         w.fx.submit(&[begin(3, w.q), cr(buf.res, up.res), end(3)]),

@@ -52,8 +52,8 @@ use objc2_metal::{
 
 use crate::descriptors::{RingAlloc, bind_point};
 use crate::error::{Error, Result};
-use crate::indirect::{IndirectDispatch, Kernels};
-use crate::render::{GraphicsPipeline, Kind};
+use crate::indirect::{GS_GROUPS_AT, GsExpand, IndirectDispatch, Kernels};
+use crate::render::{GeometryPipelineInfo, GraphicsPipeline, Kind};
 use crate::stages::{FRAGMENT, MESH, OBJECT, VERTEX};
 use crate::texture::{TexDim, Texture, ViewDim, ViewSpec};
 
@@ -962,66 +962,18 @@ impl crate::record::CommandList {
         index: Option<(u64, bool)>,
         words: [u32; 5],
     ) -> Result<()> {
-        let g = p.geometry().ok_or_else(|| {
-            Error::BadArgument("a geometry pipeline without geometry facts".into())
-        })?;
-        let verts = prim.vertex_count();
-        let overlap = prim.strip_overlap();
         let count = words[0];
-        // The runtime's `IRRuntimeCalculateDrawInfoForGSEmulation`.
-        const PAYLOAD_TOTAL: u32 = 16384;
-        const PAYLOAD_METADATA: u32 = 32;
-        let by_payload =
-            (((PAYLOAD_TOTAL - PAYLOAD_METADATA) / g.vertex_bytes.max(1)) / verts) * verts;
-        let by_amplification = 1024 * g.max_input_primitives;
-        let prims_per_object = (by_payload / verts).min(by_amplification).min(256 / verts);
-        if prims_per_object == 0 {
-            return Err(Error::BadArgument(format!(
-                "a geometry pipeline whose vertex is {} bytes does not fit the payload",
-                g.vertex_bytes
-            )));
-        }
-        let stride = prims_per_object * verts;
-        let non_provoking = if prim.is_strip() { overlap } else { 0 };
-        if count < non_provoking + verts.min(count) {
+        let plan = geometry_plan(p, prim, index.map(|(_, wide)| wide), false)?;
+        if count < plan.verts {
             // Fewer vertices than one primitive.
-            if count < verts {
-                return Ok(());
-            }
+            return Ok(());
         }
-        let object_groups = (count - non_provoking).div_ceil(stride);
-        let object_threads = stride + overlap;
-        let mesh_threads = g.max_input_primitives;
-        let ir_index: u16 = match index {
-            None => 0,
-            Some((_, false)) => 1,
-            Some((_, true)) => 2,
-        };
-        let mut info = [0u8; 24];
-        info[0..2].copy_from_slice(&ir_index.to_le_bytes());
-        info[2] = prim.ir_type();
-        info[3] = verts as u8;
-        info[4..6].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
-        info[6..8].copy_from_slice(&(stride as u16).to_le_bytes());
-        info[8..10].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+        let object_groups = (count - plan.non_provoking).div_ceil(plan.stride);
+        let mut info = plan.info;
         info[10..12].copy_from_slice(&(words[1] as u16).to_le_bytes());
-        info[12..14].copy_from_slice(&(prims_per_object as u16).to_le_bytes());
-        info[14..16].copy_from_slice(&(verts as u16).to_le_bytes());
         info[16..24].copy_from_slice(&index.map_or(0, |(va, _)| va).to_le_bytes());
 
-        // IRRuntimeVertexBuffers: 31 of { address, length, stride }.
-        let vb_block: RingAlloc = self.alloc_constants(31 * 16, 16)?;
-        let mut vbs = [0u8; 31 * 16];
-        for (slot, vb) in self.rstate.vertex.iter().enumerate().take(31) {
-            if let Some(vb) = vb {
-                vbs[slot * 16..slot * 16 + 8].copy_from_slice(&vb.va.to_le_bytes());
-                vbs[slot * 16 + 8..slot * 16 + 12].copy_from_slice(&vb.size.to_le_bytes());
-                vbs[slot * 16 + 12..slot * 16 + 16].copy_from_slice(&vb.stride.to_le_bytes());
-            }
-        }
-        vb_block.write_bytes(0, &vbs)?;
-        self.table
-            .set_address(bind_point::VERTEX_BUFFER as u32, vb_block.gpu_va)?;
+        self.bind_geometry_vertex_buffers()?;
 
         let block: RingAlloc = self.alloc_constants(DRAW_BLOCK, 16)?;
         let mut bytes = [0u8; 20];
@@ -1043,11 +995,29 @@ impl crate::record::CommandList {
         };
         enc.drawMeshThreadgroups_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
             size(object_groups, words[1]),
-            size(object_threads, 1),
-            size(mesh_threads, 1),
+            size(plan.object_threads, 1),
+            size(plan.mesh_threads, 1),
         );
         self.stats.draws += 1;
         Ok(())
+    }
+
+    /// The vertex buffers of a geometry pipeline as one
+    /// `IRRuntimeVertexBuffers` block (31 of { address, length, stride }), at
+    /// the vertex buffer bind point.
+    fn bind_geometry_vertex_buffers(&mut self) -> Result<()> {
+        let vb_block: RingAlloc = self.alloc_constants(31 * 16, 16)?;
+        let mut vbs = [0u8; 31 * 16];
+        for (slot, vb) in self.rstate.vertex.iter().enumerate().take(31) {
+            if let Some(vb) = vb {
+                vbs[slot * 16..slot * 16 + 8].copy_from_slice(&vb.va.to_le_bytes());
+                vbs[slot * 16 + 8..slot * 16 + 12].copy_from_slice(&vb.size.to_le_bytes());
+                vbs[slot * 16 + 12..slot * 16 + 16].copy_from_slice(&vb.stride.to_le_bytes());
+            }
+        }
+        vb_block.write_bytes(0, &vbs)?;
+        self.table
+            .set_address(bind_point::VERTEX_BUFFER as u32, vb_block.gpu_va)
     }
 
     /// `DispatchMesh`: `groups` are object threadgroups when the pipeline
@@ -1094,6 +1064,91 @@ impl crate::record::CommandList {
         }
     }
 
+    /// `ExecuteIndirect` of draws through a geometry shader.
+    ///
+    /// The emulation is a mesh draw whose threadgroup counts and
+    /// `IRRuntimeDrawInfo` depend on the record's vertex and instance counts,
+    /// which the GPU reads. The expansion kernel works them out per record
+    /// ([`GsExpand`]) and each record is one
+    /// `drawMeshThreadgroupsWithIndirectBuffer`. The converter runtime's header
+    /// (4.0.3) has no indirect form of the emulation draw, nor does its manual.
+    ///
+    /// Memory: nothing but the expansion, 64 bytes per record from the
+    /// constant ring in chunks of at most 256 records (so the ring bound holds
+    /// for any `MaxCommandCount`, itself at most 65 536), and the vertex buffer
+    /// block, 496 bytes; a record's counts past the count buffer, or an
+    /// indexed record's past the end of the index buffer, are clamped by the
+    /// kernel. The emulation's payload lives in the stage, not in a buffer.
+    /// Everything the draw reads (the argument and count buffers, the
+    /// bound vertex and index buffers) is in the residency set like any other
+    /// resource of the list.
+    fn execute_indirect_geometry(
+        &mut self,
+        kernels: &Kernels,
+        p: &GraphicsPipeline,
+        kind: IndirectDraw,
+        spec: &IndirectDispatch<'_>,
+    ) -> Result<()> {
+        // Diagnostic (docs/metal/m5-gs.md section 1): with
+        // `VICTORY_METAL_SKIP_GS_INDIRECT=1` these draws are not drawn, to tell
+        // what they do to a picture from what the rest of a frame does.
+        if std::env::var_os("VICTORY_METAL_SKIP_GS_INDIRECT").is_some_and(|v| v != "0") {
+            return Ok(());
+        }
+        let prim = self.vertex_pipeline_checks(p)?;
+        let ib = self.rstate.index;
+        let indexed = kind == IndirectDraw::DrawIndexed;
+        let ib = match (indexed, ib) {
+            (true, None) => {
+                return Err(Error::BadArgument(
+                    "an indexed draw without an index buffer".into(),
+                ));
+            }
+            (true, ib) => ib,
+            (false, _) => None,
+        };
+        let plan = geometry_plan(p, prim, ib.map(|ib| ib.wide), true)?;
+        let width = ib.map_or(0, |ib| if ib.wide { 4u32 } else { 2 });
+        let gs = GsExpand {
+            indexed,
+            ib_va: ib.map_or(0, |ib| ib.va),
+            ib_count: ib.map_or(0, |ib| ib.size / width),
+            ib_width: width,
+            stride: plan.stride,
+            verts: plan.verts,
+            non_provoking: plan.non_provoking,
+            info: plan.info,
+        };
+        let spec = IndirectDispatch {
+            gs: Some(gs),
+            draws: true,
+            ..*spec
+        };
+        self.bind_geometry_vertex_buffers()?;
+        let size = |w: u32| MTLSize {
+            width: w as usize,
+            height: 1,
+            depth: 1,
+        };
+        self.execute_indirect_with(kernels, &spec, |l, r| {
+            if let Some(t) = r.tlab_va {
+                l.set_root_arguments_va(t)?;
+            }
+            l.table
+                .set_address(bind_point::DRAW_ARGUMENTS as u32, r.action_va)?;
+            l.table
+                .set_address(bind_point::UNIFORMS as u32, r.action_va + UNIFORMS_AT)?;
+            let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
+            enc.drawMeshThreadgroupsWithIndirectBuffer_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
+                r.action_va + GS_GROUPS_AT,
+                size(plan.object_threads),
+                size(plan.mesh_threads),
+            );
+            l.stats.draws += 1;
+            Ok(())
+        })
+    }
+
     /// `ExecuteIndirect` of draws or mesh dispatches (`kind`), the records
     /// described by `spec` (see [`crate::indirect`]).
     ///
@@ -1123,9 +1178,7 @@ impl crate::record::CommandList {
                 ));
             }
             IndirectDraw::Draw | IndirectDraw::DrawIndexed if p.kind() == Kind::Geometry => {
-                return Err(Error::Unsupported(
-                    "an indirect draw with a geometry shader".into(),
-                ));
+                return self.execute_indirect_geometry(kernels, p, kind, spec);
             }
             _ => {}
         }
@@ -1205,6 +1258,119 @@ impl crate::record::CommandList {
             }
         }
     }
+}
+
+/// How a geometry-shader draw is cut into threadgroups, the same for a direct
+/// draw and for each record of an indirect one: the converter runtime's
+/// `IRRuntimeCalculateDrawInfoForGSEmulation` and the threadgroup counts of
+/// `IRRuntimeCalculateObjectTgCountForTessellationAndGeometryEmulation`, with
+/// the vertex count left open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GeometryPlan {
+    /// Vertices one primitive reads.
+    pub verts: u32,
+    /// Vertices one object threadgroup takes.
+    pub stride: u32,
+    /// Vertices at the end of a strip that start no primitive.
+    pub non_provoking: u32,
+    /// Threads of an object and of a mesh threadgroup.
+    pub object_threads: u32,
+    pub mesh_threads: u32,
+    /// `IRRuntimeDrawInfo` with the instance count and the index buffer
+    /// address zero (the draw fills them).
+    pub info: [u8; 24],
+}
+
+/// `VICTORY_METAL_LOG=1`: each distinct kind of geometry-shader draw, once
+/// (what the title does: topology, indexed or not, direct or indirect, the
+/// vertex size and the primitives per mesh threadgroup).
+fn note_geometry(how: &str, prim: Primitive, indexed: bool, g: &GeometryPipelineInfo) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    if !std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+        return;
+    }
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let line = format!(
+        "{how} {prim:?} {} vertex {} bytes, {} primitives per mesh threadgroup",
+        if indexed { "indexed" } else { "non-indexed" },
+        g.vertex_bytes,
+        g.max_input_primitives
+    );
+    let mut seen = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if seen.insert(line.clone()) {
+        eprintln!("victory-metal back: geometry draw: {line}");
+    }
+}
+
+/// The cut for pipeline `p` reading `prim`; `index` is `Some(wide)` for an
+/// indexed draw.
+pub(crate) fn geometry_plan(
+    p: &GraphicsPipeline,
+    prim: Primitive,
+    index: Option<bool>,
+    how_indirect: bool,
+) -> Result<GeometryPlan> {
+    let g = p
+        .geometry()
+        .ok_or_else(|| Error::BadArgument("a geometry pipeline without geometry facts".into()))?;
+    let verts = prim.vertex_count();
+    let overlap = prim.strip_overlap();
+    note_geometry(
+        if how_indirect { "indirect" } else { "direct" },
+        prim,
+        index.is_some(),
+        &g,
+    );
+    // The runtime's `IRRuntimeCalculateDrawInfoForGSEmulation`.
+    const PAYLOAD_TOTAL: u32 = 16384;
+    const PAYLOAD_METADATA: u32 = 32;
+    // A strip's object threadgroup also holds the `overlap` vertices that start
+    // the next group's primitives: they take payload space and threads too. The
+    // runtime's own sizes (`256 / verts` primitives) would need 257 threads for
+    // a triangle strip, one over the 256 the pipeline allows, and the draw
+    // would run nothing.
+    let by_payload = ((((PAYLOAD_TOTAL - PAYLOAD_METADATA) / g.vertex_bytes.max(1))
+        .saturating_sub(overlap))
+        / verts)
+        * verts;
+    let by_amplification = 1024 * g.max_input_primitives;
+    let prims_per_object = (by_payload / verts)
+        .min(by_amplification)
+        .min((256 - overlap) / verts);
+    if prims_per_object == 0 {
+        return Err(Error::BadArgument(format!(
+            "a geometry pipeline whose vertex is {} bytes does not fit the payload",
+            g.vertex_bytes
+        )));
+    }
+    let stride = prims_per_object * verts;
+    let mesh_threads = g.max_input_primitives;
+    let ir_index: u16 = match index {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    let mut info = [0u8; 24];
+    info[0..2].copy_from_slice(&ir_index.to_le_bytes());
+    info[2] = prim.ir_type();
+    info[3] = verts as u8;
+    info[4..6].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+    info[6..8].copy_from_slice(&(stride as u16).to_le_bytes());
+    info[8..10].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+    info[12..14].copy_from_slice(&(prims_per_object as u16).to_le_bytes());
+    info[14..16].copy_from_slice(&(verts as u16).to_le_bytes());
+    Ok(GeometryPlan {
+        verts,
+        stride,
+        non_provoking: if prim.is_strip() { overlap } else { 0 },
+        object_threads: stride + overlap,
+        mesh_threads,
+        info,
+    })
 }
 
 /// What the action of an indirect record is, for [`CommandList::execute_indirect_draws`].

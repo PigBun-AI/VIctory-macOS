@@ -54,9 +54,10 @@ const CHUNK: u32 = 256;
 pub const MAX_RECORDS: u32 = 1 << 16;
 
 const SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
-struct P { ulong args_va; ulong count_va; ulong base_va; ulong out_tlab_va; ulong out_disp_va; ulong desc_va;\n\
+struct P { ulong args_va; ulong count_va; ulong base_va; ulong out_tlab_va; ulong out_disp_va; ulong desc_va; ulong gs_ib_va;\n\
   uint n; uint first; uint stride; uint tlab_words; uint tlab_stride_words; uint ndesc; uint disp_word; uint max_count;\n\
-  uint has_count; uint act_words; uint out_words; uint index_type; };\n\
+  uint has_count; uint act_words; uint out_words; uint index_type;\n\
+  uint gs; uint gs_stride; uint gs_verts; uint gs_nonprov; uint gs_ib_count; uint gs_ib_width; uint gs_info[6]; };\n\
 struct D { uint rec_word; uint tlab_word; uint words; uint pad; };\n\
 kernel void expand(constant P& p [[buffer(30)]], uint i [[thread_position_in_grid]]) {\n\
   if (i >= p.n) return;\n\
@@ -80,7 +81,26 @@ kernel void expand(constant P& p [[buffer(30)]], uint i [[thread_position_in_gri
     }\n\
   }\n\
   for (uint k = 0; k < aw; k++) { disp[k] = rec[p.disp_word + k]; }\n\
+  if (p.gs != 0) {\n\
+    bool indexed = p.gs == 2;\n\
+    uint count = disp[0];\n\
+    uint inst = disp[1];\n\
+    uint start = indexed ? disp[2] : 0;\n\
+    if (indexed) { count = min(count, start >= p.gs_ib_count ? 0u : p.gs_ib_count - start); }\n\
+    uint groups = (count >= p.gs_verts && inst != 0) ? (count - p.gs_nonprov + p.gs_stride - 1) / p.gs_stride : 0;\n\
+    disp[0] = count;\n\
+    if (indexed) { disp[2] = 0; }\n\
+    disp[5] = groups; disp[6] = groups != 0 ? inst : 0; disp[7] = groups != 0 ? 1 : 0;\n\
+    for (uint k = 0; k < 6; k++) { disp[8 + k] = p.gs_info[k]; }\n\
+    disp[10] = (p.gs_info[2] & 0xffffu) | ((inst & 0xffffu) << 16);\n\
+    ulong ib = p.gs_ib_va + (ulong)start * (ulong)p.gs_ib_width;\n\
+    disp[12] = (uint)(ib & 0xffffffffUL); disp[13] = (uint)(ib >> 32);\n\
+  }\n\
 }\n";
+
+/// Bytes of the kernel's parameter block at the start of a chunk's ring
+/// allocation (the struct `P` of the source, 152 bytes, rounded up).
+const HEADER: u64 = 160;
 
 /// The expansion kernel of a device, compiled on first use.
 pub struct Kernels {
@@ -148,7 +168,42 @@ pub struct IndirectDispatch<'a> {
     pub index_type: u32,
     /// Stages that read what the expansion wrote.
     pub consumer: u16,
+    /// The draw goes through a geometry shader (needs `draws`).
+    pub gs: Option<GsExpand>,
 }
+
+/// A draw through a geometry shader (`CommandList::execute_indirect_draws`):
+/// the kernel also works out, per record, the object threadgroup counts of
+/// the emulation's mesh draw and its `IRRuntimeDrawInfo`, which depend on the
+/// record's counts, so the draw is a `drawMeshThreadgroupsWithIndirectBuffer`
+/// per record.
+///
+/// The expansion of a record is 64 bytes: the draw parameters
+/// (`IRRuntimeDrawParams`: 5 words, the start index of an indexed draw zero
+/// because it is folded into the index buffer address), the threadgroup
+/// triple at byte 20 (`GS_GROUPS_AT`) and the `IRRuntimeDrawInfo` at byte
+/// 32.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GsExpand {
+    /// The draw is indexed (the index buffer's address, size and width follow).
+    pub indexed: bool,
+    pub ib_va: u64,
+    /// Indices the index buffer holds; a record's count is clamped to what
+    /// is left after its start index, as nothing else guards the GPU's reads.
+    pub ib_count: u32,
+    pub ib_width: u32,
+    /// Vertices one object threadgroup takes, one primitive reads, a strip
+    /// ends with and cannot start a primitive from.
+    pub stride: u32,
+    pub verts: u32,
+    pub non_provoking: u32,
+    /// The record-independent `IRRuntimeDrawInfo` (instance count and index
+    /// buffer address zero).
+    pub info: [u8; 24],
+}
+
+/// Where the mesh threadgroup counts are in the expansion of a geometry draw.
+pub const GS_GROUPS_AT: u64 = 20;
 
 /// One record as the encoder of the action sees it.
 #[derive(Clone, Copy, Debug)]
@@ -278,7 +333,7 @@ impl CommandList {
         };
         let descs = spec.roots.len() as u64;
         // Ring bytes of a chunk of `k` records.
-        let fixed = 96 + (16 * descs).next_multiple_of(16) + tlab_bytes;
+        let fixed = HEADER + (16 * descs).next_multiple_of(16) + tlab_bytes;
         let out_bytes: u64 = if spec.draws { 64 } else { 16 };
         let per_record = tlab_bytes + out_bytes;
         let room = self.queue().constant_segment_bytes();
@@ -294,12 +349,12 @@ impl CommandList {
         while first < n {
             let k = chunk.min(n - first);
             let ring = self.alloc_constants(fixed + k * per_record, 16)?;
-            let desc_at = 96u64;
+            let desc_at = HEADER;
             let base_at = desc_at + (16 * descs).next_multiple_of(16);
             let tlabs_at = base_at + tlab_bytes;
             let disps_at = tlabs_at + k * tlab_bytes;
             let va = |at: u64| ring.gpu_va + at;
-            let mut p = Vec::<u8>::with_capacity(96);
+            let mut p = Vec::<u8>::with_capacity(HEADER as usize);
             for v in [
                 spec.args.gpu_va() + spec.args_offset,
                 count_va,
@@ -307,6 +362,7 @@ impl CommandList {
                 va(tlabs_at),
                 va(disps_at),
                 va(desc_at),
+                spec.gs.map_or(0, |g| g.ib_va),
             ] {
                 p.extend_from_slice(&v.to_le_bytes());
             }
@@ -326,6 +382,19 @@ impl CommandList {
             ] {
                 p.extend_from_slice(&v.to_le_bytes());
             }
+            let g = spec.gs;
+            for v in [
+                g.map_or(0, |g| 1 + u32::from(g.indexed)),
+                g.map_or(0, |g| g.stride),
+                g.map_or(0, |g| g.verts),
+                g.map_or(0, |g| g.non_provoking),
+                g.map_or(0, |g| g.ib_count),
+                g.map_or(0, |g| g.ib_width),
+            ] {
+                p.extend_from_slice(&v.to_le_bytes());
+            }
+            p.extend_from_slice(&g.map_or([0u8; 24], |g| g.info));
+            p.resize(HEADER as usize, 0);
             ring.write_bytes(0, &p)?;
             for (i, r) in spec.roots.iter().enumerate() {
                 ring.write_u32s(

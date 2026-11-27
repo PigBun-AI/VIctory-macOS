@@ -715,6 +715,7 @@ impl Run<'_> {
             } else {
                 crate::stages::DISPATCH
             },
+            gs: None,
         };
         // The kernel makes its own copies of the argument buffer; otherwise
         // the draws and dispatches read the one the list has, written as for

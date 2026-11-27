@@ -516,6 +516,13 @@ impl CommandList {
 
     /// `CopyResource` of two textures: every subresource. They must have the
     /// same dimension, size, mips, array size, samples and Metal format.
+    ///
+    /// The same texture on both sides copies every subresource onto itself:
+    /// nothing changes, so it is accepted and encodes nothing. The API calls it
+    /// invalid, but it is what the game does (28 times in a run, always whole
+    /// resources: `victory-gpu` gives two title resources of one memory one
+    /// host texture and the title copies one to the other), and refusing it
+    /// failed the whole list.
     pub fn copy_texture_resource(&mut self, dst: &Texture, src: &Texture) -> Result<()> {
         self.live()?;
         let (a, b) = (dst.desc(), src.desc());
@@ -523,6 +530,9 @@ impl CommandList {
             return Err(Error::BadArgument(
                 "copy of a texture of another device".into(),
             ));
+        }
+        if dst.same(src) {
+            return Ok(());
         }
         let shape = a.dim == b.dim
             && (a.width, a.height, a.depth_or_array) == (b.width, b.height, b.depth_or_array)
@@ -532,9 +542,6 @@ impl CommandList {
             // Formats of one family (`R8G8B8A8_TYPELESS` and its sRGB view
             // format): every subresource goes through `copy_texture`, which
             // moves the bytes.
-            if dst.same(src) {
-                return Err(Error::BadArgument("copy of a texture onto itself".into()));
-            }
             for slice in 0..a.array_len() {
                 for mip in 0..a.mips {
                     let at = |t| TexLoc {
@@ -554,9 +561,6 @@ impl CommandList {
             return Err(Error::BadArgument(format!(
                 "CopyResource between textures of different descriptions: {a:?} and {b:?}"
             )));
-        }
-        if dst.same(src) {
-            return Err(Error::BadArgument("copy of a texture onto itself".into()));
         }
         self.texture_hazard(src, ALL, ALL, false);
         self.texture_hazard(dst, ALL, ALL, true);
