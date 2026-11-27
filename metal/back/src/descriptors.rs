@@ -316,6 +316,20 @@ impl DescriptorHeap {
             return Err(Error::BadArgument("typed view range overflows".into()));
         };
         self.check_resident(buffer.gpu_va(), 1)?;
+        let alignment = self.device.typed_view_alignment(format);
+        if access == ViewAccess::Read && !first.is_multiple_of(alignment) {
+            // Not a texture-buffer start: read an aligned copy of the range
+            // (see `crate::mirror`).
+            let m = buffer.typed_mirror(format, first, num_elements)?;
+            return self.write(
+                index,
+                IrDescriptorTableEntry {
+                    gpu_va: m.gpu_va,
+                    texture_view_id: m.resource_id,
+                    metadata: buffer_metadata(size, 0, true)?,
+                },
+            );
+        }
         let view = buffer.texture_view(format, first, num_elements, access)?;
         self.write(
             index,

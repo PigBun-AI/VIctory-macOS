@@ -38,6 +38,8 @@ callable from C, so the library's version is read from the header macros only
   sampler entry has `gpuVA = resource id`, `textureViewID = 0`, `metadata = lodBias bits`; bind
   points `DescriptorHeap 0`, `SamplerHeap 1`, `ArgumentBuffer 2`, `HullDomain 3`, `DrawArguments 4`,
   `Uniforms 5`, `VertexBuffer 6`, `StageInAttributeStart 11`.
+* Measured again 2026-11-27 (4.0.3): the texture-view offset field is not applied to typed buffer
+  reads at all (see `m1-exec.md`, typed views: misaligned SRVs use a mirror).
 * The manual's prose still says the texture-view offset is "2 bytes"; the header uses an 8-bit
   mask. The code follows the header (unchanged).
 * The `kIR*` constants are header-only (`IR_PRIVATE_IMPLEMENTATION`), not exported by the

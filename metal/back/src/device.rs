@@ -71,6 +71,8 @@ pub(crate) struct DeviceInner {
     pub(crate) compiler: Retained<ProtocolObject<dyn MTL4Compiler>>,
     /// Pipelines that clear part of an attachment inside a pass.
     pub(crate) clear_pipes: Mutex<crate::draw::ClearPipes>,
+    /// Mirrors of misaligned typed views ([`crate::mirror`]).
+    pub(crate) mirrors: crate::mirror::Registry,
 }
 
 /// The device and everything shared between the objects made from it.
@@ -173,6 +175,7 @@ impl Device {
                 timelines: Mutex::new(Vec::new()),
                 compiler,
                 clear_pipes: Mutex::new(Default::default()),
+                mirrors: Default::default(),
             }),
         })
     }

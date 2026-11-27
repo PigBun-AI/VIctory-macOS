@@ -105,16 +105,17 @@ impl Link for WineUnixlib {
             len: block.len() as u64,
         };
         let nt = RawLink::call(self, OP_PROTO_SUBMIT, (&raw mut a).cast());
-        let s = nt_to_status(nt);
-        if s == Status::INTERNAL && std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0")
+        let status = nt_to_status(nt);
+        if status == Status::INTERNAL
+            && std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0")
         {
+            // Not a status of the back's: the unixlib call itself failed.
             eprintln!(
-                "victory-metal bridge: a submit of {} bytes came back as NTSTATUS {:#010x}",
-                block.len(),
+                "victory-metal bridge: the unixlib call answered NTSTATUS {:#010x}",
                 nt as u32
             );
         }
-        s
+        status
     }
 
     fn call(&self, op: SyncOp, args: *mut u8, len: usize) -> Status {

@@ -188,6 +188,63 @@ pub(super) struct Run<'a> {
     pub(super) open: Option<(CommandList, QueueId, Bound)>,
 }
 
+/// `VICTORY_METAL_STEP=1`: every command is printed before it runs, so the
+/// last one printed is the one a crash of the process happened in.
+fn step_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_METAL_STEP").is_some_and(|v| v != "0");
+        if on {
+            crash_report();
+        }
+        on
+    })
+}
+
+/// The handler that was there before ours, to pass the signal on to.
+static PREVIOUS: [std::sync::atomic::AtomicUsize; 2] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 2];
+
+/// Prints the faulting address and the call stack of a `SIGSEGV` / `SIGBUS`
+/// in the process (for `VICTORY_METAL_STEP`), then hands the signal on.
+fn crash_report() {
+    extern "C" fn handler(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
+        let mut frames = [std::ptr::null_mut::<libc::c_void>(); 48];
+        // SAFETY: a diagnostic in a process that is about to fault anyway.
+        unsafe {
+            let n = libc::backtrace(frames.as_mut_ptr(), 48);
+            let addr = if info.is_null() {
+                std::ptr::null_mut()
+            } else {
+                (*info).si_addr
+            };
+            let msg = format!("victory-metal crash: signal {sig} at address {addr:p}\n");
+            libc::write(2, msg.as_ptr().cast(), msg.len());
+            libc::backtrace_symbols_fd(frames.as_ptr(), n, 2);
+            let i = usize::from(sig == libc::SIGBUS);
+            let prev = PREVIOUS[i].load(std::sync::atomic::Ordering::Relaxed);
+            if prev > 1 {
+                let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                    std::mem::transmute(prev);
+                f(sig, info, ctx);
+            }
+        }
+    }
+    for (i, sig) in [libc::SIGSEGV, libc::SIGBUS].into_iter().enumerate() {
+        // SAFETY: installs a handler with the platform's `sigaction`.
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            let mut new: libc::sigaction = std::mem::zeroed();
+            new.sa_sigaction = handler as *const () as usize;
+            new.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
+            libc::sigemptyset(&mut new.sa_mask);
+            if libc::sigaction(sig, &new, &mut old) == 0 {
+                PREVIOUS[i].store(old.sa_sigaction, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 impl State {
     /// Runs a block that [`validate`] accepted.
     pub(super) fn run_block(&mut self, block: &[u8]) -> Status {
@@ -200,21 +257,20 @@ impl State {
             open: None,
         };
         let mut failed: Option<(Status, String)> = None;
-        // `VICTORY_METAL_TRACE_CMDS=1`: each command, before it runs (finds a
-        // command that crashes the process).
-        let trace_cmds = std::env::var_os("VICTORY_METAL_TRACE_CMDS").is_some_and(|v| v != "0");
+        run.st.note = None;
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
-            if trace_cmds {
-                let mut d = format!("{c:?}");
-                d.truncate(300);
-                eprintln!("victory-metal exec: {d}");
+            if step_log() {
+                eprintln!("victory-metal step: {c:?}");
             }
             if let Err(s) = run.command(&c) {
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
-                    eprintln!("victory-metal back: {:?} failed: {s:?}", c.opcode());
+                    // `note` still holds the reason a refusal recorded (the
+                    // block's own note below replaces it).
+                    let why = run.st.note.as_deref().unwrap_or("no reason recorded");
+                    eprintln!("victory-metal back: {:?} failed: {s:?}: {why}", c.opcode());
                 }
                 // Dropping `run` drops the open list and the unflushed ones.
                 failed = Some((s, format!("{c:?}")));
@@ -305,11 +361,12 @@ impl Run<'_> {
         let result = if batch.lists.is_empty() {
             Ok(())
         } else {
-            batch
-                .queue
-                .submit(batch.lists)
-                .map(|_| ())
-                .map_err(|e| logged("commit of a batch of lists", &e))
+            batch.queue.submit(batch.lists).map(|_| ()).map_err(|e| {
+                if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                    eprintln!("victory-metal back: committing the lists failed: {e}");
+                }
+                status_of(&e)
+            })
         };
         // Every submit ends with maintain.
         self.st.device.maintain();

@@ -105,7 +105,7 @@ impl Queue {
         slot.cb
             .setLabel(Some(&NSString::from_str("victory command list")));
         let ordered_after_prior = self.inter_submit_barrier();
-        Ok(CommandList {
+        let mut list = CommandList {
             queue: self.clone(),
             table: slot.table.clone(),
             slot: Some(slot),
@@ -123,7 +123,9 @@ impl Queue {
             splits: HashMap::new(),
             blit_writes: Vec::new(),
             stats: ListStats::default(),
-        })
+        };
+        list.refresh_mirrors()?;
+        Ok(list)
     }
 }
 
@@ -437,10 +439,8 @@ impl CommandList {
         // The object stage of a geometry pipeline (a vertex shader made
         // for the emulation) reads the same arguments at the hull/domain
         // point, too.
-        self.table.set_address(
-            bind_point::ARGUMENT_BUFFER_HULL_DOMAIN as u32,
-            tlab.gpu_va,
-        )?;
+        self.table
+            .set_address(bind_point::ARGUMENT_BUFFER_HULL_DOMAIN as u32, tlab.gpu_va)?;
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER as u32, tlab.gpu_va)
     }
@@ -483,8 +483,11 @@ impl CommandList {
         }
         let p = pipeline.clone();
         let key = p.identity();
+        // After `prepare`: it may open a new encoder, which has no pipeline
+        // set (and `last_pipeline` is forgotten with the old encoder).
+        self.prepare(DISPATCH)?;
         let new_pipeline = self.last_pipeline != Some(key);
-        let encoder = self.prepare(DISPATCH)?;
+        let encoder = self.encoder_ref()?;
         if new_pipeline {
             encoder.setComputePipelineState(p.raw());
         }
@@ -528,8 +531,11 @@ impl CommandList {
         }
         let p = pipeline.clone();
         let key = p.identity();
+        // After `prepare`: it may open a new encoder, which has no pipeline
+        // set (and `last_pipeline` is forgotten with the old encoder).
+        self.prepare(DISPATCH)?;
         let new_pipeline = self.last_pipeline != Some(key);
-        let encoder = self.prepare(DISPATCH)?;
+        let encoder = self.encoder_ref()?;
         if new_pipeline {
             encoder.setComputePipelineState(p.raw());
         }

@@ -5,8 +5,8 @@
 use victory_metal_proto::cmd::*;
 use victory_metal_proto::file::FileWriter;
 use victory_metal_proto::ids::*;
-use victory_metal_proto::render::*;
 use victory_metal_proto::indirect::ExecuteIndirect;
+use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::{Encoder, STREAM_HEADER_SIZE, STREAM_MAGIC};

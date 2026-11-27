@@ -659,7 +659,10 @@ impl Msc {
         // The separate stage-in function of a vertex shader of a geometry pipeline.
         let mut stage_in = None;
         if stage == ShaderStage::Vertex
-            && options.graphics.as_ref().is_some_and(|g| g.geometry_emulation)
+            && options
+                .graphics
+                .as_ref()
+                .is_some_and(|g| g.geometry_emulation)
             && let Some(elements) = &options.stage_in
         {
             stage_in = Some(self.synthesize_stage_in(&compiler, &refl, elements)?);
@@ -773,7 +776,11 @@ impl Msc {
                 format: e.format,
                 inputSlot: e.slot,
                 alignedByteOffset: e.offset,
-                instanceDataStepRate: if e.per_instance { e.step_rate.max(1) } else { 0 },
+                instanceDataStepRate: if e.per_instance {
+                    e.step_rate.max(1)
+                } else {
+                    0
+                },
                 inputSlotClass: u32::from(e.per_instance),
             };
         }
