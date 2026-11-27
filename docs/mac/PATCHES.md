@@ -168,6 +168,9 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
 - **Data directories**: `victory-data-livetr-<profile>-<backend>`, cloned from the read-only seed `victory-data-livetr`; `--fresh-data` clones
   again. Both backends start from the same state and can run in parallel. These directories and the prefix are the allowed differences
   of `--print-env` between backends, besides `WINEDLLPATH`/`WINEDLLOVERRIDES`/`VICTORY_METAL_LOG`/`VICTORY_METAL_NOTIMPL_LOG`.
+- **Capture and watchdog switches**: `--record-at` (`VICTORY_RECORD_AT`, I2), `--capture-frames` (takes `w<N>`, I2), `--no-watchdog`
+  (`VICTORY_MAC_NO_WATCHDOG=1`, L5; logged as `non-fidelity`) and the preset `--corpus` (`--record-at w<N>` plus `--no-watchdog`, default
+  `w5`): see "Capture runs" in `docs/mac/RUN.md`.
 - `--print-env` prints what would be passed (sorted, `~` for the home directory) and the command, and does nothing else.
 - Each run keeps `run-env.txt`, `start.txt`, `summary.txt` next to its logs.
 - Refuses: the Metal backend on a D3DMetal prefix (`wineprefix-play`, `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`); a start while

@@ -75,7 +75,11 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--keys SPEC`, `--no-keys` | `VICTORY_KEYS` | `8-3600/3:Enter` (Enter every 3 s from 8 s; patch I1) |
 | `--input FILE\|none` | `VICTORY_INPUT_REPLAY` | `tools/mac/input/world-neutral.txt` (neutral input from world frame 1; I1) |
 | `--record FILE` | `VICTORY_INPUT_RECORD` (relative to the out directory); turns the default replay off | off |
-| `--capture-frames LIST` | `VICTORY_CAPTURE_FRAMES` (diagnostics builds) | off |
+| `--capture-frames LIST` | `VICTORY_CAPTURE_FRAMES` (diagnostics builds): comma list of present numbers and `w<N>` (I2, see "Capture runs"), e.g. `64,w12`; an item that is neither is refused | off |
+| `--record-at f<N>\|w<N>\|SEC` | `VICTORY_RECORD_AT` (diagnostics builds): when the frame recorder starts. `f<N>` present number, `w<N>` the N-th world frame after world frame 1 (I2), `SEC` seconds. Records only with `VICTORY_RECORD=<folder>` in the environment (the script warns if it is missing) | off |
+| `--no-watchdog` | `VICTORY_MAC_NO_WATCHDOG=1` (L5): the title's own hang watchdog off. **Non-fidelity**, logged (see "Capture runs") | off |
+| `--corpus` | preset for capture-corpus runs: `--record-at <--corpus-frame>` plus `--no-watchdog`. An explicit `--record-at` wins over the preset's. **Non-fidelity** | off |
+| `--corpus-frame w<N>` | the frame `--corpus` records at (a bare `N` means `w<N>`) | `w5` |
 | `--frametime-log` | `VICTORY_FRAMETIME_LOG=<out>/frametime.log` (frame, microseconds since the previous sample, draws) | off |
 | `--tracking 0\|1` | `VICTORY_FAULT_TRACKING` | 1 |
 | `--masked SPEC` | `VICTORY_PATCH_MASKED` | not set (follows tracking; the extra #144 sites on build 1.0.2.1) |
@@ -102,7 +106,32 @@ directory, default `GTA6.Xbox.v1.0.2.1` in `GTA6_ROOT`), `VICTORY_MAC_WINE_DIR` 
 `VICTORY_DXC_DIR` (`dxc` next to the cache), `DXC_LIB` (D3DMetal's `libdxcompiler.dylib` in the Wine tree); `VICTORY_FAULT_TRACKING`;
 `VICTORY_KEYS`, `VICTORY_INPUT_REPLAY` (or neither, with `--no-keys` / `--input none`); `VICTORY_OUTPUT` (by profile); and, when asked
 for, `VICTORY_PRESENT_MAX`, `VICTORY_POOL_CHECK`, `VICTORY_LOG_RENDER_SIZE`, `VICTORY_FRAMETIME_LOG`, `VICTORY_CAPTURE_FRAMES`,
-`VICTORY_INPUT_RECORD`, `VICTORY_PATCH_MASKED`. Only the wineserver of the run's own prefix is ever stopped.
+`VICTORY_RECORD_AT`, `VICTORY_MAC_NO_WATCHDOG`, `VICTORY_INPUT_RECORD`, `VICTORY_PATCH_MASKED`. `--print-env` lists them all. Only the wineserver of the run's own prefix is ever stopped.
+
+## Capture runs: `--record-at`, `--capture-frames`, `--no-watchdog`, `--corpus`
+
+**`w<N>`** (patch I2) names the N-th world frame after world frame 1 (`w0` is world frame 1, `w300` world frame 301). A present number
+(`f300`) names a different moment in every run, `w300` the same one. `--capture-frames` takes it next to plain present numbers
+(`--capture-frames 64,w12`); `--record-at` takes `f<N>`, `w<N>` or seconds. `w0` cannot trace the first world frame's draws ahead of time
+(use `w1` or later), and when the world is never reached, nothing triggers. Recording also needs `VICTORY_RECORD=<folder>` in the
+environment and a diagnostics build (`docs/replay.md`); `run.sh` does not set the folder.
+
+**`--no-watchdog`** (patch L5) sets `VICTORY_MAC_NO_WATCHDOG=1`: the title's own hang watchdog, which kills the title in the world when a
+frame takes too long, is turned off (three jumps patched at load, build 1.0.2.1 only; otherwise it stays on and the log says why). The run is
+**non-fidelity**: the log carries `non-fidelity: title hang watchdog disabled`, and `--print-env`, `run-env.txt` and `start.txt` say so; no
+fidelity result may cite it. **Use it with a time limit.** With the watchdog off, a run that really hangs no longer crashes: nothing ends it
+but `--timeout SEC` (default 900 s, which stays; `--timeout 0` plus `--no-watchdog` makes the script warn). Check `summary.txt` for
+`time limit ... reached` in `stderr.log` to tell a hang that the limit ended from a run that finished by itself.
+
+**`--corpus`** is the preset for filling the capture corpus: `--record-at w<N>` plus `--no-watchdog`, with `N` from `--corpus-frame`
+(default **`w5`**). The default is low on purpose: with D3DMetal the game usually crashes within about 10 frames of entering the world, so
+a later frame is often never reached, while the recorder arms at `w5` and takes the next whole frame (a few frames later, as with `f<N>`).
+A slower recording frame needs the watchdog off, which is why the preset includes it. Same options on both backends:
+
+```sh
+VICTORY_RECORD=$HOME/captures tools/mac/run.sh --corpus --backend d3dmetal --timeout 600
+tools/mac/run.sh --print-env --corpus --backend metal        # shows VICTORY_RECORD_AT=w5 and VICTORY_MAC_NO_WATCHDOG=1
+```
 
 ## What a run leaves in its out directory
 

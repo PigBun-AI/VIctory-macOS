@@ -28,7 +28,17 @@
 #   --keys SPEC | --no-keys      VICTORY_KEYS, default 8-3600/3:Enter (Enter every 3 s from 8 s)
 #   --input FILE|none            VICTORY_INPUT_REPLAY, default tools/mac/input/world-neutral.txt (I1)
 #   --record FILE                VICTORY_INPUT_RECORD (relative: under --out); turns the default replay off
-#   --capture-frames LIST        VICTORY_CAPTURE_FRAMES (diagnostics builds)
+#   --capture-frames LIST        VICTORY_CAPTURE_FRAMES (diagnostics builds): comma list of present numbers and/or w<N>, the N-th
+#                                world frame after world frame 1 (I2), for example 64,w12. Bad items are refused here (the build skips them)
+#   --record-at f<N>|w<N>|SEC    VICTORY_RECORD_AT (diagnostics builds): when the frame recorder starts, as f<N> (present number),
+#                                w<N> (N-th world frame after world frame 1, I2) or seconds. Needs VICTORY_RECORD=<folder> (passed
+#                                through from the environment) to record anything
+#   --no-watchdog                VICTORY_MAC_NO_WATCHDOG=1 (L5): the title's own hang watchdog off. NON-FIDELITY (logged). A run that
+#                                really hangs no longer crashes, so it ends only by --timeout: keep a limit (--timeout 0 warns)
+#   --corpus                     preset for capture-corpus runs: --record-at <--corpus-frame> plus --no-watchdog (an explicit
+#                                --record-at wins over the preset's). NON-FIDELITY. D3DMetal usually crashes within ~10 frames of
+#                                entering the world, so the default frame is w5
+#   --corpus-frame w<N>|N        the frame --corpus records at (default w5; a bare N means w<N>)
 #   --frametime-log              VICTORY_FRAMETIME_LOG=<out>/frametime.log
 #   --tracking 0|1               VICTORY_FAULT_TRACKING (default 1, as the code's default)
 #   --masked SPEC                VICTORY_PATCH_MASKED (default: not set, the code follows fault tracking)
@@ -61,6 +71,7 @@ backend="${VICTORY_MAC_BACKEND:-d3dmetal}"; profile="${VICTORY_MAC_PROFILE:-perf
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
+record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
 present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -73,6 +84,9 @@ while [ $# -gt 0 ]; do
         --keys) keys=${2:?}; shift ;; --no-keys) keys=none ;;
         --input) input=${2:?}; shift ;; --record) record=${2:?}; shift ;;
         --capture-frames) capture=${2:?}; shift ;;
+        --record-at) record_at=${2:?--record-at f<N>|w<N>|SECONDS}; shift ;;
+        --no-watchdog) no_watchdog=1 ;;
+        --corpus) corpus=1 ;; --corpus-frame) corpus_frame=${2:?--corpus-frame w<N>}; shift ;;
         --tracking) tracking=${2:?}; shift ;; --masked) masked=${2:?}; shift ;;
         --present-max) present_max=${2:?}; shift ;; --pool-check) pool_check=${2:?}; shift ;;
         --settings-output) settings_output=${2:?}; shift ;;
@@ -94,6 +108,21 @@ case "$settings_output" in 1280x720|1664x936|1920x1080|2560x1440|3840x2160) ;;
     *) die "--settings-output is one of the title's modes: 1280x720 1664x936 1920x1080 2560x1440 3840x2160" ;; esac
 case "$console" in ''|series-x|series-s) ;; *) die "--console is series-x or series-s" ;; esac
 case "$pool_check" in ''|skip|keep) ;; *) die "--pool-check is skip or keep" ;; esac
+if [ -n "$capture" ]; then
+    oldifs=$IFS; IFS=,
+    for item in $capture; do
+        [[ "$item" =~ ^[wW]?[0-9]+$ ]] || { IFS=$oldifs; die "--capture-frames: '$item' is neither a present number nor w<N> (the build would skip it)"; }
+    done
+    IFS=$oldifs
+fi
+case "$corpus_frame" in [0-9]*) corpus_frame="w$corpus_frame" ;; esac
+[[ "$corpus_frame" =~ ^[wW][0-9]+$ ]] || die "--corpus-frame is w<N> or a whole number N, not '$corpus_frame'"
+if [ "$corpus" = 1 ]; then
+    no_watchdog=1
+    [ -n "$record_at" ] || record_at="$corpus_frame"
+fi
+[ -z "$record_at" ] || [[ "$record_at" =~ ^([wWf][0-9]+|[0-9]+(\.[0-9]+)?)$ ]] \
+    || die "--record-at is f<N>, w<N> or seconds, not '$record_at' (the build would take anything else as 'wait for the trigger file')"
 case "$tmo" in ''|*[!0-9]*) die "--timeout takes whole seconds" ;; esac
 case "$sample" in ''|*[!0-9]*) die "--sample takes whole seconds" ;; esac
 
@@ -163,6 +192,17 @@ if [ -n "$record" ]; then
 fi
 if [ "$input" = none ]; then UNSET+=(VICTORY_INPUT_REPLAY); unset VICTORY_INPUT_REPLAY; else export VICTORY_INPUT_REPLAY="$input"; fi
 [ -z "$capture" ] || export VICTORY_CAPTURE_FRAMES="$capture"
+[ -z "$record_at" ] || export VICTORY_RECORD_AT="$record_at"
+[ "$no_watchdog" = 0 ] || export VICTORY_MAC_NO_WATCHDOG=1
+# the watchdog is off by this run's option or by the caller's environment (anything but empty or 0, as the loader reads it)
+watchdog_off=0
+case "${VICTORY_MAC_NO_WATCHDOG:-}" in ''|0) ;; *) watchdog_off=1 ;; esac
+if [ "$watchdog_off" = 1 ] && [ "$tmo" = 0 ] && [ "$execmode" = 0 ]; then
+    echo "tools/mac/run.sh: warning: the title's hang watchdog is off and there is no --timeout: a run that really hangs never ends" >&2
+fi
+if [ -n "$record_at" ] && [ -z "${VICTORY_RECORD:-}" ]; then
+    echo "tools/mac/run.sh: warning: VICTORY_RECORD_AT is set but VICTORY_RECORD (the folder) is not: nothing will be recorded" >&2
+fi
 [ "$frametime" = 0 ] || export VICTORY_FRAMETIME_LOG="$out/frametime.log"
 # the title's output: the profile decides, and says so in the log
 if [ "$profile" = fidelity ]; then
@@ -196,6 +236,10 @@ describe() {
     else
         echo "# perf: non-fidelity: output patched to ${VICTORY_OUTPUT} (the title's code, patch L3)"
     fi
+    if [ "$watchdog_off" = 1 ]; then
+        echo "# non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG}; patch L5): a real hang does not crash, the run ends by --timeout (${tmo} s; 0 = never)"
+    fi
+    [ "$corpus" = 0 ] || echo "# corpus: --record-at ${record_at} (--corpus-frame ${corpus_frame}) plus --no-watchdog"
     if [ "$backend" = metal ]; then
         echo "# metal: stage $stage; front/d3d12.dll front/dxgi.dll x86_64-windows/victory_metal_bridge.dll go into the prefix's system32 (originals kept as .metal-orig)"
     else
@@ -318,6 +362,7 @@ print_environment >"$out/run-env.txt"
     echo "backend $backend  profile $profile"
     echo "checkout $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) ($(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ') changed files)"
     echo "exe $(shasum -a 256 "$exe" | cut -c1-16) $(stat -f %Sm -t %FT%T "$exe")"
+    [ "$watchdog_off" = 0 ] || echo "non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG})"
     [ "$profile" = fidelity ] && echo "settings.xml $(grep -A3 '<resolutionFullscreen>' "$settings" | tr -d ' \n')" || echo "non-fidelity: output patched to ${VICTORY_OUTPUT}"
 } >"$out/start.txt"
 cat "$out/start.txt"
