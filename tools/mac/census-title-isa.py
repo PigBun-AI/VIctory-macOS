@@ -7,7 +7,7 @@ Writes, to the output directory argv[2] (outside the repository: game-derived da
   isa-counts.tsv      class, count, functions, top-function-share
   isa-functions.tsv   class, function begin RVA, count        (per-function distribution)
   isa-sites-<class>.txt  RVAs (hex) of each site, for the classes that matter
-Only counts go into the repository (docs/mac/translation-matrix-mac.csv).
+Only counts go into the repository (docs/mac/translation-matrix-mac.csv.txt).
 There is no execution profile here: 'hot path' needs a runtime sampler (see translation-map-mac.md).
 """
 import sys, re, struct, bisect, collections, os

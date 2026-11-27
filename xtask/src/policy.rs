@@ -18,6 +18,8 @@ const ALLOWED_EXTENSIONS: &[&str] = &[
     "rs", "toml", "md", "txt", "lock", "yml", "yaml", "json", "hlsl", "hlsli", "ps1", "cmd", "sh",
     // Mac: source patches for the Wine VIctory runs on (tools/macos/patches).
     "patch",
+    // Mac: small test programs and census scripts (tools/mac/rosetta-probe, tools/mac/census-*.py): source, no game data.
+    "c", "h", "py",
 ];
 const ALLOWED_NAMES: &[&str] = &[
     ".gitignore",
