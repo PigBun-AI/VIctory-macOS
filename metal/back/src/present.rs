@@ -112,6 +112,9 @@ pub struct Swapchain {
     /// Queues whose residency sets already include the layer's.
     attached: Vec<usize>,
     probe: bool,
+    /// `VICTORY_METAL_DUMP_PRESENT` (see [`crate::dump`]).
+    dump: Option<crate::dump::DumpSpec>,
+    dump_kernel: Option<ComputePipeline>,
     last_probe: Option<(u64, u32, u32)>,
     presents: u64,
     dropped: u64,
@@ -151,6 +154,8 @@ impl Swapchain {
             in_flight: VecDeque::new(),
             attached: Vec::new(),
             probe,
+            dump: crate::dump::DumpSpec::from_env(),
+            dump_kernel: None,
             last_probe: None,
             presents: 0,
             dropped: 0,
@@ -292,6 +297,58 @@ impl Swapchain {
         Ok(k)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn write_dump(
+        &self,
+        spec: &crate::dump::DumpSpec,
+        src: &crate::memory::Buffer,
+        target: &ProtocolObject<dyn MTLTexture>,
+        sw: u32,
+        sh: u32,
+        dw: u32,
+        dh: u32,
+    ) {
+        let n = self.presents + 1;
+        let _ = std::fs::create_dir_all(&spec.dir);
+        let Some(p) = src.cpu_ptr() else { return };
+        // SAFETY: a readback buffer of sw*sh*4 bytes the finished list wrote.
+        let src_px = unsafe { std::slice::from_raw_parts(p, sw as usize * sh as usize * 4) };
+        let mut px = vec![0u8; dw as usize * dh as usize * 4];
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: dw as usize,
+                height: dh as usize,
+                depth: 1,
+            },
+        };
+        // SAFETY: room for dw*dh texels of 4 bytes (BGRA8; other layer formats are not dumped below).
+        unsafe {
+            target.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+                std::ptr::NonNull::new(px.as_mut_ptr()).unwrap().cast(),
+                dw as usize * 4,
+                region,
+                0,
+            );
+        }
+        let drawable_ok = self.pixel == MTLPixelFormat::BGRA8Unorm;
+        for t in px.as_chunks_mut::<4>().0 {
+            t.swap(0, 2);
+        }
+        let s = crate::dump::write_png_rgba8(&spec.path(n, "source"), sw, sh, src_px);
+        let d = if drawable_ok {
+            crate::dump::write_png_rgba8(&spec.path(n, "drawable"), dw, dh, &px)
+        } else {
+            Ok(())
+        };
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            eprintln!(
+                "victory-metal back: dumped present {n}: source {sw}x{sh}, drawable {dw}x{dh} into {} ({s:?}, {d:?})",
+                spec.dir.display()
+            );
+        }
+    }
+
     fn present_inner(&mut self, queue: &Queue, src: &Texture, sync_interval: u32) -> Result<()> {
         let kernel = self.pipeline()?;
         let key = Arc::as_ptr(&queue.inner) as usize;
@@ -323,9 +380,45 @@ impl Swapchain {
         list.set_address(DST_SLOT, ring.gpu_va + 32)?;
         list.set_address(PARAM_SLOT, ring.gpu_va + 64)?;
         list.dispatch(&kernel, [dw.div_ceil(8), dh.div_ceil(8), 1], [8, 8, 1])?;
+        // Diagnostics: the source as RGBA8 into a readback buffer, in the same list (the kernel only
+        // reads the source; the drawable is read below, after the list).
+        let dump = self
+            .dump
+            .as_ref()
+            .filter(|d| d.wants(self.presents + 1))
+            .cloned();
+        let mut dump_buf = None;
+        if dump.is_some() {
+            let k = match &self.dump_kernel {
+                Some(k) => k.clone(),
+                None => {
+                    let k = self
+                        .device
+                        .compute_pipeline_from_msl(crate::dump::DUMP_KERNEL, "present_dump")?;
+                    self.dump_kernel = Some(k.clone());
+                    k
+                }
+            };
+            let buf = self.device.create_buffer(
+                crate::memory::BufferKind::Readback,
+                u64::from(sd.width) * u64::from(sd.height) * 4,
+            )?;
+            list.set_address(DST_SLOT, buf.gpu_va())?;
+            list.dispatch(
+                &k,
+                [sd.width.div_ceil(8), sd.height.div_ceil(8), 1],
+                [8, 8, 1],
+            )?;
+            dump_buf = Some(buf);
+        }
         list.end()?;
         let as_drawable: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*drawable);
         let value = queue.submit_drawable(vec![list], as_drawable)?;
+        if let (Some(spec), Some(buf)) = (dump, dump_buf) {
+            // After the list, before the display gets the drawable.
+            queue.wait_for(value, 10_000)?;
+            self.write_dump(&spec, &buf, &target, sd.width, sd.height, dw, dh);
+        }
         if self.probe {
             // Read before the present hands the drawable to the display.
             queue.wait_for(value, 5_000)?;

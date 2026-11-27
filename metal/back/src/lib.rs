@@ -29,6 +29,7 @@ pub mod descriptors;
 pub mod device;
 #[cfg(target_vendor = "apple")]
 pub mod draw;
+pub mod dump;
 #[cfg(target_vendor = "apple")]
 pub mod error;
 #[cfg(target_vendor = "apple")]

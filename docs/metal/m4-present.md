@@ -105,6 +105,15 @@ failure is the first missing graphics command, not a defect of present.
 Present: nothing missing. `IDXGIFactory::CreateSwapChain*` and swap chain methods are not in the list.
 Back `last_error`: none from present. `EnumOutputs` answers NOT_FOUND (no outputs) and the game did not mind.
 
+## Diagnostics: `VICTORY_METAL_DUMP_PRESENT=<present numbers>@<directory>`
+
+e.g. `300,1322@/path/outside/the/repo`. At those presents (the n-th present of a swap chain, from 1; for the title's single
+swap chain its present number) the back writes `present-<n>-source.png` (the source back buffer, read by a compute kernel
+into a readback buffer, as RGBA8) and `present-<n>-drawable.png` (the whole drawable, after the present kernel and before
+the display gets it), uncompressed PNGs (`metal/back/src/dump.rs`). Equal sizes: byte-equal; otherwise the drawable is the
+nearest-neighbour scaling of the source. Test: `metal/back/tests/exec_present_dump.rs`. The layer's gravity is `resizeAspect`
+and `VICTORY_METAL_LOG=1` prints the swap chain (front) and the layer (back: bounds, contentsScale, drawableSize, gravity).
+
 ## Known limits
 
 `PRESENT` holds the executor state lock while it waits for the latency slot; `sync_interval > 1` is treated as
