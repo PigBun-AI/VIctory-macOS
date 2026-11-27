@@ -190,6 +190,17 @@ impl Gfx {
 
     /// Draws the mesh pipeline into a fresh target and reads it back.
     fn draw_and_read(&self, pso: PsoId, bg: [f32; 4]) -> Vec<u32> {
+        let dispatch = Command::DispatchMesh(DispatchMesh {
+            x: 1,
+            y: 1,
+            z: 1,
+            _pad: 0,
+        });
+        self.run(pso, Vec::new(), dispatch, bg)
+    }
+
+    /// `draw` with `state` (topology, vertex buffer) set before it, into a fresh target, read back.
+    fn run(&self, pso: PsoId, state: Vec<Command<'static>>, draw: Command<'static>, bg: [f32; 4]) -> Vec<u32> {
         let t = self.texture();
         let rb = self.fx.buffer(BufferKind::READBACK, (W * H * 4) as u64);
         cpu_write(rb.cpu_addr, &vec![0xDEAD_BEEF; (W * H) as usize]);
@@ -220,7 +231,7 @@ impl Gfx {
         let mut copy = <CopyTextureRegion as Wire>::ZERO;
         copy.dst = foot;
         copy.src = loc;
-        let cmds = vec![
+        let mut cmds = vec![
             begin(1, self.q),
             Command::SetRootSignature(SetRootSignature {
                 bind_point: BindPoint::GRAPHICS,
@@ -233,18 +244,16 @@ impl Gfx {
             Command::SetScissors(SetScissors::from_slice(&[Rect::new(
                 0, 0, W as i32, H as i32,
             )])),
+        ];
+        cmds.extend(state);
+        cmds.extend([
             Command::BeginRenderPass(pass),
-            Command::DispatchMesh(DispatchMesh {
-                x: 1,
-                y: 1,
-                z: 1,
-                _pad: 0,
-            }),
+            draw,
             Command::EndRenderPass(<EndRenderPass as Wire>::ZERO),
-            Command::Barrier(Barrier::memory(stage::FRAGMENT, stage::BLIT)),
+            Command::Barrier(Barrier::memory(stage::FRAGMENT | stage::VERTEX, stage::BLIT)),
             Command::CopyTextureRegion(copy),
             end(1),
-        ];
+        ]);
         assert_eq!(
             self.fx.submit(&cmds),
             Status::OK,
@@ -339,4 +348,108 @@ float4 main(PSIn i) : SV_Target0 { return i.c0 + 0 * (i.c1 + i.c2); }\n";
         assert!(seen > 50, "primitive {idx} covers {seen} pixels");
     }
     let _ = want;
+}
+
+// ---------------------------------------------------------------------------
+// The vertex pipeline: VS + a geometry stage that hands the other vertices on.
+//
+// Three ways to give a pixel shader the other vertices of a triangle were weighed (docs/metal/
+// attribute-at-vertex.md, "Vertex pipelines"): nointerpolation with the provoking vertex alone gives vertex 0
+// only; SV_VertexID plus a buffer the pixel stage reads needs the vertex stage's outputs in a buffer that
+// the same draw's pixel stage may read before it is written (no ordering inside a draw); a geometry stage
+// sees the whole triangle in the order the API gives it and the back already runs it (m5-gs.md). The
+// translator's stage (`victory_shader::emit::vertex_pipeline_gs`, mac S1) is that geometry stage.
+
+const VS_LIST: &str = "struct VSIn { float3 pos : POSITION; float4 col : COLOR0; };\n\
+struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+VSOut main(VSIn i) { VSOut o; o.pos = float4(i.pos, 1); o.col = i.col; return o; }\n";
+
+/// What `vertex_pipeline_gs` makes, in HLSL: the vertex's own value per vertex (constant), and the values of
+/// vertices 1 and 2 as constant elements of every emitted vertex.
+const GS_LOWERED: &str = "\
+struct VI { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+struct GO { float4 pos : SV_Position; nointerpolation float4 c0 : COLOR0; nointerpolation float4 c1 : COLOR1; nointerpolation float4 c2 : COLOR2; };\n\
+[maxvertexcount(3)]\n\
+void main(triangle VI i[3], inout TriangleStream<GO> s) {\n\
+  for (int k = 0; k < 3; k++) { GO o; o.pos = i[k].pos; o.c0 = i[k].col; o.c1 = i[1].col; o.c2 = i[2].col; s.Append(o); }\n}\n";
+
+#[test]
+fn a_geometry_stage_hands_the_other_vertices_to_a_vertex_pipelines_pixel_shader() {
+    let Some(vs) = dxil_or_skip("attr_vs", "vs_6_6", VS_LIST) else {
+        return;
+    };
+    let Some(gs) = dxil_or_skip("attr_gs", "gs_6_6", GS_LOWERED) else {
+        return;
+    };
+    let Some(ps) = dxil_or_skip("attr_ps3", "ps_6_6", PS_LOWERED) else {
+        return;
+    };
+    let g = Gfx::new();
+    let mut d = GraphicsPsoDesc::new();
+    d.vs = StageCode::of(&vs);
+    d.gs = StageCode::of(&gs);
+    d.ps = StageCode::of(&ps);
+    d.input_count = 2;
+    d.inputs[0] = InputElement::new("POSITION", 0, format::R32G32B32_FLOAT, 0, 0);
+    d.inputs[1] = InputElement::new("COLOR", 0, format::R32G32B32A32_FLOAT, 0, APPEND_ALIGNED);
+    d.rt_count = 1;
+    d.rt_formats[0] = format::R8G8B8A8_UNORM;
+    d.raster.cull = CullMode::NONE;
+    d.depth.depth_enable = 0;
+    d.depth.depth_write = 0;
+    let mut a = CreateGraphicsPipelineArgs::new();
+    a.root_sig = g.sig;
+    a.desc = d;
+    let (st, a) = g.fx.call(a);
+    assert_eq!(st, Status::OK, "{:?}", g.fx.executor().last_error());
+    // Six vertices, a triangle list: the primitives' own order, (0, 1, 2) and (4, 5, 3).
+    let order: Vec<usize> = INDICES.iter().flatten().copied().collect();
+    let words: Vec<u32> = order
+        .iter()
+        .flat_map(|&v| [POS[v][0], POS[v][1], 0.5].into_iter().chain(COL[v]))
+        .map(f32::to_bits)
+        .collect();
+    let vb = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    cpu_write(vb.cpu_addr, &words);
+    let state = vec![
+        Command::SetPrimitiveTopology(SetPrimitiveTopology {
+            topology: Topology::TRIANGLE_LIST,
+            _pad: 0,
+        }),
+        Command::SetVertexBuffers(SetVertexBuffers::from_slice(
+            0,
+            &[VertexBufferView {
+                va: vb.gpu_va,
+                size: 6 * 28,
+                stride: 28,
+            }],
+        )),
+    ];
+    let draw = Command::Draw(Draw {
+        vertex_count: 6,
+        instance_count: 1,
+        start_vertex: 0,
+        start_instance: 0,
+    });
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let got = g.run(a.pso, state, draw, bg);
+    let want = reference(bg);
+    let (mut compared, mut painted) = (0, 0);
+    for py in 0..H {
+        for px in 0..W {
+            let i = (py * W + px) as usize;
+            let Some(w) = want[i] else { continue };
+            compared += 1;
+            if w != pack(bg) {
+                painted += 1;
+            }
+            assert!(
+                (0..4).all(|c| (channel(got[i], c) - channel(w, c)).abs() <= 3),
+                "pixel ({px},{py}) is {:#010x}, wanted {w:#010x}",
+                got[i]
+            );
+        }
+    }
+    assert!(painted > 150, "the triangles must cover many pixels ({painted})");
+    assert!(compared > 700);
 }
