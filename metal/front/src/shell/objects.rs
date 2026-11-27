@@ -268,6 +268,9 @@ pub struct PsoObj {
     pub private: PrivateData,
     pub device_obj: ComObject<DeviceObj>,
     pub pipeline: dv::Pipeline,
+    /// What the pipeline was made from, for a pipeline library
+    /// ([`crate::library::Fingerprint`]).
+    pub fingerprint: u64,
 }
 
 /// `ID3D12CommandSignature`: the checked signature and the root signature it

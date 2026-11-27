@@ -222,6 +222,7 @@ impl DeviceObj_Impl {
             private: PrivateData::default(),
             device_obj: self.to_object(),
             pipeline,
+            fingerprint: super::library::compute_fingerprint(&rs.root_sig, dxil),
         });
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
@@ -281,6 +282,7 @@ impl DeviceObj_Impl {
             private: PrivateData::default(),
             device_obj: self.to_object(),
             pipeline,
+            fingerprint: super::library::graphics_fingerprint(&rs.root_sig, &desc),
         });
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
@@ -1274,7 +1276,7 @@ fn dsv_params(d: &D3D12_DEPTH_STENCIL_VIEW_DESC) -> crate::hresult::Result<ViewP
 
 /// A refused pipeline description: noted (when `VICTORY_METAL_NOTIMPL_LOG`
 /// is set, for what the back lacks) and returned as its HRESULT.
-fn refuse(e: pso::PsoError) -> windows::core::Error {
+pub(super) fn refuse(e: pso::PsoError) -> windows::core::Error {
     if e.hr == Hr::E_NOTIMPL {
         super::note_notimpl(&format!("pipeline state: {}", e.why));
     }
@@ -1303,7 +1305,7 @@ fn stencil_ops_of(f: &D3D12_DEPTH_STENCILOP_DESC) -> pso::StencilOps {
 /// The fields of `D3D12_GRAPHICS_PIPELINE_STATE_DESC`, copied into the
 /// core's description (nothing is read through a pointer yet).
 #[allow(clippy::field_reassign_with_default)]
-fn state_of_desc(d: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> pso::PipelineState {
+pub(super) fn state_of_desc(d: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> pso::PipelineState {
     let mut s = pso::PipelineState::default();
     s.vs = bytecode_of(&d.VS);
     s.ps = bytecode_of(&d.PS);
