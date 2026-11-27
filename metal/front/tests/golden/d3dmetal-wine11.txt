@@ -1,0 +1,224 @@
+INFO start: front-smoke
+GOLD CreateDXGIFactory2: S_OK
+GOLD factory QI IDXGIObject: S_OK
+GOLD factory QI IDXGIFactory: S_OK
+GOLD factory QI IDXGIFactory1: S_OK
+GOLD factory QI IDXGIFactory2: S_OK
+GOLD factory QI IDXGIFactory3: S_OK
+GOLD factory QI IDXGIFactory4: S_OK
+GOLD factory QI IDXGIFactory5: S_OK
+GOLD factory QI IDXGIFactory6: S_OK
+GOLD factory QI IDXGIFactory7: S_OK
+GOLD CreateDXGIFactory1: S_OK
+GOLD CreateDXGIFactory: S_OK
+GOLD EnumAdapters1(0): S_OK
+INFO adapter 0: AMD Compatibility Mode vendor=0x1002 device=0x66af subsys=0x0 rev=0 dedicated_video=115448725504 dedicated_system=0 shared=115448725504 luid=0x0:0x3f1 flags=0x0
+GOLD adapter 0 shape: software=false dedicated_video_nonzero=true desc_hr=S_OK
+GOLD EnumAdapterByLuid 0: S_OK
+GOLD adapter 0 QI IDXGIAdapter: S_OK
+GOLD adapter 0 QI IDXGIAdapter3: S_OK
+GOLD QueryVideoMemoryInfo 0: S_OK
+INFO QueryVideoMemoryInfo: budget=115448725504 usage=65536
+GOLD EnumAdapters1 end: 0x887a0002
+GOLD EnumWarpAdapter: 0x887a0004
+GOLD D3D12CreateDevice(adapter, 12_0): S_OK
+GOLD D3D12CreateDevice(null, 12_0): S_OK
+GOLD D3D12CreateDevice(adapter, 12_0, null out): S_OK
+GOLD device QI ID3D12Object: S_OK
+GOLD device QI ID3D12DeviceChild: 0x80004002
+GOLD device QI ID3D12Device: S_OK
+GOLD device QI ID3D12Device1: S_OK
+GOLD device QI ID3D12Device2: S_OK
+GOLD device QI ID3D12Device3: S_OK
+GOLD device QI ID3D12Device4: S_OK
+GOLD device QI ID3D12Device5: S_OK
+GOLD device QI ID3D12Device6: S_OK
+GOLD device QI ID3D12Device7: S_OK
+GOLD device QI ID3D12Device8: S_OK
+GOLD device QI ID3D12Device9: S_OK
+GOLD device QI ID3D12Device10: S_OK
+GOLD device QI ID3D12Device11: S_OK
+GOLD device QI ID3D12Device12: S_OK
+GOLD device QI ID3D12Device13: S_OK
+GOLD device QI ID3D12Device14: S_OK
+GOLD device QI bogus: 0x80004002
+GOLD GetAdapterLuid == adapter luid: true
+GOLD GetNodeCount: 1
+GOLD GetDeviceRemovedReason: S_OK
+INFO increment CBV_SRV_UAV: 24
+INFO increment SAMPLER: 24
+INFO increment RTV: 18
+INFO increment DSV: 18
+GOLD serialize 1.0 desc empty -> 1_0: S_OK 445842432ed6bb0546364dc7a50714de3d27990d010000004400000001000000240000005254533018000000010000000000000018000000000000001800000001000000 err=false
+GOLD serialize 1.0 desc empty -> 1_1: 0x80070057 - err=false
+GOLD serialize 1.0 desc empty-none -> 1_0: S_OK 445842431dfc4ad63577c25d4acbda9efaa7d86b010000004400000001000000240000005254533018000000010000000000000018000000000000001800000000000000 err=false
+GOLD serialize 1.0 desc empty-none -> 1_1: 0x80070057 - err=false
+GOLD serialize 1.0 desc mixed -> 1_0: S_OK 44584243057526d27ca7e232c49666a22e45957701000000500100000100000024000000525453302401000001000000050000001800000002000000bc000000040000000000000000000000540000000100000000000000980000000200000001000000a40000000300000000000000ac0000000400000000000000b4000000030000005c00000000000000020000000000000000000000ffffffff010000000400000001000000030000000800000003000000ffffffff0000000001000000ffffffff000000000700000004000000010000000000000002000000090000000300000009000000150000000100000003000000040000000000003f100000000400000002000000000000000000404102000000050000000500000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD serialize 1.0 desc mixed -> 1_1: 0x80070057 - err=false
+GOLD serialize 1.0 desc two-tables -> 1_0: S_OK 445842430a88ff391230dabc4bfa785e090fa7c401000000e8000000010000002400000052545330bc00000001000000040000001800000000000000bc000000210000000000000005000000480000000100000004000000780000000000000006000000840000000400000007000000b4000000020000005000000000000000020000000000000000000000ffffffff0100000004000000010000000300000008000000030000000100000002000000020000008c000000010000000400000001000000030000000800000003000000ffffffff0000000001000000ffffffff0500000005000000 err=false
+GOLD serialize 1.0 desc two-tables -> 1_1: 0x80070057 - err=false
+GOLD serialize 1.0 desc constants-only -> 1_0: S_OK 44584243c0f817caa767ae276c2da77fc8b72821010000005c00000001000000240000005254533030000000010000000100000018000000000000003000000000000000010000000000000024000000000000000700000004000000 err=false
+GOLD serialize 1.0 desc constants-only -> 1_1: 0x80070057 - err=false
+GOLD serialize 1.0 desc samplers-only -> 1_0: S_OK 445842431ff667bbc08e09657ce6c28841e146b801000000ac00000001000000240000005254533080000000010000000000000018000000020000001800000000000000150000000100000003000000040000000000003f100000000400000002000000000000000000404102000000050000000500000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD serialize 1.0 desc samplers-only -> 1_1: 0x80070057 - err=false
+GOLD serialize versioned 1.1 desc mixed: S_OK 44584243980fa215ef326ed633d2e35614cf148101000000680100000100000024000000525453303c01000002000000050000001800000002000000d4000000040000000000000000000000540000000100000000000000a40000000200000001000000b00000000300000000000000bc0000000400000000000000c8000000030000005c0000000000000002000000000000000000000000000000ffffffff01000000040000000100000003000000030000000800000003000000ffffffff000000000100000001000000ffffffff000000000700000004000000010000000000000000000000020000000900000008000000030000000900000002000000150000000100000003000000040000000000003f100000000400000002000000000000000000404102000000050000000500000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD serialize versioned 1.1 desc two-tables: S_OK 44584243bd82b539cd2a21ed68d441e25023b77b01000000300100000100000024000000525453300401000002000000040000001800000001000000d00000008000000000000000050000004800000001000000040000008000000000000000060000008c0000000400000007000000c400000002000000500000000000000002000000000000000000000000000000ffffffff010000000400000001000000030000000300000008000000030000000100000002000000020000009400000001000000040000000100000003000000030000000800000003000000ffffffff000000000100000001000000ffffffff05000000050000000400000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD serialize versioned 1.1 desc host: S_OK 44584243e96a031c3a3b9a35ecaca93d0c339d5f01000000a4000000010000002400000052545330780000000200000004000000180000000000000078000000010c000001000000000000004800000002000000000000005400000003000000000000006000000004000000000000006c000000000000000700000008000000000000000600000000000000000000000600000000000000000000000600000000000000 err=false
+GOLD serialize versioned 1.1 desc host-with-sampler: S_OK 44584243be839768253402e8750d9a7caf45ff1601000000d8000000010000002400000052545330ac0000000200000004000000180000000100000078000000010c000001000000000000004800000002000000000000005400000003000000000000006000000004000000000000006c000000000000000700000008000000000000000600000000000000000000000600000000000000000000000600000000000000150000000100000003000000040000000000003f1000000004000000020000000000000000004041020000000500000005000000 err=false
+GOLD serialize versioned 1.0 desc empty: S_OK 445842432ed6bb0546364dc7a50714de3d27990d010000004400000001000000240000005254533018000000010000000000000018000000000000001800000001000000 err=false
+GOLD serialize versioned 1.0 desc empty-none: S_OK 445842431dfc4ad63577c25d4acbda9efaa7d86b010000004400000001000000240000005254533018000000010000000000000018000000000000001800000000000000 err=false
+GOLD serialize versioned 1.0 desc mixed: S_OK 44584243057526d27ca7e232c49666a22e45957701000000500100000100000024000000525453302401000001000000050000001800000002000000bc000000040000000000000000000000540000000100000000000000980000000200000001000000a40000000300000000000000ac0000000400000000000000b4000000030000005c00000000000000020000000000000000000000ffffffff010000000400000001000000030000000800000003000000ffffffff0000000001000000ffffffff000000000700000004000000010000000000000002000000090000000300000009000000150000000100000003000000040000000000003f100000000400000002000000000000000000404102000000050000000500000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD serialize versioned 1.0 desc two-tables: S_OK 445842430a88ff391230dabc4bfa785e090fa7c401000000e8000000010000002400000052545330bc00000001000000040000001800000000000000bc000000210000000000000005000000480000000100000004000000780000000000000006000000840000000400000007000000b4000000020000005000000000000000020000000000000000000000ffffffff0100000004000000010000000300000008000000030000000100000002000000020000008c000000010000000400000001000000030000000800000003000000ffffffff0000000001000000ffffffff0500000005000000 err=false
+GOLD serialize versioned 1.0 desc constants-only: S_OK 44584243c0f817caa767ae276c2da77fc8b72821010000005c00000001000000240000005254533030000000010000000100000018000000000000003000000000000000010000000000000024000000000000000700000004000000 err=false
+GOLD serialize versioned 1.0 desc samplers-only: S_OK 445842431ff667bbc08e09657ce6c28841e146b801000000ac00000001000000240000005254533080000000010000000000000018000000020000001800000000000000150000000100000003000000040000000000003f100000000400000002000000000000000000404102000000050000000500000055000000020000000500000001000000000080bf0400000001000000000000000000803fffff7f7f000000000000000000000000 err=false
+GOLD deserialize v11-mixed: 1.0 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0][type=3 vis=0 desc reg=2 space=9][type=4 vis=0 desc reg=3 space=9] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-mixed at 1.1: 1.1 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 flags=0x0 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0 flags=0x0][type=3 vis=0 desc reg=2 space=9 flags=0x8][type=4 vis=0 desc reg=3 space=9 flags=0x2] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-mixed at 1.0: 1.0 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0][type=3 vis=0 desc reg=2 space=9][type=4 vis=0 desc reg=3 space=9] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-mixed unconverted: 1.1 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 flags=0x0 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0 flags=0x0][type=3 vis=0 desc reg=2 space=9 flags=0x8][type=4 vis=0 desc reg=3 space=9 flags=0x2] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD deserialize v11-two-tables: 1.0 params=4 samplers=1 flags=0x80 [type=0 vis=5 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=4 vis=7 desc reg=5 space=5] [filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-two-tables at 1.1: 1.1 params=4 samplers=1 flags=0x80 [type=0 vis=5 (range type=0 n=2 base=0 space=0 flags=0x0 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x1 off=4294967295)][type=4 vis=7 desc reg=5 space=5 flags=0x4] [filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-two-tables at 1.0: 1.0 params=4 samplers=1 flags=0x80 [type=0 vis=5 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=4 vis=7 desc reg=5 space=5] [filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v11-two-tables unconverted: 1.1 params=4 samplers=1 flags=0x80 [type=0 vis=5 (range type=0 n=2 base=0 space=0 flags=0x0 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x1 off=4294967295)][type=4 vis=7 desc reg=5 space=5 flags=0x4] [filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD deserialize v11-host: 1.0 params=4 samplers=0 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6][type=3 vis=0 desc reg=0 space=6][type=4 vis=0 desc reg=0 space=6] 
+GOLD versioned deserialize v11-host at 1.1: 1.1 params=4 samplers=0 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6 flags=0x0][type=3 vis=0 desc reg=0 space=6 flags=0x0][type=4 vis=0 desc reg=0 space=6 flags=0x0] 
+GOLD versioned deserialize v11-host at 1.0: 1.0 params=4 samplers=0 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6][type=3 vis=0 desc reg=0 space=6][type=4 vis=0 desc reg=0 space=6] 
+GOLD versioned deserialize v11-host unconverted: 1.1 params=4 samplers=0 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6 flags=0x0][type=3 vis=0 desc reg=0 space=6 flags=0x0][type=4 vis=0 desc reg=0 space=6 flags=0x0] 
+GOLD deserialize v11-host-with-sampler: 1.0 params=4 samplers=1 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6][type=3 vis=0 desc reg=0 space=6][type=4 vis=0 desc reg=0 space=6] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5]
+GOLD versioned deserialize v11-host-with-sampler at 1.1: 1.1 params=4 samplers=1 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6 flags=0x0][type=3 vis=0 desc reg=0 space=6 flags=0x0][type=4 vis=0 desc reg=0 space=6 flags=0x0] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5]
+GOLD versioned deserialize v11-host-with-sampler at 1.0: 1.0 params=4 samplers=1 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6][type=3 vis=0 desc reg=0 space=6][type=4 vis=0 desc reg=0 space=6] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5]
+GOLD versioned deserialize v11-host-with-sampler unconverted: 1.1 params=4 samplers=1 flags=0xc01 [type=1 vis=0 const reg=0 space=7 n=8][type=2 vis=0 desc reg=0 space=6 flags=0x0][type=3 vis=0 desc reg=0 space=6 flags=0x0][type=4 vis=0 desc reg=0 space=6 flags=0x0] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5]
+GOLD deserialize v10-empty: 1.0 params=0 samplers=0 flags=0x1  
+GOLD versioned deserialize v10-empty at 1.1: 1.1 params=0 samplers=0 flags=0x1  
+GOLD versioned deserialize v10-empty at 1.0: 1.0 params=0 samplers=0 flags=0x1  
+GOLD versioned deserialize v10-empty unconverted: 1.0 params=0 samplers=0 flags=0x1  
+GOLD deserialize v10-empty-none: 1.0 params=0 samplers=0 flags=0x0  
+GOLD versioned deserialize v10-empty-none at 1.1: 1.1 params=0 samplers=0 flags=0x0  
+GOLD versioned deserialize v10-empty-none at 1.0: 1.0 params=0 samplers=0 flags=0x0  
+GOLD versioned deserialize v10-empty-none unconverted: 1.0 params=0 samplers=0 flags=0x0  
+GOLD deserialize v10-mixed: 1.0 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0][type=3 vis=0 desc reg=2 space=9][type=4 vis=0 desc reg=3 space=9] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-mixed at 1.1: 1.1 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 flags=0x3 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x3 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0 flags=0x2][type=3 vis=0 desc reg=2 space=9 flags=0x2][type=4 vis=0 desc reg=3 space=9 flags=0x2] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-mixed at 1.0: 1.0 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0][type=3 vis=0 desc reg=2 space=9][type=4 vis=0 desc reg=3 space=9] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-mixed unconverted: 1.0 params=5 samplers=2 flags=0x4 [type=0 vis=0 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=1 vis=0 const reg=0 space=7 n=4][type=2 vis=1 desc reg=1 space=0][type=3 vis=0 desc reg=2 space=9][type=4 vis=0 desc reg=3 space=9] [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD deserialize v10-two-tables: 1.0 params=4 samplers=0 flags=0x21 [type=0 vis=5 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=4 vis=7 desc reg=5 space=5] 
+GOLD versioned deserialize v10-two-tables at 1.1: 1.1 params=4 samplers=0 flags=0x21 [type=0 vis=5 (range type=0 n=2 base=0 space=0 flags=0x3 off=4294967295)(range type=1 n=4 base=1 space=3 flags=0x3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 flags=0x3 off=8)(range type=3 n=4294967295 base=0 space=1 flags=0x3 off=4294967295)][type=4 vis=7 desc reg=5 space=5 flags=0x2] 
+GOLD versioned deserialize v10-two-tables at 1.0: 1.0 params=4 samplers=0 flags=0x21 [type=0 vis=5 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=4 vis=7 desc reg=5 space=5] 
+GOLD versioned deserialize v10-two-tables unconverted: 1.0 params=4 samplers=0 flags=0x21 [type=0 vis=5 (range type=0 n=2 base=0 space=0 off=4294967295)(range type=1 n=4 base=1 space=3 off=8)][type=1 vis=4 const reg=3 space=1 n=2][type=0 vis=6 (range type=1 n=4 base=1 space=3 off=8)(range type=3 n=4294967295 base=0 space=1 off=4294967295)][type=4 vis=7 desc reg=5 space=5] 
+GOLD deserialize v10-constants-only: 1.0 params=1 samplers=0 flags=0x0 [type=1 vis=0 const reg=0 space=7 n=4] 
+GOLD versioned deserialize v10-constants-only at 1.1: 1.1 params=1 samplers=0 flags=0x0 [type=1 vis=0 const reg=0 space=7 n=4] 
+GOLD versioned deserialize v10-constants-only at 1.0: 1.0 params=1 samplers=0 flags=0x0 [type=1 vis=0 const reg=0 space=7 n=4] 
+GOLD versioned deserialize v10-constants-only unconverted: 1.0 params=1 samplers=0 flags=0x0 [type=1 vis=0 const reg=0 space=7 n=4] 
+GOLD deserialize v10-samplers-only: 1.0 params=0 samplers=2 flags=0x0  [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-samplers-only at 1.1: 1.1 params=0 samplers=2 flags=0x0  [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-samplers-only at 1.0: 1.0 params=0 samplers=2 flags=0x0  [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+GOLD versioned deserialize v10-samplers-only unconverted: 1.0 params=0 samplers=2 flags=0x0  [filter=21 addr=1,3,4 bias=0.5 aniso=16 cmp=4 border=2 lod=0..12 reg=2 space=5 vis=5][filter=85 addr=2,5,1 bias=-1 aniso=4 cmp=1 border=0 lod=1..340282350000000000000000000000000000000 reg=0 space=0 vis=0]
+INFO deserialize truncated: S_OK
+GOLD footprints buffer 1000: [off=0 fmt=0 1000x1x1 pitch=1024 rows=1 rowsize=1000] total=1000
+GOLD footprints buffer 65536 base 512: [off=512 fmt=0 65536x1x1 pitch=65536 rows=1 rowsize=65536] total=65536
+GOLD footprints rgba8 64x64 1 mip: [off=0 fmt=28 64x64x1 pitch=256 rows=64 rowsize=256] total=16384
+GOLD footprints rgba8 4x4 1 mip: [off=0 fmt=28 4x4x1 pitch=256 rows=4 rowsize=16] total=784
+GOLD footprints rgba8 64x64 7 mips: [off=0 fmt=28 64x64x1 pitch=256 rows=64 rowsize=256][off=16384 fmt=28 32x32x1 pitch=256 rows=32 rowsize=128][off=24576 fmt=28 16x16x1 pitch=256 rows=16 rowsize=64][off=28672 fmt=28 8x8x1 pitch=256 rows=8 rowsize=32][off=30720 fmt=28 4x4x1 pitch=256 rows=4 rowsize=16][off=31744 fmt=28 2x2x1 pitch=256 rows=2 rowsize=8][off=32256 fmt=28 1x1x1 pitch=256 rows=1 rowsize=4] total=32260
+GOLD footprints rgba8 100x37 6 mips x3 layers: [off=0 fmt=28 100x37x1 pitch=512 rows=37 rowsize=400][off=18944 fmt=28 50x18x1 pitch=256 rows=18 rowsize=200][off=23552 fmt=28 25x9x1 pitch=256 rows=9 rowsize=100][off=26112 fmt=28 12x4x1 pitch=256 rows=4 rowsize=48][off=27136 fmt=28 6x2x1 pitch=256 rows=2 rowsize=24][off=27648 fmt=28 3x1x1 pitch=256 rows=1 rowsize=12][off=28160 fmt=28 100x37x1 pitch=512 rows=37 rowsize=400][off=47104 fmt=28 50x18x1 pitch=256 rows=18 rowsize=200][off=51712 fmt=28 25x9x1 pitch=256 rows=9 rowsize=100][off=54272 fmt=28 12x4x1 pitch=256 rows=4 rowsize=48][off=55296 fmt=28 6x2x1 pitch=256 rows=2 rowsize=24][off=55808 fmt=28 3x1x1 pitch=256 rows=1 rowsize=12][off=56320 fmt=28 100x37x1 pitch=512 rows=37 rowsize=400][off=75264 fmt=28 50x18x1 pitch=256 rows=18 rowsize=200][off=79872 fmt=28 25x9x1 pitch=256 rows=9 rowsize=100][off=82432 fmt=28 12x4x1 pitch=256 rows=4 rowsize=48][off=83456 fmt=28 6x2x1 pitch=256 rows=2 rowsize=24][off=83968 fmt=28 3x1x1 pitch=256 rows=1 rowsize=12] total=83980
+GOLD footprints rgba8 100x37 6 mips x3 layers, subs 4..9 base 768: [off=768 fmt=28 6x2x1 pitch=256 rows=2 rowsize=24][off=1280 fmt=28 3x1x1 pitch=256 rows=1 rowsize=12][off=1792 fmt=28 100x37x1 pitch=512 rows=37 rowsize=400][off=20736 fmt=28 50x18x1 pitch=256 rows=18 rowsize=200][off=25344 fmt=28 25x9x1 pitch=256 rows=9 rowsize=100] total=26724
+GOLD footprints rgba32f 33x5 3 mips: [off=0 fmt=2 33x5x1 pitch=768 rows=5 rowsize=528][off=4096 fmt=2 16x2x1 pitch=256 rows=2 rowsize=256][off=4608 fmt=2 8x1x1 pitch=256 rows=1 rowsize=128] total=4736
+GOLD footprints rgb32f 17x3: [off=0 fmt=6 17x3x1 pitch=256 rows=3 rowsize=204] total=716
+GOLD footprints r8 5x5 3 mips: [off=0 fmt=61 5x5x1 pitch=256 rows=5 rowsize=5][off=1536 fmt=61 2x2x1 pitch=256 rows=2 rowsize=2][off=2048 fmt=61 1x1x1 pitch=256 rows=1 rowsize=1] total=2049
+GOLD footprints r16 300x2: [off=0 fmt=57 300x2x1 pitch=768 rows=2 rowsize=600] total=1368
+GOLD footprints bc1 13x7 4 mips: [off=0 fmt=71 16x8x1 pitch=256 rows=2 rowsize=32][off=512 fmt=71 8x4x1 pitch=256 rows=1 rowsize=16][off=1024 fmt=71 4x4x1 pitch=256 rows=1 rowsize=8][off=1536 fmt=71 4x4x1 pitch=256 rows=1 rowsize=8] total=1544
+GOLD footprints bc7 64x64 7 mips: [off=0 fmt=98 64x64x1 pitch=256 rows=16 rowsize=256][off=4096 fmt=98 32x32x1 pitch=256 rows=8 rowsize=128][off=6144 fmt=98 16x16x1 pitch=256 rows=4 rowsize=64][off=7168 fmt=98 8x8x1 pitch=256 rows=2 rowsize=32][off=7680 fmt=98 4x4x1 pitch=256 rows=1 rowsize=16][off=8192 fmt=98 4x4x1 pitch=256 rows=1 rowsize=16][off=8704 fmt=98 4x4x1 pitch=256 rows=1 rowsize=16] total=8720
+GOLD footprints bc3 1x1: [off=0 fmt=77 4x4x1 pitch=256 rows=1 rowsize=16] total=16
+INFO footprints r8g8_b8g8 7x3: [off=18446744073709551615 fmt=-1 4294967295x4294967295x4294967295 pitch=4294967295 rows=4294967295 rowsize=18446744073709551615] total=18446744073709551615
+GOLD footprints 3d rgba8 16x16x8 3 mips: [off=0 fmt=28 16x16x8 pitch=256 rows=16 rowsize=64][off=32768 fmt=28 8x8x4 pitch=256 rows=8 rowsize=32][off=40960 fmt=28 4x4x2 pitch=256 rows=4 rowsize=16] total=42768
+GOLD footprints 3d r32 5x6x7 3 mips: [off=0 fmt=41 5x6x7 pitch=256 rows=6 rowsize=20][off=10752 fmt=41 2x3x3 pitch=256 rows=3 rowsize=8][off=13312 fmt=41 1x1x1 pitch=256 rows=1 rowsize=4] total=13316
+GOLD footprints 1d rgba8 100 4 mips x2: [off=0 fmt=28 100x1x1 pitch=512 rows=1 rowsize=400][off=512 fmt=28 50x1x1 pitch=256 rows=1 rowsize=200][off=1024 fmt=28 25x1x1 pitch=256 rows=1 rowsize=100][off=1536 fmt=28 12x1x1 pitch=256 rows=1 rowsize=48][off=2048 fmt=28 100x1x1 pitch=512 rows=1 rowsize=400][off=2560 fmt=28 50x1x1 pitch=256 rows=1 rowsize=200][off=3072 fmt=28 25x1x1 pitch=256 rows=1 rowsize=100][off=3584 fmt=28 12x1x1 pitch=256 rows=1 rowsize=48] total=3632
+GOLD footprints d32 64x64: [off=0 fmt=40 64x64x1 pitch=256 rows=64 rowsize=256] total=16384
+INFO footprints d32s8 33x17 2 mips (4 subs): [off=0 fmt=39 33x17x1 pitch=512 rows=17 rowsize=132][off=8704 fmt=39 16x8x1 pitch=512 rows=8 rowsize=64][off=12800 fmt=60 33x17x1 pitch=512 rows=17 rowsize=33][off=21504 fmt=60 16x8x1 pitch=512 rows=8 rowsize=16] total=25104
+INFO footprints d24s8 33x17 (2 subs): [off=0 fmt=39 33x17x1 pitch=512 rows=17 rowsize=132][off=8704 fmt=60 33x17x1 pitch=512 rows=17 rowsize=33] total=16929
+INFO footprints nv12 64x48 (2 subs): [off=0 fmt=60 64x48x1 pitch=256 rows=48 rowsize=64][off=12288 fmt=48 32x24x1 pitch=256 rows=24 rowsize=64] total=18240
+GOLD footprints r10g10b10a2 9x9 2 mips: [off=0 fmt=24 9x9x1 pitch=256 rows=9 rowsize=36][off=2560 fmt=24 4x4x1 pitch=256 rows=4 rowsize=16] total=3344
+GOLD footprints total only: 32260
+INFO feature OPTIONS: S_OK 000000000100000002000000020000000300000001000000010000000100000000000000400000000000000000000000000000000100000002000000
+INFO feature ARCHITECTURE: S_OK 00000000000000000000000000000000
+INFO feature GPU_VA: S_OK 4000000040000000
+INFO feature OPTIONS1: S_OK 010000002000000020000000000400000100000001000000
+INFO feature ROOT_SIGNATURE: 0x80070057 00000000
+INFO feature ARCHITECTURE1: S_OK 0000000000000000000000000000000000000000
+INFO feature OPTIONS2: S_OK 0100000001000000
+INFO feature OPTIONS3: S_OK 00000000010000000d0000000200000001000000
+INFO feature EXISTING_HEAPS: S_OK 00000000
+INFO feature OPTIONS4: S_OK 010000000200000001000000
+INFO feature OPTIONS5: S_OK 00000000020000000b000000
+INFO feature OPTIONS6: S_OK 0000000000000000000000000000000001000000
+INFO feature OPTIONS7: S_OK 0a00000000000000
+INFO feature OPTIONS8: S_OK 00000000
+INFO feature OPTIONS9: S_OK 010000000100000001000000010000000000000000000000
+INFO feature OPTIONS10: S_OK 0000000000000000
+INFO feature OPTIONS11: S_OK 01000000
+INFO feature OPTIONS12: S_OK ffffffff0100000000000000
+INFO feature OPTIONS13: S_OK 010000000100000000000000000000000000000000000000
+INFO feature OPTIONS14: S_OK 000000000000000000000000
+INFO feature OPTIONS15: S_OK 0000000000000000
+INFO feature OPTIONS16: S_OK 0000000001000000
+INFO feature OPTIONS17: S_OK 0000000000000000
+INFO feature OPTIONS18: S_OK 00000000
+INFO feature OPTIONS19: S_OK 000000000000000001000000000000000000000000000000000800000008000040420f0000000000
+INFO feature OPTIONS20: S_OK 0000000000000000
+INFO feature OPTIONS21: S_OK 000000000a0000000100000001000000
+INFO shader model asked 6_9: S_OK highest=0x68
+INFO shader model asked 6_8: S_OK highest=0x68
+INFO shader model asked 6_6: S_OK highest=0x66
+GOLD shader model >= 6.6: S_OK true
+GOLD wave32 in range: S_OK wave_ops=true contains32=true
+INFO mesh shader tier: S_OK 10
+GOLD CheckFeatureSupport wrong size: 0x80070057
+[D3DMetal:LOG:9DE610F][CheckFeatureSupport_block_invoke:2047] Unsupported: CheckFeatureSupport, unhandled support query 9999
+GOLD CheckFeatureSupport unknown feature: 0x80070057
+INFO format support R32_UINT: S_OK s1=0x3e051ff s2=0x1ff
+INFO format support R32_FLOAT: S_OK s1=0x3e4d1ff s2=0xc0
+INFO format support R8G8B8A8_UNORM: S_OK s1=0x3ecd3ff s2=0x1c0
+GOLD CreateCommittedResource upload buffer: S_OK
+GOLD CreateCommittedResource default buffer (UAV): S_OK
+GOLD CreateCommittedResource readback buffer: S_OK
+[D3DMetal:LOG:9DE610F][CreateCommittedResourceCore_block_invoke:3529] Unsupported: Failed to create commited resource
+GOLD upload heap with COPY_DEST initial state: 0x80070057
+GOLD readback heap with GENERIC_READ initial state: 0x80070057
+GOLD zero-sized buffer: 0x80070057
+GOLD GetDesc upload: dim=1 align=65536 w=4096 h=1 depth=1 mips=1 fmt=0 sample=1/0 layout=1 flags=0x0
+INFO gpu va upload: 0x10003af0000
+GOLD GetDesc default: dim=1 align=65536 w=4096 h=1 depth=1 mips=1 fmt=0 sample=1/0 layout=1 flags=0x4
+INFO gpu va default: 0x10003af8000
+GOLD GetDesc readback: dim=1 align=65536 w=4096 h=1 depth=1 mips=1 fmt=0 sample=1/0 layout=1 flags=0x0
+INFO gpu va readback: 0x10003b00000
+GOLD GetGPUVirtualAddress distinct and nonzero: true
+GOLD resource QI ID3D12Pageable: S_OK
+GOLD resource QI ID3D12DeviceChild: S_OK
+GOLD resource QI ID3D12Object: S_OK
+INFO resource QI ID3D12Resource1: S_OK
+INFO resource QI ID3D12Resource2: S_OK
+GOLD resource GetDevice: S_OK same=true
+GOLD Map upload: S_OK
+GOLD Map default (not CPU visible): true
+GOLD CreateDescriptorHeap CBV_SRV_UAV shader visible: S_OK
+GOLD heap GetDesc: type=0 n=16 flags=1 node=0
+GOLD heap handles nonzero: cpu=true gpu=true
+GOLD descriptor writes: ok
+GOLD CreateDescriptorHeap SAMPLER shader visible: S_OK
+GOLD CreateDescriptorHeap RTV: S_OK
+GOLD CreateDescriptorHeap RTV shader visible (invalid): 0x80070057
+GOLD serialize for CreateRootSignature: S_OK
+GOLD CreateRootSignature: S_OK
+GOLD CreateCommandQueue: S_OK
+GOLD list QI ID3D12CommandList: S_OK
+GOLD list QI ID3D12GraphicsCommandList1: S_OK
+INFO list QI ID3D12GraphicsCommandList6: S_OK
+GOLD list Close: S_OK
+GOLD list Close twice: false
+GOLD Signal: S_OK
+GOLD SetEventOnCompletion: S_OK
+GOLD fence wait: WAIT_EVENT(0) completed=1
+GOLD Map readback: S_OK
+GOLD copy round trip: true
+GOLD GetDeviceRemovedReason after work: S_OK
+GOLD allocator Reset: S_OK
+GOLD list Reset: S_OK
+GOLD list Close after Reset: S_OK
+INFO done: ok

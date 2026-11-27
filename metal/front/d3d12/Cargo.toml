@@ -1,0 +1,14 @@
+[package]
+name = "victory-metal-front-d3d12"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "d3d12.dll of the Metal backend (exports only; the code is in victory-metal-front)"
+
+[lib]
+name = "d3d12"
+crate-type = ["cdylib"]
+
+[dependencies]
+victory-metal-front = { path = ".." }

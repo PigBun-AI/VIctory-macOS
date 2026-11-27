@@ -1,0 +1,23 @@
+[package]
+name = "victory-metal-front-smoke"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "ABI smoke test for d3d12.dll/dxgi.dll under Wine: the same exe runs on D3DMetal (=b) and on our dlls (=n,b); output lines tagged GOLD must be equal"
+
+[[bin]]
+name = "front-smoke"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
