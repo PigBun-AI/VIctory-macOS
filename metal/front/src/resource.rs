@@ -22,6 +22,103 @@ pub const HEAP_UPLOAD: u32 = 2;
 pub const HEAP_READBACK: u32 = 3;
 pub const HEAP_CUSTOM: u32 = 4;
 
+pub const CPU_PAGE_UNKNOWN: u32 = 0;
+pub const CPU_PAGE_NOT_AVAILABLE: u32 = 1;
+pub const CPU_PAGE_WRITE_COMBINE: u32 = 2;
+pub const CPU_PAGE_WRITE_BACK: u32 = 3;
+pub const POOL_UNKNOWN: u32 = 0;
+pub const POOL_L0: u32 = 1;
+pub const POOL_L1: u32 = 2;
+
+/// `D3D12_HEAP_PROPERTIES` (the node masks are 0 or 1 and carry nothing).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeapProps {
+    pub ty: u32,
+    pub cpu_page: u32,
+    pub pool: u32,
+}
+
+impl HeapProps {
+    pub const fn of_type(ty: u32) -> Self {
+        HeapProps {
+            ty,
+            cpu_page: CPU_PAGE_UNKNOWN,
+            pool: POOL_UNKNOWN,
+        }
+    }
+}
+
+/// What memory a heap (or a committed resource) is made of, in the terms the
+/// back has.
+///
+/// The machine has one memory (unified): the original API's pools L0
+/// (system memory) and L1 (video memory) are the same bytes. A custom heap
+/// is therefore mapped by its CPU access alone, and `L1` is treated as `L0`:
+///
+/// | custom heap | memory |
+/// |---|---|
+/// | `NOT_AVAILABLE` (any pool) | `Gpu`: private storage, no CPU pointer |
+/// | `WRITE_COMBINE` / `WRITE_BACK`, pool `L0` or `L1` | `Shared`: CPU-visible, cached (write-combining is not kept; `WRITE_COMBINE` reads are just fast) |
+///
+/// An `UPLOAD` heap is `Upload` (write-combined) and `READBACK` is `Readback`
+/// (cached). A texture cannot live in CPU-visible memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Memory {
+    Gpu,
+    Upload,
+    Readback,
+    Shared,
+}
+
+impl Memory {
+    pub fn cpu_visible(self) -> bool {
+        self != Memory::Gpu
+    }
+}
+
+impl HeapProps {
+    /// The memory these properties ask for, or `E_INVALIDARG` for a custom
+    /// heap the original API itself refuses (properties left unknown).
+    pub fn memory(&self) -> Result<Memory> {
+        match self.ty {
+            HEAP_DEFAULT => Ok(Memory::Gpu),
+            HEAP_UPLOAD => Ok(Memory::Upload),
+            HEAP_READBACK => Ok(Memory::Readback),
+            HEAP_CUSTOM => {
+                if !(1..=2).contains(&self.pool) {
+                    return Err(Hr::E_INVALIDARG);
+                }
+                match self.cpu_page {
+                    CPU_PAGE_NOT_AVAILABLE => Ok(Memory::Gpu),
+                    CPU_PAGE_WRITE_COMBINE | CPU_PAGE_WRITE_BACK => Ok(Memory::Shared),
+                    _ => Err(Hr::E_INVALIDARG),
+                }
+            }
+            _ => Err(Hr::E_INVALIDARG),
+        }
+    }
+}
+
+/// `ID3D12Device::GetCustomHeapProperties`: the custom properties that
+/// describe `ty` on this machine (unified memory, cache coherent: everything
+/// is pool `L0`, the CPU sees `UPLOAD` and `READBACK` memory, and `DEFAULT`
+/// has no CPU access). The answer agrees with `CheckFeatureSupport(ARCHITECTURE)`
+/// reporting UMA and CacheCoherentUMA.
+pub fn custom_heap_properties(ty: u32, unified: bool) -> Result<HeapProps> {
+    let (cpu_page, pool) = match ty {
+        HEAP_DEFAULT if unified => (CPU_PAGE_NOT_AVAILABLE, POOL_L0),
+        HEAP_DEFAULT => (CPU_PAGE_NOT_AVAILABLE, POOL_L1),
+        HEAP_UPLOAD => (CPU_PAGE_WRITE_COMBINE, POOL_L0),
+        HEAP_READBACK => (CPU_PAGE_WRITE_BACK, POOL_L0),
+        _ => return Err(Hr::E_INVALIDARG),
+    };
+    Ok(HeapProps {
+        ty: HEAP_CUSTOM,
+        cpu_page,
+        pool,
+    })
+}
+
 /// `D3D12_RESOURCE_DESC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceDesc {
@@ -57,6 +154,26 @@ impl ResourceDesc {
 
     pub fn is_buffer(&self) -> bool {
         self.dimension == DIM_BUFFER
+    }
+
+    /// `CREATE_TEXTURE` usage bits: a texture can be read by shaders unless
+    /// the description denies it.
+    pub fn texture_usage(&self) -> u32 {
+        use victory_metal_proto::types::tex_usage;
+        let mut u = 0;
+        if self.flags & FLAG_DENY_SHADER_RESOURCE == 0 {
+            u |= tex_usage::SRV;
+        }
+        if self.flags & FLAG_ALLOW_UNORDERED_ACCESS != 0 {
+            u |= tex_usage::UAV;
+        }
+        if self.flags & FLAG_ALLOW_RENDER_TARGET != 0 {
+            u |= tex_usage::RENDER_TARGET;
+        }
+        if self.flags & FLAG_ALLOW_DEPTH_STENCIL != 0 {
+            u |= tex_usage::DEPTH_STENCIL;
+        }
+        u
     }
 
     /// Array size (1 for 3D textures and buffers).
@@ -218,6 +335,62 @@ mod tests {
             ),
             Err(Hr::E_INVALIDARG)
         );
+    }
+
+    #[test]
+    fn custom_heaps_map_to_memory_by_cpu_access() {
+        let c = |cpu_page, pool| HeapProps {
+            ty: HEAP_CUSTOM,
+            cpu_page,
+            pool,
+        };
+        assert_eq!(c(CPU_PAGE_NOT_AVAILABLE, POOL_L1).memory(), Ok(Memory::Gpu));
+        assert_eq!(c(CPU_PAGE_NOT_AVAILABLE, POOL_L0).memory(), Ok(Memory::Gpu));
+        for page in [CPU_PAGE_WRITE_BACK, CPU_PAGE_WRITE_COMBINE] {
+            for pool in [POOL_L0, POOL_L1] {
+                assert_eq!(c(page, pool).memory(), Ok(Memory::Shared));
+            }
+        }
+        // Unknown properties of a custom heap are refused, as the API does.
+        assert_eq!(c(CPU_PAGE_UNKNOWN, POOL_L0).memory(), Err(Hr::E_INVALIDARG));
+        assert_eq!(
+            c(CPU_PAGE_WRITE_BACK, POOL_UNKNOWN).memory(),
+            Err(Hr::E_INVALIDARG)
+        );
+        assert_eq!(c(9, POOL_L0).memory(), Err(Hr::E_INVALIDARG));
+        assert_eq!(HeapProps::of_type(HEAP_UPLOAD).memory(), Ok(Memory::Upload));
+        assert_eq!(
+            HeapProps::of_type(HEAP_READBACK).memory(),
+            Ok(Memory::Readback)
+        );
+        assert_eq!(HeapProps::of_type(HEAP_DEFAULT).memory(), Ok(Memory::Gpu));
+        assert_eq!(HeapProps::of_type(7).memory(), Err(Hr::E_INVALIDARG));
+    }
+
+    #[test]
+    fn custom_heap_properties_agree_with_the_unified_architecture() {
+        let up = custom_heap_properties(HEAP_UPLOAD, true).unwrap();
+        assert_eq!(up.memory(), Ok(Memory::Shared));
+        assert_eq!((up.cpu_page, up.pool), (CPU_PAGE_WRITE_COMBINE, POOL_L0));
+        let rb = custom_heap_properties(HEAP_READBACK, true).unwrap();
+        assert_eq!((rb.cpu_page, rb.pool), (CPU_PAGE_WRITE_BACK, POOL_L0));
+        let def = custom_heap_properties(HEAP_DEFAULT, true).unwrap();
+        assert_eq!(def.memory(), Ok(Memory::Gpu));
+        assert_eq!(
+            custom_heap_properties(HEAP_CUSTOM, true),
+            Err(Hr::E_INVALIDARG)
+        );
+    }
+
+    #[test]
+    fn texture_usage_follows_the_flags() {
+        use victory_metal_proto::types::tex_usage::*;
+        let mut t = ResourceDesc::buffer(1, 0);
+        assert_eq!(t.texture_usage(), SRV);
+        t.flags = FLAG_ALLOW_UNORDERED_ACCESS | FLAG_ALLOW_RENDER_TARGET;
+        assert_eq!(t.texture_usage(), SRV | UAV | RENDER_TARGET);
+        t.flags = FLAG_ALLOW_DEPTH_STENCIL | FLAG_DENY_SHADER_RESOURCE;
+        assert_eq!(t.texture_usage(), DEPTH_STENCIL);
     }
 
     #[test]

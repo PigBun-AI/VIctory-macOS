@@ -28,6 +28,7 @@ pub mod mock;
 pub mod resource;
 pub mod rootsig;
 pub mod state;
+pub mod view;
 
 #[cfg(windows)]
 pub mod shell;

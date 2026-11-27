@@ -20,20 +20,23 @@ use victory_metal_proto::cmd::{
 };
 use victory_metal_proto::sync::*;
 use victory_metal_proto::types::{self as pt, BindPoint, RootParamKind, ViewDesc, ViewKind};
+use victory_metal_proto::wire::Wire;
 use victory_metal_proto::{
-    Caps as PCaps, Command, Encoder, FenceId, HeapId, Link, PROTO_VERSION, PsoId, QueueId, ResId,
-    RootSigId, Status,
+    Caps as PCaps, Command, Encoder, FenceId, HeapId, Link, MemHeapId, PROTO_VERSION, PsoId,
+    QueueId, ResId, RootSigId, Status,
 };
 
 use crate::adapter::AdapterInfo;
 use crate::caps::{self, Caps};
 use crate::convert;
 use crate::descriptor::{self, DescriptorSpace, HeapDesc, HeapRange, SlotHeap};
+use crate::footprint;
 use crate::gpu::{Gpu, status_to_hr};
 use crate::hresult::{Hr, Result};
-use crate::resource::{self, ResourceDesc};
+use crate::resource::{self, HeapProps, Memory, ResourceDesc};
 use crate::rootsig;
 use crate::state::{self, StateTracker};
+use crate::view::{Record, TargetView, TextureView};
 
 /// What the front needs from the back, fixed at connect time.
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +127,10 @@ impl Drop for System {
 struct Descriptors {
     space: DescriptorSpace,
     back: std::collections::HashMap<SlotHeap, HeapId>,
+    /// What the front keeps about a slot: render-target and depth-stencil
+    /// views (the back has no memory for them) and texture UAVs (clears name a
+    /// descriptor). Keyed by the front's heap number and the slot.
+    records: std::collections::HashMap<(SlotHeap, u32), Record>,
 }
 
 pub struct Device {
@@ -171,37 +178,219 @@ impl Device {
         }
     }
 
-    // ---- buffers --------------------------------------------------------
+    // ---- resources ------------------------------------------------------
 
-    /// `CreateCommittedResource`, buffers only (textures are M3).
+    /// `CreateCommittedResource`: a buffer or a texture with its own memory.
+    pub fn create_committed(
+        self: &Arc<Self>,
+        props: HeapProps,
+        desc: &ResourceDesc,
+        initial_state: u32,
+    ) -> Result<Resource> {
+        let mem = props.memory()?;
+        let desc = resource::validate_committed(props.ty, desc, initial_state)?;
+        if desc.is_buffer() {
+            let mut a = CreateBufferArgs::new();
+            a.size = desc.width;
+            a.kind = memory_buffer_kind(mem).0;
+            self.gpu().call(&mut a)?;
+            Ok(self.track(
+                a.res,
+                a.gpu_va,
+                a.cpu_addr,
+                props,
+                desc,
+                initial_state,
+                None,
+            ))
+        } else {
+            // A texture in CPU-visible custom memory is made like any other
+            // (private storage): there is no `Map` for it (the original
+            // API's row-major textures are not built).
+            let res = self.make_texture(&desc, None)?;
+            Ok(self.track(res, 0, 0, props, desc, initial_state, None))
+        }
+    }
+
+    /// `CreateCommittedResource` of a buffer on one of the plain heap types.
     pub fn create_committed_buffer(
         self: &Arc<Self>,
         heap_type: u32,
         desc: &ResourceDesc,
         initial_state: u32,
     ) -> Result<Buffer> {
-        let desc = resource::validate_committed(heap_type, desc, initial_state)?;
-        if !desc.is_buffer() || heap_type == resource::HEAP_CUSTOM {
+        if !desc.is_buffer() {
             return Err(Hr::E_NOTIMPL);
         }
-        let mut a = CreateBufferArgs::new();
-        a.size = desc.width;
-        a.kind = match heap_type {
-            resource::HEAP_UPLOAD => pt::BufferKind::UPLOAD,
-            resource::HEAP_READBACK => pt::BufferKind::READBACK,
-            _ => pt::BufferKind::DEFAULT,
+        self.create_committed(HeapProps::of_type(heap_type), desc, initial_state)
+    }
+
+    /// `CreateHeap`. `size` must be a multiple of `alignment` (0 = 64 KiB;
+    /// 4 MiB for multisampled textures).
+    pub fn create_heap(
+        self: &Arc<Self>,
+        props: HeapProps,
+        size: u64,
+        alignment: u64,
+        flags: u32,
+    ) -> Result<Heap> {
+        let mem = props.memory()?;
+        let alignment = if alignment == 0 {
+            resource::DEFAULT_ALIGNMENT
+        } else {
+            alignment
+        };
+        if size == 0
+            || !(alignment == resource::DEFAULT_ALIGNMENT || alignment == resource::MSAA_ALIGNMENT)
+            || size % alignment != 0
+        {
+            return Err(Hr::E_INVALIDARG);
         }
-        .0;
+        let mut a = CreateHeapArgs::new();
+        a.kind = memory_heap_kind(mem);
+        a.size = size;
         self.gpu().call(&mut a)?;
-        self.tracker.lock().unwrap().add(a.res.0, 1, initial_state);
-        Ok(Buffer {
+        Ok(Heap {
             dev: self.clone(),
-            res: a.res,
-            gpu_va: a.gpu_va,
-            cpu_addr: a.cpu_addr,
-            heap_type,
-            desc,
+            id: a.heap,
+            props,
+            flags,
+            size,
+            alignment,
         })
+    }
+
+    /// `CreatePlacedResource`: the resource lives at `offset` of the heap and
+    /// shares its bytes with whatever else is placed there (ordered by
+    /// aliasing barriers).
+    pub fn create_placed(
+        self: &Arc<Self>,
+        heap: &Arc<Heap>,
+        offset: u64,
+        desc: &ResourceDesc,
+        initial_state: u32,
+    ) -> Result<Resource> {
+        let desc = resource::validate_committed(heap.props.ty, desc, initial_state)?;
+        if offset % heap.alignment != 0 || offset >= heap.size {
+            return Err(Hr::E_INVALIDARG);
+        }
+        if desc.is_buffer() {
+            let mut a = CreatePlacedBufferArgs::new();
+            a.heap = heap.id;
+            a.offset = offset;
+            a.size = desc.width;
+            self.gpu().call(&mut a)?;
+            Ok(self.track(
+                a.res,
+                a.gpu_va,
+                a.cpu_addr,
+                heap.props,
+                desc,
+                initial_state,
+                Some(heap.clone()),
+            ))
+        } else {
+            let res = self.make_texture(&desc, Some((heap, offset)))?;
+            Ok(self.track(
+                res,
+                0,
+                0,
+                heap.props,
+                desc,
+                initial_state,
+                Some(heap.clone()),
+            ))
+        }
+    }
+
+    fn make_texture(&self, d: &ResourceDesc, at: Option<(&Heap, u64)>) -> Result<ResId> {
+        use victory_metal_proto::types::TexDim;
+        if d.layout == resource::LAYOUT_ROW_MAJOR {
+            return Err(Hr::E_NOTIMPL);
+        }
+        let mut a = CreateTextureArgs::new();
+        a.dimension = match d.dimension {
+            resource::DIM_TEXTURE1D => TexDim::TEX1D,
+            resource::DIM_TEXTURE2D => TexDim::TEX2D,
+            _ => TexDim::TEX3D,
+        };
+        a.format = d.format;
+        a.width = d.width as u32;
+        a.height = d.height;
+        a.depth_or_array = d.depth_or_array as u32;
+        a.mips = d.mips as u32;
+        a.samples = d.sample_count;
+        a.usage = d.texture_usage();
+        if let Some((h, off)) = at {
+            a.heap = h.id;
+            a.heap_offset = off;
+        }
+        self.gpu().call(&mut a)?;
+        Ok(a.res)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn track(
+        self: &Arc<Self>,
+        res: ResId,
+        gpu_va: u64,
+        cpu_addr: u64,
+        props: HeapProps,
+        desc: ResourceDesc,
+        initial_state: u32,
+        heap: Option<Arc<Heap>>,
+    ) -> Resource {
+        self.tracker
+            .lock()
+            .unwrap()
+            .add(res.0, desc.subresource_count(), initial_state);
+        Resource {
+            dev: self.clone(),
+            res,
+            gpu_va,
+            cpu_addr,
+            heap_type: props.ty,
+            props,
+            desc,
+            _heap: heap,
+        }
+    }
+
+    /// `GetResourceAllocationInfo` for resources placed one after the other
+    /// in a default heap: total size and the alignment to place them at.
+    /// `None` for a description that cannot be made (the application gets
+    /// `UINT64_MAX`, as D3D12 does).
+    pub fn allocation_info(&self, descs: &[ResourceDesc]) -> Option<(u64, u64)> {
+        let mut at = 0u64;
+        let mut align = resource::DEFAULT_ALIGNMENT;
+        for d in descs {
+            let d = resource::validate_committed(resource::HEAP_DEFAULT, d, state::COMMON).ok()?;
+            let (size, a) = if d.is_buffer() {
+                (d.width, resource::DEFAULT_ALIGNMENT)
+            } else {
+                let mut q = GetResourceAllocationInfoArgs::new();
+                q.kind = pt::ResKind::TEXTURE;
+                q.dimension = match d.dimension {
+                    resource::DIM_TEXTURE1D => pt::TexDim::TEX1D,
+                    resource::DIM_TEXTURE2D => pt::TexDim::TEX2D,
+                    _ => pt::TexDim::TEX3D,
+                };
+                q.format = d.format;
+                q.width = d.width as u32;
+                q.height = d.height;
+                q.depth_or_array = d.depth_or_array as u32;
+                q.mips = d.mips as u32;
+                q.samples = d.sample_count;
+                q.usage = d.texture_usage();
+                q.heap_kind = pt::MemKind::DEFAULT;
+                self.gpu().call(&mut q).ok()?;
+                (q.size, q.alignment.max(d.alignment))
+            };
+            let a = a.max(resource::DEFAULT_ALIGNMENT);
+            align = align.max(a);
+            at = at.div_ceil(a) * a + size.div_ceil(a) * a;
+        }
+        Some((at.div_ceil(align) * align, align))
     }
 
     // ---- queues, fences -------------------------------------------------
@@ -328,11 +517,31 @@ impl Device {
         Ok((*g.back.get(&slot).ok_or(Hr::E_INVALIDARG)?, index))
     }
 
+    /// The front's `(heap, slot)` of a CPU handle.
+    fn slot_of(&self, handle: u64) -> Result<(SlotHeap, u32)> {
+        self.desc
+            .lock()
+            .unwrap()
+            .space
+            .resolve_cpu(handle)
+            .ok_or(Hr::E_INVALIDARG)
+    }
+
     fn write_descriptor(
         &self,
         cpu_handle: u64,
         view: ViewDesc,
         sampler: Option<pt::SamplerDesc>,
+    ) -> Result<()> {
+        self.write_descriptor_rec(cpu_handle, view, sampler, None)
+    }
+
+    fn write_descriptor_rec(
+        &self,
+        cpu_handle: u64,
+        view: ViewDesc,
+        sampler: Option<pt::SamplerDesc>,
+        record: Option<Record>,
     ) -> Result<()> {
         let (heap, index) = self.resolve_cpu(cpu_handle)?;
         let mut a = WriteDescriptorArgs::new();
@@ -343,7 +552,56 @@ impl Device {
             a.sampler = s;
             a.view.kind = ViewKind::SAMPLER;
         }
-        self.gpu().call(&mut a)
+        self.gpu().call(&mut a)?;
+        let (slot, index) = self.slot_of(cpu_handle)?;
+        self.set_record(slot, index, record);
+        Ok(())
+    }
+
+    fn set_record(&self, slot: SlotHeap, index: u32, record: Option<Record>) {
+        let mut g = self.desc.lock().unwrap();
+        match record {
+            Some(r) => g.records.insert((slot, index), r),
+            None => g.records.remove(&(slot, index)),
+        };
+    }
+
+    /// `CreateShaderResourceView` / `CreateUnorderedAccessView` on a texture.
+    pub fn create_texture_view(&self, cpu_handle: u64, v: &TextureView) -> Result<()> {
+        let rec = (v.uav && v.resource.is_some()).then_some(Record::Uav(*v));
+        self.write_descriptor_rec(cpu_handle, v.to_proto(), None, rec)
+    }
+
+    /// `CreateRenderTargetView` / `CreateDepthStencilView`: the heap has no
+    /// memory on the back; the record is the descriptor. `None` is a null view.
+    pub fn create_target_view(&self, cpu_handle: u64, v: Option<TargetView>) -> Result<()> {
+        let (slot, index) = self.slot_of(cpu_handle)?;
+        self.set_record(slot, index, v.map(Record::Target));
+        Ok(())
+    }
+
+    /// The render-target or depth-stencil view a CPU handle names.
+    pub fn target_view(&self, cpu_handle: u64) -> Option<TargetView> {
+        let (slot, index) = self.slot_of(cpu_handle).ok()?;
+        match self.desc.lock().unwrap().records.get(&(slot, index)) {
+            Some(Record::Target(t)) => Some(*t),
+            _ => None,
+        }
+    }
+
+    /// The texture UAV recorded in a descriptor, by CPU handle, else by the
+    /// GPU handle of a shader-visible heap.
+    pub fn texture_uav(&self, cpu_handle: u64, gpu_handle: u64) -> Option<TextureView> {
+        let g = self.desc.lock().unwrap();
+        let key = g
+            .space
+            .resolve_cpu(cpu_handle)
+            .filter(|k| g.records.contains_key(k))
+            .or_else(|| g.space.resolve_gpu(gpu_handle))?;
+        match g.records.get(&key) {
+            Some(Record::Uav(v)) => Some(*v),
+            _ => None,
+        }
     }
 
     /// `CreateConstantBufferView`; a zero `size` or address is a null view.
@@ -365,17 +623,40 @@ impl Device {
         self.write_descriptor(cpu_handle, ViewDesc::null(), Some(convert::sampler(s)?))
     }
 
-    /// `CopyDescriptorsSimple`.
+    /// `CopyDescriptorsSimple`. Heaps the back knows copy there; the front's
+    /// own records (render targets, texture UAVs) go along either way.
     pub fn copy_descriptors(&self, dst_cpu: u64, src_cpu: u64, count: u32) -> Result<()> {
-        let (dh, di) = self.resolve_cpu(dst_cpu)?;
-        let (sh, si) = self.resolve_cpu(src_cpu)?;
-        let mut a = CopyDescriptorsArgs::new();
-        a.dst_heap = dh;
-        a.dst_index = di;
-        a.src_heap = sh;
-        a.src_index = si;
-        a.count = count;
-        self.gpu().call(&mut a)
+        let (ds, di) = self.slot_of(dst_cpu)?;
+        let (ss, si) = self.slot_of(src_cpu)?;
+        let (db, sb) = {
+            let g = self.desc.lock().unwrap();
+            (g.back.get(&ds).copied(), g.back.get(&ss).copied())
+        };
+        match (db, sb) {
+            (Some(dh), Some(sh)) => {
+                let mut a = CopyDescriptorsArgs::new();
+                a.dst_heap = dh;
+                a.dst_index = di;
+                a.src_heap = sh;
+                a.src_index = si;
+                a.count = count;
+                self.gpu().call(&mut a)?;
+            }
+            (None, None) => {}
+            _ => return Err(Hr::E_INVALIDARG),
+        }
+        let mut g = self.desc.lock().unwrap();
+        // Overlapping ranges within one heap: read all first.
+        let moved: Vec<Option<Record>> = (0..count)
+            .map(|i| g.records.get(&(ss, si + i)).copied())
+            .collect();
+        for (i, r) in moved.into_iter().enumerate() {
+            match r {
+                Some(r) => g.records.insert((ds, di + i as u32), r),
+                None => g.records.remove(&(ds, di + i as u32)),
+            };
+        }
+        Ok(())
     }
 
     // ---- recording and execution ---------------------------------------
@@ -442,32 +723,85 @@ impl BufferView {
 
 // ---- objects ---------------------------------------------------------------
 
-pub struct Buffer {
+/// A heap of memory resources can be placed in (`ID3D12Heap`).
+pub struct Heap {
+    dev: Arc<Device>,
+    pub id: MemHeapId,
+    pub props: HeapProps,
+    pub flags: u32,
+    pub size: u64,
+    pub alignment: u64,
+}
+
+impl Drop for Heap {
+    fn drop(&mut self) {
+        let mut a = DestroyHeapArgs::new();
+        a.heap = self.id;
+        let _ = self.dev.gpu().call_status(&mut a);
+    }
+}
+
+/// A buffer or a texture, committed or placed.
+pub struct Resource {
     dev: Arc<Device>,
     pub res: ResId,
     pub gpu_va: u64,
     pub cpu_addr: u64,
     pub heap_type: u32,
+    pub props: HeapProps,
     pub desc: ResourceDesc,
+    /// A placed resource keeps its heap alive.
+    _heap: Option<Arc<Heap>>,
 }
 
-impl Buffer {
-    /// `Map`: the CPU address of the contents; only upload and readback
-    /// buffers have one.
+/// Where buffers were all there was.
+pub type Buffer = Resource;
+
+impl Resource {
+    /// `Map`: the CPU address of the contents; only buffers in CPU-visible
+    /// memory have one.
     pub fn map(&self, subresource: u32) -> Result<u64> {
         if subresource != 0 || self.cpu_addr == 0 {
             return Err(Hr::E_INVALIDARG);
         }
         Ok(self.cpu_addr)
     }
+
+    pub fn is_texture(&self) -> bool {
+        !self.desc.is_buffer()
+    }
 }
 
-impl Drop for Buffer {
+impl Drop for Resource {
     fn drop(&mut self) {
         self.dev.tracker.lock().unwrap().remove(self.res.0);
-        let mut a = DestroyBufferArgs::new();
-        a.res = self.res;
-        let _ = self.dev.gpu().call_status(&mut a);
+        if self.desc.is_buffer() {
+            let mut a = DestroyBufferArgs::new();
+            a.res = self.res;
+            let _ = self.dev.gpu().call_status(&mut a);
+        } else {
+            let mut a = DestroyTextureArgs::new();
+            a.res = self.res;
+            let _ = self.dev.gpu().call_status(&mut a);
+        }
+    }
+}
+
+fn memory_buffer_kind(m: Memory) -> pt::BufferKind {
+    match m {
+        Memory::Gpu => pt::BufferKind::DEFAULT,
+        Memory::Upload => pt::BufferKind::UPLOAD,
+        Memory::Readback => pt::BufferKind::READBACK,
+        Memory::Shared => pt::BufferKind::SHARED,
+    }
+}
+
+fn memory_heap_kind(m: Memory) -> pt::MemKind {
+    match m {
+        Memory::Gpu => pt::MemKind::DEFAULT,
+        Memory::Upload => pt::MemKind::UPLOAD,
+        Memory::Readback => pt::MemKind::READBACK,
+        Memory::Shared => pt::MemKind::SHARED,
     }
 }
 
@@ -521,6 +855,8 @@ impl Drop for DescriptorHeap {
         let mut g = self.dev.desc.lock().unwrap();
         g.space.free(self.range.id);
         g.back.remove(&self.range.id);
+        let slot = self.range.id;
+        g.records.retain(|k, _| k.0 != slot);
         drop(g);
         if !self.back.is_null() {
             let mut a = DestroyDescHeapArgs::new();
@@ -675,7 +1011,7 @@ pub fn encode_block(
     Ok(e.finish())
 }
 
-/// `D3D12_RESOURCE_BARRIER`, reduced to buffers.
+/// `D3D12_RESOURCE_BARRIER`, reduced to what the back needs.
 #[derive(Clone, Copy, Debug)]
 pub enum ResourceBarrier {
     Transition {
@@ -777,6 +1113,96 @@ impl CommandList {
             src_offset,
             size,
         }));
+    }
+
+    /// `CopyResource`: buffers of one size, or textures of one shape.
+    pub fn copy_resource(&mut self, dst: &Resource, src: &Resource) {
+        if dst.desc.is_buffer() && src.desc.is_buffer() {
+            if dst.desc.width != src.desc.width {
+                return self.fail(Hr::E_INVALIDARG);
+            }
+            return self.copy_buffer_region(dst, 0, src, 0, src.desc.width);
+        }
+        let (d, s) = (&dst.desc, &src.desc);
+        if d.is_buffer() != s.is_buffer()
+            || d.dimension != s.dimension
+            || (d.width, d.height, d.depth_or_array, d.mips, d.sample_count)
+                != (s.width, s.height, s.depth_or_array, s.mips, s.sample_count)
+        {
+            return self.fail(Hr::E_INVALIDARG);
+        }
+        self.push(Command::CopyResource(pt_copy_resource(dst.res, src.res)));
+    }
+
+    /// `CopyTextureRegion`. `src_box` is `[left, top, front, right, bottom,
+    /// back]` in texels (blocks' texels for compressed formats).
+    pub fn copy_texture_region(
+        &mut self,
+        dst: &CopyLoc,
+        at: [u32; 3],
+        src: &CopyLoc,
+        src_box: Option<[u32; 6]>,
+    ) {
+        let (Some(d), Some(s)) = (dst.to_proto(), src.to_proto()) else {
+            return self.fail(Hr::E_INVALIDARG);
+        };
+        // A buffer cannot copy to a buffer through here.
+        if d.kind == pt::LocKind::FOOTPRINT && s.kind == pt::LocKind::FOOTPRINT {
+            return self.fail(Hr::E_INVALIDARG);
+        }
+        let mut c = <cmd::CopyTextureRegion as Wire>::ZERO;
+        c.dst = d;
+        c.src = s;
+        [c.dst_x, c.dst_y, c.dst_z] = at;
+        if let Some(b) = src_box {
+            c.flags = cmd::CopyTextureRegion::HAS_BOX;
+            [
+                c.box_left,
+                c.box_top,
+                c.box_front,
+                c.box_right,
+                c.box_bottom,
+                c.box_back,
+            ] = b;
+        }
+        self.push(Command::CopyTextureRegion(c));
+    }
+
+    /// `ClearUnorderedAccessViewUint/Float` on a texture: `view` is what the
+    /// descriptor holds, `rects` are `[left, top, right, bottom]` (none = all).
+    pub fn clear_uav_texture(
+        &mut self,
+        tex: &Resource,
+        view: &TextureView,
+        values: [u32; 4],
+        float_values: bool,
+        rects: &[[i32; 4]],
+    ) {
+        if tex.desc.is_buffer() || view.resource != Some(tex.res) {
+            return self.fail(Hr::E_INVALIDARG);
+        }
+        let mut c = <cmd::ClearUavTexture as Wire>::ZERO;
+        c.res = tex.res;
+        c.format = view.format;
+        c.dimension = view.dim;
+        c.float_values = float_values as u8;
+        c.mip = view.mip_first;
+        c.first_slice = view.slice_first;
+        c.slice_count = view.slice_count;
+        c.values = values;
+        if rects.is_empty() {
+            return self.push(Command::ClearUavTexture(c));
+        }
+        for r in rects {
+            if r.iter().any(|v| *v < 0) || r[2] <= r[0] || r[3] <= r[1] {
+                return self.fail(Hr::E_INVALIDARG);
+            }
+            let mut c = c;
+            c.flags = cmd::ClearUavTexture::HAS_RECT;
+            [c.rect_left, c.rect_top, c.rect_right, c.rect_bottom] =
+                [r[0] as u32, r[1] as u32, r[2] as u32, r[3] as u32];
+            self.push(Command::ClearUavTexture(c));
+        }
     }
 
     pub fn resource_barrier(&mut self, barriers: &[ResourceBarrier]) {
@@ -909,6 +1335,67 @@ impl CommandList {
     /// A call outside this milestone: remembered, reported at `close`.
     pub fn unsupported(&mut self) {
         self.fail(Hr::E_NOTIMPL);
+    }
+}
+
+fn pt_copy_resource(dst: ResId, src: ResId) -> cmd::CopyResource {
+    cmd::CopyResource { dst, src }
+}
+
+/// One side of `CopyTextureRegion` (`D3D12_TEXTURE_COPY_LOCATION`).
+pub enum CopyLoc<'a> {
+    /// A subresource of a texture, by D3D12 subresource index.
+    Subresource { res: &'a Resource, index: u32 },
+    /// Bytes of a buffer laid out as a texture region.
+    Footprint {
+        res: &'a Resource,
+        offset: u64,
+        format: u32,
+        width: u32,
+        height: u32,
+        depth: u32,
+        row_pitch: u32,
+    },
+}
+
+impl CopyLoc<'_> {
+    fn to_proto(&self) -> Option<cmd::TextureLocation> {
+        let mut l = <cmd::TextureLocation as Wire>::ZERO;
+        match *self {
+            CopyLoc::Subresource { res, index } => {
+                if res.desc.is_buffer() || index >= res.desc.subresource_count() {
+                    return None;
+                }
+                let (mip, slice, plane) = footprint::decompose(&res.desc, index);
+                l.res = res.res;
+                l.kind = pt::LocKind::SUBRESOURCE;
+                l.plane = plane as u8;
+                l.mip = mip as u16;
+                l.slice = slice;
+            }
+            CopyLoc::Footprint {
+                res,
+                offset,
+                format,
+                width,
+                height,
+                depth,
+                row_pitch,
+            } => {
+                if !res.desc.is_buffer() {
+                    return None;
+                }
+                l.res = res.res;
+                l.kind = pt::LocKind::FOOTPRINT;
+                l.offset = offset;
+                l.format = format;
+                l.width = width;
+                l.height = height;
+                l.depth = depth;
+                l.row_pitch = row_pitch;
+            }
+        }
+        Some(l)
     }
 }
 

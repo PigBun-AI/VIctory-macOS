@@ -807,6 +807,7 @@ fn mem_kind(k: MemKind) -> Result<CoreKind, Status> {
         MemKind::DEFAULT => Ok(CoreKind::Default),
         MemKind::UPLOAD => Ok(CoreKind::Upload),
         MemKind::READBACK => Ok(CoreKind::Readback),
+        MemKind::SHARED => Ok(CoreKind::Shared),
         _ => Err(Status::INVALID_ARG),
     }
 }

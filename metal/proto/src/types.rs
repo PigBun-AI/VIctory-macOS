@@ -100,6 +100,8 @@ open_enum! {
         UPLOAD = 1,
         /// GPU-writable, CPU-readable (shared): buffers.
         READBACK = 2,
+        /// CPU and GPU both read and write (shared, cached): buffers.
+        SHARED = 3,
     }
 }
 
