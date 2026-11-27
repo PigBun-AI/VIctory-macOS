@@ -365,6 +365,30 @@ names (`"Enter"`).
 `gameinput_mac/` and the hooks, and keep `world.rs` only if a consumer is left), or `VICTORY_KEYS` takes the
 repeat form upstream (then `keys.rs` and the `scripted()` call go).
 
+### P1 — `VICTORY_PRESENT_MAX`: a smaller host window without a smaller title output (`victory-gpu/src/mac/present_cap.rs`)
+
+*What.* `VICTORY_PRESENT_MAX=WIDTHxHEIGHT` caps the host window and its swap chain, keeping the aspect ratio and never
+enlarging (`fit_output`, with the old base's tests). The title's output size, render targets and upscaler are not
+touched: the picture it presents is drawn scaled (bilinear) into the smaller back buffer by `compose.rs`
+(`Composer::record_scaled`: the same pass as the two-plane blend with one plane and a pixel shader `ps_scale`, its
+pipeline made on first use). With two planes (Series S) the blend already scaled both to the back buffer, so only the
+back buffer's size changes. Where the picture cannot be sampled (`compose::view` says no) or the pass fails, it is
+shown at its own size and the log says why. Logs: `VICTORY_PRESENT_MAX: ...` once at start, `...the picture is drawn
+scaled into the host's smaller swap chain` per size, `presenting to a window` with the capped size.
+
+*Origin.* VIctory-macOS `d093abb1` (compute pass in `composite.rs`, `host.rs`); that line's presenter differs, so
+the behaviour and the size rule are ported, not the shader. Until now this line had the variable in `macos.md` only.
+
+*Files.* New `mac/present_cap.rs` (+1 line in `mac/mod.rs`); `compose.rs` (a second pixel shader and pipeline, the
+draw split from `record`), `host.rs` (`present_planes` calls `present_capped`; the two-plane block takes an optional
+overlay), all marked `mac P1` or commented.
+
+*Test.* `mac::present_cap::tests` (the size rule and the value's syntax; native). The GPU draw is **not run**: it
+needs a run under Wine, where the check is the log lines above and a window of the capped size.
+
+*Why not needed on Windows.* The window is fitted to the work area by `lifecycle.rs` and the swap chain stretched.
+*Remove when.* The Windows line has a presentation cap of its own.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

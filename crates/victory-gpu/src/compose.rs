@@ -1,6 +1,9 @@
 ﻿//! Two presented planes as one image: the console's display puts the second
 //! (the interface) over the first (the scene), each scaled to the screen.
 //! Grand Theft Auto VI presents so on Series S.
+//!
+//! Mac layer (docs/mac/PATCHES.md, P1): [`Composer::record_scaled`] draws one
+//! plane alone into a smaller back buffer, for `VICTORY_PRESENT_MAX`.
 
 use crate::mac::hlsl::d3d_compile as D3DCompile; // mac G4 (was windows::...::Fxc::D3DCompile)
 use windows::Win32::Graphics::Direct3D::ID3DBlob;
@@ -29,11 +32,19 @@ float4 ps(V v) : SV_Target {
     float4 o = over.SampleLevel(smooth_, v.uv, 0);
     return float4(saturate(o.rgb + s.rgb * (1 - saturate(o.a))), 1);
 }
+[RootSignature(RS)]
+float4 ps_scale(V v) : SV_Target {
+    return float4(scene.SampleLevel(smooth_, v.uv, 0).rgb, 1);
+}
 "#;
 
 pub(crate) struct Composer {
     root: ID3D12RootSignature,
     pso: ID3D12PipelineState,
+    /// One plane scaled alone (`VICTORY_PRESENT_MAX`), made on first use.
+    pso_scale: Option<ID3D12PipelineState>,
+    vs: ID3DBlob,
+    format: DXGI_FORMAT,
     views: Vec<ID3D12DescriptorHeap>,
     step: u32,
 }
@@ -70,21 +81,44 @@ impl Composer {
             compile(s!("vs"), s!("vs_5_1"))?,
             compile(s!("ps"), s!("ps_5_1"))?,
         );
-        // SAFETY: the blobs' own bytes, alive through the calls.
+        // SAFETY: the blob's own bytes, alive through the call.
         unsafe {
-            let bytes = |b: &ID3DBlob| {
-                std::slice::from_raw_parts(b.GetBufferPointer().cast::<u8>(), b.GetBufferSize())
-            };
             let device = &host.device;
-            let root: ID3D12RootSignature = device.CreateRootSignature(0, bytes(&vs))?;
+            let root: ID3D12RootSignature = device.CreateRootSignature(
+                0,
+                std::slice::from_raw_parts(vs.GetBufferPointer().cast::<u8>(), vs.GetBufferSize()),
+            )?;
+            let pso = Self::make_pso(host, &root, &vs, &ps, format)?;
+            Ok(Composer {
+                root,
+                pso,
+                pso_scale: None,
+                vs,
+                format,
+                views: Vec::new(),
+                step: device
+                    .GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
+            })
+        }
+    }
+
+    fn make_pso(
+        host: &Host,
+        root: &ID3D12RootSignature,
+        vs: &ID3DBlob,
+        ps: &ID3DBlob,
+        format: DXGI_FORMAT,
+    ) -> windows::core::Result<ID3D12PipelineState> {
+        // SAFETY: the blobs' own bytes, alive through the call.
+        unsafe {
             let code = |b: &ID3DBlob| D3D12_SHADER_BYTECODE {
                 pShaderBytecode: b.GetBufferPointer(),
                 BytecodeLength: b.GetBufferSize(),
             };
             let mut desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
-                pRootSignature: std::mem::transmute_copy(&root),
-                VS: code(&vs),
-                PS: code(&ps),
+                pRootSignature: std::mem::transmute_copy(root),
+                VS: code(vs),
+                PS: code(ps),
                 SampleMask: u32::MAX,
                 RasterizerState: D3D12_RASTERIZER_DESC {
                     FillMode: D3D12_FILL_MODE_SOLID,
@@ -102,15 +136,27 @@ impl Composer {
             desc.RTVFormats[0] = format;
             desc.BlendState.RenderTarget[0].RenderTargetWriteMask =
                 D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8;
-            let pso = device.CreateGraphicsPipelineState(&desc)?;
-            Ok(Composer {
-                root,
-                pso,
-                views: Vec::new(),
-                step: device
-                    .GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
-            })
+            host.device.CreateGraphicsPipelineState(&desc)
         }
+    }
+
+    /// One plane alone, scaled to the back buffer (`VICTORY_PRESENT_MAX`):
+    /// the same pass as [`Self::record`] with the plane in both slots and a
+    /// pixel shader that leaves the overlay out.
+    pub(crate) fn record_scaled(
+        &mut self,
+        host: &Host,
+        slot: usize,
+        list: &ID3D12GraphicsCommandList,
+        plane: (&ID3D12Resource, DXGI_FORMAT),
+        back: &ID3D12Resource,
+        size: (u32, u32),
+    ) -> windows::core::Result<()> {
+        if self.pso_scale.is_none() {
+            let ps = compile(s!("ps_scale"), s!("ps_5_1"))?;
+            self.pso_scale = Some(Self::make_pso(host, &self.root, &self.vs, &ps, self.format)?);
+        }
+        self.draw(host, slot, list, [plane, plane], back, size, true)
     }
 
     /// Each presenter command-list slot owns its own pair of SRVs. The swap
@@ -123,7 +169,21 @@ impl Composer {
         list: &ID3D12GraphicsCommandList,
         planes: [(&ID3D12Resource, DXGI_FORMAT); 2],
         back: &ID3D12Resource,
+        size: (u32, u32),
+    ) -> windows::core::Result<()> {
+        self.draw(host, slot, list, planes, back, size, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &mut self,
+        host: &Host,
+        slot: usize,
+        list: &ID3D12GraphicsCommandList,
+        planes: [(&ID3D12Resource, DXGI_FORMAT); 2],
+        back: &ID3D12Resource,
         (width, height): (u32, u32),
+        scaled: bool,
     ) -> windows::core::Result<()> {
         while self.views.len() <= slot {
             let heap = unsafe {
@@ -167,7 +227,10 @@ impl Composer {
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
             list.SetDescriptorHeaps(&[Some(views.clone())]);
             list.SetGraphicsRootSignature(&self.root);
-            list.SetPipelineState(&self.pso);
+            match (&self.pso_scale, scaled) {
+                (Some(pso), true) => list.SetPipelineState(pso),
+                _ => list.SetPipelineState(&self.pso),
+            }
             list.SetGraphicsRootDescriptorTable(0, gpu);
             list.IASetPrimitiveTopology(
                 windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,

@@ -9096,6 +9096,20 @@ impl Host {
         overlay: Option<(&ID3D12Resource, u32)>,
         frame: u64,
     ) -> Option<bool> {
+        self.present_capped(texture, state, overlay, frame, true)
+    }
+
+    /// [`Self::present_planes`]; `cap` is whether `VICTORY_PRESENT_MAX` (mac
+    /// layer, `mac/present_cap.rs`) may shrink the window and swap chain: the
+    /// fallbacks inside turn it off and show the picture at its own size.
+    fn present_capped(
+        &self,
+        texture: &ID3D12Resource,
+        state: u32,
+        overlay: Option<(&ID3D12Resource, u32)>,
+        frame: u64,
+        cap: bool,
+    ) -> Option<bool> {
         // SAFETY: a live resource.
         let desc = unsafe { texture.GetDesc() };
         let planes = overlay.and_then(|(over, over_state)| {
@@ -9117,7 +9131,20 @@ impl Host {
             };
             format
         };
-        let (width, height) = (desc.Width as u32, desc.Height);
+        // mac P1: with a cap, the host window and the swap chain are smaller
+        // than the picture and the composer draws it scaled; a lone plane that
+        // cannot be sampled is shown at its own size.
+        let native = (desc.Width as u32, desc.Height);
+        let capped = if cap {
+            crate::mac::present_cap::output_size(native.0, native.1)
+        } else {
+            native
+        };
+        let scaled_view = (capped != native && planes.is_none())
+            .then(|| crate::compose::view(&desc))
+            .flatten();
+        let (width, height) = if planes.is_some() || scaled_view.is_some() { capped } else { native };
+        let needs_composer = planes.is_some() || scaled_view.is_some();
         let mut presenter = self.presenter.lock().unwrap_or_else(|e| e.into_inner());
         if presenter.is_none() {
             *presenter = match self.presenter(width, height, format) {
@@ -9130,13 +9157,13 @@ impl Host {
         }
         let state_u32 = state;
         let p = presenter.as_mut()?;
-        if planes.is_some() && p.composer.is_none() {
+        if needs_composer && p.composer.is_none() {
             match crate::compose::Composer::new(self, format) {
                 Ok(c) => p.composer = Some(c),
                 Err(e) => {
                     tracing::warn!(error = %e, "two-plane composer not made; showing base plane only");
                     drop(presenter);
-                    return self.present_planes(texture, state_u32, None, frame);
+                    return self.present_capped(texture, state_u32, None, frame, false);
                 }
             }
         }
@@ -9169,13 +9196,13 @@ impl Host {
                 }
             }
         }
-        if planes.is_some() && p.composer.is_none() {
+        if needs_composer && p.composer.is_none() {
             match crate::compose::Composer::new(self, format) {
                 Ok(c) => p.composer = Some(c),
                 Err(e) => {
                     tracing::warn!(error = %e, "two-plane composer not made after resize; showing base plane only");
                     drop(presenter);
-                    return self.present_planes(texture, state_u32, None, frame);
+                    return self.present_capped(texture, state_u32, None, frame, false);
                 }
             }
         }
@@ -9211,49 +9238,85 @@ impl Host {
             copy.reset();
             copy.keep(texture);
             let list = &copy.list;
-            let composed = if let Some((over, over_state, base_fmt, over_fmt)) = planes {
-                copy.keep(over);
+            // The second plane, if any (`None` with a cap alone: `scaled_view`).
+            let over_plane = planes.map(|(over, over_state, _, over_fmt)| (over, over_state, over_fmt));
+            let composed = if let Some(base_fmt) = planes.map(|p| p.2).or(scaled_view) {
+                if let Some((over, ..)) = over_plane {
+                    copy.keep(over);
+                }
                 if let Some(composer) = p.composer.as_mut() {
                     let mut pre = Vec::with_capacity(3);
                     if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
                         pre.push(transition(texture, state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
                     }
-                    if over_state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+                    if let Some((over, over_state, _)) =
+                        over_plane.filter(|p| p.1 != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+                    {
                         pre.push(transition(over, over_state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
                     }
                     pre.push(transition(&back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
                     list.ResourceBarrier(&pre);
                     let compose_slot = slot.map_or(0, |i| i + 1);
-                    if let Err(err) = composer.record(
-                        self,
-                        compose_slot,
-                        list,
-                        [(texture, base_fmt), (over, over_fmt)],
-                        &back,
-                        (width, height),
-                    ) {
+                    let recorded = match over_plane {
+                        Some((over, _, over_fmt)) => composer.record(
+                            self,
+                            compose_slot,
+                            list,
+                            [(texture, base_fmt), (over, over_fmt)],
+                            &back,
+                            (width, height),
+                        ),
+                        None => composer.record_scaled(
+                            self,
+                            compose_slot,
+                            list,
+                            (texture, base_fmt),
+                            &back,
+                            (width, height),
+                        ),
+                    };
+                    if let Err(err) = recorded {
                         copy.close();
                         drop(back);
                         drop(presenter);
                         tracing::warn!(%err, "could not record display composite; presenting the base plane");
-                        return self.present_planes(texture, state_u32, None, frame);
+                        return self.present_capped(texture, state_u32, None, frame, false);
                     }
                     static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                    if !ONCE.swap(true, Ordering::Relaxed) {
-                        tracing::info!(
-                            frame,
-                            width,
-                            height,
-                            base_format = base_fmt.0,
-                            overlay_format = over_fmt.0,
-                            "display output: compositing two planes (overlay active)"
-                        );
+                    if let Some((_, _, over_fmt)) = over_plane {
+                        if !ONCE.swap(true, Ordering::Relaxed) {
+                            tracing::info!(
+                                frame,
+                                width,
+                                height,
+                                base_format = base_fmt.0,
+                                overlay_format = over_fmt.0,
+                                "display output: compositing two planes (overlay active)"
+                            );
+                        }
+                    }
+                    static SCALED: Mutex<Option<((u32, u32), (u32, u32))>> = Mutex::new(None);
+                    if (width, height) != native {
+                        let mut last = SCALED.lock().unwrap_or_else(|e| e.into_inner());
+                        if *last != Some((native, (width, height))) {
+                            *last = Some((native, (width, height)));
+                            tracing::info!(
+                                frame,
+                                native_width = native.0,
+                                native_height = native.1,
+                                width,
+                                height,
+                                "VICTORY_PRESENT_MAX: the picture is drawn scaled into the host's smaller swap chain"
+                            );
+                        }
                     }
                     let mut post = Vec::with_capacity(3);
                     if state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
                         post.push(transition(texture, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, state));
                     }
-                    if over_state != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE {
+                    if let Some((over, over_state, _)) =
+                        over_plane.filter(|p| p.1 != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+                    {
                         post.push(transition(over, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, over_state));
                     }
                     post.push(transition(

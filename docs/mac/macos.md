@@ -235,7 +235,7 @@ A separate 6.10 GiB heap and reserved buffer worked on the same M1 Max. Readback
 
 ## Host presentation size
 
-Set `VICTORY_PRESENT_MAX=1280x720` to cap the host presentation pass and DXGI swap chain at 720p. Smaller pictures keep their native size. The cap preserves the picture’s aspect ratio and applies after the game’s rendering and upscaling.
+Set `VICTORY_PRESENT_MAX=1280x720` to cap the host presentation pass and DXGI swap chain at 720p. Smaller pictures keep their native size. The cap preserves the picture’s aspect ratio and applies after the game’s rendering and upscaling. It changes the host window and the swap chain only, never what the title renders (its output size, internal size and upscaler stay the same: `VICTORY_OUTPUT` is the switch for that). The picture is drawn into the smaller back buffer by the presentation pass of `victory-gpu/src/compose.rs` (bilinear), together with the second plane on Series S. Code: `victory-gpu/src/mac/present_cap.rs`, docs/mac/PATCHES.md P1; the log says `VICTORY_PRESENT_MAX: the picture is drawn scaled into the host's smaller swap chain` once per size, and `presenting to a window` shows the capped size.
 
 ## Host textures on Macs with 8 or 16 GB
 
