@@ -630,6 +630,8 @@ pub enum Root {
         srv: bool,
         data: Vec<u32>,
     },
+    /// A root UAV over a zeroed buffer of this many dwords ([`Host::dispatch`] only; not read back).
+    Uav(u32),
 }
 
 /// Bindings for [`Host::draw`]: root arguments and the heap contents.
@@ -867,7 +869,7 @@ impl Host {
                         at.ptr += (index * size) as u64;
                         list.SetGraphicsRootDescriptorTable(*param, at);
                     }
-                    Root::View { .. } => return Err("root views in a draw".into()),
+                    Root::View { .. } | Root::Uav(_) => return Err("root views in a draw".into()),
                 }
             }
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
@@ -1450,6 +1452,15 @@ impl Host {
                         } else {
                             list.SetComputeRootConstantBufferView(*param, va);
                         }
+                        keep.push(b);
+                    }
+                    Root::Uav(dwords) => {
+                        let b = make(
+                            D3D12_HEAP_TYPE_DEFAULT,
+                            &buffer(u64::from(*dwords) * 4, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        )?;
+                        list.SetComputeRootUnorderedAccessView(*param, b.GetGPUVirtualAddress());
                         keep.push(b);
                     }
                 }

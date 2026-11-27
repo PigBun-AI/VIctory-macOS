@@ -75,6 +75,8 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
+            // Ray-tracing programs keep their last page-directory entries in group-shared memory.
+            "VICTORY_RT_PAGECACHE",
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
             "VICTORY_TM_CLAMP_HDR",
         ] {

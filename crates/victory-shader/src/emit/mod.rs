@@ -202,6 +202,29 @@ pub fn builder_bounds() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_BOUNDS").is_none_or(|v| v != "0"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The tests' own `VICTORY_RT_PAGECACHE`, per thread (the real switch is read once).
+    pub(crate) static RT_PAGECACHE_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the programs that walk the title's ray-tracing structures
+/// (`image_bvh*_intersect_ray`) keep the last page-directory entries they
+/// read in group-shared memory, one set per thread (`VICTORY_RT_PAGECACHE=1`,
+/// default off): a node, the next node of the same 64 KiB page and the
+/// instance record beside them then do not each wait for the directory in
+/// video memory (`Lower::memory`). Exact: the cache holds what the directory
+/// held, for pages that have a copy. Part of the translation: the shader
+/// cache keys on it.
+pub fn rt_pagecache() -> bool {
+    #[cfg(test)]
+    if let Some(on) = RT_PAGECACHE_TEST.get() {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_RT_PAGECACHE").is_some_and(|v| v == "1"))
+}
+
 /// The clean-up passes that run over a translated program before it is
 /// written (`bitcode::opt`): a set of that module's pass bits. Every pass
 /// is exact, so the switch is for telling a translator fault from a

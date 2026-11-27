@@ -232,6 +232,8 @@ pub(crate) struct Shader {
     /// Thread-group shared memory, in dwords.
     pub lds_dwords: u32,
     lds: Option<V>,
+    /// The per-thread page-directory cache (`VICTORY_RT_PAGECACHE`).
+    pcache: Option<V>,
     main: V,
     pub entry: usize,
 }
@@ -285,6 +287,7 @@ impl Shader {
             wave_size: None,
             lds_dwords: 0,
             lds: None,
+            pcache: None,
             main,
             entry,
         }
@@ -299,6 +302,18 @@ impl Shader {
         let arr = self.m.array(self.lds_dwords, self.t.i32);
         let g = self.m.global("lds", arr, 3);
         self.lds = Some(g);
+        g
+    }
+
+    /// The per-thread cache of page-directory entries (`Lower::memory`): a
+    /// group-shared array of its own, apart from the title's `lds`.
+    pub fn pcache(&mut self, dwords: u32) -> V {
+        if let Some(g) = self.pcache {
+            return g;
+        }
+        let arr = self.m.array(dwords, self.t.i32);
+        let g = self.m.global("pcache", arr, 3);
+        self.pcache = Some(g);
         g
     }
 

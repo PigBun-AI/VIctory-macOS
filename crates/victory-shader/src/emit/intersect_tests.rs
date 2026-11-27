@@ -700,3 +700,133 @@ fn a_structure_that_returns_triangle_ids_is_refused_by_name() {
         other => panic!("{:?}", other.map(|_| ())),
     }
 }
+
+/// The title's way end to end, through the real directory (no stand-in): the card reads the
+/// nodes of the same scene through a directory of title pages, with `VICTORY_RT_PAGECACHE`
+/// as `cache` says, and every thread's result is compared with the reference. `base` is the
+/// title address of the buffer's first byte; the pages the buffer lies in map to the copy
+/// at heap slot 2 (a padded duplicate), so a structure over a page boundary has halves in two
+/// pages and the cache sees a hit (same page) and a miss (next page).
+fn run_directory(wide: bool, descriptor: Descriptor, base: u64, pointers: u64, cache: bool) -> usize {
+    super::RT_PAGECACHE_TEST.set(Some(cache));
+    let built = build(wide, descriptor);
+    super::RT_PAGECACHE_TEST.set(None);
+    let (shader, res) = built.expect("lowers through the directory");
+    assert_eq!(res.bvh.len(), 1);
+    eprintln!("user data {:?}, roots cbv {:?} srv {:?} uav {:?}", shader.user_data, shader.root_cbvs, shader.root_srvs, shader.root_uavs);
+    let (scene, batches) = scene();
+    // The directory: per 64 KiB page of the title's address space the copy's number (2: heap
+    // slot 2, the heap base word being 0) and the page's byte in it.
+    let data0 = buffer(&scene, &batches[0], pointers);
+    let bytes = data0.len() as u64 * 4;
+    let (first, last) = (base >> 16, (base + bytes - 1) >> 16);
+    let pad = (base & 0xFFFF) as usize / 4;
+    let mut directory = vec![0u32; 2 * super::MEMORY_PAGES as usize];
+    for p in first..=last {
+        directory[2 * p as usize] = 2;
+        directory[2 * p as usize + 1] = ((p - first) << 16) as u32;
+    }
+    // Root views as the host's root signature orders them: user data, then by slot and kind.
+    let mut views: Vec<(u8, u8)> = shader
+        .root_cbvs
+        .iter()
+        .map(|&r| (r, 0))
+        .chain(shader.root_srvs.iter().map(|&r| (r, 1)))
+        .chain(shader.root_uavs.iter().map(|&r| (r, 2)))
+        .collect();
+    views.sort_unstable();
+    views.dedup();
+    let _one = super::valu_tests::ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut ran = 0;
+    // (WARP reads zeros through a 16 MiB root view on an upload heap here, with the cache off too:
+    // the card only.)
+    for (label, warp) in [("hardware", false)] {
+        let Ok(host) = Host::new(warp) else {
+            eprintln!("no SM 6.6 {label} device; skipped");
+            continue;
+        };
+        let (root, pso) = host
+            .compute_pipeline(&shader)
+            .unwrap_or_else(|e| panic!("{label}: compute_pipeline failed: {e}"));
+        for (b, batch) in batches.iter().enumerate() {
+            let data = buffer(&scene, batch, pointers);
+            let mut copy = vec![0u32; pad];
+            copy.extend(&data);
+            let mut roots = vec![(0, Root::Constants(vec![0; shader.user_data_dwords().max(1) as usize]))];
+            for (i, &(slot, kind)) in views.iter().enumerate() {
+                let param = 1 + i as u32;
+                roots.push((
+                    param,
+                    match (slot, kind) {
+                        (super::SLOT_MEMORY, 1) => Root::View {
+                            srv: true,
+                            data: directory.clone(),
+                        },
+                        (_, 2) => Root::Uav(2 * super::MEMORY_FAULTS),
+                        (_, k) => Root::View {
+                            srv: k == 1,
+                            data: vec![0; 64],
+                        },
+                    },
+                ));
+            }
+            let out = host
+                .dispatch(
+                    &root,
+                    &pso,
+                    &Dispatch {
+                        roots,
+                        views: &[
+                            View::Buffer {
+                                data: &data,
+                                stride: Stride::Raw,
+                            },
+                            View::RawUav(4 * THREADS),
+                            View::Buffer {
+                                data: &copy,
+                                stride: Stride::Raw,
+                            },
+                        ],
+                        samplers: &[],
+                        groups: [1, 1, 1],
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
+            for t in 0..THREADS as usize {
+                let want = match batch.get(t) {
+                    Some(c) => expected(&scene, c, true),
+                    None => BEFORE,
+                };
+                let got = &out[0][4 * t..4 * t + 4];
+                assert_eq!(got, want, "{label}, cache {cache}, batch {b} thread {t}");
+            }
+        }
+        eprintln!("{label} done, cache {cache}, base {base:#x}");
+        ran += 1;
+    }
+    assert!(ran > 0, "no SM 6.6 device available");
+    shader.dxil.len()
+}
+
+#[test]
+fn the_node_test_through_the_directory_is_the_same_with_the_page_cache() {
+    // Whole page, and a structure across a page boundary (its 128-byte boxes have a half in the
+    // next page); both forms.
+    for base in [0x12_3456_7800u64, 0x12_3456_F000, 0x12_3456_F700] {
+        let structure = base + u64::from(NODES);
+        let off = run_directory(true, WHOLE, base, structure, false);
+        let on = run_directory(true, WHOLE, base, structure, true);
+        eprintln!("64-bit form, base {base:#x}: DXIL {off} bytes, with the cache {on}");
+        assert!(on > off, "the cache is in the translation");
+        let descriptor = Descriptor::Numbers(
+            (structure >> 8) as u32,
+            (structure >> 40) as u32 | bvh::BOX_SORT,
+        );
+        let off = run_directory(false, descriptor, base, 0, false);
+        let on = run_directory(false, descriptor, base, 0, true);
+        eprintln!("32-bit form, base {base:#x}: DXIL {off} bytes, with the cache {on}");
+        assert!(on > off, "the cache is in the translation");
+    }
+}

@@ -290,6 +290,9 @@ struct Lower<'a> {
     root_copy: Option<V>,
     /// Whether the page [`Lower::memory`] last looked for has a copy.
     page_there: Option<V>,
+    /// `VICTORY_RT_PAGECACHE`: this thread's flat id in the group, once the
+    /// cache is set up in the entry block (`Lower::page_cache`).
+    pcache_thread: Option<V>,
     mask_phis: HashMap<Value, V>,
     pending_masks: Vec<(V, usize, usize)>,
     data_phis: Vec<(V, usize, usize)>,
@@ -1647,6 +1650,7 @@ impl<'a> Lower<'a> {
             coherent: HashSet::new(),
             root_copy: None,
             page_there: None,
+            pcache_thread: None,
             ordered: if x.native.stage == HwStage::Ps {
                 ordered_section(p)
             } else {
@@ -3133,6 +3137,34 @@ impl<'a> Lower<'a> {
         let at = self.s.m.bin(c, Bin::Shl, page, k3);
         let directory = self.s.root_srv_handle(SLOT_MEMORY);
         let (iu, both, align) = (self.s.m.undef(i32t), self.s.m.i8(3), k(self, 4));
+        // `VICTORY_RT_PAGECACHE`: the thread's last entries for pages that have a copy, by page
+        // number (4 ways); a hit does not read the directory in video memory.
+        let cache = self.page_cache();
+        let (mut hit_block, mut cache_key) = (None, None);
+        if let Some((pc, flat, group)) = cache {
+            let (ways, kg, one) = (k(self, 3), k(self, group), k(self, 1));
+            let way = self.s.m.bin(c, Bin::And, page, ways);
+            let slot = self.s.m.bin(c, Bin::Mul, way, kg);
+            let slot = self.s.m.bin(c, Bin::Add, slot, flat);
+            let key = self.s.m.bin(c, Bin::Add, page, one);
+            let ptr = self.s.m.element(c, pc, slot);
+            let have = self.s.m.load(c, ptr);
+            let hit = self.s.m.cmp(c, pred::EQ, have, key);
+            let (hit_b, miss_b, join_b) = (self.s.m.new_block(), self.s.m.new_block(), self.s.m.new_block());
+            self.s.m.terminate(c, Term::CondBr(hit, hit_b, miss_b));
+            // Hit: the number and the offset the thread kept.
+            let (k4g, k8g) = (k(self, 4 * group), k(self, 8 * group));
+            let at1 = self.s.m.bin(hit_b, Bin::Add, slot, k4g);
+            let at2 = self.s.m.bin(hit_b, Bin::Add, slot, k8g);
+            let p1 = self.s.m.element(hit_b, pc, at1);
+            let p2 = self.s.m.element(hit_b, pc, at2);
+            let (n_hit, s_hit) = (self.s.m.load(hit_b, p1), self.s.m.load(hit_b, p2));
+            self.s.m.terminate(hit_b, Term::Br(join_b));
+            hit_block = Some((hit_b, n_hit, s_hit, join_b));
+            cache_key = Some((pc, slot, key, k4g, k8g));
+            self.cur = miss_b;
+        }
+        let c = self.cur;
         let entry = self.s.op(
             c,
             "rawBufferLoad.f32",
@@ -3142,7 +3174,35 @@ impl<'a> Lower<'a> {
             &[directory, at, iu, both, align],
         );
         let (copy, start) = (self.s.m.extract(c, entry, 0), self.s.m.extract(c, entry, 1));
-        let (number, start) = (self.as_int(copy), self.as_int(start));
+        let (mut number, mut start) = (self.as_int(copy), self.as_int(start));
+        if let (Some((hit_b, n_hit, s_hit, join_b)), Some((pc, slot, key, k4g, k8g))) = (hit_block, cache_key) {
+            // Miss: what was read is kept, for a page that has a copy only (a page without
+            // one is looked at again: the host fills it in from the next frame on).
+            let zero = k(self, 0);
+            let mask = k(self, !MEMORY_READ_ONLY);
+            let has = self.s.m.bin(c, Bin::And, number, mask);
+            let there = self.s.m.cmp(c, pred::NE, has, zero);
+            let keep = self.s.m.select(c, there, key, zero);
+            let ptr = self.s.m.element(c, pc, slot);
+            self.s.m.store(c, ptr, keep);
+            let at1 = self.s.m.bin(c, Bin::Add, slot, k4g);
+            let at2 = self.s.m.bin(c, Bin::Add, slot, k8g);
+            let p1 = self.s.m.element(c, pc, at1);
+            let p2 = self.s.m.element(c, pc, at2);
+            self.s.m.store(c, p1, number);
+            self.s.m.store(c, p2, start);
+            let miss_end = c;
+            self.s.m.terminate(miss_end, Term::Br(join_b));
+            self.cur = join_b;
+            let i32t = self.s.t.i32;
+            let n = self.s.m.phi(join_b, i32t);
+            self.s.m.set_phi(n, vec![(n_hit, hit_b), (number, miss_end)]);
+            let s = self.s.m.phi(join_b, i32t);
+            self.s.m.set_phi(s, vec![(s_hit, hit_b), (start, miss_end)]);
+            number = n;
+            start = s;
+        }
+        let c = self.cur;
         let mask = k(self, !MEMORY_READ_ONLY);
         let copy = self.s.m.bin(c, Bin::And, number, mask);
         // A page without a copy: its number, at a place by the number. In a
@@ -3191,6 +3251,43 @@ impl<'a> Lower<'a> {
         let within = self.s.m.bin(c, Bin::And, lo, k64k);
         let byte = self.s.m.bin(c, Bin::Add, start, within);
         (h, byte)
+    }
+
+    /// `VICTORY_RT_PAGECACHE`: the group-shared array of this program's page-directory entries
+    /// (4 ways per thread: page + 1, number, offset; the three are `4 * group` dwords apart,
+    /// the threads of a way neighbours), this thread's flat id and the group size. Only for
+    /// compute programs that test rays against the title's structures, in groups of up to 64.
+    /// The keys are cleared in the entry block; a thread reads and writes only its own.
+    fn page_cache(&mut self) -> Option<(V, V, u32)> {
+        if !super::rt_pagecache()
+            || self.x.res.bvh.is_empty()
+            || self.x.native.stage != HwStage::Cs
+            || self.s.mesh.is_some()
+        {
+            return None;
+        }
+        let [x, y, z] = self.s.threads?;
+        let group = x * y * z;
+        if group == 0 || group > 64 {
+            return None;
+        }
+        let pc = self.s.pcache(12 * group);
+        if let Some(flat) = self.pcache_thread {
+            return Some((pc, flat, group));
+        }
+        let (e, i32t) = (self.s.entry, self.s.t.i32);
+        let flat = self
+            .s
+            .op(e, "flattenedThreadIdInGroup.i32", Attr::ReadNone, i32t, 96, &[]);
+        let zero = self.s.m.i32(0);
+        for way in 0..4 {
+            let k = self.s.m.i32(way * group);
+            let at = self.s.m.bin(e, Bin::Add, flat, k);
+            let ptr = self.s.m.element(e, pc, at);
+            self.s.m.store(e, ptr, zero);
+        }
+        self.pcache_thread = Some(flat);
+        Some((pc, flat, group))
     }
 
     /// The title address in the root view `src` is built around, in a program
