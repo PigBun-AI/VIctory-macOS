@@ -45,10 +45,21 @@
 //!   depth (`R32_FLOAT` footprint) and bytes for stencil (`R8_UINT`); a
 //!   `R24_UNORM_X8_TYPELESS` footprint is refused, not converted.
 //!
+//! # `B8G8R8X8_*`
+//!
+//! Metal has no format with an unused channel: the three `B8G8R8X8` numbers
+//! map to `BGRA8Unorm` / `BGRA8Unorm_sRGB` and the unused byte is a real
+//! alpha channel. The difference: the application never sees it. A shader
+//! view reads alpha as 1 ([`alpha_is_unused`]; the back's view code swizzles
+//! it); a render target or unordered view stores whatever is written to
+//! alpha in the fourth byte (D3D12 drops it), so a *copy* of the texture to a
+//! buffer shows those bytes where D3D12's are undefined, and an unordered
+//! `Load` of the format returns the stored alpha, not 1. Blending that reads
+//! destination alpha sees the stored one.
+//!
 //! # Not covered
 //!
-//! `R32G32B32_*` (no 96-bit format in Metal), `B8G8R8X8_*` (no format with
-//! an unused channel), `B4G4R4A4_UNORM` (channel order Metal lacks),
+//! `R32G32B32_*` (no 96-bit format in Metal), `B4G4R4A4_UNORM` (channel order Metal lacks),
 //! `R1_UNORM`, `R10G10B10_XR_BIAS_A2_UNORM`, video formats, `R8G8_B8G8` and
 //! `G8R8_G8B8`, planar and the palette formats: a texture or view in one of
 //! them is refused with `Unsupported`, and nothing is created.
@@ -101,6 +112,15 @@ pub mod dxgi {
 
 use MTLPixelFormat as P;
 use dxgi as d;
+
+/// Whether the format's fourth channel is unused (`B8G8R8X8_*`): a view that
+/// reads it gets 1, whatever the byte holds.
+pub fn alpha_is_unused(dxgi: u32) -> bool {
+    matches!(
+        dxgi,
+        d::B8G8R8X8_UNORM | d::B8G8R8X8_TYPELESS | d::B8G8R8X8_UNORM_SRGB
+    )
+}
 
 /// What a format number is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -658,7 +678,13 @@ pub static FORMATS: &[Format] = &[
         P::BGRA8Unorm,
         4,
     ),
-    none(d::B8G8R8X8_UNORM, "B8G8R8X8_UNORM", 4),
+    c(
+        d::B8G8R8X8_UNORM,
+        "B8G8R8X8_UNORM",
+        d::B8G8R8X8_TYPELESS,
+        P::BGRA8Unorm,
+        4,
+    ),
     t(d::B8G8R8A8_TYPELESS, "B8G8R8A8_TYPELESS", P::BGRA8Unorm, 4),
     c(
         d::B8G8R8A8_UNORM_SRGB,
@@ -667,8 +693,14 @@ pub static FORMATS: &[Format] = &[
         P::BGRA8Unorm_sRGB,
         4,
     ),
-    none(d::B8G8R8X8_TYPELESS, "B8G8R8X8_TYPELESS", 4),
-    none(d::B8G8R8X8_UNORM_SRGB, "B8G8R8X8_UNORM_SRGB", 4),
+    t(d::B8G8R8X8_TYPELESS, "B8G8R8X8_TYPELESS", P::BGRA8Unorm, 4),
+    c(
+        d::B8G8R8X8_UNORM_SRGB,
+        "B8G8R8X8_UNORM_SRGB",
+        d::B8G8R8X8_TYPELESS,
+        P::BGRA8Unorm_sRGB,
+        4,
+    ),
     bc(
         d::BC6H_TYPELESS,
         "BC6H_TYPELESS",
@@ -808,6 +840,7 @@ const USAGE_SRV: u32 = 1 << 0;
 const USAGE_UAV: u32 = 1 << 1;
 const USAGE_RT: u32 = 1 << 2;
 const USAGE_DS: u32 = 1 << 3;
+const USAGE_CAST: u32 = 1 << 4;
 
 /// The Metal format a texture of `dxgi` is created with. A typeless
 /// `R32_TYPELESS` / `R16_TYPELESS` becomes the depth format when `usage` has
@@ -854,14 +887,15 @@ pub fn texture_usage(dxgi: u32, usage: u32) -> Result<MTLTextureUsage> {
         }
         u |= MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead;
     }
-    if f.needs_view_usage() {
+    if f.needs_view_usage() || (usage & USAGE_CAST != 0 && !f.has_depth_stencil()) {
         u |= MTLTextureUsage::PixelFormatView;
     }
     Ok(u)
 }
 
 /// The Metal format of a view in `view` of a texture made as `texture`
-/// (both DXGI numbers; `view` 0 = the texture's own). The family must agree.
+/// (both DXGI numbers; `view` 0 = the texture's own). The family must agree,
+/// unless the texture was made castable (`tex_usage::CAST`) and the texel sizes match.
 /// For depth-stencil textures the view picks a plane: depth views read as
 /// the texture's depth format, stencil views as `X32_Stencil8`. `usage` is
 /// what the texture was created with (it decides `R32_TYPELESS` depth).
@@ -872,7 +906,17 @@ pub fn view_pixel_format(texture: u32, view: u32, usage: u32) -> Result<MTLPixel
     }
     let t = require(texture)?;
     let v = require(view)?;
-    if t.family != v.family {
+    // A texture made castable shows its texels in any colour format of the
+    // same size (R32_UINT as R9G9B9E5, R8G8B8A8 as R32_FLOAT).
+    let cast = usage & USAGE_CAST != 0
+        && !t.has_depth_stencil()
+        && !v.has_depth_stencil()
+        && !t.is_compressed()
+        && !v.is_compressed()
+        && v.class != Class::Typeless
+        && t.bytes == v.bytes
+        && v.pixel.is_some();
+    if t.family != v.family && !cast {
         return Err(Error::BadArgument(format!(
             "a view in {} of a {} texture (different format families)",
             v.name, t.name
@@ -1019,12 +1063,7 @@ mod tests {
 
     #[test]
     fn unmappable_formats_are_refused_by_name() {
-        for n in [
-            d::R32G32B32_FLOAT,
-            d::B8G8R8X8_UNORM,
-            d::B4G4R4A4_UNORM,
-            d::R1_UNORM,
-        ] {
+        for n in [d::R32G32B32_FLOAT, d::B4G4R4A4_UNORM, d::R1_UNORM] {
             let e = require(n).unwrap_err();
             assert!(
                 matches!(&e, Error::Unsupported(m) if m.contains("no Metal pixel format")),
@@ -1033,6 +1072,33 @@ mod tests {
         }
         assert!(matches!(require(1000), Err(Error::Unsupported(_))));
         assert!(matches!(require(0), Err(Error::Unsupported(_))));
+    }
+
+    #[test]
+    fn a_castable_texture_is_viewed_in_formats_of_its_size() {
+        // Without the flag another family is refused; with it the sizes decide.
+        assert!(
+            view_pixel_format(d::R32_UINT, d::R32_FLOAT, USAGE_SRV).is_ok(),
+            "same family"
+        );
+        assert!(view_pixel_format(d::R32_UINT, d::R9G9B9E5_SHAREDEXP, USAGE_SRV).is_err());
+        assert_eq!(
+            view_pixel_format(d::R32_UINT, d::R9G9B9E5_SHAREDEXP, USAGE_SRV | USAGE_CAST).unwrap(),
+            P::RGB9E5Float
+        );
+        assert!(view_pixel_format(d::R32_UINT, d::R16G16_UNORM, USAGE_SRV | USAGE_CAST).is_ok());
+        // Not across sizes, nor to or from depth or block-compressed formats.
+        assert!(view_pixel_format(d::R32_UINT, d::R16_UNORM, USAGE_SRV | USAGE_CAST).is_err());
+        assert!(view_pixel_format(d::R32_UINT, d::BC1_UNORM, USAGE_SRV | USAGE_CAST).is_err());
+        assert!(
+            view_pixel_format(d::R32_UINT, d::D24_UNORM_S8_UINT, USAGE_SRV | USAGE_CAST).is_err()
+        );
+        // The flag asks for view usage on Metal's side.
+        assert!(
+            texture_usage(d::R32_UINT, USAGE_SRV | USAGE_CAST)
+                .unwrap()
+                .contains(MTLTextureUsage::PixelFormatView)
+        );
     }
 
     #[test]

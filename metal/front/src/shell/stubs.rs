@@ -507,12 +507,10 @@ impl ID3D12Device9_Impl for DeviceObj_Impl {
 
 impl ID3D12Device10_Impl for DeviceObj_Impl {
     fn CreateCommittedResource3(&self, pheapproperties: *const D3D12_HEAP_PROPERTIES, heapflags: D3D12_HEAP_FLAGS, pdesc: *const D3D12_RESOURCE_DESC1, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riidresource: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device10::CreateCommittedResource3");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreateCommittedResource3(pheapproperties, heapflags, pdesc, initiallayout, poptimizedclearvalue, pprotectedsession, numcastableformats, pcastableformats, riidresource, ppvresource)
     }
     fn CreatePlacedResource2(&self, pheap: windows::core::Ref<ID3D12Heap>, heapoffset: u64, pdesc: *const D3D12_RESOURCE_DESC1, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
-        super::note_notimpl("ID3D12Device10::CreatePlacedResource2");
-        Err(windows::core::Error::from(E_NOTIMPL))
+        self.x_CreatePlacedResource2(pheap, heapoffset, pdesc, initiallayout, poptimizedclearvalue, numcastableformats, pcastableformats, riid, ppvresource)
     }
     fn CreateReservedResource2(&self, pdesc: *const D3D12_RESOURCE_DESC, initiallayout: D3D12_BARRIER_LAYOUT, poptimizedclearvalue: *const D3D12_CLEAR_VALUE, pprotectedsession: windows::core::Ref<ID3D12ProtectedResourceSession>, numcastableformats: u32, pcastableformats: *const windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, riid: *const windows::core::GUID, ppvresource: *mut *mut core::ffi::c_void) -> windows::core::Result<()> {
         super::note_notimpl("ID3D12Device10::CreateReservedResource2");

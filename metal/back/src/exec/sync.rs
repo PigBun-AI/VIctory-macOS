@@ -303,8 +303,16 @@ impl State {
                     Res::Texture(t) => t,
                     Res::Buffer(_) => return Err(Status::INVALID_ARG),
                 };
-                let spec = view_spec(&v)?;
+                let mut spec = view_spec(&v)?;
                 let usage = texture.desc().usage;
+                // `B8G8R8X8` is BGRA in Metal: its alpha reads 1 in a shader view.
+                if !uav && spec.plane == 0 {
+                    let own = texture.desc().format;
+                    let shown = if spec.format == 0 { own } else { spec.format };
+                    if crate::format::alpha_is_unused(shown) {
+                        spec.swizzle = crate::texture::unused_alpha_swizzle(spec.swizzle);
+                    }
+                }
                 if usage & if uav { 2 } else { 1 } == 0 {
                     return Err(Status::INVALID_ARG);
                 }

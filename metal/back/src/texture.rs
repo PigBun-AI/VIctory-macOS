@@ -164,7 +164,7 @@ impl TextureDesc {
                 return bad("multisampling a compressed format".into());
             }
         }
-        if self.usage & !0xF != 0 {
+        if self.usage & !0x1F != 0 {
             return bad("unknown usage bits".into());
         }
         if self.usage & 0b1100 != 0 && self.dim == TexDim::D3 && f.has_depth_stencil() {
@@ -245,6 +245,13 @@ pub const SWIZZLE_IDENTITY: [u8; 4] = [0, 1, 2, 3];
 pub fn stencil_plane_swizzle(app: [u8; 4]) -> [u8; 4] {
     // What each D3D12 channel of the stencil format holds, as Metal sources.
     const BASE: [u8; 4] = [4, 0, 4, 5];
+    app.map(|c| if c < 4 { BASE[c as usize] } else { c })
+}
+
+/// The component sources of a shader view of an `B8G8R8X8` format after the
+/// unused channel reads 1 underneath the application's mapping.
+pub fn unused_alpha_swizzle(app: [u8; 4]) -> [u8; 4] {
+    const BASE: [u8; 4] = [0, 1, 2, 5];
     app.map(|c| if c < 4 { BASE[c as usize] } else { c })
 }
 

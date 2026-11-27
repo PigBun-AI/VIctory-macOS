@@ -214,3 +214,32 @@ fn a_stencil_plane_srv_gets_the_green_channel_mapping() {
     fx.write_view(heap.heap, 3, d);
     assert_ne!(entry(3)[1], entry(0)[1]);
 }
+
+/// A shader view of a `B8G8R8X8` texture reads alpha as 1: its identity request
+/// is the swizzled view, not the texture itself (which would show the stored byte).
+#[test]
+fn a_bgrx_srv_gets_alpha_one() {
+    let fx = Fx::new();
+    let mut a = CreateTextureArgs::new();
+    a.dimension = TexDim::TEX2D;
+    a.format = 88 /* B8G8R8X8_UNORM */;
+    (a.width, a.height, a.depth_or_array, a.mips, a.samples) = (4, 4, 1, 1, 1);
+    a.usage = tex_usage::SRV;
+    let t = fx.ok(a);
+    let heap = fx.heap(HeapKind::CBV_SRV_UAV, 8, true);
+    let entry = |i: u64| cpu_read_u64s(heap.cpu_addr + 24 * i, 3);
+    let mut v = ViewDesc::null();
+    v.kind = ViewKind::TEXTURE_SRV;
+    v.resource = t.res;
+    v.format = 88 /* B8G8R8X8_UNORM */;
+    v.dimension = TexViewDim::TEX2D;
+    v.swizzle = swizzle::IDENTITY;
+    fx.write_view(heap.heap, 0, v);
+    v.format = 0;
+    fx.write_view(heap.heap, 1, v);
+    v.swizzle = [swizzle::R, swizzle::G, swizzle::B, swizzle::ONE];
+    fx.write_view(heap.heap, 2, v);
+    assert_ne!(entry(0)[1], 0);
+    assert_eq!(entry(0), entry(1), "format 0 is the texture's own");
+    assert_eq!(entry(0), entry(2), "identity is alpha one");
+}

@@ -464,3 +464,45 @@ mod tests {
         assert_eq!(t.transition(3, 0, COPY_SOURCE, COMMON, 0).unwrap(), None);
     }
 }
+
+/// The legacy state an enhanced-barrier layout stands for when a resource is
+/// created in it (`CreateCommittedResource3`, `CreatePlacedResource2`): the
+/// state tracker here speaks states. `None` for layouts that mean nothing
+/// for the resource (video, shading rate).
+///
+/// Layout numbers are `D3D12_BARRIER_LAYOUT`: the queue-specific ones
+/// (direct 18-23, compute 24-29) map as their general twin.
+pub fn state_of_layout(layout: u32) -> Option<u32> {
+    Some(match layout {
+        // UNDEFINED (buffers), COMMON, PRESENT and the queue-specific COMMONs.
+        0 | 0xffff_ffff | 18 | 24 => COMMON,
+        // GENERIC_READ.
+        1 | 19 | 25 => GENERIC_READ,
+        2 => RENDER_TARGET,
+        3 | 20 | 27 => UNORDERED_ACCESS,
+        4 => DEPTH_WRITE,
+        5 => DEPTH_READ,
+        6 | 21 | 26 => NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE,
+        7 | 22 | 28 => COPY_SOURCE,
+        8 | 23 | 29 => COPY_DEST,
+        9 => RESOLVE_SOURCE,
+        10 => RESOLVE_DEST,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn layouts_map_to_the_states_they_replace() {
+        assert_eq!(state_of_layout(0), Some(COMMON));
+        assert_eq!(state_of_layout(0xffff_ffff), Some(COMMON));
+        assert_eq!(state_of_layout(3), Some(UNORDERED_ACCESS));
+        assert_eq!(state_of_layout(20), Some(UNORDERED_ACCESS));
+        assert_eq!(state_of_layout(8), Some(COPY_DEST));
+        assert_eq!(state_of_layout(11), None, "shading rate source");
+        assert_eq!(state_of_layout(30), None, "video");
+    }
+}

@@ -777,6 +777,81 @@ fn the_stencil_plane_reads_in_the_green_channel() {
     );
 }
 
+/// `B8G8R8X8` is BGRA in Metal: the bytes are the same, the channel order is
+/// right, and a shader view reads the unused byte as 1 (D3D12 never shows it).
+#[test]
+fn the_unused_channel_of_a_bgrx_texture_reads_as_one() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc::tex2d(dxgi::B8G8R8X8_UNORM, 4, 4, SRV))
+        .unwrap();
+    // Every texel B=0x40 G=0x80 R=0xC0 and the unused byte 0.
+    let mut bytes = Vec::new();
+    for _ in 0..16 {
+        bytes.extend_from_slice(&[0x40, 0x80, 0xC0, 0x00]);
+    }
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &bytes).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &loc(&t, 0, 0),
+        &buf_loc(&up, dxgi::B8G8R8X8_UNORM, 16, 4),
+        [4, 4, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.swizzle = victory_metal_back::texture::unused_alpha_swizzle(SWIZZLE_IDENTITY);
+    assert_eq!(spec.swizzle, [0, 1, 2, 5]);
+    rig.srv(0, t.view(&spec).unwrap());
+    let v = rig.read_f("read_f", &[0, 1, 1, 0]);
+    assert!((v[0] - 192.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert!((v[1] - 128.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert!((v[2] - 64.0 / 255.0).abs() < 1e-3, "{v:?}");
+    assert_eq!(v[3], 1.0);
+    // The application's mapping still chooses: alpha everywhere.
+    assert_eq!(
+        victory_metal_back::texture::unused_alpha_swizzle([3, 3, 3, 3]),
+        [5, 5, 5, 5]
+    );
+}
+
+/// A texture made castable (`CreateCommittedResource3`'s list) shows its
+/// texels in another format family of the same size: one memory, no copy.
+#[test]
+fn a_castable_texture_is_read_in_another_format_family() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    // R32_UINT holding the bits of 1.5f.
+    let t = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, SRV | 16))
+        .unwrap();
+    let bytes: Vec<u8> = (0..16).flat_map(|_| 1.5f32.to_le_bytes()).collect();
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &bytes).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer_to_texture(
+        &loc(&t, 0, 0),
+        &buf_loc(&up, dxgi::R32_UINT, 16, 4),
+        [4, 4, 1],
+    )
+    .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.format = dxgi::R32_FLOAT;
+    rig.srv(0, t.view(&spec).unwrap());
+    assert_eq!(rig.read_f("read_f", &[0, 1, 1, 0])[0], 1.5);
+    // The same texture made without the flag refuses the view.
+    let plain = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, SRV))
+        .unwrap();
+    spec.format = dxgi::R9G9B9E5_SHAREDEXP;
+    assert!(plain.view(&spec).is_err());
+}
+
 #[test]
 fn mip_ranges_array_slices_cubes_and_swizzles() {
     let (_g, d, q) = setup();
