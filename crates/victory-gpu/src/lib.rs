@@ -74,6 +74,8 @@ mod sampler;
 pub mod shader_cache;
 pub mod live;
 #[cfg(windows)]
+pub mod live_translator;
+#[cfg(windows)]
 mod memory;
 #[cfg(windows)]
 mod shadow;

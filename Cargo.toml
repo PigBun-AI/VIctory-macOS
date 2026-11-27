@@ -19,6 +19,7 @@ victory-loader = { path = "crates/victory-loader" }
 victory-hle = { path = "crates/victory-hle" }
 victory-gpu = { path = "crates/victory-gpu" }
 victory-shader = { path = "crates/victory-shader" }
+victory-shader-dylib = { path = "crates/victory-shader-dylib" }
 victory-formats = { path = "crates/victory-formats" }
 victory-pipeline = { path = "crates/victory-pipeline" }
 victory-game = { path = "crates/victory-game" }

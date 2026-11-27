@@ -82,6 +82,8 @@
 
 mod bitcode;
 pub mod live;
+pub mod livelib;
+pub mod wire;
 mod container;
 #[cfg(all(test, windows))]
 mod cube_lod_tests;

@@ -49,6 +49,10 @@ pub struct Snapshot {
     values: BTreeMap<&'static str, Option<OsString>>,
     /// What the shader cache computed from this snapshot (its key), once.
     pub key: OnceLock<[u8; 32]>,
+    /// The live translator library this generation translates with (the BLAKE3 of its file), if
+    /// `VICTORY_LIVE_TRANSLATOR` is on; `None`: the translator linked into the executable. Kept out
+    /// of `key` (computed once from the switches) and mixed into the cache key beside it.
+    pub translator: OnceLock<[u8; 32]>,
 }
 
 impl Snapshot {
@@ -58,6 +62,15 @@ impl Snapshot {
             Some(v) => v.as_ref(),
             None => None,
         }
+    }
+
+    /// Every switch of the whitelist as `(NAME, value)`, an unset one with an empty value: what a
+    /// translator library is given (`snapshot_of` of it has this snapshot's values).
+    pub fn settings(&self) -> Vec<(String, String)> {
+        self.values
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.as_ref().map_or(String::new(), |v| v.to_string_lossy().into_owned())))
+            .collect()
     }
 
     /// `NAME=value` for the switches that differ from `other`.
@@ -99,7 +112,7 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 fn state() -> &'static State {
     STATE.get_or_init(|| {
         let base = env_values();
-        let first = Arc::new(Snapshot { generation: 0, values: base.clone(), key: OnceLock::new() });
+        let first = Arc::new(Snapshot { generation: 0, values: base.clone(), key: OnceLock::new(), translator: OnceLock::new() });
         State { base, current: RwLock::new(first) }
     })
 }
@@ -184,7 +197,11 @@ pub fn apply(settings: &[(String, String)]) -> Result<Option<Arc<Snapshot>>, Str
     if cur.values == values {
         return Ok(None);
     }
-    let next = Arc::new(Snapshot { generation: cur.generation + 1, values, key: OnceLock::new() });
+    let translator = OnceLock::new();
+    if let Some(t) = cur.translator.get() {
+        let _ = translator.set(*t);
+    }
+    let next = Arc::new(Snapshot { generation: cur.generation + 1, values, key: OnceLock::new(), translator });
     *cur = next.clone();
     GENERATION.store(next.generation, Ordering::Release);
     Ok(Some(next))
@@ -201,7 +218,25 @@ pub fn snapshot_of(settings: &[(String, String)]) -> Result<Arc<Snapshot>, Strin
         };
         values.insert(name, if v.is_empty() { None } else { Some(OsString::from(v)) });
     }
-    Ok(Arc::new(Snapshot { generation: 0, values, key: OnceLock::new() }))
+    Ok(Arc::new(Snapshot { generation: 0, values, key: OnceLock::new(), translator: OnceLock::new() }))
+}
+
+/// The translator library the run starts with (generation 0; set once, before the first
+/// translation). Later libraries come with [`set_translator`].
+pub fn init_translator(id: [u8; 32]) {
+    let _ = state().current.read().unwrap_or_else(|e| e.into_inner()).translator.set(id);
+}
+
+/// A new generation with the same switches and the translator library `id`.
+pub fn set_translator(id: [u8; 32]) -> Arc<Snapshot> {
+    let st = state();
+    let mut cur = st.current.write().unwrap_or_else(|e| e.into_inner());
+    let translator = OnceLock::new();
+    let _ = translator.set(id);
+    let next = Arc::new(Snapshot { generation: cur.generation + 1, values: cur.values.clone(), key: OnceLock::new(), translator });
+    *cur = next.clone();
+    GENERATION.store(next.generation, Ordering::Release);
+    next
 }
 
 /// Reads a live file: one `KEY=VALUE` a line; blank lines and `#` comments
@@ -261,5 +296,14 @@ VICTORY_RT_PAGECACHE=1
         assert_eq!(var_os("VICTORY_LEGACY_MUL_FAST"), first.get("VICTORY_LEGACY_MUL_FAST").cloned());
         assert!(c.generation > b.generation);
         assert!(apply(&[("VICTORY_NOPE".into(), "1".into())]).is_err());
+        // A translator library is a generation of its own and rides along with later switch changes.
+        let t = set_translator([7; 32]);
+        assert_eq!(t.generation, generation());
+        assert_eq!(t.translator.get(), Some(&[7; 32]));
+        let d = apply(&[("VICTORY_LEGACY_MUL_FAST".into(), "1".into())]).unwrap().unwrap();
+        assert_eq!(d.translator.get(), Some(&[7; 32]));
+        assert_eq!(d.generation, t.generation + 1);
+        // The switches as a library is given them reproduce the snapshot.
+        assert_eq!(snapshot_of(&d.settings()).unwrap().settings(), d.settings());
     }
 }

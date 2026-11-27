@@ -11,6 +11,9 @@
 //! kept (a switch put back finds its pipelines at once, and the GPU may
 //! still run an old one: nothing is freed).
 //!
+//! `VICTORY_LIVE_TRANSLATOR=<dll>` (`live_translator`) rides on the same generations: a changed
+//! library file is a new generation whose translator is that library (the same watcher thread).
+//!
 //! The window's caption gets `[L<generation>]` ([`tag`]).
 
 use std::sync::Once;
@@ -30,20 +33,30 @@ pub fn tag() -> String {
     }
 }
 
-/// Starts the watcher if `VICTORY_LIVE_FILE` is set (once).
+/// Starts the watcher if `VICTORY_LIVE_FILE` or `VICTORY_LIVE_TRANSLATOR` is set (once).
 pub fn start_from_env() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let Some(path) = std::env::var_os("VICTORY_LIVE_FILE").filter(|p| !p.is_empty()) else {
+        let file = std::env::var_os("VICTORY_LIVE_FILE").filter(|p| !p.is_empty()).map(std::path::PathBuf::from);
+        let library = std::env::var_os("VICTORY_LIVE_TRANSLATOR").filter(|p| !p.is_empty()).map(std::path::PathBuf::from);
+        if file.is_none() && library.is_none() {
             return;
-        };
-        let path = std::path::PathBuf::from(path);
+        }
         ON.store(true, Ordering::Relaxed);
-        tracing::info!(file = %path.display(), switches = ?live::WHITELIST, "live toggles on: the file is looked at every second");
-        let _ = std::thread::Builder::new().name("victory-live".into()).spawn(move || watch(&path));
+        if let Some(path) = &file {
+            tracing::info!(file = %path.display(), switches = ?live::WHITELIST, "live toggles on: the file is looked at every second");
+        }
+        #[cfg(windows)]
+        if let Some(path) = &library {
+            // The library the run starts with translates from the first shader on; one that does not
+            // load leaves the translator linked into the executable until a good one is built.
+            if let Err(e) = crate::live_translator::start(path) {
+                tracing::warn!(error = %e, "live translator: the starting library is not used; the translator in the executable runs until a good library appears at {}", path.display());
+            }
+        }
+        let _ = std::thread::Builder::new().name("victory-live".into()).spawn(move || watch(file.as_deref(), library.as_deref()));
     });
 }
-
 /// What identifies a version of the file.
 fn stamp(path: &std::path::Path) -> Option<(SystemTime, u64)> {
     let m = std::fs::metadata(path).ok()?;
@@ -62,30 +75,57 @@ pub fn load(path: &std::path::Path) -> Result<Option<(u64, String)>, String> {
     }))
 }
 
-fn watch(path: &std::path::Path) {
+fn watch(path: Option<&std::path::Path>, library: Option<&std::path::Path>) {
     // The file as it is at the start is not applied: the run starts with the environment's
     // switches (a file left from an earlier run must not decide them); a later change is.
-    let mut seen = stamp(path);
+    // The same for the library: the one at the start was loaded by `start_from_env`.
+    let mut seen = path.and_then(stamp);
+    #[cfg(windows)]
+    let mut seen_library = library.and_then(crate::live_translator::stamp);
     // The generation being waited for, when it began, pipelines asked for before it.
     let mut report: Option<(u64, Instant, u64, u64, u32)> = None;
     loop {
         std::thread::sleep(Duration::from_secs(1));
-        let now = stamp(path);
-        if now != seen {
-            seen = now;
-            if now.is_some() {
-                match load(path) {
-                    Ok(Some((generation, shown))) => {
-                        tracing::info!("live toggles changed: {shown}, generation {generation}");
-                        let (created, made) = crate::pipeline::live_progress();
-                        report = Some((generation, Instant::now(), created, made, 0));
+        if let Some(path) = path {
+            let now = stamp(path);
+            if now != seen {
+                seen = now;
+                if now.is_some() {
+                    match load(path) {
+                        Ok(Some((generation, shown))) => {
+                            tracing::info!("live toggles changed: {shown}, generation {generation}");
+                            let (created, made) = crate::pipeline::live_progress();
+                            report = Some((generation, Instant::now(), created, made, 0));
+                        }
+                        Ok(None) => tracing::info!("live toggles: the file changed but not the switches; generation stays {}", live::generation()),
+                        Err(e) => tracing::warn!(error = %e, "live toggles: the file is not applied (generation stays {})", live::generation()),
                     }
-                    Ok(None) => tracing::info!("live toggles: the file changed but not the switches; generation stays {}", live::generation()),
-                    Err(e) => tracing::warn!(error = %e, "live toggles: the file is not applied (generation stays {})", live::generation()),
                 }
             }
         }
-        if let Some((generation, began, created0, made0, quiet)) = &mut report {
+        #[cfg(windows)]
+        if let Some(library) = library {
+            let now = crate::live_translator::stamp(library);
+            if now != seen_library {
+                seen_library = now;
+                if now.is_some() {
+                    let began = Instant::now();
+                    let (created, made) = crate::pipeline::live_progress();
+                    match crate::live_translator::reload(library) {
+                        Ok(Some((generation, id, info))) => {
+                            tracing::info!(
+                                "live translator changed: library {} ({info}), generation {generation}, loaded in {} ms",
+                                crate::live_translator::short(&id),
+                                began.elapsed().as_millis()
+                            );
+                            report = Some((generation, Instant::now(), created, made, 0));
+                        }
+                        Ok(None) => tracing::info!("live translator: the file changed but not the library's bytes; generation stays {}", live::generation()),
+                        Err(e) => tracing::warn!(error = %e, "live translator: the library is not used (generation stays {})", live::generation()),
+                    }
+                }
+            }
+        }        if let Some((generation, began, created0, made0, quiet)) = &mut report {
             let (created, made) = crate::pipeline::live_progress();
             let left = created.saturating_sub(made);
             let asked = created.saturating_sub(*created0);
