@@ -2674,6 +2674,14 @@ fn hand_out_resource(
 ) -> HRESULT {
     #[cfg(not(windows))]
     let _ = (state, clear);
+    crate::mac::render_size::resource(
+        desc.dimension == 3,
+        desc.width,
+        desc.height,
+        desc.depth_or_array_size,
+        desc.sample_count,
+        desc.flags,
+    ); // mac P2
     let resource = Box::new(Resource {
         object: Object::new(&RESOURCE_FUNCTIONS),
         desc,

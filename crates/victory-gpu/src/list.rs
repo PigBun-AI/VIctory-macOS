@@ -1670,6 +1670,9 @@ mod state {
     ) {
         // (Through the draw state, which keeps them for the host list
         // that continues this one after a cut: `State::replay`.)
+        if let Some(first) = items(viewports, count).first() {
+            crate::mac::render_size::viewport(first.Width, first.Height); // mac P2
+        }
         with_state(this, |list, s| s.set_viewports(list, items(viewports, count)));
     }
     pub(super) extern "system" fn scissors(this: This, count: u32, rects: *const RECT) {

@@ -6,6 +6,7 @@
 pub mod adapter;
 pub mod hlsl;
 pub mod present_cap;
+pub mod render_size;
 pub mod rosetta;
 pub mod world;
 #[cfg(windows)]

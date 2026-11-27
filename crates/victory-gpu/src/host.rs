@@ -9135,6 +9135,7 @@ impl Host {
         // than the picture and the composer draws it scaled; a lone plane that
         // cannot be sampled is shown at its own size.
         let native = (desc.Width as u32, desc.Height);
+        crate::mac::render_size::presented(native.0, native.1); // mac P2
         let capped = if cap {
             crate::mac::present_cap::output_size(native.0, native.1)
         } else {

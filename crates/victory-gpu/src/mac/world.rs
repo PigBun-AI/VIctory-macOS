@@ -93,6 +93,7 @@ pub fn log_latch() {
 
 /// The title recorded a draw (any kind): called from `list::count_draw`.
 pub(crate) fn draw() {
+    super::render_size::draw();
     DRAWS.fetch_add(1, Relaxed);
 }
 
@@ -101,7 +102,9 @@ pub(crate) fn draw() {
 pub(crate) fn on_present(present: u64) {
     let draws = DRAWS.load(Relaxed);
     let since = draws.saturating_sub(AT_LAST_PRESENT.swap(draws, Relaxed));
-    if CLOCK.advance(present, since, threshold()) && LOG.load(Relaxed) {
+    let latched = CLOCK.advance(present, since, threshold());
+    super::render_size::on_present(world_frame());
+    if latched && LOG.load(Relaxed) {
         tracing::info!(
             present,
             draws = since,
