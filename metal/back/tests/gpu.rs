@@ -386,20 +386,37 @@ fn barrier_between_dependent_dispatches_orders_them() {
     for round in 0..5 {
         let (mid, out, st) = run_chain(&d, &q, true, false);
         assert_eq!((mid, out), (x, x.wrapping_add(1)), "round {round}");
+        // One encoder: the head barrier (consumer form) and the one in the encoder.
         assert_eq!(
             (st.encoders, st.encoder_barriers, st.consumer_barriers),
-            (1, 1, 0)
+            (1, 1, 1)
         );
     }
-    // Across two encoders (consumer barrier at the start of the second).
+    // Across two encoders: each starts with its head barrier, which already
+    // covers the recorded device-visibility barrier (no third one).
     for round in 0..5 {
         let (mid, out, st) = run_chain(&d, &q, true, true);
         assert_eq!((mid, out), (x, x.wrapping_add(1)), "round {round}");
         assert_eq!(
             (st.encoders, st.encoder_barriers, st.consumer_barriers),
-            (2, 0, 1)
+            (2, 0, 2)
         );
     }
+    // The same with the queue's own ordering off: the recorded barrier alone,
+    // a consumer barrier at the start of the second encoder.
+    q.set_inter_submit_barrier(false);
+    let (mid, out, st) = run_chain(&d, &q, true, true);
+    assert_eq!((mid, out), (x, x.wrapping_add(1)));
+    assert_eq!(
+        (
+            st.encoders,
+            st.encoder_barriers,
+            st.consumer_barriers,
+            st.producer_barriers
+        ),
+        (2, 0, 1, 0),
+        "one consumer barrier covers the earlier encoder and the earlier lists"
+    );
 }
 
 /// Observational: the same chain with no barrier. Metal 4 may overlap the
@@ -409,6 +426,8 @@ fn barrier_between_dependent_dispatches_orders_them() {
 fn missing_barrier_observation() {
     let (_g, d) = setup();
     let q = Queue::new(&d).unwrap();
+    // The queue's own head barrier would order the two encoders too.
+    q.set_inter_submit_barrier(false);
     let x = lcg(12345, ITERS);
     for (name, split) in [("same encoder", false), ("two encoders", true)] {
         let mut stale = 0;
@@ -446,20 +465,68 @@ fn consecutive_lists_are_ordered_by_the_inter_submit_barrier() {
         l1.set_address(2, iters.gpu_va()).unwrap();
         l1.dispatch(&a, [1, 1, 1], [1, 1, 1]).unwrap();
         l1.end().unwrap();
-        assert_eq!(l1.stats().producer_barriers, 1);
         let mut l2 = q.begin_list().unwrap();
         l2.set_address(0, mid.gpu_va()).unwrap();
         l2.set_address(1, outb.gpu_va()).unwrap();
         l2.dispatch(&b, [1, 1, 1], [1, 1, 1]).unwrap();
         l2.end().unwrap();
+        // The ordering is the head barrier of each list's encoder: no
+        // barrier at the end, no extra encoder.
+        for l in [&l1, &l2] {
+            let st = l.stats();
+            assert_eq!((st.encoders, st.consumer_barriers), (1, 1));
+            assert_eq!(st.producer_barriers, 0);
+        }
         // One commit of both lists, in order.
         let v = q.submit(vec![l1, l2]).unwrap();
         q.wait_for(v, WAIT_MS).unwrap();
         assert_eq!(
             outb.read_u32s(0, 1).unwrap()[0],
             x.wrapping_add(1),
-            "round {round}"
+            "round {round}, one commit"
         );
+    }
+}
+
+/// The same, as two commits (two `ExecuteCommandLists` calls), ten times:
+/// without the barrier the observational test below reads the stale value
+/// every time, with it the dependent kernel is always right.
+#[test]
+fn consecutive_submits_are_ordered_by_the_inter_submit_barrier() {
+    let (_g, d) = setup();
+    let q = Queue::new(&d).unwrap();
+    let a = d.compute_pipeline_from_msl(SLOW_A, "slow_a").unwrap();
+    let b = d.compute_pipeline_from_msl(SLOW_A, "plus_one").unwrap();
+    let input = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let mid = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let outb = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let iters = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    input.write_u32s(0, &[12345]).unwrap();
+    iters.write_u32s(0, &[ITERS]).unwrap();
+    let want = lcg(12345, ITERS).wrapping_add(1);
+    for round in 0..10 {
+        mid.write_u32s(0, &[0]).unwrap();
+        outb.write_u32s(0, &[0]).unwrap();
+        let mut l1 = q.begin_list().unwrap();
+        l1.set_address(0, input.gpu_va()).unwrap();
+        l1.set_address(1, mid.gpu_va()).unwrap();
+        l1.set_address(2, iters.gpu_va()).unwrap();
+        l1.dispatch(&a, [1, 1, 1], [1, 1, 1]).unwrap();
+        l1.end().unwrap();
+        q.submit(vec![l1]).unwrap();
+        // An empty list in between costs no encoder and breaks nothing.
+        let mut empty = q.begin_list().unwrap();
+        empty.end().unwrap();
+        assert_eq!(empty.stats().encoders, 0);
+        q.submit(vec![empty]).unwrap();
+        let mut l2 = q.begin_list().unwrap();
+        l2.set_address(0, mid.gpu_va()).unwrap();
+        l2.set_address(1, outb.gpu_va()).unwrap();
+        l2.dispatch(&b, [1, 1, 1], [1, 1, 1]).unwrap();
+        l2.end().unwrap();
+        let v = q.submit(vec![l2]).unwrap();
+        q.wait_for(v, WAIT_MS).unwrap();
+        assert_eq!(outb.read_u32s(0, 1).unwrap()[0], want, "round {round}");
     }
 }
 
@@ -697,9 +764,12 @@ fn residency_sets_are_attached_and_limited() {
 fn end_of_empty_list_with_barrier_is_valid() {
     let (_g, d) = setup();
     let q = Queue::new(&d).unwrap();
+    // An empty list opens no encoder even with the inter-submit barrier on:
+    // the barrier is the head of the next list's encoder.
     let mut l = q.begin_list().unwrap();
     l.end().unwrap();
-    assert_eq!(l.stats().producer_barriers, 1);
+    assert_eq!(l.stats().encoders, 0);
+    assert_eq!(l.stats().producer_barriers, 0);
     submit_wait(&q, l);
     q.set_inter_submit_barrier(false);
     let mut l = q.begin_list().unwrap();

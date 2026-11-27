@@ -188,8 +188,9 @@ pub struct QueueOptions {
     pub ring_segment_bytes: u64,
     /// Number of constant-ring segments.
     pub ring_segments: u32,
-    /// Insert the conservative all-stage barrier at the end of every list,
-    /// which orders each list after everything committed before it (the game's API
+    /// Start every encoder with a queue-level all-stage barrier from
+    /// everything committed before it (consumer form, no extra encoder),
+    /// which orders each list after the earlier ones (the game's API
     /// executes lists of a queue in order; Metal 4 would overlap them).
     pub inter_submit_barrier: bool,
 }
@@ -329,7 +330,7 @@ impl Queue {
         self.inner.barrier.store(on, Ordering::Relaxed);
     }
 
-    /// Whether lists begun now get the trailing all-stage barrier.
+    /// Whether lists begun now start their encoders with the all-stage barrier.
     pub fn inter_submit_barrier(&self) -> bool {
         self.inner.barrier.load(Ordering::Relaxed)
     }

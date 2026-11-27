@@ -22,10 +22,24 @@
 //! whose stage is in its `before` mask arrives; commands that cannot be
 //! affected do not pay for it.
 //!
+//! **Ordering after earlier lists.** The game's API runs the lists of a queue
+//! in order; Metal 4 would overlap them. A tracker made with
+//! `prior_lists_covered` puts one consumer-form barrier, every earlier queue
+//! stage to this encoder's stages, at the *start of every encoder it opens*
+//! (the "head barrier"). Nothing is encoded for a list that opens no encoder
+//! (an empty list costs no encoder, which is the point), and nothing at the
+//! end of a list. Every encoder gets one, not just the first, because Metal 4
+//! may overlap two encoders of one list, so the second would not be ordered
+//! after earlier lists by the first one's barrier. The head barrier covers
+//! every device-visibility consumer barrier and every device-visibility
+//! producer barrier of a list, which are therefore not encoded.
+//!
 //! The tracker's output is a list of [`Action`]s the executor performs in
 //! order, each *before* the command that triggered it.
 
-use crate::stages::{COMPUTE_ENCODER_STAGES, FRAGMENT, RENDER_ENCODER_STAGES, TILE};
+use crate::stages::{
+    ALL, COMPUTE_ENCODER_STAGES, FRAGMENT, RENDER_ENCODER_STAGES, TILE, VIS_DEVICE,
+};
 
 /// Which Metal 4 encoder a command needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,23 +116,40 @@ pub struct Tracker {
     next_id: u32,
     closed: u16,
     pending: Vec<Pending>,
-    prior_lists_covered: bool,
+    /// Earlier lists are ordered before this one by a queue-level barrier.
+    covered: bool,
+    /// Every encoder starts with that barrier.
+    head_barrier: bool,
 }
 
 impl Tracker {
     /// A tracker for a fresh command list.
     ///
-    /// `prior_lists_covered` says that a queue-level all-stage barrier
-    /// already separates this list from everything committed before it, so
-    /// a barrier that only concerns work from earlier lists needs nothing.
-    /// With `false`, such a barrier is encoded as a consumer barrier.
+    /// `prior_lists_covered` asks for the head barrier (see the module
+    /// docs): every encoder starts with a queue-level barrier from all
+    /// earlier work, so this list is ordered after everything committed
+    /// before it, and a barrier that only concerns work from earlier lists
+    /// needs nothing. With `false`, nothing orders the list after earlier
+    /// ones and such a barrier is encoded as a consumer barrier.
     pub fn new(prior_lists_covered: bool) -> Tracker {
         Tracker {
             open: None,
             next_id: 0,
             closed: 0,
             pending: Vec::new(),
-            prior_lists_covered,
+            covered: prior_lists_covered,
+            head_barrier: prior_lists_covered,
+        }
+    }
+
+    /// Tests of where barriers land: a tracker that knows earlier lists are
+    /// covered but does not encode the head barrier, so the placement of
+    /// the barriers themselves is all that shows.
+    #[cfg(test)]
+    fn covered_without_head() -> Tracker {
+        Tracker {
+            covered: true,
+            ..Tracker::new(false)
         }
     }
 
@@ -215,12 +246,15 @@ impl Tracker {
             // The consumer form is for work in other encoders, and, when no
             // queue-level barrier orders earlier lists before this one, for
             // work of earlier lists too (any stage the barrier names).
-            let consumer_after = if self.prior_lists_covered {
+            let consumer_after = if self.covered {
                 p.after & p.earlier
             } else {
                 p.after
             };
-            if consumer_after != 0 {
+            // The head barrier of this encoder already waits for all earlier
+            // queue work with device visibility.
+            let covered_by_head = self.head_barrier && p.vis == VIS_DEVICE;
+            if consumer_after != 0 && !covered_by_head {
                 out.push(Action::Consumer {
                     after: consumer_after,
                     before,
@@ -244,14 +278,18 @@ impl Tracker {
     }
 
     /// The list ends. Pending barriers whose consumer is in a later list
-    /// become producer barriers at the end of the last encoder; with
-    /// `trailing_all` a queue-level all-stage barrier is added after them.
-    pub fn finish(&mut self, trailing_all: bool) -> Vec<Action> {
+    /// become producer barriers at the end of the last encoder, except
+    /// (with the head barrier) device-visibility ones, which the next list's
+    /// head barrier covers.
+    pub fn finish(&mut self) -> Vec<Action> {
         let mut out = Vec::new();
         let mut producers = Vec::new();
         for p in std::mem::take(&mut self.pending) {
             let known = p.earlier | p.in_encoder;
-            let after = if self.prior_lists_covered {
+            if self.head_barrier && p.vis == VIS_DEVICE {
+                continue;
+            }
+            let after = if self.covered {
                 p.after & known
             } else {
                 p.after
@@ -263,13 +301,6 @@ impl Tracker {
                     vis: p.vis,
                 });
             }
-        }
-        if trailing_all {
-            producers.push(Action::Producer {
-                after: crate::stages::ALL,
-                before: crate::stages::ALL,
-                vis: crate::stages::VIS_DEVICE,
-            });
         }
         if !producers.is_empty() {
             if self.open.is_none() {
@@ -290,6 +321,13 @@ impl Tracker {
         });
         self.next_id += 1;
         out.push(Action::Open(kind));
+        if self.head_barrier {
+            out.push(Action::Consumer {
+                after: ALL,
+                before: kind.stages(),
+                vis: VIS_DEVICE,
+            });
+        }
     }
 
     fn close(&mut self, out: &mut Vec<Action>) {
@@ -319,7 +357,7 @@ mod tests {
 
     #[test]
     fn first_command_opens_a_compute_encoder() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         assert_eq!(cmd(&mut t, DISPATCH), [Action::Open(EncoderKind::Compute)]);
         assert_eq!(cmd(&mut t, BLIT), []);
         assert_eq!(cmd(&mut t, DISPATCH), []);
@@ -328,7 +366,7 @@ mod tests {
 
     #[test]
     fn barrier_between_two_dispatches_lands_in_the_encoder() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
         assert_eq!(t.pending(), 1);
@@ -347,7 +385,7 @@ mod tests {
 
     #[test]
     fn copy_then_dispatch_uses_blit_to_dispatch() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, BLIT);
         t.barrier(BLIT, DISPATCH, VIS_DEVICE);
         assert_eq!(
@@ -362,7 +400,7 @@ mod tests {
 
     #[test]
     fn barrier_waits_for_a_command_it_can_affect() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, BLIT);
         t.barrier(BLIT, DISPATCH, VIS_DEVICE);
         // Another copy is not a consumer of the barrier: nothing is encoded.
@@ -382,7 +420,7 @@ mod tests {
 
     #[test]
     fn barrier_across_an_encoder_split_is_a_consumer_barrier() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
         assert_eq!(t.split(), [Action::Close]);
@@ -401,7 +439,7 @@ mod tests {
 
     #[test]
     fn barrier_from_compute_to_render_is_a_consumer_barrier_in_the_render_encoder() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(DISPATCH, VERTEX | FRAGMENT, VIS_DEVICE);
         assert_eq!(
@@ -420,7 +458,7 @@ mod tests {
 
     #[test]
     fn consumer_before_is_limited_to_the_consuming_encoder() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(DISPATCH, DISPATCH | VERTEX | MESH, VIS_DEVICE);
         let acts = cmd(&mut t, VERTEX);
@@ -436,11 +474,11 @@ mod tests {
 
     #[test]
     fn pending_barrier_at_the_end_becomes_a_producer_barrier() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(DISPATCH, DISPATCH | BLIT, VIS_DEVICE);
         assert_eq!(
-            t.finish(false),
+            t.finish(),
             [
                 Action::Producer {
                     after: DISPATCH,
@@ -456,12 +494,27 @@ mod tests {
     fn producer_after_is_limited_to_work_the_list_did_when_prior_lists_are_covered() {
         let mut t = Tracker::new(true);
         cmd(&mut t, BLIT);
-        t.barrier(ALL, ALL, VIS_DEVICE);
+        t.barrier(ALL, ALL, VIS_RESOURCE_ALIAS);
         assert_eq!(
-            t.finish(false),
+            t.finish(),
             [
                 Action::Producer {
                     after: BLIT,
+                    before: ALL,
+                    vis: VIS_RESOURCE_ALIAS
+                },
+                Action::Close
+            ]
+        );
+        // Without the head barrier nothing narrows it.
+        let mut t = Tracker::new(false);
+        cmd(&mut t, BLIT);
+        t.barrier(ALL, ALL, VIS_DEVICE);
+        assert_eq!(
+            t.finish(),
+            [
+                Action::Producer {
+                    after: ALL,
                     before: ALL,
                     vis: VIS_DEVICE
                 },
@@ -472,17 +525,17 @@ mod tests {
 
     #[test]
     fn barrier_about_earlier_lists_only() {
-        // Covered by the inter-list barrier: nothing at all, not even an
-        // encoder just to hold it.
+        // Covered by the head barrier of the next list: nothing at all, not
+        // even an encoder just to hold it.
         let mut t = Tracker::new(true);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
-        assert_eq!(t.finish(false), []);
+        assert_eq!(t.finish(), []);
 
         // Not covered: it is encoded, in an encoder made for it if need be.
         let mut t = Tracker::new(false);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
         assert_eq!(
-            t.finish(false),
+            t.finish(),
             [
                 Action::Open(EncoderKind::Compute),
                 Action::Producer {
@@ -508,52 +561,101 @@ mod tests {
                 }
             ]
         );
+        // Covered: the head barrier alone.
         let mut t = Tracker::new(true);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
         assert_eq!(
             cmd(&mut t, DISPATCH),
-            [Action::Open(EncoderKind::Compute)],
-            "covered: no barrier"
+            [Action::Open(EncoderKind::Compute), HEAD]
+        );
+        // Aliasing visibility is not what the head barrier does: kept.
+        let mut t = Tracker::new(true);
+        t.barrier(DISPATCH, DISPATCH, VIS_RESOURCE_ALIAS);
+        assert_eq!(
+            cmd(&mut t, DISPATCH),
+            [Action::Open(EncoderKind::Compute), HEAD]
+        );
+        let mut t = Tracker::new(true);
+        t.barrier(DISPATCH, DISPATCH, VIS_RESOURCE_ALIAS);
+        assert_eq!(
+            t.finish(),
+            [],
+            "nothing in the list can be affected, the barrier is about earlier lists"
+        );
+    }
+
+    /// The head barrier `Tracker::new(true)` puts at the start of every encoder.
+    const HEAD: Action = Action::Consumer {
+        after: ALL,
+        before: COMPUTE_ENCODER_STAGES,
+        vis: VIS_DEVICE,
+    };
+
+    #[test]
+    fn every_encoder_starts_with_the_head_barrier_and_nothing_ends_with_one() {
+        let mut t = Tracker::new(true);
+        assert_eq!(
+            cmd(&mut t, DISPATCH),
+            [Action::Open(EncoderKind::Compute), HEAD]
+        );
+        assert_eq!(cmd(&mut t, BLIT), []);
+        assert_eq!(t.finish(), [Action::Close], "no trailing barrier");
+        // A second encoder of the same list gets its own: Metal 4 may overlap
+        // the two, so the first one's barrier does not order the second.
+        let mut t = Tracker::new(true);
+        cmd(&mut t, DISPATCH);
+        assert_eq!(t.split(), [Action::Close]);
+        assert_eq!(
+            cmd(&mut t, DISPATCH),
+            [Action::Open(EncoderKind::Compute), HEAD]
+        );
+        // A render encoder's head barrier names its own stages.
+        let mut t = Tracker::new(true);
+        assert_eq!(
+            cmd(&mut t, VERTEX),
+            [
+                Action::Open(EncoderKind::Render),
+                Action::Consumer {
+                    after: ALL,
+                    before: RENDER_ENCODER_STAGES,
+                    vis: VIS_DEVICE
+                }
+            ]
         );
     }
 
     #[test]
-    fn trailing_global_barrier_goes_after_the_pending_ones() {
+    fn an_empty_list_has_no_encoder_whatever_the_queue_option() {
+        assert_eq!(Tracker::new(true).finish(), []);
+        assert_eq!(Tracker::new(false).finish(), []);
+    }
+
+    #[test]
+    fn device_barriers_at_the_end_of_a_list_are_covered_by_the_next_lists_head() {
         let mut t = Tracker::new(true);
         cmd(&mut t, DISPATCH);
-        t.barrier(DISPATCH, DISPATCH, VIS_RESOURCE_ALIAS);
-        let acts = t.finish(true);
-        assert_eq!(acts.len(), 3);
+        t.barrier(DISPATCH, DISPATCH | BLIT, VIS_DEVICE);
+        assert_eq!(t.finish(), [Action::Close]);
+        // Without the head barrier it must be encoded.
+        let mut t = Tracker::new(false);
+        cmd(&mut t, DISPATCH);
+        t.barrier(DISPATCH, DISPATCH | BLIT, VIS_DEVICE);
         assert_eq!(
-            acts[1],
-            Action::Producer {
-                after: ALL,
-                before: ALL,
-                vis: VIS_DEVICE
-            }
-        );
-        assert_eq!(acts[2], Action::Close);
-        // An empty list still gets an encoder to hold the global barrier.
-        let mut t = Tracker::new(true);
-        assert_eq!(
-            t.finish(true),
+            t.finish(),
             [
-                Action::Open(EncoderKind::Compute),
                 Action::Producer {
-                    after: ALL,
-                    before: ALL,
+                    after: DISPATCH,
+                    before: DISPATCH | BLIT,
                     vis: VIS_DEVICE
                 },
                 Action::Close
             ]
         );
-        // Without any of it, an empty list is empty.
-        assert_eq!(Tracker::new(true).finish(false), []);
     }
 
     #[test]
     fn consecutive_barriers_merge_and_visibilities_stay_apart() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         cmd(&mut t, BLIT);
         t.barrier(DISPATCH, DISPATCH, VIS_DEVICE);
@@ -581,7 +683,7 @@ mod tests {
 
     #[test]
     fn an_empty_barrier_is_dropped() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, DISPATCH);
         t.barrier(0, DISPATCH, VIS_DEVICE);
         t.barrier(DISPATCH, 0, VIS_DEVICE);
@@ -590,7 +692,7 @@ mod tests {
 
     #[test]
     fn a_render_pass_does_not_wait_on_its_own_fragment_work() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, FRAGMENT);
         t.barrier(FRAGMENT, VERTEX, VIS_DEVICE);
         assert_eq!(
@@ -606,7 +708,7 @@ mod tests {
             ]
         );
         // Vertex-to-vertex inside one pass is allowed in the encoder.
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         cmd(&mut t, VERTEX);
         t.barrier(VERTEX, VERTEX, VIS_DEVICE);
         assert_eq!(
@@ -621,7 +723,7 @@ mod tests {
 
     #[test]
     fn unencodable_stages_are_refused() {
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::covered_without_head();
         assert!(t.command(0).is_none());
         assert!(t.command(DISPATCH | BLIT).is_none());
         assert!(t.command(crate::stages::RESOURCE_STATE).is_none());
@@ -633,7 +735,7 @@ mod tests {
         // dispatch | barrier | split | blit | (new encoder) dispatch:
         // the barrier was declared in encoder 0; the consumer is in
         // encoder 1, so it is a consumer barrier for DISPATCH only.
-        let mut t = Tracker::new(true);
+        let mut t = Tracker::new(false);
         cmd(&mut t, DISPATCH);
         t.barrier(ALL, DISPATCH, VIS_DEVICE);
         t.split();
@@ -643,9 +745,27 @@ mod tests {
             [
                 Action::Open(EncoderKind::Compute),
                 Action::Consumer {
-                    after: DISPATCH,
+                    after: ALL,
                     before: DISPATCH,
                     vis: VIS_DEVICE
+                }
+            ]
+        );
+        // With the head barrier the device-visibility one is covered, and an
+        // aliasing one is narrowed to the stages the list actually used.
+        let mut t = Tracker::new(true);
+        cmd(&mut t, DISPATCH);
+        t.barrier(ALL, DISPATCH, VIS_RESOURCE_ALIAS);
+        t.split();
+        assert_eq!(
+            cmd(&mut t, DISPATCH),
+            [
+                Action::Open(EncoderKind::Compute),
+                HEAD,
+                Action::Consumer {
+                    after: DISPATCH,
+                    before: DISPATCH,
+                    vis: VIS_RESOURCE_ALIAS
                 }
             ]
         );

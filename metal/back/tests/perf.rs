@@ -66,6 +66,36 @@ fn perf() {
         );
     }
 
+    // 1b. The same with one tiny dispatch in the list: the round trip of a
+    //     non-empty `ExecuteCommandLists`, which is what the barrier costs
+    //     in practice (the empty list above is the worst case for an extra
+    //     encoder, this is the common one).
+    {
+        let pso = d.compute_pipeline_from_msl(NOP, "nop").unwrap();
+        let tiny = d.create_buffer(BufferKind::Default, 4096).unwrap();
+        for barrier in [false, true] {
+            let q = queue(&d, barrier);
+            let mut t = Vec::new();
+            for i in 0..2200 {
+                let s = Instant::now();
+                let mut l = q.begin_list().unwrap();
+                l.set_address(0, tiny.gpu_va()).unwrap();
+                l.dispatch(&pso, [1, 1, 1], [32, 1, 1]).unwrap();
+                l.end().unwrap();
+                let v = q.submit(vec![l]).unwrap();
+                q.wait_for(v, 10_000).unwrap();
+                if i >= 200 {
+                    t.push(s.elapsed().as_secs_f64() * 1e6);
+                }
+            }
+            println!(
+                "PERF one_dispatch_submit_roundtrip[inter_submit_barrier={barrier}] = p50 {:.0} / p99 {:.0} us (n=2000)",
+                pct(&mut t.clone(), 0.5),
+                pct(&mut t, 0.99)
+            );
+        }
+    }
+
     // 2. Cost of the conservative barrier between lists: 400 lists, each a
     //    1M-thread dispatch touching 4 MiB, committed one by one without
     //    waiting; wall time of the whole batch.

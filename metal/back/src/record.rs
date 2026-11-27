@@ -1,7 +1,10 @@
 //! Recording: one front-end command list is one `MTL4CommandBuffer`.
 //!
 //! Copies, fills and dispatches share one `MTL4ComputeCommandEncoder` (there
-//! is no blit encoder in Metal 4). Barriers are **deferred**: a barrier is
+//! is no blit encoder in Metal 4). When the queue orders lists after one
+//! another (the default), every encoder starts with a consumer-form
+//! queue barrier from all earlier work; a list that opens no encoder costs
+//! nothing. Barriers are **deferred**: a barrier is
 //! held until the next command shows where it has to be encoded (see
 //! [`crate::barrier`]); split barriers are only encoded at their end.
 //!
@@ -57,7 +60,6 @@ pub struct CommandList {
     tracker: Tracker,
     encoder: Option<ComputeEncoder>,
     table: ArgumentTable,
-    trailing_barrier: bool,
     ended: bool,
     keep_buffers: Vec<Buffer>,
     keep_pipelines: Vec<ComputePipeline>,
@@ -81,14 +83,13 @@ impl Queue {
         slot.cb.beginCommandBufferWithAllocator(&slot.allocator);
         slot.cb
             .setLabel(Some(&NSString::from_str("victory command list")));
-        let trailing_barrier = self.inter_submit_barrier();
+        let ordered_after_prior = self.inter_submit_barrier();
         Ok(CommandList {
             queue: self.clone(),
             table: slot.table.clone(),
             slot: Some(slot),
-            tracker: Tracker::new(trailing_barrier),
+            tracker: Tracker::new(ordered_after_prior),
             encoder: None,
-            trailing_barrier,
             ended: false,
             keep_buffers: Vec::new(),
             keep_pipelines: Vec::new(),
@@ -437,11 +438,11 @@ impl CommandList {
     }
 
     /// Finishes the list: barriers nobody consumed are encoded in producer
-    /// form, the trailing all-stage barrier is added when the queue asks for
-    /// it, and the command buffer is ended.
+    /// form (device-visibility ones are left out when the queue orders lists
+    /// itself, see [`crate::barrier`]), and the command buffer is ended.
     pub fn end(&mut self) -> Result<()> {
         self.live()?;
-        let actions = self.tracker.finish(self.trailing_barrier);
+        let actions = self.tracker.finish();
         self.perform(actions)?;
         self.cb().endCommandBuffer();
         self.ended = true;
