@@ -122,7 +122,7 @@ mod client {
             // SAFETY: `wide` is a NUL-terminated path.
             let module = unsafe { LoadLibraryW(wide.as_ptr()) };
             if module.is_null() {
-                return Err(format!("{}: cannot be loaded (os error {})", path.display(), std::io::Error::last_os_error()));
+                return Err(format!("{}: is not a library this process can load (Windows error {})", path.display(), std::io::Error::last_os_error().raw_os_error().unwrap_or(0)));
             }
             let sym = |name: &[u8]| {
                 // SAFETY: `name` is NUL-terminated, `module` is loaded.
