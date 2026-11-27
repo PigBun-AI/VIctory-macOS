@@ -1842,7 +1842,7 @@ fn a_pass_without_attachments_runs_pixel_shaders_that_only_write_through_views()
 }
 
 // ---- rasterizer and colour write state (C-F-028, C-F-025) -------------------------
-// D3D12 spec (SDK 10.0.22621): D3D12_RASTERIZER_DESC / D3D12_RENDER_TARGET_BLEND_DESC.
+// The title API's spec (SDK 10.0.22621): rasterizer description and per-target blend description.
 
 /// The big triangle is counter-clockwise on the target (and in NDC with y up).
 fn drawn(g: &Gfx, d: GraphicsPsoDesc, tri: Tri) -> Vec<u32> {
@@ -1924,7 +1924,7 @@ fn wireframe_draws_the_edges_only_and_depth_clip_decides_beyond_the_far_plane() 
 #[test]
 fn the_colour_write_mask_keeps_the_channels_it_does_not_name() {
     let Some(g) = setup() else { return };
-    // D3D12_COLOR_WRITE_ENABLE: RED 1, GREEN 2, BLUE 4, ALPHA 8
+    // colour write enable bits: RED 1, GREEN 2, BLUE 4, ALPHA 8
     let bg = [0.0, 0.0, 0.25, 0.5];
     for mask in [0x1u8, 0x2, 0x4, 0x8, 0x5, 0xA, 0xF, 0x0] {
         let mut d = g.desc();
@@ -1998,7 +1998,7 @@ fn a_negative_depth_bias_moves_a_coplanar_triangle_in_front() {
     assert!(close(run(away)[i], pack(green.c), 1), "positive bias");
 }
 
-/// D3D12 blend equations (spec, "Output Merger"): colour = op(src * sf, dst * df);
+/// The blend equations of the title API (spec, "Output Merger"): colour = op(src * sf, dst * df);
 /// MIN and MAX ignore the factors. Every factor on its own against ZERO, and
 /// every operation, one pixel each, read back and compared with the CPU.
 #[test]
