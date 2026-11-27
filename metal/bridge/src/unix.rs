@@ -137,7 +137,16 @@ fn executor() -> Arc<dyn Link> {
         Slot::Installed(e) => e.clone(),
         Slot::Cleared => Arc::new(NoExecutor),
         Slot::Default => {
-            let e: Arc<dyn Link> = Arc::new(victory_metal_back::exec::Executor::new());
+            let ex = victory_metal_back::exec::Executor::new();
+            // Check the Mac driver's table now: a mismatch is reported at startup,
+            // not when the first swap chain fails.
+            if let Err(text) = wine::WineSurfaces::check_at_startup()
+                && std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0")
+            {
+                eprintln!("victory-metal bridge: window surfaces unavailable: {text}");
+            }
+            ex.set_surface_provider(Arc::new(wine::WineSurfaces::new()));
+            let e: Arc<dyn Link> = Arc::new(ex);
             *slot = Slot::Installed(e.clone());
             e
         }
@@ -362,21 +371,29 @@ unsafe extern "C" fn present_clear(args: *mut c_void) -> i32 {
 /// `view_release_metal_view`, `on_main_thread`, then Win32 helpers we do
 /// not use. D3DMetal calls them in the order get_win_data, create device,
 /// create view, get layer, release_win_data; so do we.
+///
+/// # Checking the table instead of trusting the numbers
+///
+/// The slot numbers are a fact about one build of winemac.drv. [`Table::find`]
+/// checks them when the first layer is asked for (and the bridge reports the
+/// result once at startup):
+///
+/// * the symbol `macdrv_functions` must be in a loaded `winemac.so`;
+/// * every one of the first ten entries must point into that same image, and
+///   when the image keeps its local symbols (CrossOver's does) the symbol
+///   found at each entry must be the `my_*` wrapper that slot is meant to
+///   hold (`my_get_win_data` at 1, ...), which pins the order and the
+///   signatures; if the wrappers carry other names the table is a different
+///   version and the error says which slot disagrees and what is there;
+/// * `get_win_data` must return a record that starts with the `HWND` asked
+///   for and holds a client view, which pins the offset of that view.
+///
+/// Anything else is a clear error, never a call through a wrong pointer.
 pub mod wine {
     use std::ffi::{CStr, c_char, c_void};
+    use std::sync::Mutex;
 
     use super::*;
-
-    const SLOT_GET_WIN_DATA: usize = 1;
-    const SLOT_RELEASE_WIN_DATA: usize = 2;
-    const SLOT_CREATE_DEVICE: usize = 4;
-    const SLOT_RELEASE_DEVICE: usize = 5;
-    const SLOT_CREATE_VIEW: usize = 6;
-    const SLOT_GET_LAYER: usize = 7;
-    const SLOT_RELEASE_VIEW: usize = 8;
-    /// Offset of `client_cocoa_view` in `struct d3dmetal_macdrv_win_data`
-    /// (hwnd, cocoa_window, cocoa_view, then it).
-    const CLIENT_VIEW_OFFSET: usize = 24;
 
     /// Stages `acquire` can stop at; the number reached is reported back.
     pub const STAGE_NO_TABLE: u32 = 0;
@@ -385,6 +402,22 @@ pub mod wine {
     pub const STAGE_DEVICE: u32 = 3;
     pub const STAGE_VIEW: u32 = 4;
     pub const STAGE_LAYER: u32 = 5;
+
+    /// Slots of `struct macdrv_functions_t` this bridge uses, with the
+    /// wrapper function that must sit there (`d3dmetal.c`).
+    const SLOTS: [(usize, &str); 8] = [
+        (1, "my_get_win_data"),
+        (2, "my_release_win_data"),
+        (3, "my_macdrv_get_cocoa_window"),
+        (4, "my_macdrv_create_metal_device"),
+        (5, "my_macdrv_release_metal_device"),
+        (6, "my_macdrv_view_create_metal_view"),
+        (7, "my_macdrv_view_get_metal_layer"),
+        (8, "my_macdrv_view_release_metal_view"),
+    ];
+    /// Offset of `client_cocoa_view` in `struct d3dmetal_macdrv_win_data`
+    /// (hwnd, cocoa_window, cocoa_view, then it).
+    const CLIENT_VIEW_OFFSET: usize = 24;
 
     // dyld's image list; libc marks these deprecated in favour of a crate
     // that wraps the same two functions.
@@ -396,8 +429,24 @@ pub mod wine {
     type F1 = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
     type F2 = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
 
+    /// The functions of the table, after the checks above.
+    #[derive(Clone, Copy)]
+    pub struct Table {
+        get_win_data: F1,
+        release_win_data: unsafe extern "C" fn(*mut c_void),
+        create_device: unsafe extern "C" fn() -> *mut c_void,
+        release_device: unsafe extern "C" fn(*mut c_void),
+        create_view: F2,
+        get_layer: F1,
+        release_view: unsafe extern "C" fn(*mut c_void),
+    }
+
+    // Plain function pointers into a loaded image.
+    unsafe impl Send for Table {}
+    unsafe impl Sync for Table {}
+
     /// `macdrv_functions` from the winemac.so Wine has already loaded.
-    fn table() -> Option<*const usize> {
+    fn symbol() -> Option<*const usize> {
         // SAFETY: dyld queries and a `RTLD_NOLOAD` open take no ownership.
         unsafe {
             for i in 0.._dyld_image_count() {
@@ -423,9 +472,160 @@ pub mod wine {
         None
     }
 
-    fn slot(table: *const usize, index: usize) -> *const c_void {
-        // SAFETY: the table is a struct of at least ten pointers.
-        unsafe { *table.add(index) as *const c_void }
+    /// The image and (if the image keeps it) the symbol an address is in.
+    fn locate(addr: usize) -> Option<(usize, Option<String>)> {
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        // SAFETY: `dladdr` fills `info`; the strings it points at live as long as the image.
+        unsafe {
+            if libc::dladdr(addr as *const c_void, &mut info) == 0 {
+                return None;
+            }
+            let name = (!info.dli_sname.is_null()).then(|| {
+                CStr::from_ptr(info.dli_sname)
+                    .to_string_lossy()
+                    .trim_start_matches('_')
+                    .to_string()
+            });
+            Some((info.dli_fbase as usize, name))
+        }
+    }
+
+    impl Table {
+        /// Finds and checks the table. The error says what is wrong and
+        /// where, for the log.
+        pub fn find() -> Result<Table, String> {
+            let base = symbol().ok_or_else(|| {
+                "no `macdrv_functions` in a loaded winemac.so: this Wine is not the CrossOver build with the D3DMetal hooks, or the Mac driver is not in use (Wine is not running on macOS drivers)".to_string()
+            })?;
+            let (image, _) = locate(base as usize)
+                .ok_or_else(|| "cannot tell which image `macdrv_functions` is in".to_string())?;
+            let mut at = [0usize; 9];
+            for (index, expect) in SLOTS {
+                // SAFETY: the table has at least ten pointers (`d3dmetal.c`); the first nine are read.
+                let p = unsafe { *base.add(index) };
+                if p == 0 {
+                    return Err(format!(
+                        "macdrv_functions[{index}] is null (expected {expect}): the table is not this bridge's version"
+                    ));
+                }
+                match locate(p) {
+                    Some((fbase, _)) if fbase != image => {
+                        return Err(format!(
+                            "macdrv_functions[{index}] points outside winemac.so (expected {expect}): the table is not this bridge's version"
+                        ));
+                    }
+                    Some((_, Some(name))) if name != expect => {
+                        return Err(format!(
+                            "macdrv_functions[{index}] is `{name}`, this bridge expects `{expect}`: winemac.drv's D3DMetal table has another layout (another CrossOver version?)"
+                        ));
+                    }
+                    // No symbol name (stripped): the image check above is all there is.
+                    _ => {}
+                }
+                at[index] = p;
+            }
+            // SAFETY: the wrappers sit where `d3dmetal.c` puts them (checked above)
+            // and have the signatures it gives them.
+            unsafe {
+                Ok(Table {
+                    get_win_data: std::mem::transmute::<usize, F1>(at[1]),
+                    release_win_data: std::mem::transmute::<usize, unsafe extern "C" fn(*mut c_void)>(
+                        at[2],
+                    ),
+                    create_device: std::mem::transmute::<
+                        usize,
+                        unsafe extern "C" fn() -> *mut c_void,
+                    >(at[4]),
+                    release_device: std::mem::transmute::<usize, unsafe extern "C" fn(*mut c_void)>(
+                        at[5],
+                    ),
+                    create_view: std::mem::transmute::<usize, F2>(at[6]),
+                    get_layer: std::mem::transmute::<usize, F1>(at[7]),
+                    release_view: std::mem::transmute::<usize, unsafe extern "C" fn(*mut c_void)>(
+                        at[8],
+                    ),
+                })
+            }
+        }
+    }
+
+    /// What `Table::acquire` made for one window.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Acquired {
+        pub layer: *mut c_void,
+        pub view: *mut c_void,
+        pub device: *mut c_void,
+    }
+
+    impl Table {
+        /// The layer, view and device of the client area of `hwnd`. On an
+        /// error: the stage reached and what went wrong.
+        ///
+        /// # Safety
+        /// `hwnd` is a window of this process.
+        pub unsafe fn acquire(&self, hwnd: u64) -> Result<Acquired, (u32, String)> {
+            // SAFETY: functions checked in `find`; the sequence is D3DMetal's.
+            unsafe {
+                let data = (self.get_win_data)(hwnd as *mut c_void);
+                if data.is_null() {
+                    return Err((
+                        STAGE_TABLE,
+                        format!(
+                            "get_win_data({hwnd:#x}) returned null: not a window of the Mac driver"
+                        ),
+                    ));
+                }
+                let first = *data.cast::<usize>();
+                let client_view = *data
+                    .cast::<u8>()
+                    .add(CLIENT_VIEW_OFFSET)
+                    .cast::<*mut c_void>();
+                if first != hwnd as usize || client_view.is_null() {
+                    (self.release_win_data)(data);
+                    return Err((
+                        STAGE_TABLE,
+                        format!(
+                            "the window record of {hwnd:#x} does not have the layout this bridge knows (first field {first:#x}, client view {client_view:p}): another winemac.drv version"
+                        ),
+                    ));
+                }
+                let device = (self.create_device)();
+                if device.is_null() {
+                    (self.release_win_data)(data);
+                    return Err((STAGE_WIN_DATA, "create_metal_device returned null".into()));
+                }
+                let view = (self.create_view)(client_view, device);
+                if view.is_null() {
+                    (self.release_device)(device);
+                    (self.release_win_data)(data);
+                    return Err((STAGE_DEVICE, "view_create_metal_view returned null".into()));
+                }
+                let layer = (self.get_layer)(view);
+                (self.release_win_data)(data);
+                if layer.is_null() {
+                    (self.release_view)(view);
+                    (self.release_device)(device);
+                    return Err((STAGE_VIEW, "view_get_metal_layer returned null".into()));
+                }
+                Ok(Acquired {
+                    layer,
+                    view,
+                    device,
+                })
+            }
+        }
+
+        /// Gives back what `acquire` made.
+        ///
+        /// # Safety
+        /// `a` came from `acquire` of this table and is not released yet.
+        pub unsafe fn release(&self, a: Acquired) {
+            // SAFETY: as in `acquire`.
+            unsafe {
+                (self.release_view)(a.view);
+                (self.release_device)(a.device);
+            }
+        }
     }
 
     /// Fills in the layer, view and device of the window in `args.hwnd`.
@@ -436,60 +636,29 @@ pub mod wine {
         // SAFETY: the PE passes a `LayerArgs`.
         let args = unsafe { &mut *args.cast::<LayerArgs>() };
         args.stage = STAGE_NO_TABLE;
-        let Some(table) = table() else {
-            return STATUS_NOT_SUPPORTED;
+        let table = match Table::find() {
+            Ok(t) => t,
+            Err(text) => {
+                log_once(&text);
+                return STATUS_NOT_SUPPORTED;
+            }
         };
         args.stage = STAGE_TABLE;
-        // SAFETY: these are the functions winemac.drv put in its table, with
-        // the signatures `d3dmetal.c` gives them.
-        unsafe {
-            let get_win_data: F1 = std::mem::transmute(slot(table, SLOT_GET_WIN_DATA));
-            let release_win_data: unsafe extern "C" fn(*mut c_void) =
-                std::mem::transmute(slot(table, SLOT_RELEASE_WIN_DATA));
-            let create_device: unsafe extern "C" fn() -> *mut c_void =
-                std::mem::transmute(slot(table, SLOT_CREATE_DEVICE));
-            let release_device: unsafe extern "C" fn(*mut c_void) =
-                std::mem::transmute(slot(table, SLOT_RELEASE_DEVICE));
-            let create_view: F2 = std::mem::transmute(slot(table, SLOT_CREATE_VIEW));
-            let get_layer: F1 = std::mem::transmute(slot(table, SLOT_GET_LAYER));
-            let release_view: unsafe extern "C" fn(*mut c_void) =
-                std::mem::transmute(slot(table, SLOT_RELEASE_VIEW));
-
-            let data = get_win_data(args.hwnd as *mut c_void);
-            if data.is_null() {
-                return STATUS_UNSUCCESSFUL;
+        // SAFETY: `hwnd` is the caller's window.
+        match unsafe { table.acquire(args.hwnd) } {
+            Ok(a) => {
+                args.stage = STAGE_LAYER;
+                args.layer = a.layer as u64;
+                args.view = a.view as u64;
+                args.device = a.device as u64;
+                STATUS_SUCCESS
             }
-            args.stage = STAGE_WIN_DATA;
-            let client_view = *data
-                .cast::<u8>()
-                .add(CLIENT_VIEW_OFFSET)
-                .cast::<*mut c_void>();
-            let device = create_device();
-            if device.is_null() {
-                release_win_data(data);
-                return STATUS_UNSUCCESSFUL;
+            Err((stage, text)) => {
+                args.stage = stage;
+                log_once(&text);
+                STATUS_UNSUCCESSFUL
             }
-            args.stage = STAGE_DEVICE;
-            let view = create_view(client_view, device);
-            if view.is_null() {
-                release_device(device);
-                release_win_data(data);
-                return STATUS_UNSUCCESSFUL;
-            }
-            args.stage = STAGE_VIEW;
-            let layer = get_layer(view);
-            release_win_data(data);
-            if layer.is_null() {
-                release_view(view);
-                release_device(device);
-                return STATUS_UNSUCCESSFUL;
-            }
-            args.stage = STAGE_LAYER;
-            args.layer = layer as u64;
-            args.view = view as u64;
-            args.device = device as u64;
         }
-        STATUS_SUCCESS
     }
 
     /// Gives back what `layer_acquire` made.
@@ -499,19 +668,91 @@ pub mod wine {
     pub unsafe extern "C" fn layer_release(args: *mut c_void) -> i32 {
         // SAFETY: the PE passes the `LayerArgs` acquire filled in.
         let args = unsafe { &*args.cast::<LayerArgs>() };
-        let Some(table) = table() else {
+        let Ok(table) = Table::find() else {
             return STATUS_NOT_SUPPORTED;
         };
-        // SAFETY: as in `layer_acquire`.
+        // SAFETY: the pointers are what `layer_acquire` gave out.
         unsafe {
-            let release_device: unsafe extern "C" fn(*mut c_void) =
-                std::mem::transmute(slot(table, SLOT_RELEASE_DEVICE));
-            let release_view: unsafe extern "C" fn(*mut c_void) =
-                std::mem::transmute(slot(table, SLOT_RELEASE_VIEW));
-            release_view(args.view as *mut c_void);
-            release_device(args.device as *mut c_void);
+            table.release(Acquired {
+                layer: args.layer as *mut c_void,
+                view: args.view as *mut c_void,
+                device: args.device as *mut c_void,
+            });
         }
         STATUS_SUCCESS
+    }
+
+    /// Writes a reason on stderr (the Wine log of the process), each text once.
+    fn log_once(text: &str) {
+        static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        if !seen.iter().any(|s| s == text) {
+            eprintln!("victory-metal bridge: {text}");
+            seen.push(text.to_string());
+        }
+    }
+
+    /// The `SurfaceProvider` of a Wine process: asks winemac.drv for a
+    /// Metal view over the client area of the window, keeps it until the
+    /// back gives the layer back.
+    #[derive(Default)]
+    pub struct WineSurfaces {
+        held: Mutex<Vec<(u64, Acquired)>>,
+    }
+
+    // The pointers are Cocoa objects the table's functions manage.
+    unsafe impl Send for WineSurfaces {}
+    unsafe impl Sync for WineSurfaces {}
+
+    impl WineSurfaces {
+        pub fn new() -> WineSurfaces {
+            WineSurfaces::default()
+        }
+
+        /// Checks the winemac table now and says what it found, so that a
+        /// mismatch shows at startup and not at the first swap chain.
+        pub fn check_at_startup() -> Result<(), String> {
+            Table::find().map(drop)
+        }
+    }
+
+    impl victory_metal_proto::SurfaceProvider for WineSurfaces {
+        fn layer_for(&self, window: victory_metal_proto::WindowRef) -> *mut c_void {
+            let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, a)) = held.iter().find(|(w, _)| *w == window.0) {
+                return a.layer;
+            }
+            let table = match Table::find() {
+                Ok(t) => t,
+                Err(text) => {
+                    log_once(&text);
+                    return std::ptr::null_mut();
+                }
+            };
+            // SAFETY: the window handle comes from the application's swap chain call;
+            // `get_win_data` answers null for one it does not know.
+            match unsafe { table.acquire(window.0) } {
+                Ok(a) => {
+                    held.push((window.0, a));
+                    a.layer
+                }
+                Err((_, text)) => {
+                    log_once(&text);
+                    std::ptr::null_mut()
+                }
+            }
+        }
+
+        fn release_layer(&self, window: victory_metal_proto::WindowRef) {
+            let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(i) = held.iter().position(|(w, _)| *w == window.0) {
+                let (_, a) = held.remove(i);
+                if let Ok(table) = Table::find() {
+                    // SAFETY: made by `acquire` above and not released before.
+                    unsafe { table.release(a) };
+                }
+            }
+        }
     }
 }
 
@@ -540,6 +781,22 @@ mod tests {
             STATUS_SUCCESS
         );
         assert_eq!(SINK.load(Ordering::Relaxed), 256);
+    }
+
+    #[test]
+    fn without_winemac_the_table_check_says_so() {
+        let err = wine::Table::find()
+            .err()
+            .expect("no winemac.so in a native test");
+        assert!(
+            err.contains("macdrv_functions") && err.contains("winemac.so"),
+            "{err}"
+        );
+        use victory_metal_proto::SurfaceProvider;
+        let p = wine::WineSurfaces::new();
+        assert!(p.layer_for(victory_metal_proto::WindowRef(5)).is_null());
+        // Giving back a layer never handed out is harmless.
+        p.release_layer(victory_metal_proto::WindowRef(5));
     }
 
     #[test]
