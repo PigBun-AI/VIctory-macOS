@@ -44,8 +44,7 @@ impl Default for HostPolicy {
             "ole32.dll",
             "advapi32.dll",
             "iphlpapi.dll",
-            // The title's crash handler writes minidumps with it (loaded by name).
-            "dbghelp.dll",
+            // dbghelp.dll is not here (mac H2): `modules::dbghelp` stubs it.
             // Same APIs as the console's (XAudio2 ordinal 1 is XAudio2Create
             // on both); Media Foundation reads local media files.
             "xaudio2_9.dll",
