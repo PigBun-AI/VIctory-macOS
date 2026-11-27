@@ -24,6 +24,8 @@ use crate::structure::{Atom, Bool, LaneExit, Structured};
 /// it shares the emitter's state.
 #[path = "intersect.rs"]
 pub(super) mod intersect;
+#[path = "sunclamp.rs"]
+pub(super) mod sunclamp;
 
 type Why = &'static str;
 
@@ -11498,6 +11500,8 @@ impl<'a> Lower<'a> {
                 Some(g) => g[ch as usize],
                 None => self.s.m.extract(c, r, ch),
             };
+            // `VICTORY_TM_CLAMP_HDR` (this one program only): no Inf or NaN gets in.
+            let x = if sunclamp::samples_clamped() && !*d16 { self.sat_f16(x) } else { x };
             xs.push(if *d16 {
                 // shortcut: d16 results are taken as floats (rounded to
                 // nearest even); integer formats would keep 16 bits.
@@ -12287,6 +12291,8 @@ impl<'a> Lower<'a> {
             (true, false) => ("storeVertexOutput", 171),
             (true, true) => ("storePrimitiveOutput", 172),
         };
+        // `VICTORY_EXPORT_F16_SAT` (default on): colour exports are made finite (NaN -> 0, +-65504).
+        let sat = sunclamp::export_sat() && matches!(e.target, Target::Color(_));
         for (id, col, value, half) in stores {
             let mut x = self.i32_of(value)?;
             if let Some(high) = half {
@@ -12311,6 +12317,7 @@ impl<'a> Lower<'a> {
                         Some(&f) => f,
                         None => self.as_float(x),
                     };
+                    let f = if sat { self.sat_f16(f) } else { f };
                     (".f32", f)
                 }
                 _ => (".i32", x),

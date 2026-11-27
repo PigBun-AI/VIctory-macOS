@@ -61,6 +61,8 @@ pub struct Container<'a> {
     pub digest: [u8; 16],
     pub version: (u16, u16),
     pub parts: Vec<Part<'a>>,
+    /// The whole container, as given to [Container::parse].
+    pub(crate) bytes: &'a [u8],
 }
 
 const HEADER_SIZE: usize = 0x20;
@@ -105,6 +107,7 @@ impl<'a> Container<'a> {
             digest,
             version,
             parts,
+            bytes: data,
         })
     }
 

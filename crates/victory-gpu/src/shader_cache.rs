@@ -75,6 +75,10 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
+            // Colour exports clamped to +-65504, NaN -> 0 (emit::lower::sunclamp), every pixel program.
+            "VICTORY_EXPORT_F16_SAT",
+            // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
+            "VICTORY_TM_CLAMP_HDR",
         ] {
             bytes.extend_from_slice(name.as_bytes());
             bytes.push(b'=');
