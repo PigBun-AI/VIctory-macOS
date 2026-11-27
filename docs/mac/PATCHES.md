@@ -70,6 +70,11 @@ macOS 27.2.1 on an M5 Max, Rosetta 2 installed (macOS 28 drops Intel apps: the W
 
 ### M3 — `tools/mac/env.sh`, `tools/mac/check.sh`, this document
 
+*Fix, 2026-11-27 (first run on Wine).* llvm-mingw's clang linked `libunwind.dll`, which Wine does not have
+(`Library libunwind.dll not found`, c0000135, exit 53 at start). `env.sh` now names `tools/mac/cc.sh`, a
+wrapper that swaps `-lunwind` for llvm-mingw's static `libunwind.a` (what `tools/macos/gnullvm-cc.sh` does
+with `libgcc_eh` on Homebrew). An exe built before this fix must be relinked.
+
 New files only. `env.sh` reuses the toolchain of a sibling `VIctory-macOS/target/toolchain` (or
 `VICTORY_MAC_TOOLCHAIN`). Remove when the Mac fork's `setup.sh` is the one way to a toolchain.
 

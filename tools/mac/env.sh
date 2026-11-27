@@ -20,5 +20,5 @@ export RUSTUP_HOME="$VICTORY_MAC_TOOLCHAIN/rustup"
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$_here/rust-toolchain.toml")}"
 export LLVM_MINGW="$(ls -d "$VICTORY_MAC_TOOLCHAIN"/llvm-mingw-*-macos-universal 2>/dev/null | tail -n 1)"
 export PATH="$CARGO_HOME/bin:$LLVM_MINGW/bin:$PATH"
-export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER="$_here/tools/mac/cc.sh"
 unset _here
