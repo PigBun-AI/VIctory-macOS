@@ -10,8 +10,11 @@
 #
 # What a run is made of (each has an option; the options only ever choose, the
 # rest below is the same for every combination):
-#   --backend d3dmetal|metal     (VICTORY_MAC_BACKEND, default d3dmetal) the ONLY thing the backends differ in:
-#                                the prefix, the dlls in it, WINEDLLPATH/WINEDLLOVERRIDES, VICTORY_METAL_LOG/_NOTIMPL_LOG
+#   --backend metal|d3dmetal     (VICTORY_MAC_BACKEND, default metal: our Metal backend is the one main path) the ONLY thing
+#                                the backends differ in: the prefix, the dlls in it, WINEDLLPATH/WINEDLLOVERRIDES,
+#                                VICTORY_METAL_LOG/_NOTIMPL_LOG. d3dmetal is a reference-only backend: opening and menu
+#                                scenes it draws correctly (pixel reference) and the final performance comparison; it
+#                                is installed and selectable, never the default (its world is ~750 no-op pipelines)
 #   --profile fidelity|perf      (VICTORY_MAC_PROFILE, default perf; --fidelity / --perf)
 #       fidelity  Series X, the title's own output size from its settings (2560x1440, written into the DATA
 #                 directory's copy of settings.xml before the run), VICTORY_OUTPUT=0: no resolution patch;
@@ -48,9 +51,26 @@
 #   --exec                       run `victory.exe <the arguments after -->` in the foreground (stdout/stderr stay on the terminal,
 #                                the exit status is victory.exe's) with the environment of a run: same prefix, DLLs, data and cache
 #                                folders, DXC front end. For `victory.exe warm` (tools/mac/drop-ab.sh). Needs at least one argument.
-#   --allow-concurrent           start although another victory.exe is running (two can run the GPU out of memory)
+#   --allow-concurrent           start although another victory.exe is running (two can run the GPU out of memory). Only with
+#                                --i-have-approval (or VICTORY_MAC_CONCURRENT_APPROVED=1): the Mac integration lead approves it
+#   --i-have-approval            the approval --allow-concurrent needs
+#   --lock-timeout SEC           how long to queue for the game lock (default 0 = for ever); exit status 4 when it runs out
+#
+# ONE GAME AT A TIME on this Mac: before it starts victory.exe (the title, or --exec; not --print-env) run.sh takes the
+# machine-wide game lock (tools/mac/game-lock.sh: a directory next to all checkouts, shared by every worktree), queues if
+# another run holds it (printing the holder every 30 s), takes over a lock whose holder is gone, and lets it go when the
+# run ends, times out or is interrupted. `tools/mac/game-lock.sh status` shows holder and queue. Keep heavy CPU work (builds,
+# tests) away from a run: tools/mac/check.sh runs niced with fewer jobs while the lock is held. Every run logs the load
+# average every 10 s to <out>/load.log (and at the start in start.txt), to tell a clean frame-time run from a noisy one.
 #
 # Other VICTORY_* / WINE* variables in the environment pass through unchanged.
+# The Metal stage (the directory with front/, x86_64-windows/ and x86_64-unix/) is found in this order:
+#   1. $VICTORY_METAL_OUT (environment)
+#   2. $ROOT/metal/target/wine-stage (this checkout's own build, if it has a stage)
+#   3. VICTORY_METAL_OUT from tools/mac/run.local.env (untracked, in .gitignore; machine-specific values)
+# tools/mac/run.local.env is sourced at the start if it exists; a variable already set in the environment wins over the
+# file. With no stage found, the Metal backend stops with an error (set VICTORY_METAL_OUT, write run.local.env, or use
+# --backend d3dmetal). VICTORY_METAL_ARCHIVE (read-only archive of compiled Metal libraries) passes through the same way.
 # Wine: VICTORY_MAC_WINE_DIR, else ../VIctory-macOS/target/wine-cx next to this checkout.
 # Builds (once) the DXC front end tools/macos/dxc-d3dmetal.sh and sets VICTORY_DXC_HELPER / DXC_LIB /
 # VICTORY_DXC_DIR for the helper shaders (docs/mac/PATCHES.md, G4). Only the Wine processes of the
@@ -62,20 +82,38 @@ WDIR="${VICTORY_MAC_WINE_DIR:-$G/VIctory-macOS/target/wine-cx}"
 WINE="$WDIR/bin/wine"; SERVER="$WDIR/bin/wineserver"
 
 die() { echo "tools/mac/run.sh: $*" >&2; exit 2; }
+
+# machine-specific settings: tools/mac/run.local.env (untracked). The environment wins over the file; the file's stage
+# is only the last place to look (see the head of this file), so it is kept apart from the environment's.
+env_stage="${VICTORY_METAL_OUT:-}"; local_stage=""
+local_env="$ROOT/tools/mac/run.local.env"
+if [ -f "$local_env" ]; then
+    saved=()
+    for n in $(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$local_env" | sort -u); do
+        if [ -n "${!n+x}" ]; then saved+=("$n=${!n}"); fi
+    done
+    unset VICTORY_METAL_OUT
+    # shellcheck disable=SC1090
+    set -a; . "$local_env"; set +a
+    local_stage="${VICTORY_METAL_OUT:-}"
+    unset VICTORY_METAL_OUT
+    for kv in ${saved[@]+"${saved[@]}"}; do export "${kv%%=*}=${kv#*=}"; done
+    [ -z "$env_stage" ] || export VICTORY_METAL_OUT="$env_stage"
+fi
 usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # a Windows path for a Wine process: Z: is the Unix root
 winpath() { printf 'Z:%s' "$(printf '%s' "$1" | tr / '\\')"; }
 
 # ---- options ---------------------------------------------------------------
-backend="${VICTORY_MAC_BACKEND:-d3dmetal}"; profile="${VICTORY_MAC_PROFILE:-perf}"
+backend="${VICTORY_MAC_BACKEND:-metal}"; profile="${VICTORY_MAC_PROFILE:-perf}"
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
-present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
+lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --backend) backend=${2:?--backend d3dmetal|metal}; shift ;;
+        --backend) backend=${2:?--backend metal|d3dmetal}; shift ;;
         --profile) profile=${2:?--profile fidelity|perf}; shift ;;
         --fidelity) profile=fidelity ;; --perf) profile=perf ;;
         --exe) exe=${2:?}; shift ;; --out) out=${2:?}; shift ;; --timeout) tmo=${2:?}; shift ;;
@@ -92,7 +130,8 @@ while [ $# -gt 0 ]; do
         --settings-output) settings_output=${2:?}; shift ;;
         --log-render-size) render_size=1 ;; --frametime-log) frametime=1 ;;
         --console) console=${2:?}; shift ;; --build) build=1 ;; --sample) sample=${2:?}; shift ;;
-        --allow-concurrent) concurrent=1 ;;
+        --allow-concurrent) concurrent=1 ;; --i-have-approval) approved=1 ;;
+        --lock-timeout) lock_tmo=${2:?--lock-timeout SECONDS}; shift ;;
         --print-env|--dry-run) print_env=1 ;;
         --exec) execmode=1 ;;
         -h|--help) usage ;;
@@ -125,6 +164,10 @@ fi
     || die "--record-at is f<N>, w<N> or seconds, not '$record_at' (the build would take anything else as 'wait for the trigger file')"
 case "$tmo" in ''|*[!0-9]*) die "--timeout takes whole seconds" ;; esac
 case "$sample" in ''|*[!0-9]*) die "--sample takes whole seconds" ;; esac
+case "$lock_tmo" in ''|*[!0-9]*) die "--lock-timeout takes whole seconds" ;; esac
+if [ "$concurrent" = 1 ] && [ "$approved" = 0 ] && [ "${VICTORY_MAC_CONCURRENT_APPROVED:-0}" != 1 ]; then
+    die "--allow-concurrent needs the approval of the Mac integration lead: add --i-have-approval (or VICTORY_MAC_CONCURRENT_APPROVED=1) once it is given. Only one game at a time otherwise (the queue is automatic: drop --allow-concurrent)"
+fi
 
 # ---- paths -----------------------------------------------------------------
 time_name="$(date +%Y%m%d-%H%M%S)"
@@ -149,7 +192,16 @@ if [ -z "$prefix" ]; then
     if [ -n "${WINEPREFIX:-}" ]; then prefix="$WINEPREFIX"
     elif [ "$backend" = metal ]; then prefix="$metal_prefix"; else prefix="$d3dm_prefix"; fi
 fi
-stage="${VICTORY_METAL_OUT:-$ROOT/metal/target/wine-stage}"
+# the Metal stage: environment, then this checkout's own build, then run.local.env (resolved only for the Metal backend)
+stage=""; stage_from=""
+if [ "$backend" = metal ]; then
+    if [ -n "$env_stage" ]; then stage="$env_stage"; stage_from="VICTORY_METAL_OUT (environment)"
+    elif [ -f "$ROOT/metal/target/wine-stage/front/d3d12.dll" ]; then stage="$ROOT/metal/target/wine-stage"; stage_from="$ROOT/metal/target/wine-stage"
+    elif [ -n "$local_stage" ]; then stage="$local_stage"; stage_from="VICTORY_METAL_OUT in tools/mac/run.local.env"
+    else die "no Metal stage: VICTORY_METAL_OUT is not set, $ROOT/metal/target/wine-stage does not exist, and tools/mac/run.local.env has none. Set VICTORY_METAL_OUT, or put it in tools/mac/run.local.env, or use --backend d3dmetal (reference-only)"
+    fi
+    [ -d "$stage" ] || die "the Metal stage $stage ($stage_from) is not a directory; fix VICTORY_METAL_OUT or tools/mac/run.local.env, or use --backend d3dmetal (reference-only)"
+fi
 SYS32="$prefix/drive_c/windows/system32"
 
 # ---- checks that need no side effect ----------------------------------------
@@ -176,6 +228,7 @@ base_overrides="mscoree,mshtml=;winedbg.exe=d"
 if [ "$backend" = metal ]; then
     export WINEDLLOVERRIDES="$base_overrides;d3d12core=b;d3d12,dxgi=n,b"
     export WINEDLLPATH="$stage${WINEDLLPATH:+:$WINEDLLPATH}"
+    export VICTORY_METAL_OUT="$stage"
     export VICTORY_METAL_LOG=1
     export VICTORY_METAL_NOTIMPL_LOG="$(winpath "$out/notimpl.log")"
 else
@@ -241,8 +294,9 @@ describe() {
     fi
     [ "$corpus" = 0 ] || echo "# corpus: --record-at ${record_at} (--corpus-frame ${corpus_frame}) plus --no-watchdog"
     if [ "$backend" = metal ]; then
-        echo "# metal: stage $stage; front/d3d12.dll front/dxgi.dll x86_64-windows/victory_metal_bridge.dll go into the prefix's system32 (originals kept as .metal-orig)"
+        echo "# metal: stage $stage (from $stage_from); front/d3d12.dll front/dxgi.dll x86_64-windows/victory_metal_bridge.dll go into the prefix's system32 (originals kept as .metal-orig)"
     else
+        echo "# d3dmetal: reference-only backend (openings/menus pixel reference, perf comparison)"
         echo "# d3dmetal: any .metal-orig dlls in the prefix's system32 are put back first"
     fi
     for v in "${UNSET[@]+"${UNSET[@]}"}"; do echo "# unset: $v"; done
@@ -258,13 +312,46 @@ print_environment() {
         { print swap(swap($0, ENVIRON["WIN_HOME"], "Z:~"), ENVIRON["HOME"], "~") }'
 }
 
+if [ "$backend" = d3dmetal ]; then
+    echo "d3dmetal: reference-only backend (openings/menus pixel reference, perf comparison)" >&2
+fi
 if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
+
+# ---- the game lock, cleanup ---------------------------------------------------
+# (victory.exe is only ever started below this line; --print-env has left already)
+. "$ROOT/tools/mac/game-lock.sh"
+GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"
+pid=""; wd=""; sm=""; ld=""; _cleaned=0
+cleanup() {
+    [ "$_cleaned" = 0 ] || return 0
+    _cleaned=1
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        # interrupted: the game must not outlive the lock
+        kill -TERM "$pid" 2>/dev/null; "$SERVER" -k 2>/dev/null
+        for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+        kill -KILL "$pid" 2>/dev/null
+    fi
+    for _j in "$wd" "$sm" "$ld"; do
+        [ -z "$_j" ] || { pkill -P "$_j" 2>/dev/null; kill "$_j" 2>/dev/null; }
+    done
+    gl_release
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+if [ "$concurrent" = 1 ]; then
+    echo "tools/mac/run.sh: warning: --allow-concurrent (approved): NOT taking the game lock; frame times of any run are unreliable" >&2
+else
+    GL_CMD="victory.exe $([ "$execmode" = 1 ] && echo "--exec ${title_args[*]}" || echo title) backend $backend"
+    gl_acquire "$backend" "$out" "$lock_tmo" || exit 4
+fi
 
 # ---- from here on: side effects --------------------------------------------
 [ -x "$WINE" ] || { echo "no Wine at $WINE" >&2; exit 1; }
 [ -f "$exe" ] || { echo "no exe $exe" >&2; exit 1; }
 if [ "$concurrent" = 0 ]; then
-    others=$(pgrep -f 'victory\.exe' | tr '\n' ' ')
+    # (the lock is ours; a victory.exe that is still running was not started through run.sh)
+    others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe}" | tr '\n' ' ')   # (the pattern is a test knob)
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
 fi
 
@@ -350,7 +437,9 @@ fi
 # --exec: victory.exe with other arguments, in the environment above, in the foreground
 if [ "$execmode" = 1 ]; then
     "$SERVER" -k 2>/dev/null; "$SERVER" -w 2>/dev/null
-    "${cmd[@]}"; st=$?
+    "${cmd[@]}" &
+    pid=$!
+    wait $pid; st=$?
     "$SERVER" -k 2>/dev/null
     exit "$st"
 fi
@@ -363,6 +452,7 @@ print_environment >"$out/run-env.txt"
     echo "checkout $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null) ($(git -C "$ROOT" status --porcelain 2>/dev/null | wc -l | tr -d ' ') changed files)"
     echo "exe $(shasum -a 256 "$exe" | cut -c1-16) $(stat -f %Sm -t %FT%T "$exe")"
     [ "$watchdog_off" = 0 ] || echo "non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG})"
+    echo "load average at start: $(uptime | sed 's/.*load averages*: //')"
     [ "$profile" = fidelity ] && echo "settings.xml $(grep -A3 '<resolutionFullscreen>' "$settings" | tr -d ' \n')" || echo "non-fidelity: output patched to ${VICTORY_OUTPUT}"
 } >"$out/start.txt"
 cat "$out/start.txt"
@@ -391,11 +481,21 @@ if [ "$sample" -gt 0 ]; then
     ) 2>/dev/null &
     sm=$!
 fi
+# the load average every 10 s, next to the frame times: a noisy machine is visible afterwards
+(
+    while kill -0 $pid 2>/dev/null; do
+        echo "$(date +%FT%T) load average: $(uptime | sed 's/.*load averages*: //')" >>"$out/load.log"
+        sleep 10
+    done
+) 2>/dev/null &
+ld=$!
 start=$(date +%s)
 wait $pid; st=$?
 {
     [ -z "${wd:-}" ] || { pkill -P $wd; kill $wd; wait $wd; }
     [ -z "${sm:-}" ] || { kill $sm; wait $sm; }
+    [ -z "${ld:-}" ] || { kill $ld; wait $ld; }
+    wd=""; sm=""; ld=""
 } 2>/dev/null
 "$SERVER" -k 2>/dev/null
 end=$(date +%s)

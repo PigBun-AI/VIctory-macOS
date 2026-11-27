@@ -1,11 +1,11 @@
 #!/bin/bash
-# A/B of where the title's draws go on the D3DMetal route (docs/mac/PATCHES.md, G8):
+# A/B of where the title's draws go (docs/mac/PATCHES.md, G8; default backend metal, --backend d3dmetal as an option):
 # a WARM run (pipeline book + `victory warm` made before) against a COLD run (new,
 # empty cache), the same input in both, then drop-stats-report.sh on the two.
 # Runs one game each, one after the other (the GPU is shared; never start it while
 # another run is going). Needs a victory.exe built from mac/drop-stats (tools/mac/check.sh).
 #
-#   tools/mac/drop-ab.sh [--out DIR] [--base DIR] [--frames N] [--warm-jobs N] [--perf|--fidelity]
+#   tools/mac/drop-ab.sh [--out DIR] [--base DIR] [--frames N] [--warm-jobs N] [--perf|--fidelity] [--backend metal|d3dmetal]
 #                        [--make-book] [--warm-only|--cold-only] [--before-cold CMD]
 #   tools/mac/drop-ab.sh --report RUN_DIR [RUN_DIR ...] [--frames N]     (logs only, no run)
 #
@@ -16,6 +16,7 @@
 #                   also copies the `cache` folder beside it, the cold run starts with an EMPTY one
 #   --perf|--fidelity  run.sh's profile (default --perf: the output patched to 1280x720; --fidelity
 #                   is run.sh's fidelity profile, which writes 2560x1440 into the copy's settings.xml)
+#   --backend B     run.sh's backend for every run of this script (default metal; d3dmetal is reference-only)
 #   --frames N      the report counts world frames 1..N (default 600)
 #   --warm-jobs N   processes of `victory warm` (default: its own, two thirds of the cores)
 #   --make-book     if the warm cache has no known-pipelines.bin, first make one with a normal run
@@ -25,12 +26,12 @@
 #                   folder and nothing here empties it -- the cold run goes FIRST for that reason)
 #
 # Both runs: VICTORY_MAC_DROP_STATS=2 (per-present lines with the host pipelines that ran) and
-# `tools/mac/run.sh --backend d3dmetal --perf|--fidelity --data D/data --cache D/cache --out D/run`
+# `tools/mac/run.sh --backend <metal|d3dmetal> --perf|--fidelity --data D/data --cache D/cache --out D/run`
 # (run.sh's own input script world-neutral.txt and Enter keys, its 900 s timeout; the options are
 # explicit, nothing of run.sh's environment is copied here). The log folder is the --out given to
 # run.sh, so there is nothing to look for; run.sh's own files (start.txt, run-env.txt, summary.txt,
 # stdout.log, stderr.log) are in <warm|cold|book>/run. The data folder is the copy given with --data;
-# it is not run.sh's per-profile directory (victory-data-livetr-<profile>-d3dmetal), which is never touched.
+# it is not run.sh's per-profile directory (victory-data-livetr-<profile>-<backend>), which is never touched.
 # stdout is stamped with the time each line was seen (stdout.ts.log), to tie D3DMetal's
 # `marking PSO(n) as no-op` lines to presents.
 #
@@ -49,7 +50,7 @@ G="${GTA6_ROOT:-$(cd "$ROOT/.." && pwd)}"
 cd "$ROOT" || exit 1
 REPORT="$ROOT/tools/mac/drop-stats-report.sh"
 RUN="$ROOT/tools/mac/run.sh"
-profile=perf
+profile=perf; backend=metal
 out=""; base=""; frames=600; wjobs=""; book=0; only=""; before=""; report_only=()
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -57,6 +58,7 @@ while [ $# -gt 0 ]; do
         --warm-jobs) wjobs=$2; shift ;; --make-book) book=1 ;;
         --warm-only) only=warm ;; --cold-only) only=cold ;; --before-cold) before=$2; shift ;;
         --report) shift; while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do report_only+=("$1"); shift; done; continue ;;
+        --backend) backend=${2:?--backend metal|d3dmetal}; shift ;;
         --perf) profile=perf ;; --fidelity) profile=fidelity ;;
         -h|--help) sed -n '2,/^set -u/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "usage: see the head of $0" >&2; exit 2 ;;
@@ -78,7 +80,7 @@ EXE="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
     echo "drop-ab $(date +%FT%T)"
     echo "checkout $ROOT @ $(git rev-parse --short HEAD) $(git rev-parse --abbrev-ref HEAD)"
     echo "exe $(ls -l "$EXE" | awk '{print $5, $6, $7, $8}')"
-    echo "profile $profile (run.sh --backend d3dmetal --$profile)"
+    echo "profile $profile (run.sh --backend $backend --$profile)"
     echo "base data $base"; echo "base cache $basecache"
     echo "input tools/mac/input/world-neutral.txt sha1 $(shasum tools/mac/input/world-neutral.txt | cut -c1-12)"
     echo "frames $frames"
@@ -87,7 +89,7 @@ EXE="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 # env of both runs; everything else is run.sh's
 export VICTORY_MAC_DROP_STATS=2
 # the options every run.sh call of this script has: one place, one backend
-RUN_OPTS=(--backend d3dmetal "--$profile" --exe "$EXE")
+RUN_OPTS=(--backend "$backend" "--$profile" --exe "$EXE")
 
 # a copy of a folder: an APFS clone (no extra space until written), else a plain copy
 clone() { cp -c -R "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -R "$1" "$2"; }; }

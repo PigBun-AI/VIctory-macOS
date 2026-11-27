@@ -1,9 +1,10 @@
 #!/bin/bash
 # Batch acceptance of the ray-tracing structure builder (docs/mac/rt-builder-acceptance.md):
-#   tools/mac/rt-builder-accept.sh run   [--out DIR] [--timeout SEC] [--backends "d3dmetal metal"] [--baseline] [-- run.sh options]
+#   tools/mac/rt-builder-accept.sh run   [--out DIR] [--timeout SEC] [--backends "metal"] [--baseline] [-- run.sh options]
 #   tools/mac/rt-builder-accept.sh check LOGDIR_OR_stderr.log [...]     (logs only; exit 0 = every check passed)
 #   tools/mac/rt-builder-accept.sh print                                  (the run.sh command lines, nothing started)
-# `run` starts one game per backend, one after the other (never two at once), with
+# `run` starts one game per backend (default: metal only; --backends "metal d3dmetal" adds the reference-only D3DMetal), one after
+# the other (never two at once; run.sh holds the game lock), with
 # VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 VICTORY_MAC_DROP_STATS=1 and run.sh --perf, then checks each.
 # --baseline adds a run per backend with the builder off (same input) for the drop counts to compare.
 set -u
@@ -66,7 +67,7 @@ case "${1:-}" in
     exit $rc ;;
   run|print)
     mode=$1; shift
-    out="$ROOT/target/mac-runs/rt-builder-$(date +%Y%m%d-%H%M%S)"; tmo=900; backends="d3dmetal metal"; base=0; extra=()
+    out="$ROOT/target/mac-runs/rt-builder-$(date +%Y%m%d-%H%M%S)"; tmo=900; backends="metal"; base=0; extra=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --out) out=$2; shift ;; --timeout) tmo=$2; shift ;; --backends) backends=$2; shift ;;

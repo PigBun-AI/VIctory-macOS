@@ -82,3 +82,6 @@ tools/mac/sync.local.env
 
 # private word list and local settings, never committed
 tools/mac/privacy.local.txt
+
+# machine-specific settings for tools/mac/run.sh, never committed
+tools/mac/run.local.env

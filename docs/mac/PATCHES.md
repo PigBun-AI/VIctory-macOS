@@ -164,13 +164,25 @@ off while `indirect::amd()` is true. Nothing is selected wrongly: there is no ot
 
 ### M4 — `tools/mac/run.sh`: the one way to start the title on a Mac
 
-One script for both backends (D3DMetal and our Metal backend) and both output profiles; usage, every option and
+One script for both backends (our Metal backend, the default and only main path; D3DMetal, reference-only) and both output profiles; usage, every option and
 variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches:
 
-- **Backend** (`--backend d3dmetal|metal`) is the only difference between two runs, besides the data directories (below): the prefix (`target/wineprefix-livetr-d3dmetal`
+- **Default backend: `metal`** (user decision 2026-11-28): our Metal backend is the one main path. D3DMetal stays installed and selectable
+  with `--backend d3dmetal`, **reference-only**: pixel reference for openings and menus (what it draws correctly) and the final
+  performance comparison; `run.sh` prints `d3dmetal: reference-only backend (openings/menus pixel reference, perf comparison)` on
+  stderr and into `--print-env` / `run-env.txt`.
+- **Stage resolution** (metal): `$VICTORY_METAL_OUT`, else `$ROOT/metal/target/wine-stage` (if it has `front/d3d12.dll`), else
+  `VICTORY_METAL_OUT` from `tools/mac/run.local.env`; none: an error that names the three ways out (set it, write `run.local.env`,
+  `--backend d3dmetal`). **`tools/mac/run.local.env`** is untracked (in `.gitignore`), sourced at the start if present, the environment
+  wins over it; it holds machine-specific values (`VICTORY_METAL_OUT`, `VICTORY_METAL_ARCHIVE`, `VICTORY_GAME_LOCK`).
+- **Game lock** (`tools/mac/game-lock.sh`, taken by `run.sh` before any `victory.exe`, not by `--print-env`): one game instance on the
+  machine at a time, shared by all worktrees; queueing, stale-lock takeover, release on end/timeout/interrupt; `--allow-concurrent`
+  needs `--i-have-approval`; `check.sh` runs niced while it is held; each run logs the load average (`load.log`). See `docs/mac/RUN.md`.
+  *Remove when* never needed: this is the rule for the machine, not a workaround.
+- **Backend** (`--backend metal|d3dmetal`) is the only difference between two runs, besides the data directories (below): the prefix (`target/wineprefix-livetr-d3dmetal`
   or `-metal`, never shared), the dlls in its `system32` (the Metal ones are installed with the originals kept as `.metal-orig`,
   and put back when the D3DMetal backend is chosen), `WINEDLLPATH`, `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG`,
-  `VICTORY_METAL_NOTIMPL_LOG`. `run.sh --print-env --backend d3dmetal` against `--backend metal` shows exactly that.
+  `VICTORY_METAL_NOTIMPL_LOG`. `run.sh --print-env --backend d3dmetal` against `--backend metal` (or no option) shows exactly that.
 - **Profile** (`--profile fidelity|perf`, default **perf** for now, see "Profiles and when to switch" below).
 - Everything else is set the same way for both: the helper DXC (G4: `VICTORY_DXC_HELPER`, `VICTORY_DXC_DIR`, `DXC_LIB`), the input
   (I1: `VICTORY_KEYS` 8-3600/3:Enter, `VICTORY_INPUT_REPLAY` the neutral input), `VICTORY_FAULT_TRACKING` (1), the masked-store
@@ -186,7 +198,8 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
 - `--print-env` prints what would be passed (sorted, `~` for the home directory) and the command, and does nothing else.
 - Each run keeps `run-env.txt`, `start.txt`, `summary.txt` next to its logs.
 - Refuses: the Metal backend on a D3DMetal prefix (`wineprefix-play`, `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`); a start while
-  another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory; `--allow-concurrent`).
+  another run holds the game lock (it queues instead; two games at once ran a 32 GB Mac out of GPU memory; `--allow-concurrent` only
+  with `--i-have-approval`).
 
 *Not verified by a run:* the script was exercised with `--print-env` and with a stand-in Wine (data copy, `settings.xml` edit,
 dll install and restore, watchdog, sampler); no title was started.
@@ -332,7 +345,7 @@ pipeline it names was created 0..10 s before the line for at least 90% of them (
 if so it gives the draws that ran on no-op pipelines (`psoran`), else only the lines per world frame.
 
 *Run.* `tools/mac/drop-ab.sh` (warm = `--make-book` run if needed + `victory warm` + run, cold = empty cache, same
-input script and Enter keys as `run.sh` has them; both through `run.sh --backend d3dmetal --perf|--fidelity --data --cache --out`,
+input script and Enter keys as `run.sh` has them; both through `run.sh --backend metal` (default; `--backend d3dmetal` is an option of the script) `--perf|--fidelity --data --cache --out`,
 and `victory warm` through `run.sh --exec -- warm`, so the prefix and the environment are `run.sh`'s) and prints the share of each class over the first N world frames. *Remove when* the Metal backend replaces the D3DMetal path.
 
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)

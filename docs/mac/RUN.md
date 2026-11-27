@@ -1,6 +1,7 @@
 # Running the title on a Mac: `tools/mac/run.sh`
 
-One script starts `victory.exe` on this Mac, on either backend, with the same configuration for both. It is not a build step:
+One script starts `victory.exe` on this Mac. **The default backend is our Metal backend (`metal`)**; D3DMetal stays installed and
+selectable (`--backend d3dmetal`) as a reference only (see "Backends"). Both get the same configuration. It is not a build step:
 `tools/mac/check.sh` builds (`target/x86_64-pc-windows-gnullvm/release/victory.exe`). Patch notes: `docs/mac/PATCHES.md` (M4).
 
 ```sh
@@ -14,7 +15,7 @@ Nothing is written outside this checkout's `target/` and the data directories na
 
 | Choice | Option (variable) | Values | Default |
 |---|---|---|---|
-| Backend | `--backend` (`VICTORY_MAC_BACKEND`) | `d3dmetal`: Apple's D3DMetal in CrossOver Wine. `metal`: our Metal backend (`d3d12.dll`, `dxgi.dll` and the bridge in the prefix) | `d3dmetal` |
+| Backend | `--backend` (`VICTORY_MAC_BACKEND`) | `metal`: our Metal backend (`d3d12.dll`, `dxgi.dll` and the bridge in the prefix), the one main path. `d3dmetal`: Apple's D3DMetal in CrossOver Wine, **reference-only** | `metal` |
 | Profile | `--profile`, `--fidelity`, `--perf` (`VICTORY_MAC_PROFILE`) | `fidelity`, `perf` | `perf` (until the owner switches it, `PATCHES.md`) |
 
 **The backend decides nothing but:** the prefix, the dlls in its `system32`, `WINEDLLPATH`, `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG` and
@@ -39,16 +40,61 @@ only ones): the backend choice, `WINEDLLPATH` / `WINEDLLOVERRIDES`, `VICTORY_MET
 
 ### Backends
 
-- **d3dmetal**: prefix `target/wineprefix-livetr-d3dmetal` (cloned from the old `target/wineprefix-livetr` on first use if that exists,
-  else made by Wine). If the prefix's `system32` holds `d3d12.dll.metal-orig` / `dxgi.dll.metal-orig` they are put back first.
-- **metal**: prefix `target/wineprefix-livetr-metal`, made with `wineboot` on first use. The stage is `metal/target/wine-stage`
-  (`VICTORY_METAL_OUT` changes it); `front/d3d12.dll`, `front/dxgi.dll` and `x86_64-windows/victory_metal_bridge.dll` are copied into the
+- **metal** (default): prefix `target/wineprefix-livetr-metal`, made with `wineboot` on first use. The **stage** (the directory with
+  `front/`, `x86_64-windows/`, `x86_64-unix/`) is resolved in this order, the first that exists wins:
+  1. `$VICTORY_METAL_OUT` (environment);
+  2. `$ROOT/metal/target/wine-stage` (this checkout's own build, if it holds `front/d3d12.dll`);
+  3. `VICTORY_METAL_OUT` from `tools/mac/run.local.env` (below).
+  None of them: the script stops and says to set `VICTORY_METAL_OUT`, or write it into `run.local.env`, or use `--backend d3dmetal`.
+  `--print-env` names the stage and where it came from. `front/d3d12.dll`, `front/dxgi.dll` and `x86_64-windows/victory_metal_bridge.dll` are copied into the
   prefix's `system32`, the originals first kept as `*.metal-orig` (once). No stage: the script says to run `tools/metal/build-unixlib.sh`
   (`--build` runs it). `WINEDLLPATH=<stage>[:...]`, `WINEDLLOVERRIDES` ends in `d3d12,dxgi=n,b`, `VICTORY_METAL_LOG=1`,
   `VICTORY_METAL_NOTIMPL_LOG=<Wine Z: path of the run's out directory>\notimpl.log`. The D3DMetal prefixes (`wineprefix-play`,
   `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`) are refused. Debug switches of the back (`VICTORY_METAL_TRACE`, `_STEP`,
   `_SKIP_GS_INDIRECT`, `_DROPSTATS`, `_CALLSTATS`, `_ARCHIVE`, `_LENIENT`) are only passed through from the environment, never set;
   skipping geometry-shader indirect draws is not a default.
+- **d3dmetal** (`--backend d3dmetal`): **reference-only**. It stays installed for what it draws correctly, as a pixel reference
+  (openings, menus) and for the final performance comparison; it is not a path to fix anything on (in the world it turns about 750
+  pipelines into no-ops). `run.sh` says so on stderr, in `--print-env` and in `run-env.txt`:
+  `d3dmetal: reference-only backend (openings/menus pixel reference, perf comparison)`. Prefix `target/wineprefix-livetr-d3dmetal`
+  (cloned from the old `target/wineprefix-livetr` on first use if that exists, else made by Wine). If the prefix's `system32` holds
+  `d3d12.dll.metal-orig` / `dxgi.dll.metal-orig` they are put back first.
+
+### `tools/mac/run.local.env` (machine-specific, untracked)
+
+If `tools/mac/run.local.env` exists, `run.sh` sources it at the start (it is in `.gitignore`, never committed; one per checkout /
+worktree). A variable already set in the environment wins over the file; the file's `VICTORY_METAL_OUT` is the last place the stage is
+looked for (step 3 above). Example, on the machine of the Metal backend's owner (the `current` link is a symbolic link to the latest
+usable snapshot, kept by the Metal backend's owner):
+
+```sh
+VICTORY_METAL_OUT="$HOME/Documents/GTA6Project/research/metal-stage/current"
+VICTORY_METAL_ARCHIVE="$HOME/Documents/GTA6Project/victory-data/metal-archive"   # read-only, fewer cold compiles
+# VICTORY_GAME_LOCK=...   the place of the game lock (default below)
+```
+
+`VICTORY_METAL_ARCHIVE` is only passed through to the title (the Metal back reads it); `run.sh` does not look inside.
+
+## One game at a time (the game lock)
+
+**Only one game instance may run on this Mac at any time**, across all checkouts: two can run the GPU out of memory, and any heavy CPU job
+makes frame times meaningless.
+
+- Before `run.sh` starts `victory.exe` (the title, or `--exec`; not `--print-env`) it takes the machine-wide lock
+  `$VICTORY_GAME_LOCK`, default `$HOME/Documents/GTA6Project/research/.victory-game.lock`, a directory made with `mkdir`
+  (atomic) holding pid, process start, time, worktree, backend, out directory and command of the holder.
+- If the lock is held, `run.sh` queues (first come, first served) and prints the holder every 30 s. `--lock-timeout SEC` (default 0 =
+  wait for ever) gives up after SEC seconds with **exit status 4**.
+- A lock whose process is gone (killed, crashed) is stale and is taken over by the next run (it says so on stderr).
+- The lock is let go when the run ends, hits `--timeout`, or is interrupted (`INT`, `TERM`: the game is stopped first, so it never
+  outlives the lock). Only `kill -9` of `run.sh` leaves a lock behind, and that one is stale at once.
+- `tools/mac/game-lock.sh status` prints the holder and the queue; `held` is exit 0 if a live process holds it.
+- `--allow-concurrent` (runs without the lock) is only accepted together with `--i-have-approval` (or
+  `VICTORY_MAC_CONCURRENT_APPROVED=1`): it needs the approval of the Mac integration lead. Without it `run.sh` stops with an error.
+- Heavy CPU jobs (builds, test runs, `cargo`) belong **between** runs, not during one: `tools/mac/check.sh` runs itself with
+  `nice -n 15` and `CARGO_BUILD_JOBS=4` while the lock is held and says so; other heavy jobs should do the same or wait.
+- Every run records the load average (`uptime`) at the start in `start.txt` and every 10 s in `<out>/load.log` (beside `frametime.log`),
+  so a frame-time run on a busy machine can be told from a clean one.
 
 ## Data directories
 
@@ -90,7 +136,8 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--console series-x\|series-s` | the console model the title sees; `series-x` passes no `--console` | `series-x` |
 | `--build` | metal: run `tools/metal/build-unixlib.sh` first | off |
 | `--sample SEC` | every SEC seconds a line in `<out>/mem.csv`: GPU memory in use and allocated (`ioreg`), GPU `recoveryCount`, swap, `vm_stat` pages, RSS of all `victory.exe` | off |
-| `--allow-concurrent` | start although another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory) | refused |
+| `--allow-concurrent`, `--i-have-approval` | start without the game lock although another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory); needs the approval of the Mac integration lead (`--i-have-approval` or `VICTORY_MAC_CONCURRENT_APPROVED=1`) | refused |
+| `--lock-timeout SEC` | how long to queue for the game lock (0: for ever); exit status 4 when it runs out | 0 |
 | `--print-env`, `--dry-run` | print and exit | |
 | `--exec` | run `victory.exe ARGS` (the arguments after `--`, e.g. `-- warm --jobs 4`) in the foreground instead of the title, with the environment, prefix, DLLs, data and cache of a run; no keys, no time limit, no log folder, exit status is `victory.exe`'s | off |
 | `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` (with `--exec`: the whole `victory.exe` command line) | |
@@ -136,9 +183,9 @@ tools/mac/run.sh --print-env --corpus --backend metal        # shows VICTORY_REC
 
 `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
 hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` (the `--print-env` text of this run), `summary.txt`
-(status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, and as asked `mem.csv`, `frametime.log`,
-`notimpl.log` (metal).
+(status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, `load.log` (load average every 10 s), and as asked
+`mem.csv`, `frametime.log`, `notimpl.log` (metal).
 
-Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env --backend metal)`.
+Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env)`.
 
 Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.

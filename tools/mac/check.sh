@@ -10,8 +10,14 @@
 # returns the last command's status and used to hide a failed build). Plain sh:
 # sync-windows.sh runs this with `sh`.
 set -u
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/../.."
 . tools/mac/env.sh || { echo "check FAILED: environment (tools/mac/env.sh)" >&2; exit 1; }
+# A game is running (it holds the game lock, tools/mac/game-lock.sh): do not disturb its frame times, run niced with fewer jobs
+if [ -z "${VICTORY_CHECK_NICED:-}" ] && bash tools/mac/game-lock.sh held 2>/dev/null; then
+    echo "check.sh: a game holds the game lock: running niced (nice -n 15) with CARGO_BUILD_JOBS=4" >&2
+    exec env VICTORY_CHECK_NICED=1 CARGO_BUILD_JOBS=4 nice -n 15 sh "$SELF" "$@"
+fi
 LOGS="${LOGS:-target/mac-logs}"
 mkdir -p "$LOGS"
 FAILED=""
