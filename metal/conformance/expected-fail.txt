@@ -1,0 +1,69 @@
+# Known differences between Wine + D3DMetal and Wine + our Metal backend in
+# `-p victory-shader` (tools/metal/compare-tests.sh). TEST | SIDE | REASON
+# SIDE: ours = fails on ours, passes on D3DMetal; both = fails on both.
+# Written 2026-11-27 from the first full comparison (D3DMetal: 1 failed; ours: 63 failed of 454).
+# The reason names the first call a test makes that the front/back does not implement yet.
+
+emit::crosslane_tests::pixel_quad_swizzle_and_dpp_validate_and_create_pipeline | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::deltas::tests::non_provoking_vertex_values_reach_the_pixel_shader | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::deltas::tests::per_vertex_center_lowers_deltas_to_zero_and_interpolates_p0 | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::dpp_row_masks_name_the_console_rows_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::first_lanes_kept_in_halves_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::half_add_reduction_across_halves_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::lane_masks_passed_between_halves_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::lane_reads_across_halves_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::lds_in_a_loop_in_halves_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::lds_synced_in_halves_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::literal_wave64_programs_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::permlanex16_picks_lanes_as_the_console_does_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::predicated_diamond_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::predicated_early_out_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::reductions_and_prefixes_across_halves_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::skip_guard_with_uniform_loop_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::thread_ticket_relabels_2d_and_partial_tail_groups_bijectively | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::trampoline_early_out_and_mask_data_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::uniform_buffer_load_loop_across_halves_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::wave64_programs_in_halves_match_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::halves_tests::wave_scalarization_lockstep_loop_matches_the_console_on_every_gpu | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::image_store_tests::d16_float_stores_of_some_channels_run_on_the_host | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::image_store_tests::float_stores_of_each_dmask_run_on_the_host | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::image_store_tests::integer_stores_run_on_the_host | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::image_store_tests::mip_stores_to_the_views_level_run_on_the_host | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::memory_tests::early_depth_stencil_skips_occluded_read_mark_pixel_shaders | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::memory_tests::heap_direct_texture_reads_mark_their_heap_index | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::memory_tests::typed_store_marks_use_the_element_stride_at_page_boundaries | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::mesh_index_tests::gpu::mesh_index_bounds_and_zero_vertex_on_gpu | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::rect::tests::rectangles_get_their_fourth_corner | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::stride_tests::a_heap_buffer_read_where_no_buffer_view_is_reads_zeros | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::stride_tests::a_sampler_chosen_by_a_uniform_branch_samples_as_chosen | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::stride_tests::d16_typed_buffer_accesses_pass_bits_through_integer_views | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::stride_tests::d16_x_loads_read_r16_uint_and_r16_float_views | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::synthetic_tests::a_compare_mask_joined_with_data_on_the_skip_edge_is_0_there | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::synthetic_tests::a_mask_joined_with_data_at_a_uniform_loop_is_its_number | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::synthetic_tests::gathers_at_a_level_match_the_hardware | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::synthetic_tests::permutes_mask_high_address_bits_and_divergent_branches | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::synthetic_tests::permutes_read_the_lane_named_and_zero_from_lanes_left_out | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::synthetic_tests::relative_moves_in_waterfall_loops_reach_each_lane_s_element | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::tests::edge_flagged_triangles_draw_as_unflagged_ones | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::half_mesh_outputs_reach_the_pixel_shader | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_and_pixel_prune_unused_outputs_under_32k_and_draw | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_repacks_interleaved_scalar_and_vector_outputs_and_prunes_primitives | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_with_aligned_only_overflow_draws | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::mesh_shaders_at_metals_output_limit_draw | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::stub_pipeline_is_created | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::typed_buffer_tests::integer_typed_bits_survive_srv_and_uav_round_trips | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::valu_tests::a_format_load_read_as_halves_loads_the_integer | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::valu_tests::halves_go_through_a_table_as_they_are_and_name_their_views | ours | typed buffer views are not implemented in the back (Status::UNSUPPORTED: needs a texture view of the buffer); the view is not written, reads give zeros
+emit::valu_tests::image_addresses_of_16_bits_and_clamps | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::image_atomic_adds_finish_when_only_the_upper_half_contends | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::image_atomic_adds_of_64_bits_apply_once | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::image_atomics_of_64_bits | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::image_atomics_of_64_bits_in_rounds_match_the_turns | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::image_atomics_of_64_bits_umax_matches_the_locks | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::v_cvt_u16_and_i16_f16_saturate | ours | half NaN to 16-bit integer: v_cvt_i16_f16(0x7e00) gives 0x8000, the console gives 0 (Metal/MSC conversion of NaN; D3DMetal passes)
+emit::valu_tests::v_sin_and_v_cos_f16_reduce_large_turns | ours | v_sin_f16(NaN) gives 0, the console gives NaN (Metal sin of a half NaN; D3DMetal passes)
+emit::waterfall_tests::lanes_sample_the_entry_their_offset_names_in_the_console_waterfall | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::waterfall_tests::lanes_sample_the_texture_their_arm_loaded_or_picked | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::waterfall_tests::lanes_sample_the_texture_their_if_else_arm_chose | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::waterfall_tests::lanes_sample_their_own_texture_in_a_waterfall_narrowed_by_v_cmpx | ours | textures: CreateCommittedResource of a 2D texture is not implemented (E_NOTIMPL, M3)
+emit::semantics_tests::arithmetic_matches_the_hardware | both | legacy FMA/multiply (v_mac_legacy_f32, 0*inf = 0): 102 of 14440 inputs differ from the model on the Apple GPU through D3DMetal as through ours; known, on the list of legacy defects

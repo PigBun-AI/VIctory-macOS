@@ -321,11 +321,16 @@ impl DeviceObj_Impl {
             return;
         };
         if d.ViewDimension != D3D12_SRV_DIMENSION_BUFFER {
-            return; // textures: M3
+            // textures: M3
+            super::note_notimpl(&format!(
+                "ID3D12Device::CreateShaderResourceView(view dimension {})",
+                d.ViewDimension.0
+            ));
+            return;
         }
         // SAFETY: `ViewDimension` says which union member is live.
         let b = unsafe { d.Anonymous.Buffer };
-        let _ = self.dev.create_buffer_view(
+        let r = self.dev.create_buffer_view(
             dest.ptr as u64,
             &dv::BufferView {
                 uav: false,
@@ -338,6 +343,7 @@ impl DeviceObj_Impl {
                 counter: None,
             },
         );
+        view_result("CreateShaderResourceView", d.Format.0, r);
     }
 
     pub(super) fn x_CreateUnorderedAccessView(
@@ -360,11 +366,15 @@ impl DeviceObj_Impl {
             return;
         };
         if d.ViewDimension != D3D12_UAV_DIMENSION_BUFFER {
+            super::note_notimpl(&format!(
+                "ID3D12Device::CreateUnorderedAccessView(view dimension {})",
+                d.ViewDimension.0
+            ));
             return;
         }
         // SAFETY: `ViewDimension` says which union member is live.
         let b = unsafe { d.Anonymous.Buffer };
-        let _ = self.dev.create_buffer_view(
+        let r = self.dev.create_buffer_view(
             dest.ptr as u64,
             &dv::BufferView {
                 uav: true,
@@ -377,6 +387,7 @@ impl DeviceObj_Impl {
                 counter: counter.map(|c| (c, b.CounterOffsetInBytes)),
             },
         );
+        view_result("CreateUnorderedAccessView", d.Format.0, r);
     }
 
     pub(super) fn x_CreateRenderTargetView(
@@ -537,7 +548,7 @@ impl DeviceObj_Impl {
                         d.Dimension.0, hp.Type.0
                     ));
                 }
-                return Err(werr(h));
+                return Err(windows::core::Error::from(windows::core::HRESULT(h.0)));
             }
         };
         let r = ComObject::new(ResourceObj {
@@ -648,6 +659,21 @@ impl DeviceObj_Impl {
                     }
                 }
             }
+        }
+    }
+}
+
+/// The view methods return nothing: say (with `VICTORY_METAL_LOG=1`, and in
+/// the not-implemented statistics) when the view was not made.
+fn view_result(what: &str, format: i32, r: crate::hresult::Result<()>) {
+    if let Err(h) = r {
+        if h == Hr::E_NOTIMPL {
+            super::note_notimpl(&format!(
+                "ID3D12Device::{what}(buffer view, format {format})"
+            ));
+        }
+        if super::log_errors() {
+            eprintln!("victory-metal front: {what} failed: {:#010x}", h.0 as u32);
         }
     }
 }

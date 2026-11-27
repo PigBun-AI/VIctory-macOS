@@ -62,7 +62,7 @@ pub(crate) fn note_notimpl(what: &str) {
     }
 }
 
-fn log_errors() -> bool {
+pub(crate) fn log_errors() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0"))
