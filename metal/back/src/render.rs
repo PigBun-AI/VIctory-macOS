@@ -489,6 +489,8 @@ struct GraphicsInner {
     device: Arc<DeviceInner>,
     kind: Kind,
     raster: Raster,
+    topology: MTLPrimitiveTopologyClass,
+    samples: u32,
     layout: TopLevelLayout,
     mesh: Option<MeshPipelineInfo>,
     vertex_slots: Vec<u32>,
@@ -527,6 +529,17 @@ impl GraphicsPipeline {
 
     pub fn raster(&self) -> Raster {
         self.inner.raster
+    }
+
+    /// The primitive class the pipeline was made for (a draw's topology must
+    /// be of this class).
+    pub fn topology_class(&self) -> MTLPrimitiveTopologyClass {
+        self.inner.topology
+    }
+
+    /// Samples per pixel it renders with.
+    pub fn sample_count(&self) -> u32 {
+        self.inner.samples
     }
 
     /// The argument buffer layout (the same for every stage).
@@ -852,6 +865,8 @@ impl Device {
                 device: self.inner.clone(),
                 kind: prepared.kind,
                 raster: desc.raster,
+                topology: desc.topology,
+                samples: desc.sample_count,
                 layout: prepared.layout.clone(),
                 mesh: prepared.mesh,
                 vertex_slots,

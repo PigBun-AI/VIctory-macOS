@@ -69,6 +69,8 @@ pub(crate) struct DeviceInner {
     pub(crate) addresses: Mutex<AddressMap>,
     pub(crate) timelines: Mutex<Vec<Weak<Timeline>>>,
     pub(crate) compiler: Retained<ProtocolObject<dyn MTL4Compiler>>,
+    /// Pipelines that clear part of an attachment inside a pass.
+    pub(crate) clear_pipes: Mutex<crate::draw::ClearPipes>,
 }
 
 /// The device and everything shared between the objects made from it.
@@ -170,6 +172,7 @@ impl Device {
                 addresses: Mutex::new(AddressMap::default()),
                 timelines: Mutex::new(Vec::new()),
                 compiler,
+                clear_pipes: Mutex::new(Default::default()),
             }),
         })
     }

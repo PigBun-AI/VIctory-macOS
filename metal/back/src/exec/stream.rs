@@ -72,16 +72,16 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
                     return Err(Status::BAD_STREAM);
                 }
                 match other {
-                    Command::SetRootSignature(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootSignature(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootConstants(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootConstants(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootDescriptor(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootDescriptor(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
-                    Command::SetRootTable(c) if c.bind_point != BindPoint::COMPUTE => {
+                    Command::SetRootTable(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
                     Command::Barrier(b) if b.class == BarrierClass::LAYOUT => {
@@ -101,14 +101,38 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
 /// What a list has bound so far: the shadow of its argument buffer and the
 /// objects a dispatch needs.
 #[derive(Default)]
-struct Bound {
-    sig: Option<Arc<RootSig>>,
-    pso: Option<Arc<Pso>>,
+pub(super) struct Side {
+    pub(super) sig: Option<Arc<RootSig>>,
     /// The argument buffer as the stream has set it (root constants,
     /// pointers), `layout.size` bytes.
-    shadow: Vec<u8>,
-    /// Shadow changed since the last dispatch wrote it to the ring.
-    dirty: bool,
+    pub(super) shadow: Vec<u8>,
+    /// Shadow changed since the last dispatch or draw wrote it to the ring.
+    pub(super) dirty: bool,
+}
+
+/// Compute and graphics have a root signature, root arguments and a
+/// pipeline each (as in the original API); they share the argument table's
+/// slot 2, so whoever wrote it last owns it (`owner`).
+#[derive(Default)]
+pub(super) struct Bound {
+    pub(super) compute: Side,
+    pub(super) graphics: Side,
+    pub(super) pso: Option<Arc<Pso>>,
+    pub(super) gpso: Option<Arc<Pso>>,
+    /// `Some(true)`: the argument table's slot 2 holds the graphics arguments.
+    owner: Option<bool>,
+}
+
+fn known_bind_point(b: BindPoint) -> bool {
+    b == BindPoint::COMPUTE || b == BindPoint::GRAPHICS
+}
+
+fn side_of(bound: &mut Bound, b: BindPoint) -> Result<&mut Side, Status> {
+    match b {
+        BindPoint::COMPUTE => Ok(&mut bound.compute),
+        BindPoint::GRAPHICS => Ok(&mut bound.graphics),
+        _ => Err(Status::UNSUPPORTED),
+    }
 }
 
 /// A queue with the lists ended for it and not yet committed.
@@ -118,11 +142,11 @@ struct Batch {
     lists: Vec<CommandList>,
 }
 
-struct Run<'a> {
-    st: &'a mut State,
+pub(super) struct Run<'a> {
+    pub(super) st: &'a mut State,
     batches: Vec<Batch>,
     /// The list being recorded.
-    open: Option<(CommandList, QueueId, Bound)>,
+    pub(super) open: Option<(CommandList, QueueId, Bound)>,
 }
 
 impl State {
@@ -152,7 +176,7 @@ impl State {
     }
 }
 
-type R = Result<(), Status>;
+pub(super) type R = Result<(), Status>;
 
 impl Run<'_> {
     fn command(&mut self, c: &Command<'_>) -> R {
@@ -178,13 +202,26 @@ impl Run<'_> {
             Command::CopyTextureRegion(c) => self.copy_texture_region(c),
             Command::CopyResource(c) => self.copy_resource(c),
             Command::ClearUavTexture(c) => self.clear_uav_texture(c),
+            Command::BeginRenderPass(c) => self.begin_render_pass(c),
+            Command::EndRenderPass(c) => self.end_render_pass(c),
+            Command::SetViewports(c) => self.set_viewports(c),
+            Command::SetScissors(c) => self.set_scissors(c),
+            Command::SetBlendFactor(c) => self.render_state(|l| l.set_blend_factor(c.color)),
+            Command::SetStencilRef(c) => self.render_state(|l| l.set_stencil_ref(c.value)),
+            Command::SetPrimitiveTopology(c) => self.set_primitive(c),
+            Command::SetIndexBuffer(c) => self.set_index_buffer(c),
+            Command::SetVertexBuffers(c) => self.set_vertex_buffers(c),
+            Command::Draw(c) => self.draw(c),
+            Command::DrawIndexed(c) => self.draw_indexed(c),
+            Command::DispatchMesh(c) => self.dispatch_mesh(c),
+            Command::ClearAttachment(c) => self.clear_attachment(c),
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
                 Err(Status::UNSUPPORTED)
             }
         }
     }
 
-    fn list(&mut self) -> Result<(&mut CommandList, &mut Bound), Status> {
+    pub(super) fn list(&mut self) -> Result<(&mut CommandList, &mut Bound), Status> {
         match self.open.as_mut() {
             Some((l, _, b)) => Ok((l, b)),
             None => Err(Status::BAD_STREAM),
@@ -322,7 +359,10 @@ impl Run<'_> {
     fn set_pipeline(&mut self, c: &SetPipeline) -> R {
         let pso = self.st.psos.get(c.pso.0).ok_or(Status::NOT_FOUND)?.clone();
         let (_, bound) = self.list()?;
-        bound.pso = Some(pso);
+        match pso.body {
+            PsoBody::Compute { .. } => bound.pso = Some(pso),
+            PsoBody::Graphics(_) => bound.gpso = Some(pso),
+        }
         Ok(())
     }
 
@@ -334,6 +374,7 @@ impl Run<'_> {
             .ok_or(Status::NOT_FOUND)?
             .clone();
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         // Setting the signature that is already bound changes nothing.
         if bound.sig.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sig)) {
             return Ok(());
@@ -378,6 +419,7 @@ impl Run<'_> {
 
     fn set_root_constants(&mut self, c: &SetRootConstants<'_>) -> R {
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         let SlotKind::Constants { count } = slot.kind else {
@@ -404,6 +446,7 @@ impl Run<'_> {
             }
         }
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         match (slot.kind, c.kind) {
@@ -428,6 +471,7 @@ impl Run<'_> {
         let va = heap.heap.entry_va(c.index);
         let heap_is_sampler = heap.sampler;
         let (_, bound) = self.list()?;
+        let bound = side_of(bound, c.bind_point)?;
         let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
         let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
         match slot.kind {
@@ -443,7 +487,7 @@ impl Run<'_> {
     fn dispatch(&mut self, c: &Dispatch) -> R {
         let (list, bound) = self.list()?;
         let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let sig = bound.compute.sig.clone().ok_or(Status::INVALID_ARG)?;
         let PsoBody::Compute { pipeline, threads } = &pso.body else {
             // A dispatch needs a compute pipeline.
             return Err(Status::INVALID_ARG);
@@ -453,15 +497,7 @@ impl Run<'_> {
         if !Arc::ptr_eq(&pso.root_sig, &sig) {
             return Err(Status::INVALID_ARG);
         }
-        if bound.dirty && !bound.shadow.is_empty() {
-            let tlab = list
-                .alloc_constants(bound.shadow.len() as u64, 8)
-                .map_err(|e| status_of(&e))?;
-            tlab.write_bytes(0, &bound.shadow)
-                .map_err(|e| status_of(&e))?;
-            list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
-        }
-        bound.dirty = false;
+        write_root_arguments(list, bound, false)?;
         list.dispatch(pipeline, [c.x, c.y, c.z], *threads)
             .map_err(|e| status_of(&e))
     }
@@ -655,6 +691,29 @@ impl Run<'_> {
         };
         r.map_err(|e| status_of(&e))
     }
+}
+
+/// Writes the root arguments of the compute (`graphics` false) or graphics
+/// side to the ring and binds them, when they changed or the other side
+/// wrote the table slot last.
+pub(super) fn write_root_arguments(list: &mut CommandList, bound: &mut Bound, graphics: bool) -> R {
+    let switched = bound.owner != Some(graphics);
+    let side = if graphics {
+        &mut bound.graphics
+    } else {
+        &mut bound.compute
+    };
+    if (side.dirty || switched) && !side.shadow.is_empty() {
+        let tlab = list
+            .alloc_constants(side.shadow.len() as u64, 8)
+            .map_err(|e| status_of(&e))?;
+        tlab.write_bytes(0, &side.shadow)
+            .map_err(|e| status_of(&e))?;
+        list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
+        bound.owner = Some(graphics);
+    }
+    side.dirty = false;
+    Ok(())
 }
 
 /// `Some(b)` when all four bytes of `v` are `b`.

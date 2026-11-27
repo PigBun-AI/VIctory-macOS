@@ -544,6 +544,9 @@ impl ArgumentTable {
     pub fn new(device: &Device, max_buffers: u32) -> Result<ArgumentTable> {
         let descriptor = MTL4ArgumentTableDescriptor::new();
         descriptor.setMaxBufferBindCount(max_buffers as usize);
+        // Vertex buffers of render encoders carry their stride here
+        // (`MTLBufferLayoutStrideDynamic`, see `render.rs`).
+        descriptor.setSupportAttributeStrides(true);
         descriptor.setLabel(Some(&NSString::from_str("victory argument table")));
         let raw = device
             .raw()
@@ -562,6 +565,23 @@ impl ArgumentTable {
         }
         // SAFETY: the index was checked against the table's size.
         unsafe { self.raw.setAddress_atIndex(gpu_va, index as usize) };
+        Ok(())
+    }
+
+    /// `setAddress:attributeStride:atIndex:`: a vertex buffer with its stride.
+    pub fn set_address_stride(&self, index: u32, gpu_va: u64, stride: u32) -> Result<()> {
+        if index >= self.max_buffers {
+            return Err(Error::BadArgument(format!(
+                "argument table slot {index} of {}",
+                self.max_buffers
+            )));
+        }
+        // SAFETY: the index was checked against the table's size; the table
+        // was made with `supportAttributeStrides`.
+        unsafe {
+            self.raw
+                .setAddress_attributeStride_atIndex(gpu_va, stride as usize, index as usize)
+        };
         Ok(())
     }
 

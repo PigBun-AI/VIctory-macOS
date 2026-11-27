@@ -50,6 +50,16 @@ pub struct ListStats {
     pub consumer_barriers: u32,
     /// Producer-form barriers encoded.
     pub producer_barriers: u32,
+    /// Render encoders begun (a pass split by a barrier counts again).
+    pub render_encoders: u32,
+    /// Render passes begun and ended.
+    pub passes: u32,
+    /// Draws encoded (indexed ones included).
+    pub draws: u32,
+    /// Mesh dispatches encoded.
+    pub mesh_draws: u32,
+    /// Clears of part of an attachment inside a pass.
+    pub attachment_clears: u32,
 }
 
 /// A command list being recorded. Made by [`Queue::begin_list`], finished
@@ -57,9 +67,16 @@ pub struct ListStats {
 pub struct CommandList {
     queue: Queue,
     slot: Option<Slot>,
-    tracker: Tracker,
+    pub(crate) tracker: Tracker,
     encoder: Option<ComputeEncoder>,
-    table: ArgumentTable,
+    /// The open render encoder (at most one of `encoder` and `render`).
+    pub(crate) render: Option<crate::draw::RenderEncoder>,
+    /// The render pass between `begin_pass` and `end_pass`.
+    pub(crate) pass: Option<crate::draw::Pass>,
+    /// Render state the stream has set (it outlives passes).
+    pub(crate) rstate: crate::draw::RenderState,
+    pub(crate) keep_gfx: Vec<crate::render::GraphicsPipeline>,
+    pub(crate) table: ArgumentTable,
     ended: bool,
     pub(crate) keep_buffers: Vec<Buffer>,
     /// Texture copies: what they keep alive and touch ([`crate::copy`]).
@@ -95,6 +112,10 @@ impl Queue {
             slot: Some(slot),
             tracker: Tracker::new(ordered_after_prior),
             encoder: None,
+            render: None,
+            pass: None,
+            rstate: Default::default(),
+            keep_gfx: Vec::new(),
             ended: false,
             keep_buffers: Vec::new(),
             copies: Default::default(),
@@ -108,7 +129,7 @@ impl Queue {
 }
 
 impl CommandList {
-    fn cb(&self) -> &ProtocolObject<dyn MTL4CommandBuffer> {
+    pub(crate) fn cb(&self) -> &ProtocolObject<dyn MTL4CommandBuffer> {
         &self.slot.as_ref().expect("list is live").cb
     }
 
@@ -152,7 +173,7 @@ impl CommandList {
         }
     }
 
-    fn perform(&mut self, actions: Vec<Action>) -> Result<()> {
+    pub(crate) fn perform(&mut self, actions: Vec<Action>) -> Result<()> {
         for action in actions {
             match action {
                 Action::Open(EncoderKind::Compute) => {
@@ -165,16 +186,17 @@ impl CommandList {
                     self.last_pipeline = None;
                     self.stats.encoders += 1;
                 }
-                Action::Open(EncoderKind::Render) => {
-                    return Err(Error::Unsupported("render encoders arrive with M3".into()));
-                }
+                Action::Open(EncoderKind::Render) => self.open_render()?,
                 Action::Close => {
                     if let Some(encoder) = self.encoder.take() {
                         encoder.endEncoding();
                     }
+                    if let Some(encoder) = self.render.take() {
+                        encoder.endEncoding();
+                    }
                 }
                 Action::Encoder { after, before, vis } => {
-                    self.encoder_ref()?
+                    self.any_encoder()?
                         .barrierAfterEncoderStages_beforeEncoderStages_visibilityOptions(
                             stages::to_mtl_stages(after)?,
                             stages::to_mtl_stages(before)?,
@@ -183,7 +205,7 @@ impl CommandList {
                     self.stats.encoder_barriers += 1;
                 }
                 Action::Consumer { after, before, vis } => {
-                    self.encoder_ref()?
+                    self.any_encoder()?
                         .barrierAfterQueueStages_beforeStages_visibilityOptions(
                             stages::to_mtl_stages(after)?,
                             stages::to_mtl_stages(before)?,
@@ -192,7 +214,7 @@ impl CommandList {
                     self.stats.consumer_barriers += 1;
                 }
                 Action::Producer { after, before, vis } => {
-                    self.encoder_ref()?
+                    self.any_encoder()?
                         .barrierAfterStages_beforeQueueStages_visibilityOptions(
                             stages::to_mtl_stages(after)?,
                             stages::to_mtl_stages(before)?,
@@ -203,6 +225,15 @@ impl CommandList {
             }
         }
         Ok(())
+    }
+
+    /// The open encoder, whichever kind, for the calls every encoder has.
+    fn any_encoder(&self) -> Result<&ProtocolObject<dyn MTL4CommandEncoder>> {
+        if let Some(e) = &self.render {
+            return Ok(ProtocolObject::from_ref(&**e));
+        }
+        let e = self.encoder_ref()?;
+        Ok(ProtocolObject::from_ref(&**e))
     }
 
     fn encoder_ref(&self) -> Result<&ComputeEncoder> {
@@ -533,6 +564,9 @@ impl Drop for CommandList {
             // Abandoned without being submitted: close what is open so the
             // command buffer can be reused, and give the slot back.
             if let Some(encoder) = self.encoder.take() {
+                encoder.endEncoding();
+            }
+            if let Some(encoder) = self.render.take() {
                 encoder.endEncoding();
             }
             if !self.ended {
