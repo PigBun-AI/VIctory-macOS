@@ -151,7 +151,20 @@ impl Shader {
     /// The translation, made on first use; a shader that does not
     /// translate is logged once.
     pub(crate) fn translated(&self) -> Option<&'static Translated> {
-        let key = crate::shader_cache::translation();
+        self.translated_with(&[]) // mac S1
+    }
+
+    /// [`Shader::translated`] of a mesh shader that hands the values of `reads` to the pixel shader it
+    /// is paired with (mac S1; `victory_shader::emit::vertex_flat`): one translation per set of reads.
+    pub(crate) fn translated_with(&self, reads: &[victory_shader::emit::VertexRead]) -> Option<&'static Translated> {
+        let mut key = crate::shader_cache::translation();
+        if !reads.is_empty() {
+            // mac S1
+            let mut h = blake3::Hasher::new();
+            h.update(&key);
+            h.update(&victory_shader::emit::vertex_flat::encode(reads));
+            key = *h.finalize().as_bytes();
+        }
         let cell = self.translated.read().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
         let cell = cell.unwrap_or_else(|| {
             let mut all = self.translated.write().unwrap_or_else(|e| e.into_inner());
@@ -159,7 +172,7 @@ impl Shader {
         });
         cell
             .get_or_init(|| {
-                let done = translate(&self.container);
+                let done = translate(&self.container, reads); // mac S1
                 // `VICTORY_SHADER_SAVE=<dir>`: each shader as the title gave it (`.cdxil`) and as
                 // translated (`.dxil`), by the hash crash reports name it with
                 if let Some(dir) = std::env::var_os("VICTORY_SHADER_SAVE") {
@@ -215,7 +228,7 @@ impl Shader {
 }
 
 #[cfg(windows)]
-fn translate(container: &[u8]) -> Result<Translated, String> {
+fn translate(container: &[u8], reads: &[victory_shader::emit::VertexRead]) -> Result<Translated, String> {
     use victory_shader::{Container, FourCC, HwStage};
     // The translation depends on it (a view index past a capped heap).
     crate::descriptor::host::probe_view_limit();
@@ -224,7 +237,7 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         Some(part) => victory_shader::native_programs(part.data).map_err(|e| e.to_string())?,
         None => Vec::new(),
     };
-    let host = crate::shader_cache::host_shader(container)?;
+    let host = crate::shader_cache::host_shader_with(container, reads)?; // mac S1
     let stores = programs.is_empty() || programs.iter().any(stores);
     let threads = programs.iter().find_map(|p| match &p.io {
         victory_shader::native::StageIo::Cs(cs) if cs.threads.iter().all(|&n| n > 0) => Some(cs.threads),

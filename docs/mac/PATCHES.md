@@ -894,6 +894,50 @@ are upstream's).
 
 *Risk.* An upstream comment records that the wide form lost an NVIDIA card; a Windows host that wants to use this patch must first turn it off (`VICTORY_WAVE_WIDE=0`).
 
+### S1 — `GetAttributeAtVertex` without `attributeAtVertex`: the other vertices as flat inputs (`victory-shader` `emit/{vertex_flat,lower,mod,wire}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`, `mac/attribute_at_vertex.rs`)
+
+*What.* A new translator capability `attribute_at_vertex` (`victory_shader::emit::host_attribute_at_vertex()`, set with
+`set_host_attribute_at_vertex`; default **true**, which is the Windows line: its output stays what it was). victory-gpu
+sets it at host creation from `mac::attribute_at_vertex::host_has_it()`: **false** on the Metal chain and under Wine on
+a Mac (D3DMetal), true on Windows; `VICTORY_ATTRIBUTE_AT_VERTEX=0|1` overrides it (and is the default for tools that
+translate without a victory-gpu host: victory-census, the metal tests). It travels in `host_settings()` as bit 31 of the
+last word, so the shader cache and the live translator library (`victory-shader-dylib`) key on it. With it false:
+* a pixel program reads the three vertices of an attribute as flat inputs instead of `dx.op.attributeAtVertex`: vertex 0 is the
+  attribute's own constant input (the provoking vertex), vertices 1 and 2 are added per-primitive `u32` elements
+  `TEXCOORD 64+n` (four scalars each); the pixel `HostShader` lists them in the new field `vertex_reads`
+  (`emit/vertex_flat.rs`, stored in the VSH1 bytes after the views);
+* a mesh pipeline: victory-gpu translates the mesh shader again with the pixel shader's reads
+  (`emit::translate_with`, `Shader::translated_with`, `shader_cache::host_shader_with`, hook in `HostPipeline::new`): each lane writes the
+  read channels of its vertex into group memory, every exit of the program leaves through one epilogue block that
+  meets (barrier) and lane n writes primitive n's vertices 1 and 2 as primitive outputs; the added outputs count against
+  the 32 KiB mesh limit, group memory over 32 KiB refuses the translation;
+  the epilogue reads every exchanged value before it writes any output, and a 16-bit output is exchanged as its raw half
+  (converted after the read): Apple's GPU compiler crashes (MTLCompilerService SIGSEGV in AGX) on the interleaved form;
+  **known issue**: real (mesh, pixel) pairs: of 4834, 2050 build, 1008 are over 32 KiB, 1774 crash Apple's compiler
+  (315 of those also crash without S1: a plain mesh plus a pixel shader that reads some outputs), see research/attr-vertex/agx-crash/;
+* a vertex pipeline: victory-gpu puts a geometry shader (`emit::vertex_pipeline_gs`: triangles in, the same triangle out
+  with vertices 1 and 2 as constant elements) in the slot of the rectangle list's stage; a rectangle list with such a pixel
+  shader, or a host that refuses the stage, gets no pipeline.
+Every hook line in an upstream file is marked `mac S1`. Tests: `emit/vertex_flat_tests.rs`, `emit/vertex_flat.rs`
+(victory-shader 209 -> 219), `mac/attribute_at_vertex.rs`; GPU pixel tests, the corpus test and the census on the `attr` branch
+(`metal/back/tests/gfx_attr_vertex.rs`, `metal/census/tests/attr_vertex_corpus.rs`, docs/metal/attribute-at-vertex.md).
+
+*Why not needed on Windows.* The Windows host (D3D12 with dxil.dll, the GPU driver) takes `GetAttributeAtVertex`. Metal Shader Converter 4.0.3
+and D3DMetal refuse it (error 7), so 4852 of the title's pixel programs, and with them most of its mesh pipelines (102 of the 103
+refused pipelines of one run), built no pipeline on a Mac. Native Metal has `vertex_value` only on Apple10 (M5+), and MSC does not emit it.
+
+*Remove when.* MSC translates `GetAttributeAtVertex` natively, or emits MSL's `vertex_value` and the lowest supported GPU has it: then
+drop the capability (the default true is then the only path), `vertex_flat.rs`, the field `vertex_reads` and the hooks (`grep 'mac S1'`).
+
+*Acceptance (2026-11-28).* Translator tests 219 passed in victory-shader (209 before), 78 in victory-gpu; GPU tests against a CPU
+reference (mesh, provoking vertex, VS + GS + PS) pass. Census with the capability off over the 25985 containers: no program emits `attributeAtVertex`;
+of the 4852 pixel programs (plus the one `atomicBinOp.i64`) 4832 build through MSC and a Metal pipeline, 20 fail on Metal's 124 varying
+scalars (126-127 with the added ones), 1 is the i64 atomic: **4852 refused -> 20** (+1 unrelated). Mesh programs newly over 32 KiB by
+the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 primitives, 8245 under the limit now): D = 4: 324, D = 10
+(median): 853, D = 22 (p90): 2362, D = 38 (max): 4504. Replays (`tools/metal/replay.sh`): f300 byte-identical picture to the earlier build (blake3 `713c6b13b79d2de4`),
+world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
+the replays log nothing about pipelines, so that the aav pipelines of those frames draw was not observed directly.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

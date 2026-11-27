@@ -339,6 +339,8 @@ impl Shader {
         opcode: u32,
         args: &[V],
     ) -> V {
+        #[cfg(test)]
+        super::vertex_flat::note_op(name); // mac S1
         let mut params = vec![self.t.i32];
         params.extend(args.iter().map(|&a| self.m.type_of(a)));
         let fty = self.m.func_ty(ret, params);

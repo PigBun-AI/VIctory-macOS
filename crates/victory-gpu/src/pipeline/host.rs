@@ -458,8 +458,20 @@ impl HostPipeline {
         if mesh.is_some() && !host()?.mesh_shaders() {
             return refuse("the host GPU has no mesh shaders (or no shader model 6.6)", shaders);
         }
+        // mac S1: a pixel shader that reads the vertices of an attribute as flat inputs (the host has no
+        // `attributeAtVertex`) gets them from its mesh shader, translated with what it reads, or from a geometry
+        // stage behind its vertex shader (below); a rectangle list has neither: no pipeline.
+        let reads = find("pixel")
+            .and_then(|ps| ps.translated())
+            .map(|t| t.host.vertex_reads.clone())
+            .unwrap_or_default();
+        if !reads.is_empty() && mesh.is_none() && g.is_some_and(|g| g.topology.0 == RECTANGLES) {
+            tracing::warn!(?shaders, "a pixel shader reads per-vertex values of a rectangle list");
+            return None;
+        }
+        let translated_of = |s: &Arc<Shader>| if s.stage == "mesh" { s.translated_with(&reads) } else { s.translated() };
         for (s, _) in &stages {
-            s.translated()?;
+            translated_of(s)?; // mac S1
         }
         let host = host()?;
 
@@ -484,7 +496,7 @@ impl HostPipeline {
         let mut samplers = Vec::new();
         let mut bound = Vec::new();
         for &(shader, visibility) in &stages {
-            let translated = shader.translated()?;
+            let translated = translated_of(shader)?; // mac S1
             let t = &translated.host;
             let mut stage = Stage {
                 shader: shader.clone(),
@@ -613,7 +625,7 @@ impl HostPipeline {
             }
         };
         let code = |i: usize| {
-            stages.get(i).and_then(|(s, _)| s.translated()).map_or(
+            stages.get(i).and_then(|(s, _)| translated_of(s)).map_or( // mac S1
                 D3D12_SHADER_BYTECODE::default(),
                 |t| D3D12_SHADER_BYTECODE {
                     pShaderBytecode: t.host.dxil.as_ptr().cast(),
@@ -720,7 +732,24 @@ impl HostPipeline {
         // shader made. Without it (refused here or by the host) the draws
         // fall back on what `draw` does for rectangles.
         let mut rect_gs = None;
-        if g.topology.0 == RECTANGLES {
+        let mut vertex_gs = false; // mac S1
+        if !reads.is_empty() {
+            // mac S1: a vertex pipeline whose pixel shader reads other vertices of a triangle: a geometry
+            // stage hands them on as flat inputs (`victory_shader::emit::vertex_pipeline_gs`).
+            let (Some(vs), Some(ps)) = (stages.first().and_then(|(s, _)| s.translated()), stages.get(1).and_then(|(s, _)| s.translated())) else {
+                return None;
+            };
+            match victory_shader::emit::vertex_pipeline_gs(&vs.host.dxil, &ps.host.dxil, &reads) {
+                Ok(gs) => {
+                    rect_gs = Some(gs);
+                    vertex_gs = true;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, ?shaders, "no per-vertex geometry stage");
+                    return None;
+                }
+            }
+        } else if g.topology.0 == RECTANGLES {
             let ps = stages.get(1).and_then(|(s, _)| s.translated());
             let vs = &stages[0].0.translated()?.host.dxil;
             match victory_shader::emit::rect_list_gs(vs, ps.map(|t| &t.host.dxil[..])) {
@@ -789,6 +818,12 @@ impl HostPipeline {
             )
         };
         let mut made = make(&desc, &name(rect_gs.as_ref()));
+        if made.is_err() && rect_gs.is_some() && vertex_gs {
+            // mac S1: without the stage the pixel shader would read inputs nothing writes: no pipeline.
+            tracing::warn!(?shaders, "host pipeline refused with the per-vertex geometry stage");
+            host.log_messages();
+            return None;
+        }
         if made.is_err() && rect_gs.is_some() {
             // The host refused the geometry stage: once more without it.
             tracing::warn!(?shaders, "host pipeline refused with the rectangle geometry stage");
@@ -827,7 +862,7 @@ impl HostPipeline {
             name: format!("{shaders:?}"),
             slots: g.slots(),
             inputs: g.elements(),
-            rects: rect_gs.is_some(),
+            rects: rect_gs.is_some() && !vertex_gs, // mac S1
             state: {
                 let (d, r, b) = (&g.depth, &g.rasterizer, &g.blend.RenderTarget[0]);
                 let face = |f: &D3D12_DEPTH_STENCILOP_DESC| {

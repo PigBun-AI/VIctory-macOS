@@ -4,6 +4,7 @@
 //! line's files in as few places as possible.
 
 pub mod adapter;
+pub mod attribute_at_vertex; // mac S1
 pub mod drop_stats;
 pub mod frames;
 pub mod hlsl;
