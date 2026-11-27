@@ -1191,3 +1191,193 @@ fn upload_and_readback_heaps_place_buffers_with_a_cpu_pointer() {
     assert_ne!(c.cpu_addr(), b.cpu_addr());
     assert_ne!(c.gpu_va(), b.gpu_va());
 }
+
+// ---- UAV clears ---------------------------------------------------------------
+
+use victory_metal_back::clear::ClearRequest;
+
+fn clear_req(values: [u32; 4], float_values: bool) -> ClearRequest {
+    ClearRequest {
+        format: 0,
+        mip: 0,
+        first_slice: 0,
+        slice_count: 0,
+        values,
+        float_values,
+        rect: None,
+    }
+}
+
+fn do_clear(q: &Queue, d: &Device, t: &Texture, req: &ClearRequest) -> Result<(), Error> {
+    let kernels = d.clear_kernels();
+    let mut l = q.begin_list().unwrap();
+    let r = l.clear_texture(&kernels, t, req);
+    l.end().unwrap();
+    if r.is_ok() {
+        run(q, l);
+    }
+    r
+}
+
+#[test]
+fn clearing_a_texture_uav_covers_the_rectangle_slices_and_mips() {
+    let (_g, d, q) = setup();
+    // Float clear of a 2D array, one slice of one mip, with a rectangle.
+    let desc = TextureDesc {
+        dim: TexDim::D2,
+        format: dxgi::R8G8B8A8_UNORM,
+        width: 8,
+        height: 8,
+        depth_or_array: 3,
+        mips: 2,
+        samples: 1,
+        usage: SRV | UAV,
+    };
+    let t = d.create_texture(&desc).unwrap();
+    for s in 0..3 {
+        for m in 0..2 {
+            let [w, h, _] = desc.mip_size(m);
+            upload(&d, &q, &t, m, s, &vec![0u8; (w * h * 4) as usize], w * 4);
+        }
+    }
+    let mut r = clear_req(
+        [1.0f32.to_bits(), 0.5f32.to_bits(), 0, 1.0f32.to_bits()],
+        true,
+    );
+    r.first_slice = 1;
+    r.slice_count = 1;
+    r.rect = Some([2, 1, 6, 3]);
+    do_clear(&q, &d, &t, &r).unwrap();
+    for s in 0..3u32 {
+        let got = download(&d, &q, &t, 0, s, 32);
+        for y in 0..8usize {
+            for x in 0..8usize {
+                let inside = s == 1 && (2..6).contains(&x) && (1..3).contains(&y);
+                let px = &got[y * 32 + x * 4..][..4];
+                let want: [u8; 4] = if inside { [255, 128, 0, 255] } else { [0; 4] };
+                assert_eq!(px, want, "slice {s} ({x},{y})");
+            }
+        }
+        // mip 1 untouched
+        assert!(download(&d, &q, &t, 1, s, 16).iter().all(|&b| b == 0));
+    }
+    // All slices of mip 1.
+    let mut r = clear_req(
+        [
+            0.0f32.to_bits(),
+            1.0f32.to_bits(),
+            0.0f32.to_bits(),
+            1.0f32.to_bits(),
+        ],
+        true,
+    );
+    r.mip = 1;
+    do_clear(&q, &d, &t, &r).unwrap();
+    for s in 0..3 {
+        let got = download(&d, &q, &t, 1, s, 16);
+        assert!(got.chunks(4).all(|p| p == [0, 255, 0, 255]), "slice {s}");
+    }
+}
+
+#[test]
+fn clearing_uint_1d_and_3d_and_through_typeless_views() {
+    let (_g, d, q) = setup();
+    let t1 = d
+        .create_texture(&TextureDesc {
+            dim: TexDim::D1,
+            format: dxgi::R32_UINT,
+            width: 16,
+            height: 1,
+            depth_or_array: 1,
+            mips: 1,
+            samples: 1,
+            usage: UAV,
+        })
+        .unwrap();
+    let mut r = clear_req([77, 0, 0, 0], false);
+    r.rect = Some([4, 0, 10, 1]);
+    do_clear(&q, &d, &t1, &r).unwrap();
+    let got = download(&d, &q, &t1, 0, 0, 64);
+    for x in 0..16usize {
+        let v = u32::from_le_bytes(got[x * 4..][..4].try_into().unwrap());
+        assert_eq!(v, if (4..10).contains(&x) { 77 } else { 0 }, "x {x}");
+    }
+    let t3 = d
+        .create_texture(&TextureDesc {
+            dim: TexDim::D3,
+            format: dxgi::R16G16B16A16_UINT,
+            width: 4,
+            height: 4,
+            depth_or_array: 4,
+            mips: 1,
+            samples: 1,
+            usage: UAV,
+        })
+        .unwrap();
+    do_clear(&q, &d, &t3, &clear_req([1, 2, 3, 4], false)).unwrap();
+    let got = download(&d, &q, &t3, 0, 0, 32);
+    for texel in got.chunks(8) {
+        let v: Vec<u16> = texel
+            .chunks(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        assert_eq!(v, [1, 2, 3, 4]);
+    }
+    // Typeless texture cleared as a uint view.
+    let tt = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R8G8B8A8_TYPELESS, 4, 4, UAV))
+        .unwrap();
+    let mut r = clear_req([9, 8, 7, 6], false);
+    r.format = dxgi::R8G8B8A8_UINT;
+    do_clear(&q, &d, &tt, &r).unwrap();
+    assert!(
+        download(&d, &q, &tt, 0, 0, 16)
+            .chunks(4)
+            .all(|p| p == [9, 8, 7, 6])
+    );
+}
+
+#[test]
+fn clears_that_cannot_be_done_exactly_are_refused() {
+    let (_g, d, q) = setup();
+    let t = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R8G8B8A8_UNORM, 4, 4, UAV))
+        .unwrap();
+    // Uint pattern on an 8-bit unorm view: undefined here, refused; zero is fine.
+    assert!(matches!(
+        do_clear(&q, &d, &t, &clear_req([1, 2, 3, 4], false)),
+        Err(Error::Unsupported(_))
+    ));
+    do_clear(&q, &d, &t, &clear_req([0; 4], false)).unwrap();
+    let u = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, UAV))
+        .unwrap();
+    assert!(matches!(
+        do_clear(&q, &d, &u, &clear_req([0; 4], true)),
+        Err(Error::Unsupported(_))
+    ));
+    let mut r = clear_req([0; 4], false);
+    r.rect = Some([0, 0, 5, 4]);
+    assert!(matches!(
+        do_clear(&q, &d, &u, &r),
+        Err(Error::BadArgument(_))
+    ));
+    r.rect = Some([3, 0, 3, 4]);
+    assert!(matches!(
+        do_clear(&q, &d, &u, &r),
+        Err(Error::BadArgument(_))
+    ));
+    let mut r = clear_req([0; 4], false);
+    r.mip = 1;
+    assert!(matches!(
+        do_clear(&q, &d, &u, &r),
+        Err(Error::BadArgument(_))
+    ));
+    let no_uav = d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 4, 4, SRV))
+        .unwrap();
+    assert!(matches!(
+        do_clear(&q, &d, &no_uav, &clear_req([0; 4], false)),
+        Err(Error::BadArgument(_))
+    ));
+}

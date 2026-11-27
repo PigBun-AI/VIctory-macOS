@@ -20,6 +20,8 @@
 #[cfg(target_vendor = "apple")]
 pub mod barrier;
 #[cfg(target_vendor = "apple")]
+pub mod clear;
+#[cfg(target_vendor = "apple")]
 pub mod copy;
 #[cfg(target_vendor = "apple")]
 pub mod descriptors;

@@ -73,6 +73,13 @@ pub struct CopyState {
     pub(crate) accesses: Vec<(Texture, u32, u32, bool)>,
 }
 
+impl CopyState {
+    /// Keeps `t` alive until the list is done.
+    pub(crate) fn keep_texture(&mut self, t: &Texture) {
+        self.keep.push(t.clone());
+    }
+}
+
 const ALL: u32 = u32::MAX;
 
 /// Layout of one plane of a texture format: bytes per block, block shape,
