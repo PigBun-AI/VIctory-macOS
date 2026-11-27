@@ -113,6 +113,56 @@ fn copy_and_fill_match_the_cpu() {
 }
 
 #[test]
+fn blits_that_touch_the_same_bytes_run_in_recorded_order() {
+    // No barrier from the caller: a copy over bytes an earlier copy or fill wrote
+    // (write after write, read after write) must still come after it, as on the
+    // original API's queues; Metal 4 would otherwise overlap them.
+    let (_g, d) = setup();
+    let q = Queue::new(&d).unwrap();
+    const N: usize = 1 << 20;
+    let zeros = d.create_buffer(BufferKind::Upload, N as u64).unwrap();
+    let src = d.create_buffer(BufferKind::Upload, N as u64).unwrap();
+    let gpu = d.create_buffer(BufferKind::Default, N as u64).unwrap();
+    let out = d.create_buffer(BufferKind::Readback, N as u64).unwrap();
+    zeros.write(0, &vec![0u8; N]).unwrap();
+    let data: Vec<u8> = (0..N as u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+        .collect();
+    src.write(0, &data).unwrap();
+    for round in 0..50 {
+        let mut l = q.begin_list().unwrap();
+        l.copy_buffer(&gpu, 0, &zeros, 0, N as u64).unwrap(); // clears everything
+        l.copy_buffer(&gpu, 0, &src, 0, 4096).unwrap(); // WAW on the first page
+        l.copy_buffer(&gpu, 300_001, &src, 123_457, 100_003)
+            .unwrap(); // WAW
+        l.fill_buffer(&gpu, 500_000, 1000, 0x5A).unwrap(); // WAW on the clear
+        l.copy_buffer(&out, 0, &gpu, 0, N as u64).unwrap(); // RAW on all of it
+        l.end().unwrap();
+        let st = l.stats();
+        assert_eq!(
+            st.encoder_barriers, 2,
+            "one after the clear, one before the read-back: {st:?}"
+        );
+        submit_wait(&q, l);
+        let mut got = vec![0u8; N];
+        out.read(0, &mut got).unwrap();
+        let mut want = vec![0u8; N];
+        want[..4096].copy_from_slice(&data[..4096]);
+        want[300_001..400_004].copy_from_slice(&data[123_457..223_460]);
+        want[500_000..501_000].fill(0x5A);
+        assert!(got == want, "round {round}: readback differs");
+    }
+    // Blits on different bytes of one buffer are not ordered against each other: no barrier.
+    let mut l = q.begin_list().unwrap();
+    l.copy_buffer(&gpu, 0, &src, 0, 4096).unwrap();
+    l.copy_buffer(&gpu, 8192, &src, 0, 4096).unwrap();
+    l.fill_buffer(&gpu, 16384, 4096, 1).unwrap();
+    l.end().unwrap();
+    assert_eq!(l.stats().encoder_barriers, 0);
+    submit_wait(&q, l);
+}
+
+#[test]
 fn copy_argument_checks() {
     let (_g, d) = setup();
     let q = Queue::new(&d).unwrap();

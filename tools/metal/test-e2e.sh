@@ -59,7 +59,14 @@ for backend in d3dmetal metal; do
         fi
         sum=$(grep '^E2E SUMMARY' "$OUTDIR/$backend.$i.out" || echo "E2E SUMMARY (none: the exe did not finish)")
         echo "   run $i: $sum"
-        case "$sum" in *"fail=0 "*) ;; *) status=1 ;; esac
+        case "$sum" in
+            *"fail=0 "*) ;;
+            *)
+                status=1
+                grep -E '^E2E (FAIL|SKIP)' "$OUTDIR/$backend.$i.out" | sed 's/^/      /'
+                head -5 "$OUTDIR/$backend.$i.err" | sed 's/^/      stderr: /'
+                ;;
+        esac
         i=$((i + 1))
     done
     echo "-- $backend, run 1:"

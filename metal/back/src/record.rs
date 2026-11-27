@@ -29,7 +29,7 @@ use crate::error::{Error, Result};
 use crate::memory::Buffer;
 use crate::pipeline::ComputePipeline;
 use crate::queue::{Queue, Slot};
-use crate::stages::{self, BLIT, DISPATCH};
+use crate::stages::{self, BLIT, DISPATCH, VIS_DEVICE};
 
 type ComputeEncoder = Retained<ProtocolObject<dyn MTL4ComputeCommandEncoder>>;
 
@@ -65,6 +65,9 @@ pub struct CommandList {
     keep_pipelines: Vec<ComputePipeline>,
     last_pipeline: Option<*const ()>,
     splits: HashMap<u64, (u16, u8)>,
+    /// Buffer ranges written by copies and fills since the last barrier that
+    /// orders blits (see [`CommandList::blit_hazard`]).
+    blit_writes: Vec<(Buffer, u64, u64)>,
     stats: ListStats,
 }
 
@@ -95,6 +98,7 @@ impl Queue {
             keep_pipelines: Vec::new(),
             last_pipeline: None,
             splits: HashMap::new(),
+            blit_writes: Vec::new(),
             stats: ListStats::default(),
         })
     }
@@ -239,6 +243,30 @@ impl CommandList {
         Ok(())
     }
 
+    /// Copies and fills of one list that touch the same bytes (write after
+    /// write, read after write) must run in the order they were recorded, as they
+    /// do on the original API's queues and as D3DMetal gives. Metal 4 may run
+    /// blits of one encoder concurrently, so this records the ranges written since
+    /// the last barrier and, when a new blit overlaps one, asks for a barrier
+    /// between blits (the tracker puts it before this command, in the encoder).
+    /// Blits that touch different bytes still overlap.
+    fn blit_hazard(&mut self, dst: &Buffer, dst_off: u64, src: Option<(&Buffer, u64)>, size: u64) {
+        let overlaps = |b: &Buffer, off: u64, w: &(Buffer, u64, u64)| {
+            w.0.same(b) && off < w.2 && w.1 < off + size
+        };
+        let hazard = self
+            .blit_writes
+            .iter()
+            .any(|w| overlaps(dst, dst_off, w) || src.is_some_and(|(sb, so)| overlaps(sb, so, w)));
+        // A very long list of distinct writes: stop tracking, order everything.
+        if hazard || self.blit_writes.len() >= 256 {
+            self.tracker.barrier(BLIT, BLIT, VIS_DEVICE);
+            self.blit_writes.clear();
+        }
+        self.blit_writes
+            .push((dst.clone(), dst_off, dst_off + size));
+    }
+
     /// `CopyBufferRegion`: `size` bytes from `src[src_offset..]` to
     /// `dst[dst_offset..]`. Overlap inside one buffer is refused (undefined in the original API).
     pub fn copy_buffer(
@@ -259,6 +287,7 @@ impl CommandList {
             return Err(Error::BadArgument("copy ranges overlap".into()));
         }
         let (d, s) = (dst.clone(), src.clone());
+        self.blit_hazard(dst, dst_offset, Some((src, src_offset)), size);
         let encoder = self.prepare(BLIT)?;
         // SAFETY: both buffers are alive (kept by this list), the ranges were
         // checked above.
@@ -291,6 +320,7 @@ impl CommandList {
             return Ok(());
         }
         let b = buffer.clone();
+        self.blit_hazard(buffer, offset, None, size);
         let encoder = self.prepare(BLIT)?;
         // SAFETY: the buffer is alive (kept by this list); range checked.
         unsafe {
@@ -407,6 +437,9 @@ impl CommandList {
         // The tracker speaks Metal's words: `after` the producer stages,
         // `before` the consumer stages.
         self.tracker.barrier(producer, consumer, vis);
+        if producer & BLIT != 0 && consumer & BLIT != 0 {
+            self.blit_writes.clear();
+        }
         Ok(())
     }
 
