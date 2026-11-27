@@ -80,10 +80,7 @@ static EXECUTOR: RwLock<Slot> = RwLock::new(Slot::Default);
 /// [`InProcess`] as a proto `Link`) hand their blocks to, in place of the
 /// back's own one. Returns the previous one, if one was installed.
 pub fn set_executor(executor: Arc<dyn Link>) -> Option<Arc<dyn Link>> {
-    match std::mem::replace(
-        &mut *EXECUTOR.write().unwrap(),
-        Slot::Installed(executor),
-    ) {
+    match std::mem::replace(&mut *EXECUTOR.write().unwrap(), Slot::Installed(executor)) {
         Slot::Installed(old) => Some(old),
         _ => None,
     }

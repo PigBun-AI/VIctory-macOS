@@ -119,16 +119,16 @@ fn which(name: &str, system32: bool) -> i32 {
     }
 }
 
-/// The proto `Link` of the PE half, against whatever executor the unixlib has:
-/// with none installed `NOP` answers OK, everything else `NOT_INITIALIZED`, and
-/// an unknown op number is refused. Exercises both entry points and the
-/// `NTSTATUS` mapping through Wine.
+/// The proto `Link` of the PE half, against the back's own `Executor`, which
+/// the unixlib makes on the first call. Exercises both entry points and the
+/// `NTSTATUS` mapping through Wine: refusals (before the device exists, bad
+/// versions, unknown ops) and a real `HELLO` / `QUERY_CAPS` / `SHUTDOWN`.
 #[cfg(windows)]
 fn proto_check() -> i32 {
     use victory_metal_bridge::pe::WineUnixlib;
     use victory_metal_proto::{
-        Link, LinkExt, Status,
-        sync::{HelloArgs, NopArgs},
+        Caps, Link, LinkExt, PROTO_VERSION, Status,
+        sync::{HelloArgs, NopArgs, QueryCapsArgs, ShutdownArgs},
     };
 
     let link = match WineUnixlib::load("victory_metal_bridge.dll") {
@@ -149,30 +149,60 @@ fn proto_check() -> i32 {
     };
     check("call NOP", link.call_args(&mut NopArgs::new()), Status::OK);
     check(
-        "call HELLO, no executor",
-        link.call_args(&mut HelloArgs::new()),
+        "call QUERY_CAPS before HELLO",
+        link.call_args(&mut QueryCapsArgs::new()),
         Status::NOT_INITIALIZED,
+    );
+    check(
+        "call HELLO, client version 0",
+        link.call_args(&mut HelloArgs::new()),
+        Status::BAD_VERSION,
     );
     let block = [0u8; 16];
     check(
-        "submit, no executor",
+        "submit, not a stream",
         link.submit(&block),
-        Status::NOT_INITIALIZED,
+        Status::BAD_STREAM,
     );
-    check(
-        "submit, empty block",
-        link.submit(&[]),
-        Status::NOT_INITIALIZED,
-    );
+    check("submit, empty block", link.submit(&[]), Status::BAD_STREAM);
     let mut junk = [0u8; 16];
     check(
-        "call unknown op",
+        "call op in the reserved range",
         link.call(
             victory_metal_proto::SyncOp(0x7777),
             junk.as_mut_ptr(),
             junk.len(),
         ),
-        Status::NOT_INITIALIZED,
+        Status::UNSUPPORTED,
+    );
+    check(
+        "call unknown op",
+        link.call(
+            victory_metal_proto::SyncOp(0x9999),
+            junk.as_mut_ptr(),
+            junk.len(),
+        ),
+        Status::UNKNOWN_OP,
+    );
+    let mut hello = HelloArgs::new();
+    hello.client_proto_version = PROTO_VERSION;
+    hello.required_caps = Caps::METAL4;
+    check(
+        "call HELLO (real device)",
+        link.call_args(&mut hello),
+        Status::OK,
+    );
+    let end = hello.device_name.iter().position(|&b| b == 0).unwrap_or(0);
+    println!(
+        "INFO   device: {}",
+        String::from_utf8_lossy(&hello.device_name[..end])
+    );
+    let mut q = QueryCapsArgs::new();
+    check("call QUERY_CAPS", link.call_args(&mut q), Status::OK);
+    check(
+        "call SHUTDOWN",
+        link.call_args(&mut ShutdownArgs::new()),
+        Status::OK,
     );
     println!("checks failed: {failures}");
     failures

@@ -122,7 +122,10 @@ fn the_default_executor_runs_a_copy_round_trip() {
 
     let mut out = vec![0u32; 1024];
     unsafe { std::ptr::copy_nonoverlapping(rb.cpu_addr as *const u32, out.as_mut_ptr(), 1024) };
-    assert!(out == words, "readback differs from what the upload buffer held");
+    assert!(
+        out == words,
+        "readback differs from what the upload buffer held"
+    );
 
     let mut sd = ShutdownArgs::new();
     assert_eq!(wine_call(&mut sd), Status::OK);
