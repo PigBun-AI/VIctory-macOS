@@ -43,6 +43,7 @@ pub mod indirect;
 pub mod m0;
 #[cfg(target_vendor = "apple")]
 pub mod memory;
+#[cfg(target_vendor = "apple")]
 pub mod mirror;
 #[cfg(target_vendor = "apple")]
 pub mod msc;
