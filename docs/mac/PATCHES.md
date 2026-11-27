@@ -954,5 +954,5 @@ the generic upstream PRs in the Mac history (not Mac specific). Each is a candid
 
 ### M7 — `tools/mac/play.sh`: hand play wrapper
 
-*What.* A 20-line wrapper over `run.sh`: fidelity, no `VICTORY_KEYS`, no input replay, watchdog off (L5), 4 h limit; defaults `--exe` and
-`--prefix` to the main checkout's when this worktree has no build. Docs: RUN.md "Playing by hand". *Remove when.* run.sh grows a play preset.
+*What.* A 20-line wrapper over `run.sh`: perf (since 2026-11-28; `--fidelity` is an option), no `VICTORY_KEYS`, no input replay, watchdog off (L5), 4 h limit; defaults `--exe` and
+`--prefix` to the main checkout's when this worktree has no build. Docs: RUN.md "Playing by hand". `run.sh --worldsave` / `--new-game` and the refusal of a seed with a world save (2026-11-28): new game is the default, the world save is only on request. *Remove when.* run.sh grows a play preset.
