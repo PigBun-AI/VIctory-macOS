@@ -274,6 +274,7 @@ fn every_sync_block_round_trips() {
     check_block::<FenceSignalArgs>();
     check_block::<DeviceStatusArgs>();
     check_block::<GetSurfaceLayerArgs>();
+    check_block::<CreateGraphicsPipelineArgs>();
     // Nothing was forgotten: one block type per registry row.
     assert_eq!(SYNC_OPS.len(), SyncOp::KNOWN.len());
 }

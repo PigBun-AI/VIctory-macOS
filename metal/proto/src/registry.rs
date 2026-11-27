@@ -135,6 +135,10 @@ pub static SYNC_OPS: &[SyncInfo] = &[
         P,
         "in: window (WindowRef); out: surface, layer_addr (M3; back may answer UNSUPPORTED)",
     ),
+    sync::<CreateGraphicsPipelineArgs>(
+        I,
+        "in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make)",
+    ),
 ];
 
 /// Every command, in opcode order.
@@ -272,6 +276,16 @@ pub const fn layout_fingerprint() -> u64 {
     h = fnv_fields(h, <crate::root::StaticSampler as Layout>::FIELDS);
     h = fnv_fields(h, <crate::types::SamplerDesc as Layout>::FIELDS);
     h = fnv_fields(h, <crate::types::ViewDesc as Layout>::FIELDS);
+    {
+        h = fnv_fields(h, <crate::pso::StageCode as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::InputElement as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::RtBlend as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::BlendDesc as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::RasterDesc as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::StencilFace as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::DepthStencilDesc as Layout>::FIELDS);
+        h = fnv_fields(h, <crate::pso::GraphicsPsoDesc as Layout>::FIELDS);
+    }
     let mut i = 0;
     while i < COMMANDS.len() {
         let c = &COMMANDS[i];

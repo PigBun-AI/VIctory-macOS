@@ -67,6 +67,7 @@ Notes the table cannot hold:
 * `WRITE_DESCRIPTOR`: `view.kind == NONE` writes a null descriptor; `SAMPLER` reads `sampler` instead of `view`. Buffer SRV/UAV: `raw` counts 32-bit words; `typed` counts elements of `format`; `structured` counts elements of `structure_stride`. A CBV is `gpu_va` + `size_bytes`.
 * `CREATE_ROOT_SIGNATURE`: `data_addr/data_len` is `RootSigDesc::encode()` (section 5).
 * `CREATE_COMPUTE_PIPELINE`: `dxil_addr/dxil_len` is the DXIL container, valid for the call. The conversion (Metal Shader Converter) is not part of this milestone's proto work: until the back has it the call may answer `UNSUPPORTED`.
+* `CREATE_GRAPHICS_PIPELINE` (version 2, number 0x50): see section 5b. The description is a fixed-size POD, not a D3D12 struct. `DESTROY_PIPELINE` frees the result.
 * `FENCE_WAIT`: `timeout_ms == u64::MAX` waits forever; `TIMEOUT` when it runs out. `FENCE_VALUE` reads the completed value. The queue-side signal/wait are stream commands.
 * `DEVICE_STATUS.state`: 0 fine, 1 hung, 2 removed (front's `GetDeviceRemovedReason`).
 
@@ -100,6 +101,18 @@ flat `ranges` array (`range_start`, `range_count`). `kind`: `CONSTANTS` (uses
 Flags: `CBV_SRV_UAV_HEAP_INDEXED`, `SAMPLER_HEAP_INDEXED`. Limits: 64 parameters,
 4096 ranges, 2032 static samplers; `decode` checks counts against the bytes
 before allocating, known enums, and that tables stay inside the range array.
+
+## 5b. Graphics pipeline description (version 2)
+
+`GraphicsPsoDesc` (`proto/src/pso.rs`, 2056 bytes, embedded in `CreateGraphicsPipelineArgs.desc`):
+
+* **Stages**: `vs`, `ps`, `amp`, `ms`, each `StageCode { addr, len }` of a DXIL container valid for the call (`0/0` = absent). `vs` alone (+`ps`) is a vertex pipeline; `ms` (+`amp`, `ps`) is a mesh pipeline; any other combination is invalid. `ps` may be absent (depth-only).
+* **Input layout** (vertex pipelines): `input_count` <= 32 `InputElement { semantic[32], semantic_index, format (DXGI number), slot, offset (`APPEND_ALIGNED` = u32::MAX), step_rate, class }`. Strides are not part of the pipeline (D3D12 gives them per vertex buffer when binding).
+* **Targets**: `rt_formats[8]` with `rt_count`, `ds_format` (0 = none), `sample_count`, `sample_mask`.
+* **State**: per-target `RtBlend` (factors, ops, write mask, logic op), `BlendDesc.independent` / `alpha_to_coverage`, `RasterDesc` (fill, cull, `front_ccw`, depth clip, depth bias, clamp, slope bias, conservative), `DepthStencilDesc` (depth/stencil, masks, both faces), `topology` (a *type*: point/line/triangle) and `strip_cut`.
+* Enums are ours (zero-based; zero is the neutral choice); D3D12's numbering never crosses the seam. State that is set on a command list in D3D12 (blend factor, stencil reference, viewports, scissors, strides, the topology in use) is not here: see `proto-render-draft.md`.
+* `GraphicsPsoDesc::check()` is the decoder-level validation (known enums, counts, names, entries past a count zero). The back refuses what it cannot make with `UNSUPPORTED` (reason in `Executor::last_error`).
+* **Replay**: a `SYNC_RECORD` of this call carries the args block (addresses meaningless) and, as `blob`, the DXIL of the stages concatenated in the order `vs, ps, amp, ms` (lengths from `desc`).
 
 ## 6. Dump / replay file
 
@@ -173,6 +186,7 @@ only in dumps.
 | 21 | `FENCE_SIGNAL` (`FenceSignalArgs`) | 1 | 24 | Implemented | head: CallHead @0, fence: FenceId @8, value: u64 @16 | in: fence, value (never lowers it) |
 | 22 | `DEVICE_STATUS` (`DeviceStatusArgs`) | 1 | 16 | Implemented | head: CallHead @0, state: u32 @8 | out: state (0 fine, 1 hung, 2 removed) |
 | 23 | `GET_SURFACE_LAYER` (`GetSurfaceLayerArgs`) | 1 | 32 | Placeholder | head: CallHead @0, window: u64 @8, surface: SurfaceId @16, layer_addr: u64 @24 | in: window (WindowRef); out: surface, layer_addr (M3; back may answer UNSUPPORTED) |
+| 80 | `CREATE_GRAPHICS_PIPELINE` (`CreateGraphicsPipelineArgs`) | 1 | 2080 | Implemented | head: CallHead @0, root_sig: RootSigId @8, flags: u32 @12, pso: PsoId @16, desc: GraphicsPsoDesc @24 | in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make) |
 
 ### Stream commands (`Link::submit`)
 
@@ -200,9 +214,9 @@ only in dumps.
 
 ### Reserved opcode ranges
 
-- 0x0400-0x04FF: graphics state and draws (M3)
-- 0x0500-0x05FF: mesh shading (M3)
-- 0x0600-0x06FF: texture copy, clear, resolve (M3)
+- 0x0400-0x04FF: textures: copy, clear, resolve (M3, m3-tex)
+- 0x0500-0x05FF: render state, draws, mesh dispatch (M3, m3-gfx)
+- 0x0600-0x06FF: render passes and render-encoder bindings (M3, m3-gfx)
 - 0x0700-0x07FF: present (M3)
 - 0x0800-0x08FF: queries and timestamps (M2)
 - 0x0900-0x09FF: ExecuteIndirect (M2)

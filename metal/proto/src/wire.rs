@@ -115,18 +115,18 @@ impl Wire for f32 {
 
 macro_rules! array_wire {
     ($($t:ty),*) => {$(
-        impl<const N: usize> Wire for [$t; N] {
-            const SIZE: usize = N * <$t as Wire>::SIZE;
-            const ZERO: Self = [<$t as Wire>::ZERO; N];
-            fn put(&self, out: &mut Vec<u8>) {
+        impl<const N: usize> $crate::wire::Wire for [$t; N] {
+            const SIZE: usize = N * <$t as $crate::wire::Wire>::SIZE;
+            const ZERO: Self = [<$t as $crate::wire::Wire>::ZERO; N];
+            fn put(&self, out: &mut alloc::vec::Vec<u8>) {
                 for v in self {
-                    v.put(out);
+                    $crate::wire::Wire::put(v, out);
                 }
             }
-            fn get(r: &mut Reader<'_>) -> Result<Self, Error> {
-                let mut a = [<$t as Wire>::ZERO; N];
+            fn get(r: &mut $crate::wire::Reader<'_>) -> Result<Self, $crate::status::Error> {
+                let mut a = [<$t as $crate::wire::Wire>::ZERO; N];
                 for v in a.iter_mut() {
-                    *v = <$t as Wire>::get(r)?;
+                    *v = <$t as $crate::wire::Wire>::get(r)?;
                 }
                 Ok(a)
             }
@@ -134,6 +134,7 @@ macro_rules! array_wire {
     )*};
 }
 array_wire!(u8, u32, f32);
+pub(crate) use array_wire;
 
 /// Defines a `repr(C)` POD struct with all fields public, and its `Wire` and
 /// `Layout` impls. `Default` is all-zero.
