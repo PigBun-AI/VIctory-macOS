@@ -412,6 +412,63 @@ impl CommandList {
         self.table.set_address(index, gpu_va)
     }
 
+    /// Binds the argument buffer at `gpu_va` as the root arguments (a ring
+    /// allocation, or a copy of one made on the GPU).
+    pub(crate) fn set_root_arguments_va(&mut self, gpu_va: u64) -> Result<()> {
+        self.live()?;
+        self.table
+            .set_address(bind_point::ARGUMENT_BUFFER as u32, gpu_va)
+    }
+
+    /// One dispatch whose group counts the GPU reads at `args_va` (`{x, y, z}`
+    /// as `u32`, 4-byte aligned). The buffer must be resident and its writers
+    /// ordered before, as for any read.
+    pub(crate) fn encode_dispatch_indirect(
+        &mut self,
+        pipeline: &ComputePipeline,
+        args_va: u64,
+        threads: [u32; 3],
+    ) -> Result<()> {
+        self.live()?;
+        if !args_va.is_multiple_of(4) {
+            return Err(Error::BadArgument(format!(
+                "indirect dispatch arguments at {args_va:#x} are not 4-byte aligned"
+            )));
+        }
+        let per_group: u64 = threads.iter().map(|&t| u64::from(t)).product();
+        if per_group == 0 || per_group > u64::from(pipeline.max_threads_per_threadgroup()) {
+            return Err(Error::BadArgument(format!(
+                "{threads:?} threads per group; the pipeline allows {}",
+                pipeline.max_threads_per_threadgroup()
+            )));
+        }
+        let p = pipeline.clone();
+        let key = p.identity();
+        let new_pipeline = self.last_pipeline != Some(key);
+        let encoder = self.prepare(DISPATCH)?;
+        if new_pipeline {
+            encoder.setComputePipelineState(p.raw());
+        }
+        // SAFETY: the address is the caller's: a resident buffer (or ring
+        // allocation) holding three u32, 4-byte aligned (checked above).
+        unsafe {
+            encoder.dispatchThreadgroupsWithIndirectBuffer_threadsPerThreadgroup(
+                args_va,
+                MTLSize {
+                    width: threads[0] as usize,
+                    height: threads[1] as usize,
+                    depth: threads[2] as usize,
+                },
+            );
+        }
+        self.last_pipeline = Some(key);
+        self.stats.dispatches += 1;
+        if new_pipeline {
+            self.keep_pipelines.push(p);
+        }
+        Ok(())
+    }
+
     /// `Dispatch`: `groups` threadgroups of `threads` threads.
     pub fn dispatch(
         &mut self,

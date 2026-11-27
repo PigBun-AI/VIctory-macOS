@@ -42,6 +42,7 @@ impl State {
     pub(super) fn new(device: Device, options: ExecOptions) -> State {
         State {
             clear_kernels: device.clear_kernels(),
+            indirect_kernels: device.indirect_kernels(),
             device,
             options,
             resources: Default::default(),

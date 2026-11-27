@@ -84,6 +84,13 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
                     Command::SetRootTable(c) if c.bind_point != BindPoint::COMPUTE => {
                         return Err(Status::UNSUPPORTED);
                     }
+                    // Draws, mesh dispatch, vertex and index buffers: waiting for the render encoder.
+                    Command::ExecuteIndirect(c)
+                        if c.arguments()
+                            .any(|a| !super::indirect::is_compute_arg(a.kind)) =>
+                    {
+                        return Err(Status::UNSUPPORTED);
+                    }
                     Command::Barrier(b) if b.class == BarrierClass::LAYOUT => {
                         return Err(Status::UNSUPPORTED);
                     }
@@ -183,6 +190,7 @@ impl Run<'_> {
             Command::SetRootDescriptor(c) => self.set_root_descriptor(c),
             Command::SetRootTable(c) => self.set_root_table(c),
             Command::Dispatch(c) => self.dispatch(c),
+            Command::ExecuteIndirect(c) => self.execute_indirect(c),
             Command::CopyBufferRegion(c) => self.copy_buffer_region(c),
             Command::FillBuffer(c) => self.fill_buffer(c),
             Command::ClearUav(c) => self.clear_uav(c),
@@ -477,6 +485,81 @@ impl Run<'_> {
         bound.dirty = false;
         list.dispatch(pipeline, [c.x, c.y, c.z], *threads)
             .map_err(|e| status_of(&e))
+    }
+
+    fn execute_indirect(&mut self, c: &victory_metal_proto::indirect::ExecuteIndirect<'_>) -> R {
+        let args = self.st.buffer(c.args)?.clone();
+        let count = if c.count.is_null() {
+            None
+        } else {
+            Some((self.st.buffer(c.count)?.clone(), c.count_offset))
+        };
+        let signature_root = if c.root_sig.is_null() {
+            None
+        } else {
+            Some(
+                self.st
+                    .root_sigs
+                    .get(c.root_sig.0)
+                    .ok_or(Status::NOT_FOUND)?
+                    .clone(),
+            )
+        };
+        let kernels = &self.st.indirect_kernels;
+        let (list, bound) = match self.open.as_mut() {
+            Some((l, _, b)) => (l, b),
+            None => return Err(Status::BAD_STREAM),
+        };
+        let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
+        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let PsoBody::Compute { pipeline, threads } = &pso.body else {
+            return Err(Status::INVALID_ARG);
+        };
+        if !pso.root_sig.compatible_with(&sig) {
+            return Err(Status::INVALID_ARG);
+        }
+        // The signature was made for a root signature; the list's must be
+        // the same one (or an identical one).
+        if let Some(made_for) = &signature_root {
+            if !made_for.compatible_with(&sig) {
+                return Err(Status::INVALID_ARG);
+            }
+        }
+        let plan = super::indirect::plan(c, Some(&sig))?;
+        let spec = crate::indirect::IndirectDispatch {
+            args: &args,
+            args_offset: c.args_offset,
+            count: count.as_ref().map(|(b, off)| (b, *off)),
+            max_count: c.max_count,
+            stride: c.stride,
+            dispatch_offset: plan.dispatch_offset,
+            record_bytes: plan.record_bytes,
+            roots: &plan.roots,
+            base: &bound.shadow,
+        };
+        // The kernel makes its own copies of the argument buffer; otherwise
+        // the dispatches read the one the list has, written as for a dispatch.
+        if !spec.replaces_root_arguments() && bound.dirty && !bound.shadow.is_empty() {
+            let tlab = list
+                .alloc_constants(bound.shadow.len() as u64, 8)
+                .map_err(|e| status_of(&e))?;
+            tlab.write_bytes(0, &bound.shadow)
+                .map_err(|e| status_of(&e))?;
+            list.set_root_arguments(&tlab).map_err(|e| status_of(&e))?;
+            bound.dirty = false;
+        }
+        let replaced = spec.replaces_root_arguments();
+        let r = list
+            .execute_indirect(kernels, pipeline, *threads, &spec)
+            .map_err(|e| {
+                self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
+                status_of(&e)
+            });
+        // The argument table now points at a record's copy: the next dispatch writes its own.
+        if replaced {
+            bound.dirty = true;
+        }
+        r
     }
 
     fn copy_buffer_region(&mut self, c: &CopyBufferRegion) -> R {

@@ -532,6 +532,11 @@ impl Queue {
         }
     }
 
+    /// Bytes of one constant-ring segment: the most one [`alloc_constants`](Self::alloc_constants) gives.
+    pub fn constant_segment_bytes(&self) -> u64 {
+        lock(&self.inner.ring).segment_bytes()
+    }
+
     /// The constant ring's own buffer (it is in the heap residency set).
     pub fn constant_ring_va(&self) -> u64 {
         lock(&self.inner.ring).base_va()

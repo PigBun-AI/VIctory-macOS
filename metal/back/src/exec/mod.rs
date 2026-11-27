@@ -46,6 +46,7 @@
 mod dxil;
 mod gfx;
 mod handles;
+mod indirect;
 mod stream;
 mod sync;
 pub mod tlab;
@@ -161,6 +162,7 @@ pub(crate) struct State {
     /// because a descriptor holds only the state's id.
     pub(crate) samplers: std::collections::HashMap<String, crate::sampler::Sampler>,
     pub(crate) clear_kernels: crate::clear::ClearKernels,
+    pub(crate) indirect_kernels: crate::indirect::Kernels,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,
