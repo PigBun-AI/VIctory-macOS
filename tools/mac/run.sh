@@ -418,8 +418,9 @@ fi
 [ -x "$WINE" ] || { echo "no Wine at $WINE" >&2; exit 1; }
 [ -f "$exe" ] || { echo "no exe $exe" >&2; exit 1; }
 if [ "$concurrent" = 0 ]; then
-    # (the lock is ours; a victory.exe that is still running was not started through run.sh)
-    others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe}" | tr '\n' ' ')   # (the pattern is a test knob)
+    # (the lock is ours; a victory.exe that is still running was not started through run.sh. Only the title's own command line
+    # `victory.exe run --execute ...` counts: a run.sh that is queued for the lock has `--exe ...victory.exe` in ITS command line)
+    others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe run --execute}" | tr '\n' ' ')   # (the pattern is a test knob)
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
 fi
 

@@ -106,7 +106,7 @@ makes frame times meaningless.
 Each profile and backend has its own: `<GTA6 root>/data/livetr-<profile>-<backend>/{data,cache,dxc}` (for example
 `data/livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
 directory, `data/livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
-state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU).
+state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU). The "another victory.exe is running" check looks for processes whose command line contains `victory.exe run --execute` (the title itself), so other `run.sh` instances waiting for the lock, whose command lines only carry `--exe …/victory.exe`, do not count (`VICTORY_MAC_EXE_PATTERN` overrides the pattern; the tests use it).
 `--fresh-data` replaces the run's directory with a new clone first (reproducible start; it also drops the translated-shader cache, so the
 run is a cold one). The fidelity profile then sets `video/resolutionFullscreen` in its clone's `settings.xml` (original kept once as
 `settings.xml.before-fidelity`). `--data`, `--cache` or `VICTORY_DATA_DIR` use that directory as it is (no cloning, no `--fresh-data`).
