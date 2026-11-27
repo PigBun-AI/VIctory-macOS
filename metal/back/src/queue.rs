@@ -136,6 +136,14 @@ impl Timeline {
         self.event.signaledValue()
     }
 
+    /// Raises the timeline to `value` from the CPU if the GPU has not (after a failed command
+    /// buffer); never lowers it.
+    pub(crate) fn raise_to(&self, value: u64) {
+        if self.event.signaledValue() < value {
+            self.event.setSignaledValue(value);
+        }
+    }
+
     /// Waits until the timeline reaches `value`.
     pub fn wait(&self, value: u64, timeout_ms: u64) -> bool {
         self.completed() >= value
@@ -373,7 +381,7 @@ impl Submitter {
                     raw.commit_count_options(
                         NonNull::new(ptrs.as_mut_ptr()).expect("non-empty"),
                         ptrs.len(),
-                        &commit_options(&sink),
+                        &commit_options(&sink, &timeline, value),
                     );
                 }
                 if let Some(d) = &drawable {
@@ -436,18 +444,26 @@ pub struct Queue {
 
 /// Commit options with a feedback handler that reports to `sink`. One
 /// per commit: Metal runs a handler for the first commit only.
-fn commit_options(sink: &Arc<Sink>) -> Retained<MTL4CommitOptions> {
+fn commit_options(
+    sink: &Arc<Sink>,
+    timeline: &Arc<Timeline>,
+    value: u64,
+) -> Retained<MTL4CommitOptions> {
     let options = MTL4CommitOptions::new();
     let sink = sink.clone();
+    let timeline = timeline.clone();
     let block = RcBlock::new(move |fb: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
         // SAFETY: Metal passes a live feedback object for the call.
         let fb = unsafe { fb.as_ref() };
         let gpu_ns = ((fb.GPUEndTime() - fb.GPUStartTime()).max(0.0) * 1e9) as u64;
+        let mut info = String::new();
         let failure = fb.error().map(|e| {
             // SAFETY: a plain extern static.
             let ours = e
                 .domain()
                 .isEqualToString(unsafe { MTL4CommandQueueErrorDomain });
+            // The encoders Metal names in `userInfo` (their labels, which of them failed).
+            info = format!("{:?}", e.userInfo());
             Failure {
                 // A code from another domain is not ours to interpret.
                 code: if ours {
@@ -459,15 +475,20 @@ fn commit_options(sink: &Arc<Sink>) -> Retained<MTL4CommitOptions> {
                 message: e.localizedDescription().to_string(),
             }
         });
+        let journal = crate::fault::finish(value, failure.is_some());
         if let Some(f) = &failure {
-            // `VICTORY_METAL_LOG=1`: a command buffer that failed (its work is
-            // lost; nothing else says so).
-            if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
-                eprintln!(
-                    "victory-metal back: a submission failed: {} {}: {}",
-                    f.domain, f.code, f.message
-                );
-            }
+            // A failed command buffer loses its work, and nothing says so but this line; whoever
+            // waits for its value must not wait for ever, so the timeline is raised here too
+            // (the queue's own signal after the commit may not come after an error).
+            // Not behind `VICTORY_METAL_LOG`: a run without the log has to be told as well.
+            eprintln!(
+                "victory-metal back: submission {value} FAILED: {} {}: {} (GPU time {:.3} s)\n  info: {info}\n{journal}  timeline raised to {value} so that nothing waits for it",
+                f.domain,
+                f.code,
+                f.message,
+                gpu_ns as f64 / 1e9,
+            );
+            timeline.raise_to(value);
         }
         sink.record(failure, gpu_ns);
     });
@@ -832,6 +853,20 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_submission_raises_the_timeline_and_never_lowers_it() {
+        let d = Device::new().unwrap();
+        let q = Queue::new(&d).unwrap();
+        let t = &q.inner.timeline;
+        assert_eq!(t.completed(), 0);
+        t.raise_to(7);
+        assert_eq!(t.completed(), 7);
+        // A waiter for the failed submission's value is released.
+        assert!(t.wait(7, 10));
+        t.raise_to(3);
+        assert_eq!(t.completed(), 7);
+    }
 
     #[test]
     fn error_codes_map_as_the_note_says() {

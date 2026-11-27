@@ -18,7 +18,8 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
-    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandEncoder, MTL4ComputeCommandEncoder, MTLSize,
+    MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandEncoder, MTL4ComputeCommandEncoder,
+    MTL4RenderCommandEncoder, MTLSize,
 };
 use std::collections::HashMap;
 
@@ -87,6 +88,10 @@ pub struct CommandList {
     /// orders blits (see [`CommandList::blit_hazard`]).
     blit_writes: Vec<(Buffer, u64, u64)>,
     pub(crate) stats: ListStats,
+    /// GPU time samples (`VICTORY_METAL_GPUPROF`, [`crate::prof`]).
+    pub(crate) prof: Option<crate::prof::ListProf>,
+    /// What the executor put into the list, for the log of a failed submission ([`crate::fault`]).
+    pub(crate) journal: Option<crate::fault::Journal>,
 }
 
 // A command buffer and its encoder may move between threads as long as one
@@ -123,6 +128,8 @@ impl Queue {
             splits: HashMap::new(),
             blit_writes: Vec::new(),
             stats: ListStats::default(),
+            prof: crate::prof::ListProf::new(self.device().raw()),
+            journal: crate::fault::Journal::new(),
         };
         list.refresh_mirrors()?;
         Ok(list)
@@ -154,6 +161,17 @@ impl CommandList {
         if let Some(slot) = self.slot.take() {
             self.queue.return_slot(slot, value);
         }
+        if let Some(journal) = self.journal.take() {
+            crate::fault::queue(value, journal);
+        }
+        if let Some(prof) = self.prof.take() {
+            crate::prof::queue_list(
+                self.queue.device().raw(),
+                &self.queue.inner.timeline,
+                value,
+                prof,
+            );
+        }
         // `keep_*` drop here, after the commit: anything retired now waits
         // for `value`.
     }
@@ -176,10 +194,94 @@ impl CommandList {
         }
     }
 
+    /// An op of the title's put into the list, for the journal of a failed submission (does
+    /// nothing unless `VICTORY_METAL_LOG` is on).
+    pub fn journal_note(&mut self, label: impl FnOnce() -> String) {
+        if let Some(j) = self.journal.as_mut() {
+            j.note(&label());
+        }
+    }
+
+    /// `VICTORY_METAL_GPUPROF`: a timestamp into the open encoder, named `label()` (the scope
+    /// that ends here). Does nothing when the profiler is off or no encoder is open.
+    pub fn prof_sample(&mut self, label: impl FnOnce() -> String) {
+        let Some(cfg) = crate::prof::config() else {
+            return;
+        };
+        let Some(p) = self.prof.as_mut() else {
+            return;
+        };
+        if let Some(enc) = &self.encoder {
+            if let Some(i) = p.next(label()) {
+                // SAFETY: `i` is below the heap's entry count (`ListProf::next`).
+                unsafe {
+                    enc.writeTimestampWithGranularity_intoHeap_atIndex(
+                        cfg.granularity(),
+                        p.heap(),
+                        i,
+                    )
+                };
+            }
+        } else if let Some(enc) = &self.render
+            && let Some(i) = p.next(label())
+        {
+            // SAFETY: as above.
+            unsafe {
+                enc.writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
+                    if cfg.draws {
+                        cfg.granularity()
+                    } else {
+                        objc2_metal::MTL4TimestampGranularity::Relaxed
+                    },
+                    objc2_metal::MTLRenderStages::Fragment,
+                    p.heap(),
+                    i,
+                )
+            };
+        }
+    }
+
+    /// A render encoder's first sample: before its first draw (the stage `Vertex` is where the
+    /// pass starts), named `gap`: the time since the last scope ended is the wait for earlier work.
+    fn prof_sample_render_start(&mut self) {
+        let Some(cfg) = crate::prof::config() else {
+            return;
+        };
+        let (Some(p), Some(enc)) = (self.prof.as_mut(), &self.render) else {
+            return;
+        };
+        if let Some(i) = p.next("gap before an encoder".into()) {
+            // SAFETY: `i` is below the heap's entry count.
+            unsafe {
+                enc.writeTimestampWithGranularity_afterStage_intoHeap_atIndex(
+                    objc2_metal::MTL4TimestampGranularity::Relaxed,
+                    objc2_metal::MTLRenderStages::Vertex,
+                    p.heap(),
+                    i,
+                )
+            };
+            let _ = cfg;
+        }
+    }
+
+    /// What a render encoder's scope is called: its size, attachments and draws.
+    fn prof_pass_label(&mut self) -> String {
+        let draws = self
+            .prof
+            .as_mut()
+            .map_or(0, |p| std::mem::take(&mut p.draws));
+        match &self.pass {
+            Some(p) => p.describe(draws),
+            None => format!("render encoder, {draws} draws"),
+        }
+    }
+
     pub(crate) fn perform(&mut self, actions: Vec<Action>) -> Result<()> {
+        let mut opened = None;
         for action in actions {
             match action {
                 Action::Open(EncoderKind::Compute) => {
+                    opened = Some(EncoderKind::Compute);
                     let encoder = self
                         .cb()
                         .computeCommandEncoder()
@@ -189,8 +291,15 @@ impl CommandList {
                     self.last_pipeline = None;
                     self.stats.encoders += 1;
                 }
-                Action::Open(EncoderKind::Render) => self.open_render()?,
+                Action::Open(EncoderKind::Render) => {
+                    opened = Some(EncoderKind::Render);
+                    self.open_render()?
+                }
                 Action::Close => {
+                    if self.render.is_some() && self.prof.is_some() {
+                        let label = self.prof_pass_label();
+                        self.prof_sample(|| label);
+                    }
                     if let Some(encoder) = self.encoder.take() {
                         encoder.endEncoding();
                     }
@@ -226,6 +335,13 @@ impl CommandList {
                     self.stats.producer_barriers += 1;
                 }
             }
+        }
+        // The barriers that open an encoder wait for earlier work: a sample after them
+        // separates that wait from the first op's own time.
+        match opened {
+            Some(EncoderKind::Compute) => self.prof_sample(|| "gap before an encoder".into()),
+            Some(EncoderKind::Render) => self.prof_sample_render_start(),
+            None => {}
         }
         Ok(())
     }

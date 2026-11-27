@@ -294,6 +294,7 @@ impl State {
         );
         // A frame of the drop statistics ends at every present.
         crate::dropstats::end_frame();
+        crate::prof::end_frame();
         r.map_err(|err| {
             self.note = Some(format!("PRESENT: {err}"));
             match err {

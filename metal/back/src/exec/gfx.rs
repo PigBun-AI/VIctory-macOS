@@ -440,16 +440,31 @@ impl Executor {
         &self,
         a: &mut CreateGraphicsPipelineArgs,
     ) -> Result<(), Status> {
-        let Some(stats) = crate::dropstats::get() else {
-            return self.create_graphics_pipeline_inner(a, &mut Label::default());
-        };
-        crate::dropstats::take_reason();
+        let started = std::time::Instant::now();
+        let stats = crate::dropstats::get();
+        if stats.is_some() {
+            crate::dropstats::take_reason();
+        }
         let mut label = Label::NONE;
         let r = self.create_graphics_pipeline_inner(a, &mut label);
         let kind = match label.ty {
             PipeType::Ms => "graphics-ms",
             PipeType::Gs => "graphics-gs",
             _ => "graphics-vs",
+        };
+        // A pipeline made slowly is logged (`VICTORY_METAL_COMPILE_LOG_MS`, 100 by default).
+        crate::prof::compiled(
+            kind,
+            label.hash,
+            started.elapsed(),
+            std::time::Duration::from_micros(crate::archive::peek_compile_us()),
+        );
+        if r.is_ok() {
+            crate::prof::register_pipeline(a.pso.0, format!("{kind} {:016x}", label.hash));
+        }
+        let Some(stats) = stats else {
+            crate::archive::take_compile_us();
+            return r;
         };
         match &r {
             Ok(()) => {
@@ -495,7 +510,7 @@ impl Executor {
             stage_bytes(&d.ms)?,
             stage_bytes(&d.gs)?,
         ];
-        if crate::dropstats::get().is_some() {
+        {
             let ty = match (kind, code[4].is_some()) {
                 (PsoKind::Mesh, _) => PipeType::Ms,
                 (_, true) => PipeType::Gs,

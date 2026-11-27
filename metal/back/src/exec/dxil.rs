@@ -262,12 +262,27 @@ impl Executor {
         &self,
         a: &mut CreateComputePipelineArgs,
     ) -> Result<(), Status> {
-        let Some(stats) = crate::dropstats::get() else {
-            return self.create_compute_pipeline_inner(a, &mut Label::default());
-        };
-        crate::dropstats::take_reason();
+        let started = std::time::Instant::now();
+        let stats = crate::dropstats::get();
+        if stats.is_some() {
+            crate::dropstats::take_reason();
+        }
         let mut label = Label::NONE;
         let r = self.create_compute_pipeline_inner(a, &mut label);
+        // A pipeline made slowly is logged (`VICTORY_METAL_COMPILE_LOG_MS`, 100 by default).
+        crate::prof::compiled(
+            "cs",
+            label.hash,
+            started.elapsed(),
+            std::time::Duration::from_micros(crate::archive::peek_compile_us()),
+        );
+        if r.is_ok() {
+            crate::prof::register_pipeline(a.pso.0, format!("cs {:016x}", label.hash));
+        }
+        let Some(stats) = stats else {
+            crate::archive::take_compile_us();
+            return r;
+        };
         match &r {
             Ok(()) => {
                 stats.register(a.pso.0, label);
@@ -309,9 +324,7 @@ impl Executor {
         // the call (`CreateComputePipelineArgs::dxil_addr`).
         let dxil =
             unsafe { std::slice::from_raw_parts(a.dxil_addr as *const u8, a.dxil_len as usize) };
-        if crate::dropstats::get().is_some() {
-            *label = crate::dropstats::label_of_stages(PipeType::Cs, &[dxil]);
-        }
+        *label = crate::dropstats::label_of_stages(PipeType::Cs, &[dxil]);
         let options = CompileOptions {
             compat: self.options.compat,
             ..CompileOptions::default()

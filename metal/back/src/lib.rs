@@ -43,6 +43,8 @@ pub mod exec;
 #[cfg(target_vendor = "apple")]
 pub mod expand;
 #[cfg(target_vendor = "apple")]
+pub(crate) mod fault;
+#[cfg(target_vendor = "apple")]
 pub mod format;
 #[cfg(target_vendor = "apple")]
 pub mod heap;
@@ -68,6 +70,8 @@ pub mod pipeline;
 pub mod pipeline_defaults;
 #[cfg(target_vendor = "apple")]
 pub mod present;
+#[cfg(target_vendor = "apple")]
+pub mod prof;
 #[cfg(target_vendor = "apple")]
 pub mod queue;
 #[cfg(target_vendor = "apple")]

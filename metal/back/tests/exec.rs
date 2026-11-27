@@ -323,7 +323,7 @@ fn a_reflection_layout_replaces_the_rule_based_one() {
     let mut consts = [0u8; 8];
     consts[..4].copy_from_slice(&(N as u32).to_le_bytes());
     consts[4..].copy_from_slice(&3.0f32.to_bits().to_le_bytes());
-    let body = |pso: PsoId| {
+    let body = |pso: PsoId, fence_value: u64| {
         vec![
             begin(1, s.queue),
             Command::SetRootSignature(SetRootSignature {
@@ -354,12 +354,14 @@ fn a_reflection_layout_replaces_the_rule_based_one() {
             Command::Barrier(Barrier::memory(stage::DISPATCH, stage::BLIT)),
             copy(s.readback.res, s.out.res, 4096),
             end(1),
-            signal_cmd(s.queue, s.fence, 1),
+            signal_cmd(s.queue, s.fence, fence_value),
         ]
     };
-    assert_eq!(fx.submit(&body(before)), Status::INVALID_ARG);
-    assert_eq!(fx.submit(&body(pso)), Status::OK);
-    assert_eq!(fx.wait(s.fence, 1), Status::OK);
+    // The failed block still gives its fence signal (nothing may wait for ever for it), so the
+    // second block signals the next value.
+    assert_eq!(fx.submit(&body(before, 1)), Status::INVALID_ARG);
+    assert_eq!(fx.submit(&body(pso, 2)), Status::OK);
+    assert_eq!(fx.wait(s.fence, 2), Status::OK);
     assert_eq!(s.readback(), expect(3.0));
 }
 

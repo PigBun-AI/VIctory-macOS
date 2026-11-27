@@ -312,6 +312,24 @@ pub(crate) struct Pass {
 }
 
 impl Pass {
+    /// The pass as a line of the GPU time table (`VICTORY_METAL_GPUPROF`): size, attachments
+    /// (Metal pixel format numbers), draws.
+    pub(crate) fn describe(&self, draws: u32) -> String {
+        let colors: Vec<String> = self
+            .color_formats
+            .iter()
+            .filter(|f| **f != MTLPixelFormat::Invalid)
+            .map(|f| f.0.to_string())
+            .collect();
+        format!(
+            "pass {}x{} colors=[{}] depth={} draws={draws}",
+            self.size[0],
+            self.size[1],
+            colors.join(","),
+            self.depth_format.0,
+        )
+    }
+
     fn any_clear(&self) -> bool {
         self.spec
             .colors

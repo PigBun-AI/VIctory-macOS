@@ -173,6 +173,11 @@ pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
+/// The same without resetting it.
+pub(crate) fn peek_compile_us() -> u64 {
+    COMPILE_US.with(|c| c.get())
+}
+
 /// The compiler time of this thread since the last call.
 pub(crate) fn take_compile_us() -> u64 {
     COMPILE_US.with(|c| c.replace(0))

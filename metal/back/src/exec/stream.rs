@@ -262,6 +262,8 @@ impl State {
         // run, and what a failure loses with them.
         let stats = crate::dropstats::get();
         let mut counted = Counted::default();
+        // `VICTORY_METAL_GPUPROF`: the pipeline the open list has set.
+        let mut prof_pso = PsoId::NULL;
         while let Some(c) = decoder.next() {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
@@ -271,6 +273,16 @@ impl State {
             }
             let before = stats.map(|s| counted.before(s, &c));
             let result = run.command(&c);
+            if crate::prof::config().is_some() || crate::fault::enabled() {
+                match &c {
+                    Command::BeginList(_) => prof_pso = PsoId::NULL,
+                    Command::SetPipeline(p) => prof_pso = p.pso,
+                    _ => {}
+                }
+                if result.is_ok() {
+                    run.prof_after(&c, prof_pso);
+                }
+            }
             if let (Some(s), Some(before)) = (stats, before) {
                 counted.after(s, &c, before, &result, &run);
             }
@@ -281,6 +293,26 @@ impl State {
                     let why = run.st.note.as_deref().unwrap_or("no reason recorded");
                     eprintln!("victory-metal back: {:?} failed: {s:?}: {why}", c.opcode());
                 }
+                // The list being recorded is lost with the failed command. A fence the title
+                // waits for that is signalled further down this block still has to be: a
+                // signal that is never given leaves the title waiting for ever (0% CPU, no
+                // log), where a lost list only costs a picture. The signals wait for the lists
+                // of the block that were already finished.
+                run.open = None;
+                for later in decoder.clone() {
+                    if let Ok(Command::QueueSignal(q)) = later {
+                        let given = run.queue_signal(&q);
+                        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                            eprintln!(
+                                "victory-metal back: after {:?} failed, the fence signal of queue {} fence {} value {} is still given: {given:?}",
+                                c.opcode(),
+                                q.queue.0,
+                                q.fence.0,
+                                q.value,
+                            );
+                        }
+                    }
+                }
                 if let Some(st) = stats {
                     let why = run.st.note.clone().unwrap_or_else(|| format!("{s:?}"));
                     counted.stopped(
@@ -289,7 +321,7 @@ impl State {
                         decoder.by_ref(),
                     );
                 }
-                // Dropping `run` drops the open list and the unflushed ones.
+                // Dropping `run` drops the unflushed lists.
                 failed = Some((s, format!("{c:?}")));
                 break;
             }
@@ -466,6 +498,116 @@ impl Counted {
 }
 
 pub(super) type R = Result<(), Status>;
+
+impl Run<'_> {
+    /// What a resource is, for a line of the GPU time table.
+    fn prof_res(&self, id: victory_metal_proto::ids::ResId) -> String {
+        match self.st.resources.get(id.0) {
+            Some(super::Res::Texture(t)) => {
+                let d = t.desc();
+                format!(
+                    "tex{:?} f{} {}x{}x{} m{}",
+                    d.dim, d.format, d.width, d.height, d.depth_or_array, d.mips
+                )
+            }
+            Some(super::Res::Buffer(b)) => format!("buf {}", b.len()),
+            None => "?".into(),
+        }
+    }
+
+    /// `VICTORY_METAL_GPUPROF`: the command `c` ran; if it is an op the table names, a timestamp
+    /// goes after it, named by what it did.
+    fn prof_after(&mut self, c: &Command<'_>, pso: PsoId) {
+        // The journal of a failed submission (`VICTORY_METAL_LOG`, `crate::fault`): pipelines as
+        // they are set, dispatches, and the kinds of copy; draws are the pipeline's.
+        if crate::fault::enabled()
+            && let Some((list, _, _)) = self.open.as_mut()
+        {
+            match c {
+                Command::SetPipeline(_) | Command::Dispatch(_) | Command::ExecuteIndirect(_) => {
+                    let kind = match c {
+                        Command::SetPipeline(_) => "set",
+                        Command::Dispatch(_) => "dispatch",
+                        _ => "execute-indirect",
+                    };
+                    list.journal_note(|| format!("{kind} {}", crate::prof::pipeline_label(pso.0)));
+                }
+                Command::CopyBufferRegion(_) => list.journal_note(|| "copy buf->buf".into()),
+                Command::CopyResource(_) | Command::CopyTextureRegion(_) => {
+                    list.journal_note(|| "copy texture".into());
+                }
+                Command::ClearUav(_) | Command::ClearUavTexture(_) | Command::FillBuffer(_) => {
+                    list.journal_note(|| "clear/fill".into());
+                }
+                _ => {}
+            }
+        }
+        let Some(cfg) = crate::prof::config() else {
+            return;
+        };
+        let label = match c {
+            Command::Dispatch(_) => Some(crate::prof::pipeline_label(pso.0)),
+            Command::ExecuteIndirect(_) => Some(format!(
+                "execute-indirect {}",
+                crate::prof::pipeline_label(pso.0)
+            )),
+            Command::CopyBufferRegion(c) => Some(format!("copy buf->buf {} bytes", c.size)),
+            Command::FillBuffer(c) => Some(format!("fill buf {} bytes", c.size)),
+            Command::ClearUav(c) => Some(format!("clear-uav buf f{} {} bytes", c.format, c.size)),
+            Command::ClearUavTexture(c) => Some(format!(
+                "clear-uav tex f{} [{}]",
+                c.format,
+                self.prof_res(c.res)
+            )),
+            Command::CopyResource(c) => Some(format!(
+                "copy-resource [{}] <- [{}]",
+                self.prof_res(c.dst),
+                self.prof_res(c.src)
+            )),
+            Command::CopyTextureRegion(c) => {
+                use victory_metal_proto::types::LocKind;
+                let side = |l: &victory_metal_proto::cmd::TextureLocation| {
+                    if l.kind == LocKind::SUBRESOURCE {
+                        format!(
+                            "{} mip{} s{} p{}",
+                            self.prof_res(l.res),
+                            l.mip,
+                            l.slice,
+                            l.plane
+                        )
+                    } else {
+                        format!(
+                            "footprint f{} {}x{}x{}",
+                            l.format, l.width, l.height, l.depth
+                        )
+                    }
+                };
+                Some(format!(
+                    "copy-texture [{}] <- [{}]",
+                    side(&c.dst),
+                    side(&c.src)
+                ))
+            }
+            Command::Draw(_) | Command::DrawIndexed(_) | Command::DispatchMesh(_) => {
+                if let Some((list, _, _)) = self.open.as_mut()
+                    && let Some(p) = list.prof.as_mut()
+                {
+                    p.draws += 1;
+                }
+                cfg.draws
+                    .then(|| format!("draw {}", crate::prof::pipeline_label(pso.0)))
+            }
+            _ => None,
+        };
+        let Some(label) = label else { return };
+        if let Some((list, _, _)) = self.open.as_mut() {
+            // Ops inside a render pass belong to the pass's scope (unless draws are sampled).
+            if list.render.is_none() || cfg.draws {
+                list.prof_sample(|| label);
+            }
+        }
+    }
+}
 
 impl Run<'_> {
     fn command(&mut self, c: &Command<'_>) -> R {
