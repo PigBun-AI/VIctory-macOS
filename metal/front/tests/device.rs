@@ -486,16 +486,57 @@ fn split_barriers_send_at_end_only() {
 }
 
 #[test]
+fn the_adapter_is_what_the_back_says_and_passes_the_callers_filters() {
+    // DXGI_ADAPTER_DESC1 as callers (victory-shader hardware_adapter, D3D12CreateDevice
+    // loops) read it: not software, non-zero dedicated memory equal to the Metal working
+    // set (unified memory), the Metal device's name NUL-terminated in 128 UTF-16 units,
+    // a LUID that is stable between calls, Apple's vendor id, caps from the back.
+    let (_link, dev) = setup();
+    let a = &dev.sys.adapter;
+    assert!(!a.software);
+    assert_eq!(a.dedicated_video_memory, dev.sys.limits.working_set);
+    assert_eq!(a.shared_system_memory, dev.sys.limits.working_set);
+    assert!(a.dedicated_video_memory > 0 && a.dedicated_system_memory == 0);
+    assert_eq!(a.vendor_id, 0x106B);
+    assert!(a.luid_low != 0 || a.luid_high != 0);
+    let d = a.description_utf16();
+    let n = d.iter().position(|c| *c == 0).unwrap();
+    assert_eq!(String::from_utf16(&d[..n]).unwrap(), a.name);
+    assert!(!a.name.is_empty());
+    let (_l2, dev2) = setup();
+    assert_eq!(
+        (dev2.sys.adapter.luid_low, dev2.sys.adapter.luid_high),
+        (a.luid_low, a.luid_high)
+    );
+    assert_eq!(dev.sys.caps.wave_lane_min, dev.sys.limits.simd_width);
+}
+
+#[test]
 fn uav_aliasing_and_bad_subresource_barriers() {
     // D3D12 spec (SDK 10.0.22621): a UAV barrier with a null resource covers
     // every UAV access; an aliasing barrier with a null side covers every
     // placed resource; a transition names an existing subresource, also at BEGIN.
     let (_link, dev) = setup();
-    let b = buf(&dev, resource::HEAP_DEFAULT, 16, true, state::UNORDERED_ACCESS);
+    let b = buf(
+        &dev,
+        resource::HEAP_DEFAULT,
+        16,
+        true,
+        state::UNORDERED_ACCESS,
+    );
     let mut l = CommandList::new(&dev, 0);
     use ResourceBarrier::*;
     l.resource_barrier(&[Uav { res: None }, Uav { res: Some(b.res) }]);
-    l.resource_barrier(&[Aliasing { before: None, after: Some(b.res) }, Aliasing { before: Some(b.res), after: None }]);
+    l.resource_barrier(&[
+        Aliasing {
+            before: None,
+            after: Some(b.res),
+        },
+        Aliasing {
+            before: Some(b.res),
+            after: None,
+        },
+    ]);
     let items = l.close().unwrap();
     let bars: Vec<Barrier> = items
         .iter()
@@ -505,9 +546,16 @@ fn uav_aliasing_and_bad_subresource_barriers() {
         })
         .collect();
     assert_eq!(bars.len(), 4);
-    assert_eq!((bars[0].before, bars[0].after), (state::stage::SHADERS, state::stage::SHADERS));
+    assert_eq!(
+        (bars[0].before, bars[0].after),
+        (state::stage::SHADERS, state::stage::SHADERS)
+    );
     assert!(bars[0].res_before.is_null() && bars[1].res_before == b.res);
-    assert_eq!(bars[0].visibility & 2, 0, "a UAV barrier is not an aliasing one");
+    assert_eq!(
+        bars[0].visibility & 2,
+        0,
+        "a UAV barrier is not an aliasing one"
+    );
     assert_eq!((bars[2].before, bars[2].after), (stage::ALL, stage::ALL));
     assert_eq!(bars[2].visibility, 3);
     assert!(bars[2].res_before.is_null() && bars[2].res_after == b.res);

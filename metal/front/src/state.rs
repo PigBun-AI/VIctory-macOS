@@ -482,12 +482,29 @@ mod tests {
         // Spec: RENDER_TARGET, UNORDERED_ACCESS, DEPTH_WRITE, STREAM_OUT,
         // COPY_DEST, RESOLVE_DEST are write states; ray tracing acceleration
         // structures are read-write (builds write them in that state).
-        for w in [RENDER_TARGET, UNORDERED_ACCESS, DEPTH_WRITE, STREAM_OUT, COPY_DEST, RESOLVE_DEST, RAYTRACING_ACCELERATION_STRUCTURE] {
+        for w in [
+            RENDER_TARGET,
+            UNORDERED_ACCESS,
+            DEPTH_WRITE,
+            STREAM_OUT,
+            COPY_DEST,
+            RESOLVE_DEST,
+            RAYTRACING_ACCELERATION_STRUCTURE,
+        ] {
             assert!(is_write_state(w), "{w:#x}");
         }
-        for r in [VERTEX_AND_CONSTANT_BUFFER, INDEX_BUFFER, DEPTH_READ, NON_PIXEL_SHADER_RESOURCE,
-            PIXEL_SHADER_RESOURCE, INDIRECT_ARGUMENT, COPY_SOURCE, RESOLVE_SOURCE, GENERIC_READ, COMMON]
-        {
+        for r in [
+            VERTEX_AND_CONSTANT_BUFFER,
+            INDEX_BUFFER,
+            DEPTH_READ,
+            NON_PIXEL_SHADER_RESOURCE,
+            PIXEL_SHADER_RESOURCE,
+            INDIRECT_ARGUMENT,
+            COPY_SOURCE,
+            RESOLVE_SOURCE,
+            GENERIC_READ,
+            COMMON,
+        ] {
             assert!(!is_write_state(r), "{r:#x}");
         }
     }
@@ -550,13 +567,21 @@ mod tests {
                 }
                 let used = if next == COMMON { 0 } else { stages_of(next) };
                 for (w, p) in pending.iter().enumerate() {
-                    assert_eq!(p & used, 0, "writer stage {w} not synced: {cur:#x}->{next:#x}");
+                    assert_eq!(
+                        p & used,
+                        0,
+                        "writer stage {w} not synced: {cur:#x}->{next:#x}"
+                    );
                 }
                 // a write into a state also waits for earlier readers: the
                 // barrier's before covers the old state's stages
                 if is_write_state(next) && cur != COMMON && stages_of(cur) != 0 {
                     let b = b.expect("a transition into a write state is a barrier");
-                    assert_eq!(b.before & stages_of(cur), stages_of(cur), "{cur:#x}->{next:#x}");
+                    assert_eq!(
+                        b.before & stages_of(cur),
+                        stages_of(cur),
+                        "{cur:#x}->{next:#x}"
+                    );
                 }
                 // Entering a write state starts a new history: the barrier
                 // above is an execution + memory dependency chain through the
@@ -575,15 +600,25 @@ mod tests {
         let mut t = StateTracker::default();
         t.add(1, 6, COPY_DEST); // 3 mips x 2 slices, say
         // Transitioning one subresource leaves the others in place.
-        t.transition(1, 4, COPY_DEST, PIXEL_SHADER_RESOURCE, 0).unwrap();
+        t.transition(1, 4, COPY_DEST, PIXEL_SHADER_RESOURCE, 0)
+            .unwrap();
         assert_eq!(
             (0..6).map(|i| t.state(1, i).unwrap()).collect::<Vec<_>>(),
-            [COPY_DEST, COPY_DEST, COPY_DEST, COPY_DEST, PIXEL_SHADER_RESOURCE, COPY_DEST]
+            [
+                COPY_DEST,
+                COPY_DEST,
+                COPY_DEST,
+                COPY_DEST,
+                PIXEL_SHADER_RESOURCE,
+                COPY_DEST
+            ]
         );
         // ALL_SUBRESOURCES with agreeing states merges into one barrier.
         let mut t2 = StateTracker::default();
         t2.add(2, 4, COPY_DEST);
-        let b = t2.transition(2, ALL_SUBRESOURCES, COPY_DEST, COPY_SOURCE, 0).unwrap();
+        let b = t2
+            .transition(2, ALL_SUBRESOURCES, COPY_DEST, COPY_SOURCE, 0)
+            .unwrap();
         // a copy write seen by a copy read is still a barrier (BLIT -> BLIT)
         assert_eq!(b.map(|b| (b.before, b.after)), Some((BLIT, BLIT)));
     }

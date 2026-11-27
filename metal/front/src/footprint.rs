@@ -270,7 +270,9 @@ mod tests {
         let sizes = [1u64, 2, 3, 4, 5, 7, 63, 64, 100, 255, 256, 257, 1000];
         let mut n = 0;
         for fmt in 1..=115u32 {
-            let Some(fi) = crate::format::info(fmt) else { continue };
+            let Some(fi) = crate::format::info(fmt) else {
+                continue;
+            };
             for dim in [DIM_TEXTURE1D, DIM_TEXTURE2D, DIM_TEXTURE3D] {
                 if dim == DIM_TEXTURE1D && (fi.block_h > 1 || fi.planes > 1) {
                     continue;
@@ -282,7 +284,11 @@ mod tests {
                         }
                         for &da in &[1u16, 3] {
                             let mips = 64 - w.max(h as u64).leading_zeros() as u16;
-                            let mips = if dim == DIM_TEXTURE3D { mips.min(4) } else { mips };
+                            let mips = if dim == DIM_TEXTURE3D {
+                                mips.min(4)
+                            } else {
+                                mips
+                            };
                             let d = tex(dim, w, h, da, mips, fmt);
                             let cnt = d.subresource_count();
                             assert_eq!(cnt, mips as u32 * d.array_size() * fi.planes as u32);
@@ -293,15 +299,26 @@ mod tests {
                             let mut last_end = 0;
                             for (i, s) in l.iter().enumerate() {
                                 let (mip, arr, pl) = decompose(&d, i as u32);
-                                assert_eq!(calc_subresource(mip, arr, pl, mips as u32, d.array_size()), i as u32);
+                                assert_eq!(
+                                    calc_subresource(mip, arr, pl, mips as u32, d.array_size()),
+                                    i as u32
+                                );
                                 let p = crate::format::plane(fmt, pl).unwrap();
                                 let f = &s.footprint;
                                 // mip size rule, rounded up to whole blocks
                                 let mw = (w >> mip).max(1).div_ceil(1 << p.shift_x);
                                 let mh = ((h >> mip).max(1) as u64).div_ceil(1 << p.shift_y);
-                                let md = if dim == DIM_TEXTURE3D { (da as u32 >> mip).max(1) } else { 1 };
+                                let md = if dim == DIM_TEXTURE3D {
+                                    (da as u32 >> mip).max(1)
+                                } else {
+                                    1
+                                };
                                 let (bw, bh) = (p.block_w as u64, p.block_h as u64);
-                                assert_eq!(f.width as u64, mw.div_ceil(bw) * bw, "{fmt} {dim} {w}x{h} s{i}");
+                                assert_eq!(
+                                    f.width as u64,
+                                    mw.div_ceil(bw) * bw,
+                                    "{fmt} {dim} {w}x{h} s{i}"
+                                );
                                 assert_eq!(f.height as u64, mh.div_ceil(bh) * bh);
                                 assert_eq!(f.depth, md);
                                 assert_eq!(s.row_size, mw.div_ceil(bw) * p.bytes as u64);
@@ -313,7 +330,8 @@ mod tests {
                                 // placed after the previous one, no overlap
                                 assert!(f.offset >= prev_end);
                                 assert!(f.offset - prev_end < PLACEMENT_ALIGNMENT);
-                                prev_end = f.offset + f.depth as u64 * s.num_rows as u64 * f.row_pitch as u64;
+                                prev_end = f.offset
+                                    + f.depth as u64 * s.num_rows as u64 * f.row_pitch as u64;
                                 last_end = f.offset - base
                                     + (f.depth as u64 * s.num_rows as u64 - 1) * f.row_pitch as u64
                                     + s.row_size;
@@ -352,13 +370,19 @@ mod tests {
         assert!(l.iter().all(|s| s.footprint.format == 48));
         // 4:2:0 chroma of an odd size rounds up
         let (l, _) = copyable_footprints(&tex(t2, 33, 17, 1, 1, 103), 1, 1, 0).unwrap();
-        assert_eq!((l[0].footprint.width, l[0].footprint.height, l[0].row_size), (17, 9, 34));
+        assert_eq!(
+            (l[0].footprint.width, l[0].footprint.height, l[0].row_size),
+            (17, 9, 34)
+        );
         // BC: the mip below 4 texels still occupies one whole block
         let (l, _) = copyable_footprints(&tex(t2, 4, 4, 1, 3, 98), 0, 3, 0).unwrap();
         assert!((1..3).all(|i| (l[i].footprint.width, l[i].row_size) == (4, 16)));
         // 3D: depth halves with the mip and slices stack at the pitch
         let (l, t) = copyable_footprints(&tex(DIM_TEXTURE3D, 4, 4, 5, 3, 28), 0, 3, 0).unwrap();
-        assert_eq!(l.iter().map(|s| s.footprint.depth).collect::<Vec<_>>(), [5, 2, 1]);
+        assert_eq!(
+            l.iter().map(|s| s.footprint.depth).collect::<Vec<_>>(),
+            [5, 2, 1]
+        );
         assert_eq!(t, l[2].footprint.offset + 4);
     }
 }

@@ -90,6 +90,12 @@ pub const F_OPTIONS21: u32 = 53;
 ///   reserved resources or tile mappings (`CreateReservedResource` /
 ///   `UpdateTileMappings` are `E_NOTIMPL`), so a title asked "tiled resources?" must
 ///   take its non-tiled path. `victory-gpu`'s tiles.rs `wanted()` is then false.
+/// * `F_OPTIONS3`: `ViewInstancingTier` (word 3) is 0, not 2: `SetViewInstanceMask` is `E_NOTIMPL`.
+/// * `F_OPTIONS5`: `RenderPassesTier` (word 1) and `RaytracingTier` (word 2) are 0, not
+///   2 and 1.1: `BeginRenderPass`/`EndRenderPass`, `CreateStateObject`,
+///   `BuildRaytracingAccelerationStructure` and `DispatchRays` are `E_NOTIMPL`.
+/// * `F_OPTIONS2`: `DepthBoundsTestSupported` stays 1 as D3DMetal says although
+///   `OMSetDepthBounds` has no effect (gap C-F-027): victory-gpu reads it.
 /// * `F_OPTIONS12`: `EnhancedBarriersSupported` (word 1) is 0, not 1: lists are
 ///   `ID3D12GraphicsCommandList6` and have no `Barrier` (List7), so legacy
 ///   `ResourceBarrier` it is; `victory-gpu` falls back when the List7 cast fails.
@@ -104,10 +110,10 @@ const BLOCKS: &[(u32, &str)] = &[
         "010000002000000020000000000400000100000001000000",
     ),
     (F_OPTIONS2, "0100000001000000"),
-    (F_OPTIONS3, "00000000010000000d0000000200000001000000"),
+    (F_OPTIONS3, "00000000010000000d0000000000000001000000"),
     (F_EXISTING_HEAPS, "00000000"),
     (F_OPTIONS4, "010000000200000001000000"),
-    (F_OPTIONS5, "00000000020000000b000000"),
+    (F_OPTIONS5, "000000000000000000000000"),
     (F_OPTIONS6, "0000000000000000000000000000000001000000"),
     (F_OPTIONS7, "0a00000000000000"),
     (F_OPTIONS8, "00000000"),
@@ -356,7 +362,7 @@ mod tests {
         Ok(b)
     }
 
-    /// OPTIONS3 is D3DMetal's answer byte for byte (docs/metal/m4-newbase.md, attributeAtVertex):
+    /// OPTIONS3 is D3DMetal's answer except ViewInstancingTier (docs/metal/m4-newbase.md, attributeAtVertex):
     /// `BarycentricsSupported` (word 4) is 1 on both, so the 103 pipelines MSC refuses are not
     /// a difference in what the host reports; victory-shader emits `attributeAtVertex` without
     /// looking at it.
@@ -367,7 +373,11 @@ mod tests {
         assert_eq!(w(0), 0, "CopyQueueTimestampQueriesSupported");
         assert_eq!(w(1), 1, "CastingFullyTypedFormatSupported");
         assert_eq!(w(2), 0xd, "WriteBufferImmediateSupportFlags");
-        assert_eq!(w(3), 2, "ViewInstancingTier");
+        assert_eq!(
+            w(3),
+            0,
+            "ViewInstancingTier (D3DMetal: 2; SetViewInstanceMask is E_NOTIMPL here)"
+        );
         assert_eq!(w(4), 1, "BarycentricsSupported");
     }
 
@@ -389,6 +399,113 @@ mod tests {
             "MSPrimitivesPipelineStatisticIncludesCulledPrimitives"
         );
         assert_eq!(w12(1), 0, "EnhancedBarriersSupported");
+        // Nothing that is E_NOTIMPL is advertised: view instancing, render
+        // passes, ray tracing.
+        let o3 = q(F_OPTIONS3, &[0; 20]).unwrap();
+        assert_eq!(get_u32(&o3, 12), 0, "ViewInstancingTier");
+        let o5 = q(F_OPTIONS5, &[0; 12]).unwrap();
+        assert_eq!(
+            (get_u32(&o5, 4), get_u32(&o5, 8)),
+            (0, 0),
+            "RenderPassesTier, RaytracingTier"
+        );
+        // and the tiers that are built stay: variable rate shading 0, sampler feedback 0
+        let o7 = q(F_OPTIONS7, &[0; 8]).unwrap();
+        assert_eq!(get_u32(&o7, 4), 0, "SamplerFeedbackTier");
+    }
+
+    /// D3D12 SDK 10.0.22621: the byte size of each D3D12_FEATURE_DATA_* structure
+    /// (what an application passes as FeatureSupportDataSize).
+    #[test]
+    fn block_sizes_are_the_sdk_structure_sizes() {
+        let sizes = [
+            (F_OPTIONS, 60),
+            (F_OPTIONS1, 24),
+            (F_OPTIONS2, 8),
+            (F_OPTIONS3, 20),
+            (F_OPTIONS4, 12),
+            (F_OPTIONS5, 12),
+            (F_OPTIONS6, 20),
+            (F_OPTIONS7, 8),
+            (F_OPTIONS8, 4),
+            (F_OPTIONS9, 24),
+            (F_OPTIONS10, 8),
+            (F_OPTIONS11, 4),
+            (F_OPTIONS12, 12),
+            (F_OPTIONS13, 24),
+            (F_OPTIONS14, 12),
+            (F_OPTIONS15, 8),
+            (F_OPTIONS16, 8),
+            (F_OPTIONS17, 8),
+            (F_OPTIONS18, 4),
+            (F_OPTIONS19, 40),
+            (F_OPTIONS20, 8),
+            (F_OPTIONS21, 16),
+            (F_GPU_VIRTUAL_ADDRESS_SUPPORT, 8),
+            (F_EXISTING_HEAPS, 4),
+            (F_SHADER_CACHE, 4),
+            (F_SERIALIZATION, 8),
+            (F_CROSS_NODE, 8),
+            (F_DISPLAYABLE, 8),
+            (F_ARCHITECTURE, 16),
+            (F_ARCHITECTURE1, 20),
+            (F_SHADER_MODEL, 4),
+            (F_ROOT_SIGNATURE, 4),
+            (F_FORMAT_SUPPORT, 12),
+            (F_FORMAT_INFO, 8),
+            (F_MULTISAMPLE_QUALITY_LEVELS, 16),
+            (F_COMMAND_QUEUE_PRIORITY, 12),
+        ];
+        for (f, n) in sizes {
+            let mut ok = vec![0u8; n];
+            if f == F_SHADER_MODEL {
+                ok[0] = 0x60;
+            }
+            if f == F_ROOT_SIGNATURE {
+                ok[0] = 1;
+            }
+            if f == F_FORMAT_INFO {
+                ok[0] = 28;
+            }
+            if f == F_MULTISAMPLE_QUALITY_LEVELS {
+                ok[4] = 1;
+                ok[0] = 28;
+            }
+            assert!(q(f, &ok).is_ok(), "feature {f} with {n} bytes");
+            let mut bad = ok.clone();
+            bad.push(0);
+            assert_eq!(
+                q(f, &bad),
+                Err(Hr::E_INVALIDARG),
+                "feature {f} with {} bytes",
+                n + 1
+            );
+        }
+    }
+
+    /// Format support bits (SDK values) for formats the title uses constantly.
+    #[test]
+    fn format_support_bits_for_common_formats() {
+        use fmt_support::*;
+        let (rgba8, _) = format_support(28);
+        for b in [
+            TEXTURE2D,
+            SHADER_SAMPLE,
+            RENDER_TARGET,
+            BLENDABLE,
+            MIP,
+            BUFFER,
+        ] {
+            assert_eq!(rgba8 & b, b, "{b:#x}");
+        }
+        let (d32, _) = format_support(40);
+        assert_ne!(d32 & DEPTH_STENCIL, 0);
+        assert_eq!(d32 & RENDER_TARGET, 0);
+        let (bc7, s2) = format_support(98);
+        assert_eq!((bc7 & (RENDER_TARGET | DEPTH_STENCIL), s2), (0, 0));
+        assert_ne!(bc7 & SHADER_SAMPLE, 0);
+        // typeless formats are only for resource creation
+        assert_eq!(format_support(27).0 & (SHADER_SAMPLE | RENDER_TARGET), 0);
     }
 
     #[test]

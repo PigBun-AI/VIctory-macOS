@@ -328,16 +328,32 @@ mod tests {
             for bits in 0..8u32 {
                 let f = red << 7 | (bits & 1) | (bits >> 1 & 1) << 2 | (bits >> 2 & 1) << 4;
                 let d = sampler(&params(f)).unwrap();
-                let lin = |b: u32| if bits >> b & 1 == 1 { Filter::LINEAR } else { Filter::NEAREST };
-                assert_eq!((d.mip_filter, d.mag_filter, d.min_filter), (lin(0), lin(1), lin(2)), "{f:#x}");
-                assert_eq!(d.max_anisotropy, 1, "MaxAnisotropy is ignored without the anisotropic filter {f:#x}");
+                let lin = |b: u32| {
+                    if bits >> b & 1 == 1 {
+                        Filter::LINEAR
+                    } else {
+                        Filter::NEAREST
+                    }
+                };
+                assert_eq!(
+                    (d.mip_filter, d.mag_filter, d.min_filter),
+                    (lin(0), lin(1), lin(2)),
+                    "{f:#x}"
+                );
+                assert_eq!(
+                    d.max_anisotropy, 1,
+                    "MaxAnisotropy is ignored without the anisotropic filter {f:#x}"
+                );
                 assert_eq!(d.reduction.0 as u32, red);
                 // the comparison function counts for comparison filters only
                 assert_eq!(d.compare == CompareFunc::LESS_EQUAL, red == 1);
             }
             let f = 0x55 | red << 7; // ANISOTROPIC, COMPARISON_ANISOTROPIC, MINIMUM_/MAXIMUM_ANISOTROPIC
             let d = sampler(&params(f)).unwrap();
-            assert_eq!((d.mip_filter, d.mag_filter, d.min_filter), (Filter::LINEAR, Filter::LINEAR, Filter::LINEAR));
+            assert_eq!(
+                (d.mip_filter, d.mag_filter, d.min_filter),
+                (Filter::LINEAR, Filter::LINEAR, Filter::LINEAR)
+            );
             assert_eq!(d.max_anisotropy, 16);
         }
         // anisotropy outside 1..=16 is clamped for anisotropic filters
@@ -348,13 +364,23 @@ mod tests {
         assert_eq!(sampler(&p).unwrap().max_anisotropy, 16);
         // addressing: WRAP, MIRROR, CLAMP, BORDER, MIRROR_ONCE are 1..=5 in D3D12
         let d = sampler(&params(0x15)).unwrap();
-        assert_eq!((d.address_u, d.address_v, d.address_w), (AddressMode::WRAP, AddressMode::MIRROR, AddressMode::MIRROR_ONCE));
+        assert_eq!(
+            (d.address_u, d.address_v, d.address_w),
+            (
+                AddressMode::WRAP,
+                AddressMode::MIRROR,
+                AddressMode::MIRROR_ONCE
+            )
+        );
         for m in 1..=5u32 {
             assert_eq!(address_mode(m).unwrap().0 as u32, m - 1);
         }
         assert!(address_mode(0).is_err() && address_mode(6).is_err());
         // LOD range, bias and border colour pass through
-        assert_eq!((d.min_lod, d.max_lod, d.mip_lod_bias, d.border_color), (1.0, 9.0, -0.5, [0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(
+            (d.min_lod, d.max_lod, d.mip_lod_bias, d.border_color),
+            (1.0, 9.0, -0.5, [0.0, 0.0, 0.0, 1.0])
+        );
         // reserved bits are refused; a comparison filter needs a function
         assert!(sampler(&params(0x2)).is_err());
         let mut c = params(0x80 | 0x15);

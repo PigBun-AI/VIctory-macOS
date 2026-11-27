@@ -354,7 +354,9 @@ fn allocation_info_aligns_each_placement_to_its_own_alignment() {
     let (rev, _) = dev.allocation_info(&[ms, t]).unwrap();
     assert!(rev >= ms_one + one && rev % (4 << 20) == 0);
     // a buffer is placed at 64 KiB multiples, rounded up
-    let (b, ab) = dev.allocation_info(&[ResourceDesc::buffer(65537, 0)]).unwrap();
+    let (b, ab) = dev
+        .allocation_info(&[ResourceDesc::buffer(65537, 0)])
+        .unwrap();
     assert_eq!((b, ab), (131072, 65536));
     // one bad description anywhere spoils the lot
     assert_eq!(dev.allocation_info(&[t, tex2d(8, 8, 1, 1, 0, 0), t]), None);
