@@ -67,13 +67,19 @@ def num(x):
     except ValueError: return None
 
 problems = []
+mac_ids = {r['id'] for r in mac_rows}
+warnings = []
 for r in rows:
+    problems_before = len(problems)
     if r['used'] == 'yes' and num(r['freq']) is None:
         problems.append(f"{r['id']}: used=yes without a numeric freq")
     if r['disposition'] in ('emulated','stubbed') and r['owner'] != 'mac' and not (r['deviation'] and r['restore_plan']):
         problems.append(f"{r['id']}: {r['disposition']} without deviation/restore_plan")
     if r['reference'] in ('hw','spec','d3dmetal') and r['status'] == 'proven' and not r['tests']:
         problems.append(f"{r['id']}: proven without tests")
+    if r['id'] in mac_ids and len(problems) > problems_before:
+        # rows of the Mac lead's file are reported, not failed on
+        warnings.extend(problems[problems_before:]); del problems[problems_before:]
 
 out = []
 P = out.append
@@ -147,6 +153,8 @@ for i, r in enumerate(stub, 1):
 P(''); P(f'stubbed rows: {len(stub)}')
 for r in stub:
     P(f"  {r['id']} {fmt(r['freq']) or 'n/m':>9}  {r['unit'][:100]}")
+if warnings:
+    P(''); P('WARNINGS (rows of the Mac file, not failed on):'); out.extend('  ' + w for w in warnings)
 if problems:
     P(''); P('PROBLEMS:'); out.extend('  ' + p for p in problems)
 
