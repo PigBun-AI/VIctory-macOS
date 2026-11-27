@@ -1486,6 +1486,42 @@ fn indirect_draws_through_a_geometry_shader_match_the_direct_ones() {
     }
 }
 
+/// The records the title's frames end with (m5-gs.md: `{3, 0, 0, 0}`, `{84, 0|1, 0, 0}`,
+/// `{4, 2034, 0, 0}`): no instance, one instance, thousands of instances, and an empty
+/// record. The real-count path must draw what the direct draws do (nothing for the dead
+/// records), and 2034 instances of one triangle are the same pixels as one.
+#[test]
+fn indirect_gs_records_with_no_many_or_zero_instances_match_the_direct_draws() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour_rec", "gs_6_6", GS_RECOLOUR) else {
+        return;
+    };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let v = TRI_A.vertices().to_vec();
+    let (_vb, va) = g.vertex_buffer(&v);
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let red = Tri {
+        c: [1.0, 0.0, 0.0, 1.0],
+        ..TRI_A
+    };
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    for (name, rec, want) in [
+        ("no instance", [3u32, 0, 0, 0], vec![]),
+        ("no vertex", [0, 1, 0, 0], vec![]),
+        ("one instance", [3, 1, 0, 0], vec![red]),
+        ("many instances", [3, 2034, 0, 0], vec![red]),
+    ] {
+        cpu_write(args.cpu_addr, &rec);
+        let mut cmds = g.state(pso, va, 3 * STRIDE);
+        cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+        cmds.push(g.execute_indirect(IndirectArgKind::DRAW, 16, 1, args.res, None));
+        cmds.push(end_pass());
+        let got = g.read(t, cmds);
+        assert_image(&got, &reference(bg, &want), name);
+    }
+}
+
 #[test]
 fn indirect_indexed_draws_through_a_geometry_shader_match_the_direct_ones_and_stay_in_the_buffer() {
     let Some(gs) = dxil_or_skip("draw_gs_recolour4", "gs_6_6", GS_RECOLOUR) else {
