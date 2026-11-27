@@ -5,7 +5,7 @@
 # updated 2026-11-27 after typed buffer views (D3DMetal: 1 failed; ours: 57 failed of 458 tests with 6 ignored).
 # updated 2026-11-27 after textures, heaps and custom heaps (D3DMetal: 1 failed; ours: 16 failed of 454 tests with 5 ignored;
 # the 41 "textures:" entries are gone).
-# updated 2026-11-27 after m4-render (render pass encoding): 11 of the 13 graphics/mesh tests pass; the 3 left that touch graphics are a geometry shader x2 and one test bug (below).
+# updated 2026-11-27 after m4-render (render pass encoding): 10 of the 13 graphics/mesh tests pass; the 3 left are a geometry shader x2 and one test bug (below).
 # Only entries with a known root cause are registered.
 # The reason names the first call a test makes that the front/back does not implement yet.
 
