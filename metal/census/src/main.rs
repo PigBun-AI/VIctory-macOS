@@ -7,6 +7,9 @@
 //! victory-census convert    [--out DIR] [--kind cs|vs|ps|ms|gs|all] [--jobs N] [--archive]
 //! victory-census archive    [--out DIR] ...          cold compile against archive load
 //! victory-census report     [--out DIR] [--research DIR]
+//! victory-census opcodes    [--game DIR] [--out DIR] [--research DIR] [--jobs N] [--limit N]
+//!                           GFX10 instruction counts per mnemonic and class (opcodes.jsonl,
+//!                           and opcodes.json/.md under --research)
 //! ```
 //!
 //! All game-derived data (translated DXIL, metallibs, archives, per-shader
@@ -22,6 +25,8 @@ mod defaults;
 mod dxc;
 #[cfg(target_vendor = "apple")]
 mod jsonl;
+#[cfg(target_vendor = "apple")]
+mod opcodes;
 #[cfg(target_vendor = "apple")]
 mod report;
 #[cfg(target_vendor = "apple")]
@@ -90,6 +95,7 @@ fn main() {
         "translate" => translate::run(rest),
         "convert" => convert::run(rest),
         "report" => report::run(rest),
+        "opcodes" => opcodes::run(rest),
         other => Err(format!("unknown command `{other}`")),
     };
     if let Err(e) = result {

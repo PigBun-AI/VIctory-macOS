@@ -27,15 +27,15 @@ use victory_shader::{Container, FourCC, native_programs};
 use crate::{arg, defaults, jobs, jsonl, out_dir};
 
 /// Files above this size are skipped, as `victory translate` does.
-const MAX_FILE: u64 = 2 << 30;
+pub(crate) const MAX_FILE: u64 = 2 << 30;
 
-enum Source<'a> {
+pub(crate) enum Source<'a> {
     Raw { offset: usize, data: &'a [u8] },
     Packed(sgd5::Record<'a>),
 }
 
 impl Source<'_> {
-    fn bytes(&self) -> Option<std::borrow::Cow<'_, [u8]>> {
+    pub(crate) fn bytes(&self) -> Option<std::borrow::Cow<'_, [u8]>> {
         match self {
             Source::Raw { data, .. } => Some(std::borrow::Cow::Borrowed(data)),
             Source::Packed(r) => r.unpack().map(std::borrow::Cow::Owned),
@@ -44,7 +44,7 @@ impl Source<'_> {
 
     /// Where it was found (the record's name is the game's own: it stays in
     /// the private rows, never in a report).
-    fn label(&self, file: &Path) -> String {
+    pub(crate) fn label(&self, file: &Path) -> String {
         let name = file
             .file_name()
             .map_or(String::new(), |n| n.to_string_lossy().into_owned());
@@ -55,7 +55,7 @@ impl Source<'_> {
     }
 }
 
-fn sources(data: &[u8]) -> Vec<Source<'_>> {
+pub(crate) fn sources(data: &[u8]) -> Vec<Source<'_>> {
     let mut out: Vec<Source<'_>> = Vec::new();
     if sgd5::is_sgd5(data) {
         out.extend(sgd5::records(data).map(Source::Packed));
