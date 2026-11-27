@@ -139,7 +139,7 @@ if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && 
     expect "default: the stop path is the time limit's" "grep -q '^== time limit 4s reached' $T/default-new/stderr.log"
     expect "default: same wineserver calls" "diff $T/default-before.calls $T/default-new.calls >/dev/null"
     expect "default: same console output apart from times" "diff <(strip $T/default-before.console) <(strip $T/default-new.console) >/dev/null"
-    pe() { bash "$1" --print-env --backend d3dmetal --exe /x --prefix /p --out /o 2>&1 | sed "s#$T/before#R#g; s#$ROOT#R#g; s#~/Documents/GTA6Project/VIctory-livetr-until#R#g"; }
+    pe() { bash "$1" --print-env --backend d3dmetal --exe /x --prefix /p --out /o 2>&1 | sed "s#$T/before#R#g; s#$ROOT#R#g"; }
     expect "default: print-env is unchanged" "diff <(pe $T/before/tools/mac/run.sh) <(pe $ROOT/tools/mac/run.sh) >/dev/null"
     expect "default: no time limit line when the title ended first" "! grep -q 'time limit' $T/nolinger/stderr.log"
 else

@@ -74,7 +74,7 @@ usable snapshot, kept by the Metal backend's owner):
 
 ```sh
 VICTORY_METAL_OUT="$HOME/Documents/GTA6Project/research/metal-stage/current"
-VICTORY_METAL_ARCHIVE="$HOME/Documents/GTA6Project/victory-data/metal-archive"   # read-only, fewer cold compiles
+VICTORY_METAL_ARCHIVE="$HOME/Documents/GTA6Project/data/shared/metal-archive"   # read-only, fewer cold compiles
 # VICTORY_GAME_LOCK=...   the place of the game lock (default below)
 ```
 
@@ -103,9 +103,9 @@ makes frame times meaningless.
 
 ## Data directories
 
-Each profile and backend has its own: `<parent>/victory-data-livetr-<profile>-<backend>/{data,cache,dxc}` (for example
-`victory-data-livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
-directory, `victory-data-livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
+Each profile and backend has its own: `<GTA6 root>/data/livetr-<profile>-<backend>/{data,cache,dxc}` (for example
+`data/livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
+directory, `data/livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
 state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU).
 `--fresh-data` replaces the run's directory with a new clone first (reproducible start; it also drops the translated-shader cache, so the
 run is a cold one). The fidelity profile then sets `video/resolutionFullscreen` in its clone's `settings.xml` (original kept once as
@@ -119,8 +119,8 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--exe PATH` | the `victory.exe` to run | `target/x86_64-pc-windows-gnullvm/release/victory.exe` |
 | `--out DIR` | logs go here | `target/mac-runs/<time>` |
 | `--timeout SEC` | stop the run after SEC seconds (0: no limit); with `--until-*` only the cap (not met by then: exit status 6) | 900 |
-| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `victory-data-livetr-<profile>-<backend>/{data,cache}` next to the checkout (below) |
-| `--seed DIR` | the read-only seed the data directories are cloned from | `victory-data-livetr` next to the checkout |
+| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `data/livetr-<profile>-<backend>/{data,cache}` under the GTA6 root (below) |
+| `--seed DIR` | the read-only seed the data directories are cloned from | `data/livetr` under the GTA6 root |
 | `--fresh-data` | delete the run's own data directory and clone it from the seed again, so the run starts from the seed state (only with the default directory) | off |
 | `--prefix DIR` | the Wine prefix (`WINEPREFIX` also works) | by backend, see above |
 | `--keys SPEC`, `--no-keys` | `VICTORY_KEYS` | `8-3600/3:Enter` (Enter every 3 s from 8 s; patch I1) |
@@ -148,7 +148,7 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--exec` | run `victory.exe ARGS` (the arguments after `--`, e.g. `-- warm --jobs 4`) in the foreground instead of the title, with the environment, prefix, DLLs, data and cache of a run; no keys, no time limit, no log folder, exit status is `victory.exe`'s | off |
 | `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` (with `--exec`: the whole `victory.exe` command line) | |
 
-Variables read: `GTA6_ROOT` (the parent of the checkouts and data, default: the checkout's parent), `GAME_DIR` / `VICTORY_GAME_DIR` (the game
+Variables read: `GTA6_ROOT` (the parent of the checkouts and data, default: the checkout's parent, or three levels up when the checkout is a worktree under `worktrees/mac/<name>`), `GAME_DIR` / `VICTORY_GAME_DIR` (the game
 directory, default `GTA6.Xbox.v1.0.2.1` in `GTA6_ROOT`), `VICTORY_MAC_WINE_DIR` (Wine, default `VIctory-macOS/target/wine-cx`), `WINEDEBUG`
 (default `-all`). Every other `VICTORY_*` / `WINE*` variable passes through unchanged and is listed by `--print-env`.
 

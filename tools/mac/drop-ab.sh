@@ -12,7 +12,7 @@
 #   --out DIR       where everything goes (default target/drop-ab/<time>): warm/ and cold/ each
 #                   hold data/ and cache/ (their own copies) and run/ (run.sh's --out: the logs)
 #   --base DIR      the data folder copied (APFS clone) for both runs: default `data` of run.sh's
-#                   seed, victory-data-livetr next to this checkout (GTA6_ROOT); the warm run
+#                   seed, data/livetr under the GTA6 root (GTA6_ROOT); the warm run
 #                   also copies the `cache` folder beside it, the cold run starts with an EMPTY one
 #   --perf|--fidelity  run.sh's profile (default --perf: the output patched to 1280x720; --fidelity
 #                   is run.sh's fidelity profile, which writes 2560x1440 into the copy's settings.xml)
@@ -31,7 +31,7 @@
 # explicit, nothing of run.sh's environment is copied here). The log folder is the --out given to
 # run.sh, so there is nothing to look for; run.sh's own files (start.txt, run-env.txt, summary.txt,
 # stdout.log, stderr.log) are in <warm|cold|book>/run. The data folder is the copy given with --data;
-# it is not run.sh's per-profile directory (victory-data-livetr-<profile>-<backend>), which is never touched.
+# it is not run.sh's per-profile directory (data/livetr-<profile>-<backend>), which is never touched.
 # stdout is stamped with the time each line was seen (stdout.ts.log), to tie D3DMetal's
 # `marking PSO(n) as no-op` lines to presents.
 #
@@ -46,7 +46,8 @@
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-G="${GTA6_ROOT:-$(cd "$ROOT/.." && pwd)}"
+case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 cd "$ROOT" || exit 1
 REPORT="$ROOT/tools/mac/drop-stats-report.sh"
 RUN="$ROOT/tools/mac/run.sh"
@@ -67,7 +68,7 @@ while [ $# -gt 0 ]; do
 done
 if [ ${#report_only[@]} -gt 0 ]; then exec "$REPORT" "${report_only[@]}" --frames "$frames"; fi
 
-[ -n "$base" ] || base="$G/victory-data-livetr/data"
+[ -n "$base" ] || base="$G/data/livetr/data"
 [ -d "$base" ] || { echo "no data folder $base (--base)" >&2; exit 1; }
 basecache="$(dirname "$base")/cache"
 [ -n "$out" ] || out="$ROOT/target/drop-ab/$(date +%Y%m%d-%H%M%S)"

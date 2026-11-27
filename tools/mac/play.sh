@@ -13,7 +13,8 @@
 # (VIctory-livetr next to it), so the release exe and the Metal prefix are not built twice.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-G="${GTA6_ROOT:-$(cd "$ROOT/.." && pwd)}"
+case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 EXE_REL=target/x86_64-pc-windows-gnullvm/release/victory.exe
 extra=()
 if [ ! -f "$ROOT/$EXE_REL" ] && [ -f "$G/VIctory-livetr/$EXE_REL" ]; then

@@ -17,7 +17,8 @@ HERE="$ROOT/tools/mac/rosetta-probe"
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
 MODE=full
 case "${1:-}" in full|quick|case) MODE="$1"; shift ;; esac
-WDIR="${VICTORY_MAC_WINE_DIR:-$ROOT/../VIctory-macOS/target/wine-cx}"
+case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+WDIR="${VICTORY_MAC_WINE_DIR:-$_g/VIctory-macOS/target/wine-cx}"
 [ -x "$WDIR/bin/wine" ] || WDIR="$HOME/Library/Caches/victory-macos/target/wine-cx"
 WINE="${WINE:-$WDIR/bin/wine}"
 WSERVER="$(dirname "$WINE")/wineserver"

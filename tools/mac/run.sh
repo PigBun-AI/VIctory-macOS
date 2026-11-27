@@ -28,7 +28,7 @@
 #   --log-render-size            VICTORY_LOG_RENDER_SIZE=1: the title's internal size in the log (P2); costs a lock
 #                                per draw, so leave it off for timing runs
 #   --exe PATH --out DIR --timeout SEC (0 = none) --cache DIR --data DIR --prefix DIR
-#   --seed DIR                   the read-only seed the data directories are cloned from (default ../victory-data-livetr)
+#   --seed DIR                   the read-only seed the data directories are cloned from (default data/livetr under the GTA6 root)
 #   --fresh-data                 clone the run's data directory from the seed again, whatever is there (reproducible start)
 #   --keys SPEC | --no-keys      VICTORY_KEYS, default 8-3600/3:Enter (Enter every 3 s from 8 s)
 #   --input FILE|none            VICTORY_INPUT_REPLAY, default tools/mac/input/world-neutral.txt (I1)
@@ -85,13 +85,14 @@
 # tools/mac/run.local.env is sourced at the start if it exists; a variable already set in the environment wins over the
 # file. With no stage found, the Metal backend stops with an error (set VICTORY_METAL_OUT, write run.local.env, or use
 # --backend d3dmetal). VICTORY_METAL_ARCHIVE (read-only archive of compiled Metal libraries) passes through the same way.
-# Wine: VICTORY_MAC_WINE_DIR, else ../VIctory-macOS/target/wine-cx next to this checkout.
+# Wine: VICTORY_MAC_WINE_DIR, else VIctory-macOS/target/wine-cx under the GTA6 root (the parent of the main checkouts; three levels up from worktrees/mac/<name>).
 # Builds (once) the DXC front end tools/macos/dxc-d3dmetal.sh and sets VICTORY_DXC_HELPER / DXC_LIB /
 # VICTORY_DXC_DIR for the helper shaders (docs/mac/PATCHES.md, G4). Only the Wine processes of the
 # chosen prefix are ever stopped.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-G="${GTA6_ROOT:-$(cd "$ROOT/.." && pwd)}"
+case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 WDIR="${VICTORY_MAC_WINE_DIR:-$G/VIctory-macOS/target/wine-cx}"
 WINE="$WDIR/bin/wine"; SERVER="$WDIR/bin/wineserver"
 
@@ -229,8 +230,8 @@ time_name="$(date +%Y%m%d-%H%M%S)"
 [ -n "$out" ] || out="$ROOT/target/mac-runs/$time_name"
 # One data directory per profile AND backend, each cloned (APFS clone) from the same read-only seed on first use, so two
 # runs of different backends start from the same state and can run side by side. The seed is never written.
-[ -n "$seed" ] || seed="$G/victory-data-livetr"
-base="$G/victory-data-livetr-$profile-$backend"
+[ -n "$seed" ] || seed="$G/data/livetr"
+base="$G/data/livetr-$profile-$backend"
 derived=1; { [ -n "${VICTORY_DATA_DIR:-}" ] || [ -n "$data" ] || [ -n "$cache" ]; } && derived=0
 [ "$fresh" = 0 ] || [ "$derived" = 1 ] || die "--fresh-data works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
 [ "$base" != "$seed" ] || die "the run's data directory is the seed"
@@ -426,7 +427,7 @@ fi
 if [ "$derived" = 1 ]; then
     if [ "$fresh" = 1 ] && [ -d "$base" ]; then
         echo "--fresh-data: replacing $base"
-        case "$base" in "$G"/victory-data-livetr-*-*) rm -rf "$base" ;; *) die "will not delete $base" ;; esac
+        case "$base" in "$G"/data/livetr-*-*) rm -rf "$base" ;; *) die "will not delete $base" ;; esac
     fi
     if [ ! -d "$base" ]; then
         echo "making $base from the seed $seed (clone)"

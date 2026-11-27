@@ -189,7 +189,7 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
   patch (follows tracking, not set), `VICTORY_PRESENT_MAX` (P1), `VICTORY_POOL_CHECK` (L3), `VICTORY_LOG_RENDER_SIZE` (P2),
   `WINEPREFIX` (explicit; only that prefix's wineserver is ever stopped), the data, cache and log directories, recording and
   frame capture options, `--sample` (memory/GPU lines in `mem.csv`).
-- **Data directories**: `victory-data-livetr-<profile>-<backend>`, cloned from the read-only seed `victory-data-livetr`; `--fresh-data` clones
+- **Data directories**: `data/livetr-<profile>-<backend>`, cloned from the read-only seed `data/livetr`; `--fresh-data` clones
   again. Both backends start from the same state and can run in parallel. These directories and the prefix are the allowed differences
   of `--print-env` between backends, besides `WINEDLLPATH`/`WINEDLLOVERRIDES`/`VICTORY_METAL_LOG`/`VICTORY_METAL_NOTIMPL_LOG`.
 - **Capture and watchdog switches**: `--record-at` (`VICTORY_RECORD_AT`, I2), `--capture-frames` (takes `w<N>`, I2), `--no-watchdog`
@@ -745,7 +745,7 @@ mode list (the fidelity profile only writes modes from the list). The first fide
 | internal size / dynamic resolution / TAA upscale | the title's, at 2/3 of 1280x720 = 853x480 | the title's own logic; expected 2/3 of 1440p = 1707x960 (`VICTORY_LOG_RENDER_SIZE`) |
 | render scale, upscaler overrides | allowed (`VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`) | refused |
 | pool check (+0x247af25) | skipped with the output patch | kept. If F0 stops there, `--pool-check skip` becomes a fixed part of the profile (rule below) |
-| data / cache directory | `victory-data-livetr-perf-<backend>` | `victory-data-livetr-fidelity-<backend>`; each cloned from the read-only seed `victory-data-livetr` on first use (`--fresh-data` clones again); the game directory is never written |
+| data / cache directory | `data/livetr-perf-<backend>` | `data/livetr-fidelity-<backend>`; each cloned from the read-only seed `data/livetr` on first use (`--fresh-data` clones again); the game directory is never written |
 
 The default stays **perf** until the 3D-missing question is settled and the owner says so; then the switch is one line,
 `profile="${VICTORY_MAC_PROFILE:-perf}"` -> `fidelity` in `run.sh`, plus (separately, as a loader change) making `VICTORY_OUTPUT=0` the
