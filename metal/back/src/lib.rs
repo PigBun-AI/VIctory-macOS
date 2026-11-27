@@ -37,6 +37,8 @@ pub mod error;
 #[cfg(target_vendor = "apple")]
 pub mod exec;
 #[cfg(target_vendor = "apple")]
+pub mod expand;
+#[cfg(target_vendor = "apple")]
 pub mod format;
 #[cfg(target_vendor = "apple")]
 pub mod heap;

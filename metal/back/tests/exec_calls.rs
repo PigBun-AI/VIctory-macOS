@@ -418,11 +418,22 @@ fn write_descriptor_encodes_views_and_refuses_what_it_cannot() {
     assert_eq!(entry(&heap, 0)[2] & SIZE_MASK, 16);
     assert_ne!(entry(&heap, 0)[1], 0, "a texture id");
     let before = entry(&heap, 0);
-    // Format ids Metal has no texture-buffer format for (R32G32B32_FLOAT, UNKNOWN).
-    for f in [6, 0] {
-        let v = ViewDesc::typed(ViewKind::BUFFER_SRV, b.res, f, 0, 4);
-        assert_eq!(write(heap.heap, 0, v), Status::UNSUPPORTED, "format {f}");
-    }
+    // UNKNOWN has no texture-buffer format; a UAV of R32G32B32_FLOAT is refused (its SRV reads
+    // an expanded copy, tests/typed_gpu.rs), and says why.
+    let v = ViewDesc::typed(ViewKind::BUFFER_SRV, b.res, 0, 0, 4);
+    assert_eq!(write(heap.heap, 0, v), Status::UNSUPPORTED, "format 0");
+    let v = ViewDesc::typed(ViewKind::BUFFER_UAV, b.res, format::R32G32B32_FLOAT, 0, 4);
+    assert_eq!(
+        write(heap.heap, 0, v),
+        Status::UNSUPPORTED,
+        "UAV of format 6"
+    );
+    assert!(
+        fx.executor().last_error().unwrap().contains("read only"),
+        "{:?}",
+        fx.executor().last_error()
+    );
+    assert_eq!(entry(&heap, 0), before, "refused writes leave the slot");
     // A first element not on the 16-byte alignment of a texture buffer.
     let v = ViewDesc::typed(ViewKind::BUFFER_UAV, b.res, format::R32_UINT, 1, 4);
     assert_eq!(write(heap.heap, 0, v), Status::UNSUPPORTED);

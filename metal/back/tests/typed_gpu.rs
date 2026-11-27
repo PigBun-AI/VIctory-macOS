@@ -249,6 +249,106 @@ fn a_typed_view_writes_the_entry_msc_reads_and_shares_textures() {
     assert_ne!(a.metadata >> 63, 0);
 }
 
+const RGB32: &str = "cbuffer c : register(b0) { uint si; uint di; uint n; uint kind; }
+[numthreads(32,1,1)] void main(uint3 t : SV_DispatchThreadID) {
+  RWBuffer<uint4> dst = ResourceDescriptorHeap[di];
+  if (t.x >= n) return;
+  if (kind == 0) { Buffer<float3> src = ResourceDescriptorHeap[si]; dst[t.x] = uint4(asuint(src[t.x]), 7); }
+  else if (kind == 1) { Buffer<uint3> src = ResourceDescriptorHeap[si]; dst[t.x] = uint4(src[t.x], 7); }
+  else { Buffer<int3> src = ResourceDescriptorHeap[si]; dst[t.x] = uint4(asuint(src[t.x]), 7); }
+}";
+
+/// `R32G32B32_FLOAT/UINT/SINT` typed SRVs (C-B-013: 52 refusals in one game run). Metal 27.0's
+/// `RGB32Float/Uint/Sint` texture-buffer formats are rejected by this device (Apple10), so the
+/// view reads an expanded four-channel mirror (`typed.rs`, `expand.rs`). The shader reads three
+/// channels through the converter's typed path; the result equals the CPU's reading of the same
+/// bytes at aligned and misaligned first elements, for the three formats, and again after the
+/// CPU changed the source between two lists.
+#[test]
+fn a_three_channel_32_bit_typed_srv_reads_what_the_cpu_reads() {
+    let Some(dxil) = dxil_or_skip("typed_rgb32", "cs_6_6", RGB32) else {
+        return;
+    };
+    let (_g, d, q) = setup();
+    let p = pipeline(&d, &dxil);
+    let out = typed_format(dxgi::R32G32B32A32_UINT).unwrap();
+    for (kind, id) in [
+        (0u32, dxgi::R32G32B32_FLOAT),
+        (1, dxgi::R32G32B32_UINT),
+        (2, dxgi::R32G32B32_SINT),
+    ] {
+        let f = typed_format(id).unwrap_or_else(|| panic!("format {id} has no typed view"));
+        assert_eq!(f.bytes, 12);
+        for (first, n) in [(0u64, 9u64), (4, 8), (1, 7), (3, 10), (5, 3), (8, 1)] {
+            let src = d.create_buffer(BufferKind::Shared, 4096).unwrap();
+            // Element e of the buffer: distinct finite floats for the float kind, large counting
+            // numbers (negative for sint) else; round 1 is another set, written by the CPU
+            // between two lists (the mirror is refreshed at the start of every list).
+            let word = |e: u32, k: u32, round: u32| -> u32 {
+                let v = e * 3 + k + 1000 * round;
+                match kind {
+                    0 => (1.0f32 + v as f32 * 0.25).to_bits(),
+                    1 => 0x8000_0000 | v,
+                    _ => (-(v as i32) - 1) as u32,
+                }
+            };
+            let dst = d.create_buffer(BufferKind::Shared, 4096).unwrap();
+            let heap = DescriptorHeap::new(&d, 8).unwrap();
+            heap.write_typed_buffer(1, &src, &f, first, n, ViewAccess::Read)
+                .unwrap_or_else(|e| panic!("format {id} first {first}: {e}"));
+            heap.write_typed_buffer(2, &dst, &out, 0, n, ViewAccess::ReadWrite)
+                .unwrap();
+            for round in 0..2u32 {
+                let words: Vec<u32> = (0..300u32)
+                    .flat_map(|e| (0..3).map(move |k| word(e, k, round)))
+                    .collect();
+                src.write_u32s(0, &words).unwrap();
+                dst.write_u32s(0, &[0xdead_beef; 256]).unwrap();
+                dispatch(&q, &p, &heap, [1, 2, n as u32, kind], 32);
+                let got = dst.read_u32s(0, 4 * n as usize + 4).unwrap();
+                let mut want = vec![0xdead_beefu32; 4 * n as usize + 4];
+                for i in 0..n as u32 {
+                    for k in 0..3 {
+                        want[(4 * i + k) as usize] = word(first as u32 + i, k, round);
+                    }
+                    // The channel the format lacks reads as 1 (1.0 for the float format) and
+                    // the test shader stores 7 over it: the shader sees x, y, z as the CPU does.
+                    want[(4 * i + 3) as usize] = 7;
+                }
+                assert_eq!(got, want, "format {id} first {first} n {n} round {round}");
+            }
+        }
+    }
+}
+
+/// Metal's three-channel formats cannot be written (no `ShaderWrite`, MTLPixelFormat.h SDK 27.2)
+/// and the view reads a copy: a UAV of them stays refused, with the reason, and writes nothing.
+#[test]
+fn a_three_channel_32_bit_typed_uav_is_refused_with_the_reason() {
+    let (_g, d, _q) = setup();
+    let buf = d.create_buffer(BufferKind::Shared, 4096).unwrap();
+    let heap = DescriptorHeap::new(&d, 4).unwrap();
+    let ok = typed_format(dxgi::R32_UINT).unwrap();
+    heap.write_typed_buffer(0, &buf, &ok, 0, 4, ViewAccess::Read)
+        .unwrap();
+    let before = entry(&heap, 0);
+    for id in [
+        dxgi::R32G32B32_FLOAT,
+        dxgi::R32G32B32_UINT,
+        dxgi::R32G32B32_SINT,
+    ] {
+        let f = typed_format(id).unwrap();
+        let e = heap
+            .write_typed_buffer(0, &buf, &f, 0, 4, ViewAccess::ReadWrite)
+            .unwrap_err();
+        assert!(
+            matches!(&e, Error::Unsupported(m) if m.contains("read only")),
+            "{e}"
+        );
+    }
+    assert_eq!(entry(&heap, 0), before, "the slot is as it was");
+}
+
 /// What cannot be a texture buffer is refused and the slot stays as it was.
 #[test]
 fn refused_views_write_nothing() {
@@ -289,14 +389,17 @@ fn every_table_format_makes_a_texture_buffer() {
         let align = d.typed_view_alignment(&f);
         let step = (align / u64::from(f.bytes)).max(1);
         for access in [ViewAccess::Read, ViewAccess::ReadWrite] {
+            if f.three_channel && access == ViewAccess::ReadWrite {
+                continue;
+            }
             for first in [0, step] {
                 heap.write_typed_buffer(0, &buf, &f, first, 16, access)
                     .unwrap_or_else(|e| panic!("format {id} {access:?} at {first}: {e}"));
             }
         }
     }
-    // No pixel format for three 32-bit channels, typeless or depth formats.
-    for id in [0, 1, 5, 6, 7, 8, 15, 19, 39, 40, 71] {
+    // No pixel format for typeless or depth formats.
+    for id in [0, 1, 5, 15, 19, 39, 40, 71] {
         assert!(typed_format(id).is_none(), "{id}");
     }
 }

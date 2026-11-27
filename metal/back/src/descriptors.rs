@@ -311,13 +311,16 @@ impl DescriptorHeap {
         let bytes = u64::from(format.bytes);
         let (Some(first), Some(size)) = (
             first_element.checked_mul(bytes),
-            num_elements.checked_mul(bytes),
+            // The descriptor's length is the texture's: an expanded mirror's elements are bigger.
+            num_elements.checked_mul(u64::from(format.mirror_bytes())),
         ) else {
             return Err(Error::BadArgument("typed view range overflows".into()));
         };
+        crate::typed::check_access(format, access)?;
         self.check_resident(buffer.gpu_va(), 1)?;
         let alignment = self.device.typed_view_alignment(format);
-        if access == ViewAccess::Read && !first.is_multiple_of(alignment) {
+        if access == ViewAccess::Read && (format.three_channel || !first.is_multiple_of(alignment))
+        {
             // Not a texture-buffer start: read an aligned copy of the range
             // (see `crate::mirror`).
             let m = buffer.typed_mirror(format, first, num_elements)?;

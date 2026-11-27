@@ -14,9 +14,27 @@
 //! [`typed_format`] maps a DXIL/DXGI format number (the proto carries it as
 //! a `u32`; layering rule 2 puts the table here) to the `MTLPixelFormat` of
 //! the texture buffer and the element size. Formats Metal has no pixel format
-//! for are not in the table and the view is refused (`Unsupported`): the
-//! three-channel 32-bit formats (`R32G32B32_FLOAT/UINT/SINT`: 6, 7, 8) and
-//! all typeless, depth and block-compressed formats.
+//! for are not in the table and the view is refused (`Unsupported`): all
+//! typeless, depth and block-compressed formats.
+//!
+//! `R32G32B32_FLOAT/UINT/SINT` (6, 7, 8) are in the table as **three-channel**
+//! formats, SRV only. Metal 27.0 added `MTLPixelFormatRGB32Float/Uint/Sint`
+//! (122, 120, 121; `MTLPixelFormat.h`, SDK 27.2) for texture buffers without
+//! `ShaderWrite`, but the device rejects them: on this Apple M5 Max (family
+//! Apple10, macOS 27.2.1) `MTLTextureDescriptor` validation asserts "invalid
+//! pixelFormat (122)" and both alignment queries assert too (measured
+//! 2026-11-27); a public report ties the formats to the new family Apple11
+//! (`MTLGPUFamilyApple11`, 1011), not seen here. So a SRV of these formats
+//! reads an **expanded mirror**: a private buffer with one 16-byte
+//! `RGBA32Float/Uint/Sint` element for every 12-byte element of the view
+//! (fourth channel 1.0 or 1, what D3D12 returns for a missing channel),
+//! refreshed by a compute pass at the start of each command list
+//! ([`crate::mirror`], [`crate::expand`]). The converter reads a typed
+//! buffer as a `texture_buffer` with the texture's pixel format, so the
+//! shader needs nothing special (tests: `typed_gpu.rs`,
+//! `a_three_channel_32_bit_typed_srv_reads_what_the_cpu_reads`). A UAV is
+//! refused ([`check_access`]): a write would go to the mirror, not the
+//! buffer. (A native path for Apple11 is not made: nothing here can run it.)
 //!
 //! # Alignment and offsets
 //!
@@ -62,13 +80,17 @@ use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTextureUsage};
 pub struct TypedFormat {
     /// DXGI format number this was made for.
     pub dxgi: u32,
-    /// The pixel format of the texture buffer.
+    /// The pixel format of the texture buffer (for the three-channel
+    /// formats: of the expanded mirror, the four-channel format of the same
+    /// type).
     pub pixel: MTLPixelFormat,
-    /// Bytes per element.
+    /// Bytes per element (of the view, in the buffer).
     pub bytes: u32,
     /// `R32_UINT` / `R32_SINT`: the texture needs `ShaderAtomic` when written
     /// (`InterlockedAdd` and friends on a typed UAV).
     pub atomic: bool,
+    /// `R32G32B32_*`: read through an expanded four-channel mirror, SRV only.
+    pub three_channel: bool,
 }
 
 /// DXGI format numbers the table knows.
@@ -76,6 +98,9 @@ pub mod dxgi {
     pub const R32G32B32A32_FLOAT: u32 = 2;
     pub const R32G32B32A32_UINT: u32 = 3;
     pub const R32G32B32A32_SINT: u32 = 4;
+    pub const R32G32B32_FLOAT: u32 = 6;
+    pub const R32G32B32_UINT: u32 = 7;
+    pub const R32G32B32_SINT: u32 = 8;
     pub const R16G16B16A16_FLOAT: u32 = 10;
     pub const R16G16B16A16_UNORM: u32 = 11;
     pub const R16G16B16A16_UINT: u32 = 12;
@@ -124,6 +149,9 @@ pub const TYPED_FORMATS: &[u32] = &[
     dxgi::R32G32B32A32_FLOAT,
     dxgi::R32G32B32A32_UINT,
     dxgi::R32G32B32A32_SINT,
+    dxgi::R32G32B32_FLOAT,
+    dxgi::R32G32B32_UINT,
+    dxgi::R32G32B32_SINT,
     dxgi::R16G16B16A16_FLOAT,
     dxgi::R16G16B16A16_UNORM,
     dxgi::R16G16B16A16_UINT,
@@ -171,10 +199,14 @@ pub const TYPED_FORMATS: &[u32] = &[
 /// has no equivalent (see the module comment).
 pub fn typed_format(dxgi: u32) -> Option<TypedFormat> {
     use MTLPixelFormat as P;
-    let (pixel, bytes) = match dxgi {
+    let (pixel, bytes): (MTLPixelFormat, u32) = match dxgi {
         dxgi::R32G32B32A32_FLOAT => (P::RGBA32Float, 16),
         dxgi::R32G32B32A32_UINT => (P::RGBA32Uint, 16),
         dxgi::R32G32B32A32_SINT => (P::RGBA32Sint, 16),
+        // The expanded mirror's pixel format (see the module comment).
+        dxgi::R32G32B32_FLOAT => (P::RGBA32Float, 12),
+        dxgi::R32G32B32_UINT => (P::RGBA32Uint, 12),
+        dxgi::R32G32B32_SINT => (P::RGBA32Sint, 12),
         dxgi::R16G16B16A16_FLOAT => (P::RGBA16Float, 8),
         dxgi::R16G16B16A16_UNORM => (P::RGBA16Unorm, 8),
         dxgi::R16G16B16A16_UINT => (P::RGBA16Uint, 8),
@@ -223,6 +255,10 @@ pub fn typed_format(dxgi: u32) -> Option<TypedFormat> {
         pixel,
         bytes,
         atomic: matches!(dxgi, dxgi::R32_UINT | dxgi::R32_SINT),
+        three_channel: matches!(
+            dxgi,
+            dxgi::R32G32B32_FLOAT | dxgi::R32G32B32_UINT | dxgi::R32G32B32_SINT
+        ),
     })
 }
 
@@ -234,6 +270,26 @@ pub enum ViewAccess {
     /// UAV: `ShaderRead | ShaderWrite` (and `ShaderAtomic` for 32-bit integer
     /// formats).
     ReadWrite,
+}
+
+/// Refuses a view this back cannot serve with this access (a UAV of a three-channel format).
+pub fn check_access(format: &TypedFormat, access: ViewAccess) -> crate::error::Result<()> {
+    if format.three_channel && access == ViewAccess::ReadWrite {
+        return Err(crate::error::Error::Unsupported(format!(
+            "a typed UAV of format {}: Metal's three-channel 32-bit pixel formats are read only \
+             and this device rejects them, so the view reads an expanded copy that a write cannot reach",
+            format.dxgi
+        )));
+    }
+    Ok(())
+}
+
+impl TypedFormat {
+    /// Bytes of one element in an expanded mirror (a three-channel format's
+    /// four-channel stand-in); `bytes` for every other format.
+    pub fn mirror_bytes(&self) -> u32 {
+        if self.three_channel { 16 } else { self.bytes }
+    }
 }
 
 impl ViewAccess {
@@ -321,7 +377,11 @@ mod tests {
         for &f in TYPED_FORMATS {
             let t = typed_format(f).unwrap_or_else(|| panic!("format {f}"));
             assert_eq!(t.dxgi, f);
-            assert!(matches!(t.bytes, 1 | 2 | 4 | 8 | 16), "{f}: {}", t.bytes);
+            assert!(
+                matches!(t.bytes, 1 | 2 | 4 | 8 | 12 | 16),
+                "{f}: {}",
+                t.bytes
+            );
         }
         let t = |f| typed_format(f).unwrap();
         assert_eq!(t(dxgi::R32G32B32A32_UINT).bytes, 16);
@@ -336,10 +396,17 @@ mod tests {
     fn no_format_is_listed_twice_and_unknown_ones_are_refused() {
         let mut seen = std::collections::HashSet::new();
         assert!(TYPED_FORMATS.iter().all(|f| seen.insert(*f)));
-        // Three 32-bit channels: Metal has no such pixel format.
+        // Three 32-bit channels: a pixel format since macOS 27.0, read only.
         for f in [6, 7, 8] {
-            assert!(typed_format(f).is_none(), "{f}");
+            let t = typed_format(f).unwrap();
+            assert!(
+                t.three_channel && t.bytes == 12 && t.mirror_bytes() == 16 && !t.atomic,
+                "{f}"
+            );
+            assert!(check_access(&t, ViewAccess::ReadWrite).is_err());
+            assert!(check_access(&t, ViewAccess::Read).is_ok());
         }
+        assert!(typed_format(dxgi::R32G32B32A32_FLOAT).is_some_and(|t| !t.three_channel));
         // Typeless, UNKNOWN, depth, block-compressed.
         for f in [0, 1, 5, 15, 27, 39, 40, 53, 60, 71, 80] {
             assert!(typed_format(f).is_none(), "{f}");

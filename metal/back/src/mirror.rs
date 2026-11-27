@@ -27,6 +27,10 @@
 //! * only read views (SRV): a UAV through a mirror would write the copy, so
 //!   a misaligned typed UAV stays refused ([`crate::typed`]).
 //!
+//! The three-channel 32-bit formats (`R32G32B32_*`) take the same road in every case, aligned
+//! or not: the mirror is **expanded** to one four-channel element per three-channel one and
+//! refreshed by a compute pass instead of a copy ([`crate::expand`], [`crate::typed`]).
+//!
 //! Limits: at most [`MAX_MIRRORS`] mirrors and [`MAX_MIRROR_BYTES`] bytes at
 //! a time (each costs a blit per list for as long as its source lives); past
 //! them the view is refused as before, with the reason. A mirror lives and
@@ -50,6 +54,8 @@ pub(crate) struct MirrorKey {
     pub(crate) pixel: usize,
     pub(crate) offset: u64,
     pub(crate) elements: u64,
+    /// An expanded mirror of a three-channel format.
+    pub(crate) expand: bool,
 }
 
 /// A copy of a range of a buffer, and the texture buffer over it.
@@ -57,8 +63,12 @@ pub(crate) struct Mirror {
     pub(crate) key: MirrorKey,
     pub(crate) buffer: Buffer,
     pub(crate) resource_id: u64,
-    /// Bytes copied from the source (the view's length).
+    /// Bytes of the mirror (what the limits count).
     pub(crate) len: u64,
+    /// Bytes read from the source each time the mirror is refreshed.
+    pub(crate) src_len: u64,
+    /// The value of the fourth channel of an expanded mirror (bits); `None` for a plain copy.
+    pub(crate) fourth: Option<u32>,
 }
 
 /// The buffers of a device that have mirrors, and what the mirrors cost.
@@ -134,10 +144,18 @@ impl Buffer {
         elements: u64,
     ) -> Result<MirrorView> {
         let bytes = u64::from(format.bytes);
-        let len = elements.checked_mul(bytes);
-        let end = len.and_then(|n| n.checked_add(first_byte));
-        let (Some(len), Some(end)) = (len, end) else {
+        let src_len = elements.checked_mul(bytes);
+        let end = src_len.and_then(|n| n.checked_add(first_byte));
+        let (Some(src_len), Some(end)) = (src_len, end) else {
             return Err(Error::BadArgument("typed view range overflows".into()));
+        };
+        // What the mirror holds: the same bytes, or the expanded elements.
+        let len = if format.three_channel {
+            elements
+                .checked_mul(u64::from(format.mirror_bytes()))
+                .ok_or_else(|| Error::BadArgument("typed view range overflows".into()))?
+        } else {
+            src_len
         };
         if elements == 0 || end > self.len() {
             return Err(Error::BadArgument(format!(
@@ -149,6 +167,7 @@ impl Buffer {
             pixel: format.pixel.0,
             offset: first_byte,
             elements,
+            expand: format.three_channel,
         };
         let mut mirrors = self.inner.mirrors.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(m) = mirrors.iter().find(|m| m.key == key) {
@@ -168,10 +187,17 @@ impl Buffer {
         let device = crate::device::Device {
             inner: self.inner.device.clone(),
         };
+        // The texture over the mirror has the mirror's element size.
+        let view_format = TypedFormat {
+            bytes: format.mirror_bytes(),
+            three_channel: false,
+            ..*format
+        };
         let made = device
             .create_buffer(BufferKind::Default, len.next_multiple_of(16))
             .and_then(|buffer| {
-                let view = buffer.texture_view(format, 0, elements, typed::ViewAccess::Read)?;
+                let view =
+                    buffer.texture_view(&view_format, 0, elements, typed::ViewAccess::Read)?;
                 Ok((buffer, view.resource_id))
             });
         let (buffer, resource_id) = match made {
@@ -193,6 +219,14 @@ impl Buffer {
             buffer,
             resource_id,
             len,
+            src_len,
+            fourth: format.three_channel.then(|| {
+                if format.dxgi == typed::dxgi::R32G32B32_FLOAT {
+                    0x3f80_0000
+                } else {
+                    1
+                }
+            }),
         });
         Ok(view)
     }
@@ -206,12 +240,13 @@ impl Buffer {
             .len()
     }
 
-    /// The mirrors of this buffer: `(mirror, byte offset in the buffer, bytes)`.
-    fn mirror_copies(&self) -> Vec<(Buffer, u64, u64)> {
+    /// The mirrors of this buffer: `(mirror, byte offset in the buffer, bytes read, fourth
+    /// channel of an expanded one)`.
+    fn mirror_copies(&self) -> Vec<(Buffer, u64, u64, Option<u32>)> {
         let mirrors = self.inner.mirrors.lock().unwrap_or_else(|e| e.into_inner());
         mirrors
             .iter()
-            .map(|m| (m.buffer.clone(), m.key.offset, m.len))
+            .map(|m| (m.buffer.clone(), m.key.offset, m.src_len, m.fourth))
             .collect()
     }
 }
@@ -222,15 +257,26 @@ impl crate::record::CommandList {
     pub(crate) fn refresh_mirrors(&mut self) -> Result<()> {
         let registry = &self.queue().device().inner.mirrors;
         let sources = registry.live();
-        let mut any = false;
+        let (mut copied, mut expanded) = (false, false);
         for src in &sources {
-            for (mirror, offset, len) in src.mirror_copies() {
-                self.copy_buffer(&mirror, 0, src, offset, len)?;
-                any = true;
+            for (mirror, offset, len, fourth) in src.mirror_copies() {
+                match fourth {
+                    None => {
+                        self.copy_buffer(&mirror, 0, src, offset, len)?;
+                        copied = true;
+                    }
+                    Some(bits) => {
+                        self.expand_three_channel(&mirror, src, offset, len / 12, bits)?;
+                        expanded = true;
+                    }
+                }
             }
         }
-        if any {
+        if copied {
             self.barrier(BLIT, ALL, VIS_DEVICE)?;
+        }
+        if expanded {
+            self.barrier(crate::stages::DISPATCH, ALL, VIS_DEVICE)?;
         }
         Ok(())
     }
