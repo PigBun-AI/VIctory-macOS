@@ -73,7 +73,8 @@ modules know nothing of the wire protocol.
 | WRITE_DESCRIPTOR | partly | NONE, CBV, buffer SRV/UAV (RAW, STRUCTURED) implemented. TYPED, `HAS_COUNTER`, SAMPLER → `UNSUPPORTED` |
 | COPY_DESCRIPTORS | implemented | same heap kind, memmove semantics |
 | CREATE_ROOT_SIGNATURE / DESTROY_ROOT_SIGNATURE | implemented | layout by the rules below |
-| CREATE_COMPUTE_PIPELINE | **placeholder**: `UNSUPPORTED` | arguments and the root-signature handle are still checked. Pipelines in tests come from `Executor::create_compute_pipeline_from_msl` (not on the wire) |
+| CREATE_COMPUTE_PIPELINE | implemented | `exec/dxil.rs`: DXIL (or DXBC, converted first) through MSC with the root signature's description; reflection checked against the TLAB layout; the pipeline's threads per group come from the reflection |
+| CREATE_GRAPHICS_PIPELINE (0x50) | implemented (M3, m3-gfx) | `exec/gfx.rs`: VS+PS and AS/MS+PS from the POD `GraphicsPsoDesc`; proto enums map to Metal in one table with unit tests; the pipeline is a `render::GraphicsPipeline` (Metal pipeline, cached `MTLDepthStencilState`, rasterizer state). A `DISPATCH` with it bound is `INVALID_ARG`; draws are phase 2 (`docs/metal/proto-render-draft.md`) |
 | DESTROY_PIPELINE | implemented | |
 | CREATE_FENCE / DESTROY_FENCE / FENCE_VALUE / FENCE_WAIT / FENCE_SIGNAL | implemented | signal never lowers; wait forever = `u64::MAX` |
 | DEVICE_STATUS | implemented | worst state of any queue |
