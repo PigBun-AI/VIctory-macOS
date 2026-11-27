@@ -150,13 +150,28 @@ D3DMetal's default presentation of the Apple GPU (it has `D3DM_VENDOR_ID`, `D3DM
 `D3DM_DEVICE_DESCRIPTION` to change it); wave lanes 32/32, so `victory_shader::emit::set_host_rdna` stays
 off while `indirect::amd()` is true. Nothing is selected wrongly: there is no other adapter.
 
-### M4 — `tools/mac/run.sh`
+### M4 — `tools/mac/run.sh`: the one way to start the title on a Mac
 
-Runs a `victory.exe` under CrossOver Wine + D3DMetal in this checkout's own prefix
-(`target/wineprefix-livetr`: only that prefix's wineserver is ever stopped), outside-the-repo cache and data
-(`$VICTORY_DATA_DIR`, default `victory-data-livetr/data` next to the checkout), scripted keys, logs in `target/mac-runs/<time>`. Keys: this line's
-`VICTORY_KEYS` takes `<s>:<key>,...`, `<from>-<to>:<key>` (held) and, with patch I1, `<from>-<to>/<every>[+<hold>]:<key>`
-(`run.sh` itself still writes one `<s>:Enter` per 3 s, which also runs an exe built before I1). `VICTORY_INPUT_RECORD` and `VICTORY_INPUT_REPLAY` (I1) pass through from the environment.
+One script for both backends (D3DMetal and our Metal backend) and both output profiles; usage, every option and
+variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches:
+
+- **Backend** (`--backend d3dmetal|metal`) is the only difference between two runs: the prefix (`target/wineprefix-livetr-d3dmetal`
+  or `-metal`, never shared), the dlls in its `system32` (the Metal ones are installed with the originals kept as `.metal-orig`,
+  and put back when the D3DMetal backend is chosen), `WINEDLLPATH`, `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG`,
+  `VICTORY_METAL_NOTIMPL_LOG`. `run.sh --print-env --backend d3dmetal` against `--backend metal` shows exactly that.
+- **Profile** (`--profile fidelity|perf`, default **perf** for now, see "Profiles and when to switch" below).
+- Everything else is set the same way for both: the helper DXC (G4: `VICTORY_DXC_HELPER`, `VICTORY_DXC_DIR`, `DXC_LIB`), the input
+  (I1: `VICTORY_KEYS` 8-3600/3:Enter, `VICTORY_INPUT_REPLAY` the neutral input), `VICTORY_FAULT_TRACKING` (1), the masked-store
+  patch (follows tracking, not set), `VICTORY_PRESENT_MAX` (P1), `VICTORY_POOL_CHECK` (L3), `VICTORY_LOG_RENDER_SIZE` (P2),
+  `WINEPREFIX` (explicit; only that prefix's wineserver is ever stopped), the data, cache and log directories, recording and
+  frame capture options, `--sample` (memory/GPU lines in `mem.csv`).
+- `--print-env` prints what would be passed (sorted, `~` for the home directory) and the command, and does nothing else.
+- Each run keeps `run-env.txt`, `start.txt`, `summary.txt` next to its logs.
+- Refuses: the Metal backend on a D3DMetal prefix (`wineprefix-play`, `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`); a start while
+  another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory; `--allow-concurrent`).
+
+*Not verified by a run:* the script was exercised with `--print-env` and with a stand-in Wine (data copy, `settings.xml` edit,
+dll install and restore, watchdog, sampler); no title was started.
 
 ### M5 — `tools/mac/wine-tests.sh` (tests under Wine, with the DXC front end)
 
@@ -286,10 +301,22 @@ command). Rosetta aborts on a fault in the second page of a 32-byte store. Remov
 
 ### L3 — title output size 1280x720 by default on a Mac (`mac/resolution.rs`)
 
-`VICTORY_OUTPUT`, `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`; compares each site byte for byte
-and leaves it alone if the build differs (build 1.0.2.1 only). The default 1280x720 applies
-under Rosetta only. Not needed on Windows (the user picks the size in the title). Remove when
-the Mac GPU path is fast enough for the title's own size.
+`VICTORY_OUTPUT`, `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`, `VICTORY_POOL_CHECK`; compares each site byte for byte
+and leaves it alone if the build differs (build 1.0.2.1 only). The default 1280x720 applies on **any Mac** (the loader asks Wine
+for its host system, `wine_get_host_version` = "Darwin", `resolution::on_a_mac`; `apps/victory/src/mac.rs` does not look at
+Rosetta): it was documented as "under Rosetta only", which the code never did. Not needed on Windows (the user picks the size in the
+title). The patch changes the title's *output*; the internal size follows (output x 2/3, 1280x720 gives 853x480).
+
+- The output patch writes the size into the settings block (+0x204/+0x208) and, for a size other than 3840x2160, also jumps over the
+  back buffer pool's check (+0x247af25: the pool, 64 MB on Series X, is sized for 3840x2160 and the check wants under 2 MB of it
+  left; at 1920x1080 49 MB are left and the title stopped there, run res-1). The two sites are written together or not at all.
+- `VICTORY_POOL_CHECK=skip` (new) jumps over that check alone, with the output left to the title. It exists for the fidelity profile:
+  with `VICTORY_OUTPUT=0` and a settings size of 2560x1440 the check is expected to stop the title at its `int3` the same way
+  (roughly 34 MB of the pool left if only the two 1440p back buffers use it, the same arithmetic; **not run**). It changes no size and no scale. Off unless set.
+- When the output is patched the log says `non-fidelity: output patched to WxH` (stdout, once), besides `resolution: ... Done` per site.
+- Which settings decide the output: see "Which `settings.xml` keys decide the output" below.
+
+Remove when the Mac GPU path is fast enough for the title's own size.
 
 ### L4 — `clwb` loops become NOPs under Rosetta (`mac/clwb.rs`)
 
@@ -388,6 +415,79 @@ needs a run under Wine, where the check is the log lines above and a window of t
 
 *Why not needed on Windows.* The window is fitted to the work area by `lifecycle.rs` and the swap chain stretched.
 *Remove when.* The Windows line has a presentation cap of its own.
+
+### P2 — `VICTORY_LOG_RENDER_SIZE`: the title's internal render size in the log (`victory-gpu/src/mac/render_size.rs`)
+
+*What.* Off unless `VICTORY_LOG_RENDER_SIZE=1` (with it off each hook is one atomic load; with it on, a lock per draw, so not
+for timing runs). Prints lines starting `render size:` on stdout:
+
+- `render size: target colour|depth WxH (samples N, K sizes so far)`: each 16:9 colour or depth render target size the title makes
+  (the first 300 sizes);
+- `render size: world frame N: internal WxH (scale S of the output WxH; D draws of T below the output size, X at the output size)
+  confirmed=yes|no top=[WxH:draws ...]` at world frames 1, 2, 5, 10, 30, 100, 300, 1000, then every 3000th (world frame: patch I1);
+- `render size: changed: AxB -> CxD at world frame N` whenever the frame's internal size differs from the previous frame's
+  (dynamic resolution shows up here; at most 200 lines).
+
+*How the internal size is decided (the reliable rule).* The title's render size is its output times its upscaler's scale
+(`+0x7e9440`, clamp 0.2..1.0, initial 2/3), computed in its own code and not stored anywhere readable at load, so it is read off
+what the title does:
+
+1. Every draw is counted under the viewport it was recorded with (the first viewport of the last `SetViewports` on the recording
+   thread). At each present the counts of the frame are taken.
+2. Candidates are viewport sizes that have **the output's aspect ratio** (within 1 %) and are **smaller than the output** by area.
+   Square or odd-shaped targets (shadow maps, atlases) and the output-sized passes (the upscaler's result, post effects, the
+   interface) drop out. The **internal size is the candidate with the most draws** (a tie goes to the larger). Half-size passes
+   (ambient occlusion, bloom) are candidates too but have far fewer draws than the geometry passes at the internal size.
+3. With no candidate drawn, the internal size is the output's (render scale 1.0).
+4. `confirmed=yes` when the title also made both a colour and a depth render target of exactly that size. It is corroboration, not
+   the verdict (a target can be created with padding, or before the log started).
+5. The output is the size of the picture the host presents, so the ratio is internal / presented.
+
+*Checks to make with it.* (a) Calibration: with the perf profile (output 1280x720) the verdict must be 853x480 (2/3), the figure
+known from the earlier runs. (b) Fidelity profile at 2560x1440 the rule gives 1707x960 if the scale stays 2/3. (c) A scale other
+than 2/3, or a `changed:` line in a steady scene, is the sign of dynamic resolution, which nobody has shown yet. Unit tests cover the
+rule (`mac::render_size::tests`, native); the hooks are not run: there is no run of the title with it yet.
+
+*Hooks in the Windows line's files* (one line each, marked `mac P2`): `list.rs` (`viewports`), `resource.rs`
+(`hand_out_resource`), `host.rs` (the presented size). `mac/world.rs` calls it from `draw` and `on_present`.
+
+### Which `settings.xml` keys decide the output (checked 2026-11-27, build 1.0.2.1)
+
+The file is `<data dir>/<title id>/storage/settings/settings.xml` (`rage__fwSystemSettingsCollection`, CRLF). Only **`video/resolutionFullscreen/width`
+and `/height`** decide the output size. Evidence:
+
+1. The settings block the title applies at start (`+0x22434a0`) hands `[block+0x204]` and `[block+0x208]` to the one writer of the screen
+   size (`+0x2478130`); everything else reads that screen size afterwards (device parameters, render size, back buffers). The L3 patch
+   writes the size it wants into exactly those two fields (`resolution.rs`, `OUTPUT`).
+2. Round trip: the saved `settings.xml` files of our data directories (identical where compared) read `<resolutionFullscreen><width 1280><height 720>` after runs in which
+   the patch wrote 1280x720 into `+0x204/+0x208` (an unpatched Series X writes 3840x2160, PR #393): the title saves what is in those fields,
+   so those two fields are the two values of that element.
+3. The other keys of the file do not carry it: `video/uiResolution` is `0x0` in the same files (not touched by the patch), `refreshRate`
+   (60/1), `adapterIndex`, `outputIndex`, `frameRateLimit`, `vSync`, `tripleBuffered` (in the same routine `+0x20c` is a flag byte and `+0x210`
+   a value capped at 1000 that becomes a frame time: not the size) and `videoCardDescription` ("Xbox Series X", the console model).
+4. The title's own display mode list is 1280x720, 1664x936, 1920x1080, 2560x1440, 3840x2160 at 60 Hz (`+0x615c0c0`), so 2560x1440 is a
+   mode it has.
+
+Not proven: that `uiResolution` stays `0x0` ("same as the output") at another output size, and what the title does with a size outside its
+mode list (the fidelity profile only writes modes from the list). The first fidelity run shows both in the log.
+
+### Profiles and when to switch (not switched yet)
+
+`tools/mac/run.sh --profile fidelity|perf` (docs/mac/RUN.md):
+
+| | **perf** (the default for now) | **fidelity** |
+|---|---|---|
+| console | Series X (or `--console series-s`) | Series X only |
+| output | patched to 1280x720 (`VICTORY_OUTPUT=1280x720`, L3), log `non-fidelity: output patched to 1280x720` | the title's own, from `settings.xml` set to 2560x1440 in the profile's own data directory copy; `VICTORY_OUTPUT=0`, no resolution patch |
+| internal size / dynamic resolution / TAA upscale | the title's, at 2/3 of 1280x720 = 853x480 | the title's own logic; expected 2/3 of 1440p = 1707x960 (`VICTORY_LOG_RENDER_SIZE`) |
+| render scale, upscaler overrides | allowed (`VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`) | refused |
+| pool check (+0x247af25) | skipped with the output patch | kept; `--pool-check skip` only if the first run stops there |
+| data / cache directory | `victory-data-livetr` | `victory-data-livetr-fidelity` (cloned once from the first; the game directory is never written) |
+
+The default stays **perf** until the 3D-missing question is settled and the owner says so; then the switch is one line,
+`profile="${VICTORY_MAC_PROFILE:-perf}"` -> `fidelity` in `run.sh`, plus (separately, as a loader change) making `VICTORY_OUTPUT=0` the
+code's default in `resolution.rs` `default_output_on`, so that a start without `run.sh` agrees. Perf stays as the explicit profile for
+debugging and speed work, marked `non-fidelity` in the log, and no fidelity result may cite a perf run.
 
 ## Not ported this round (decided with the Windows line as the reference)
 

@@ -279,6 +279,8 @@ The title takes its output size from its own settings (`settings.xml`, `video/re
 
 `VICTORY_OUTPUT=<W>x<H>` asks for another of the title's modes, as before. `VICTORY_OUTPUT=0`, or `none`, leaves the title's own size alone, for a run that wants the picture at the size its settings carry. On Windows, without the switch, the title's own size is used as before.
 
+For a run at the size the title itself would pick, `tools/mac/run.sh --fidelity` (docs/mac/RUN.md) leaves the output unpatched (`VICTORY_OUTPUT=0`) and sets 2560x1440 in the settings of its own copy of the data directory; `--perf` is the 1280x720 default above. `VICTORY_LOG_RENDER_SIZE=1` logs the internal render size the title ends up with (docs/mac/PATCHES.md, P2). Series X at the title's own 3840x2160 needs no patch at all; any other size stops at the back buffer pool check unless `VICTORY_POOL_CHECK=skip` (or the output patch, which does it) jumps over it.
+
 ## Optional switches for slow storage, low memory and speed
 
 None of these changes the default, except `VICTORY_OUTPUT`, which sets the title's output size on a Mac (see above). Each is read from the environment when the game starts, and all of them are tools for testers, so please post what you see on #131 or #135 when you try one.
