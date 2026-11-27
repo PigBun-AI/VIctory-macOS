@@ -32,7 +32,7 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSSize;
 use objc2_metal::*;
-use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer, kCAGravityResizeAspect};
 
 use crate::device::Device;
 use crate::error::{Error, Result};
@@ -158,10 +158,44 @@ impl Swapchain {
         sc.layer.setDevice(Some(device.raw()));
         // The kernel writes the drawable.
         sc.layer.setFramebufferOnly(false);
+        // The default gravity (`resize`) stretches the drawable over the layer without keeping its
+        // aspect ratio: Wine's client area is not 16:9 (1272x686 pt for a 1280x720 request), so the
+        // picture came out squeezed by about 4%. The title's output is scaled uniformly to the
+        // display (research/present-size-20261127.md). The bars are the layer's background.
+        // SAFETY: a constant of QuartzCore, valid for the process lifetime.
+        sc.layer
+            .setContentsGravity(unsafe { kCAGravityResizeAspect });
         sc.layer.setMaximumDrawableCount(DRAWABLES);
         sc.layer.setAllowsNextDrawableTimeout(true);
         sc.resize(width, height, Some(dxgi_format))?;
+        sc.log_layer("created");
         Ok(sc)
+    }
+
+    /// The layer's gravity as the string CoreAnimation reports.
+    pub fn contents_gravity(&self) -> String {
+        self.layer.contentsGravity().to_string()
+    }
+
+    /// `VICTORY_METAL_LOG=1`: what the layer looks like (bounds in points, scale, drawable size, gravity).
+    fn log_layer(&self, what: &str) {
+        if !std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            return;
+        }
+        let b = self.layer.bounds();
+        let d = self.layer.drawableSize();
+        eprintln!(
+            "victory-metal back: swap chain {what}: layer bounds {}x{} pt at ({}, {}), contentsScale {}, drawableSize {}x{}, contentsGravity {}, format {}",
+            b.size.width,
+            b.size.height,
+            b.origin.x,
+            b.origin.y,
+            self.layer.contentsScale(),
+            d.width,
+            d.height,
+            self.layer.contentsGravity(),
+            self.pixel.0,
+        );
     }
 
     /// New drawable size (and format, if given).
@@ -181,6 +215,7 @@ impl Swapchain {
         });
         self.width = width;
         self.height = height;
+        self.log_layer("resized");
         Ok(())
     }
 

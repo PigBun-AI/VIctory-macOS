@@ -99,6 +99,19 @@ impl SwapChainObj {
             hwnd.0 as usize as u64,
             desc,
         ))?;
+        if super::log_errors() {
+            eprintln!(
+                "victory-metal front: swap chain created: {}x{} format {} buffers {} Scaling {} AlphaMode {} flags {:#x} swap effect {}",
+                desc.width,
+                desc.height,
+                desc.format,
+                desc.buffer_count,
+                scaling.0,
+                alpha_mode.0,
+                desc.flags,
+                desc.swap_effect
+            );
+        }
         let event = (desc.flags & FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0).then(|| {
             // SAFETY: a manual-reset event, signalled.
             unsafe { CreateEventW(None, true, true, None) }
@@ -303,6 +316,12 @@ impl SwapChainObj_Impl {
             if h == 0 {
                 h = ch;
             }
+        }
+        if super::log_errors() {
+            eprintln!(
+                "victory-metal front: ResizeBuffers: {w}x{h} (asked {width}x{height}) format {} buffers {buffercount} Scaling {} AlphaMode {} flags {:#x}",
+                newformat.0, self.scaling.0, self.alpha_mode.0, swapchainflags.0 as u32
+            );
         }
         // The application released its references to the old buffers; ours go too.
         self.buffers.lock().unwrap().clear();

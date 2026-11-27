@@ -298,3 +298,34 @@ fn a_back_buffer_of_another_size_is_scaled() {
     assert_eq!((i.width, i.height, i.probe_x, i.probe_y), (48, 32, 24, 16));
     assert_eq!(i.probe_texel as u32, bgra([0, 255, 0, 255]));
 }
+
+#[test]
+fn the_layer_keeps_the_aspect_ratio_of_the_drawable() {
+    // The default gravity (`resize`) stretched a 16:9 drawable over Wine's 1272x686 pt client area;
+    // a swap chain sets `resizeAspect` on its layer (research/present-size-20261127.md).
+    let w = world();
+    let sc = w.fx.ok(create(format::R8G8B8A8_UNORM, 64, 36, 3));
+    assert!(!sc.swapchain.is_null());
+    let layers = w.layers.layers.lock().unwrap();
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].1.contentsGravity().to_string(), "resizeAspect");
+    // A fresh layer has the default; the swap chain is what changed it.
+    assert_eq!(CAMetalLayer::new().contentsGravity().to_string(), "resize");
+    // A resize keeps it.
+    drop(layers);
+    let mut r = ResizeSwapchainArgs::new();
+    r.swapchain = sc.swapchain;
+    r.width = 128;
+    r.height = 72;
+    r.format = format::R8G8B8A8_UNORM;
+    r.buffer_count = 3;
+    r.usage = tex_usage::UAV;
+    let _ = w.fx.ok(r);
+    assert_eq!(
+        w.layers.layers.lock().unwrap()[0]
+            .1
+            .contentsGravity()
+            .to_string(),
+        "resizeAspect"
+    );
+}
