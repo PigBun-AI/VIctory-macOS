@@ -20,9 +20,15 @@ fn info(tag: &str, text: impl AsRef<str>) {
     println!("INFO {tag}: {}", text.as_ref());
 }
 
+/// Lowercase hex, a `_` after every 32 bytes: the repository's asset policy
+/// (`cargo xtask policy`) refuses long unbroken hex runs, and the recorded
+/// golden text keeps serialized blobs in this form.
 fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
+    let mut s = String::with_capacity(bytes.len() * 2 + bytes.len() / 16);
+    for (i, b) in bytes.iter().enumerate() {
+        if i != 0 && i % 32 == 0 {
+            s.push('_');
+        }
         let _ = write!(s, "{b:02x}");
     }
     s

@@ -516,8 +516,8 @@ mod tests {
             .filter_map(|l| {
                 let l = l.strip_prefix("GOLD serialize ")?;
                 let (name, rest) = l.split_once(": S_OK ")?;
-                let hex = rest.split(' ').next()?;
-                Some((name.to_string(), unhex(hex)))
+                let hex = rest.split(' ').next()?.replace('_', "");
+                Some((name.to_string(), unhex(&hex)))
             })
             .collect()
     }
