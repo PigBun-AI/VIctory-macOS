@@ -1,11 +1,43 @@
 //! Metal side of the backend (layer L3). Only this crate may name Metal,
 //! objc2 or QuartzCore types.
 //!
-//! M0 holds the bring-up subset used by the probe: a device, a queue,
-//! no-copy wrapping of caller memory, three tiny compute kernels, empty
-//! command buffers on the classic queue and on the Metal 4 queue, a
-//! residency set, and a clear-and-present on a caller-supplied
-//! `CAMetalLayer`. The proto interpreter comes with M1.
+//! Two parts:
+//!
+//! * [`m0`]: the M0 bring-up subset used by the probe and the bridge (it
+//!   keeps a classic queue for control measurements; it is the only file
+//!   that may name Metal 3 command objects).
+//! * the M1 executor core, Metal 4 only (architecture note 2.6, rules 6
+//!   and 11): [`device`], [`memory`], [`residency`], [`descriptors`],
+//!   [`record`], [`queue`], [`pipeline`], with the pure pieces
+//!   [`stages`], [`pages`], [`barrier`].
+//!
+//! The API is plain Rust: no wire protocol types. The proto interpreter
+//! maps its handles (`ResId` and friends) to the objects made here.
 
 #[cfg(target_vendor = "apple")]
+pub mod barrier;
+#[cfg(target_vendor = "apple")]
+pub mod descriptors;
+#[cfg(target_vendor = "apple")]
+pub mod device;
+#[cfg(target_vendor = "apple")]
+pub mod error;
+#[cfg(target_vendor = "apple")]
 pub mod m0;
+#[cfg(target_vendor = "apple")]
+pub mod memory;
+#[cfg(target_vendor = "apple")]
+pub mod pages;
+#[cfg(target_vendor = "apple")]
+pub mod pipeline;
+#[cfg(target_vendor = "apple")]
+pub mod queue;
+#[cfg(target_vendor = "apple")]
+pub mod record;
+#[cfg(target_vendor = "apple")]
+pub mod residency;
+#[cfg(target_vendor = "apple")]
+pub mod stages;
+
+#[cfg(target_vendor = "apple")]
+pub use error::{Error, Result};
