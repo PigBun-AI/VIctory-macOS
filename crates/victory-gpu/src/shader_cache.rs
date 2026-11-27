@@ -101,6 +101,8 @@ fn build() -> [u8; 32] {
             ("VICTORY_PAGECACHE_ALL", victory_shader::emit::pagecache_all()),
             // The legacy multiply written shorter where provably the same.
             ("VICTORY_BVH_BOUNDS", victory_shader::emit::legacy_mul_fast()),
+            // Buffer-view addresses picked by a computed index come from the host table.
+            ("VICTORY_VIEWADDR_TABLE", victory_shader::emit::viewaddr_table()),
         ] {
             bytes.extend_from_slice(name.as_bytes());
             bytes.push(b'=');

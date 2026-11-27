@@ -41,6 +41,7 @@ pub const WHITELIST: &[&str] = &[
     "VICTORY_BVH_BOUNDS",
     "VICTORY_GROUP_SYNC",
     "VICTORY_SHADER_OPT",
+    "VICTORY_VIEWADDR_TABLE",
 ];
 
 /// One generation's values of the switches in [`WHITELIST`] (`None`: unset).

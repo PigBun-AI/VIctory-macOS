@@ -37,7 +37,10 @@ fn shadow_rays_translate_with_indexed_view_addresses() {
     let dir = std::env::var_os("VICTORY_GAME_DIR").expect("VICTORY_GAME_DIR: the game folder");
     let mut f = std::fs::File::open(std::path::Path::new(&dir).join("shaders.rpf")).unwrap();
     // SAFETY: set before any thread of this test reads it.
-    unsafe { std::env::set_var("VICTORY_DESC_WHY", "1") };
+    unsafe {
+        std::env::set_var("VICTORY_DESC_WHY", "1");
+        std::env::set_var("VICTORY_VIEWADDR_TABLE", "1");
+    }
     super::set_host_max_wave(32);
     super::shader::set_view_heap_limit(999_999);
     for (at, name, hash) in PROGRAMS {

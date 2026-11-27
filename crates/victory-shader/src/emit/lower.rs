@@ -3092,6 +3092,9 @@ impl<'a> Lower<'a> {
     /// ([`super::shader::SLOT_VIEW_ADDRESSES`]); none for a load at a fixed
     /// place, or where the slot is not known.
     fn indexed_view_address(&mut self, site: Site) -> Option<(V, V)> {
+        if !super::viewaddr_table() {
+            return None;
+        }
         let a = self.scalar.get(&site).copied()?;
         a.dynamic?;
         let table = match self.x.native.layout.get(a.param)?.root {

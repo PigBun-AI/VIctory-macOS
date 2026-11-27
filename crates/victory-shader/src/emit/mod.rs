@@ -223,6 +223,14 @@ pub fn rt_pagecache() -> bool {
     switch(crate::emit::live::var_os("VICTORY_RT_PAGECACHE").as_deref(), true)
 }
 
+/// `VICTORY_VIEWADDR_TABLE=1` (default off): the address of a buffer view picked from a heap by an
+/// index the code computes (the shadow-mask ray programs) is read from the host's address table
+/// (`SLOT_VIEW_ADDRESSES` / `SLOT_TABLE_VIEW_ADDRESSES`), and such programs translate. Off: they are
+/// refused as before. The host keeps the table always, so the switch can change while the title
+/// runs. Part of the translation: the shader cache keys on the effective value.
+pub fn viewaddr_table() -> bool {
+    switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), false)
+}
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
 pub(crate) fn switch(value: Option<&std::ffi::OsStr>, default: bool) -> bool {

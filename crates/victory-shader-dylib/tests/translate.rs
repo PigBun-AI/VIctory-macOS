@@ -134,7 +134,7 @@ fn dll_and_linked_translator_agree_byte_for_byte() {
     let lib = Library::load(Path::new(&copy)).unwrap();
     assert!(lib.info.starts_with("victory-shader-dylib "), "{}", lib.info);
 
-    let variants: [&[(&str, &str)]; 3] = [&[], &[("VICTORY_RT_PAGECACHE", "1")], &[("VICTORY_SHADER_OPT", "0"), ("VICTORY_WAVE_WIDE", "0")]];
+    let variants: [&[(&str, &str)]; 4] = [&[], &[("VICTORY_RT_PAGECACHE", "1")], &[("VICTORY_SHADER_OPT", "0"), ("VICTORY_WAVE_WIDE", "0")], &[("VICTORY_VIEWADDR_TABLE", "1")]];
     let (mut same, mut failed_same) = (0, 0);
     for settings in variants {
         let settings: Vec<(String, String)> = settings.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
