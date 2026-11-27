@@ -59,6 +59,12 @@ fn resource<'a>(r: &'a Ref<ID3D12Resource>) -> Option<&'a ResourceObj_Impl> {
 
 impl ListObj_Impl {
     pub fn unsupported_call(&self) {
+        // `VICTORY_METAL_LENIENT=1` (a survey tool, never a mode to play in): a command
+        // the front has no encoding for is skipped instead of invalidating the list, so
+        // a program runs on and every missing call is counted (VICTORY_METAL_NOTIMPL_LOG).
+        if super::lenient() {
+            return;
+        }
         self.list.lock().unwrap().unsupported();
     }
 

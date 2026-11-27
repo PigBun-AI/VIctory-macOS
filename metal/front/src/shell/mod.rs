@@ -64,6 +64,13 @@ pub(crate) fn note_notimpl(what: &str) {
     }
 }
 
+/// `VICTORY_METAL_LENIENT=1`: see `ListObj::unsupported_call`.
+pub(crate) fn lenient() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_LENIENT").is_some_and(|v| v != "0"))
+}
+
 pub(crate) fn log_errors() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
