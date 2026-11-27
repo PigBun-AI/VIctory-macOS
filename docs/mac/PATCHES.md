@@ -913,8 +913,10 @@ last word, so the shader cache and the live translator library (`victory-shader-
   the 32 KiB mesh limit, group memory over 32 KiB refuses the translation;
   the epilogue reads every exchanged value before it writes any output, and a 16-bit output is exchanged as its raw half
   (converted after the read): Apple's GPU compiler crashes (MTLCompilerService SIGSEGV in AGX) on the interleaved form;
-  **known issue**: real (mesh, pixel) pairs: of 4834, 2050 build, 1008 are over 32 KiB, 1774 crash Apple's compiler
-  (315 of those also crash without S1: a plain mesh plus a pixel shader that reads some outputs), see research/attr-vertex/agx-crash/;
+  **known issue** (numbers from the Metal backend owner, 2026-11-28): there are 4834 real (mesh, pixel) pairs: 2170 build,
+  1261 are over 32 KiB in total, 1400 crash Apple's compiler (AGX; 1273 pairs after de-duplication, already in the
+  `mesh-pair-denylist`), 3 exceed the varying limit (2170 + 1261 + 1400 + 3 = 4834). The earlier figure of 1774 crashes was an
+  artefact of compiling 4 pairs at once; rerun one at a time it is 1400. Only 3 pairs crash without S1 too. See research/attr-vertex/agx-crash/;
 * a vertex pipeline: victory-gpu puts a geometry shader (`emit::vertex_pipeline_gs`: triangles in, the same triangle out
   with vertices 1 and 2 as constant elements) in the slot of the rectangle list's stage; a rectangle list with such a pixel
   shader, or a host that refuses the stage, gets no pipeline.
@@ -932,7 +934,7 @@ drop the capability (the default true is then the only path), `vertex_flat.rs`, 
 *Acceptance (2026-11-28).* Translator tests 219 passed in victory-shader (209 before), 78 in victory-gpu; GPU tests against a CPU
 reference (mesh, provoking vertex, VS + GS + PS) pass. Census with the capability off over the 25985 containers: no program emits `attributeAtVertex`;
 of the 4852 pixel programs (plus the one `atomicBinOp.i64`) 4832 build through MSC and a Metal pipeline, 20 fail on Metal's 124 varying
-scalars (126-127 with the added ones), 1 is the i64 atomic: **4852 refused -> 20** (+1 unrelated). Mesh programs newly over 32 KiB by
+scalars (126-127 with the added ones), 1 is the i64 atomic: **pixel programs refused for attributeAtVertex 4852 -> 0**; the 21 that remain fail for other reasons (20 over the varying limit, 1 i64 atomic). Mesh programs newly over 32 KiB by
 the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 primitives, 8245 under the limit now): D = 4: 324, D = 10
 (median): 853, D = 22 (p90): 2362, D = 38 (max): 4504. Replays (`tools/metal/replay.sh`): f300 byte-identical picture to the earlier build (blake3 `713c6b13b79d2de4`),
 world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
