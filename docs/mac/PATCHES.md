@@ -714,3 +714,8 @@ low-address guards (#398) and 2 TiB views, DirectStorage per-worker handles (#40
 tolerance (this line's `publish.rs` already stages per writer), pipeline cache calls under Wine;
 the generic upstream PRs in the Mac history (not Mac specific). Each is a candidate for a later
 `mac:` commit once a run on the Mac shows the need.
+
+### M7 — `tools/mac/play.sh`: hand play wrapper
+
+*What.* A 20-line wrapper over `run.sh`: fidelity, no `VICTORY_KEYS`, no input replay, watchdog off (L5), 4 h limit; defaults `--exe` and
+`--prefix` to the main checkout's when this worktree has no build. Docs: RUN.md "Playing by hand". *Remove when.* run.sh grows a play preset.
