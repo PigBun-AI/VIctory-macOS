@@ -668,7 +668,7 @@ fn footprint_offset(
 ) -> Result<u64, Status> {
     let f = crate::format::lookup(loc.format).ok_or(Status::INVALID_ARG)?;
     let (bw, bh) = (u32::from(f.block.0), u32::from(f.block.1));
-    if at[0] % bw != 0 || at[1] % bh != 0 {
+    if !at[0].is_multiple_of(bw) || !at[1].is_multiple_of(bh) {
         return Err(Status::INVALID_ARG);
     }
     let rows_per_image = u64::from(f.block_rows(loc.height));
