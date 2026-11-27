@@ -801,7 +801,14 @@ pub(crate) fn fail(what: std::fmt::Arguments) -> ! {
         // SAFETY: a plain query.
         if let Err(e) = unsafe { host.device.GetDeviceRemovedReason() } {
             text.push_str(&format!("; device removed: {e}"));
-            log_removal_context();
+            if dred_any() {
+                // Carry the runtime snapshot in the fatal record itself. Another
+                // reporter may own SAID, or we may already hold a resource lock.
+                text.push_str("; device-removed data");
+                text.push_str(&host.read_removal_data(&[], false));
+            } else {
+                log_removal_context();
+            }
         }
         match host.log_messages() {
             Some(first) => text.push_str(&format!("; debug layer: {first}")),
@@ -819,6 +826,32 @@ pub(crate) fn fail(what: std::fmt::Arguments) -> ! {
         Some(report) => report(&text),
         None => std::process::abort(),
     }
+}
+
+#[cfg(all(test, feature = "diagnostics"))]
+#[test]
+#[ignore = "removes a dedicated WARP device; requires explicit light mode"]
+fn fatal_warp_dred() {
+    use std::os::windows::process::CommandExt;
+    assert_eq!(std::env::var("VICTORY_D3D12_WARP").as_deref(), Ok("1"));
+    assert!(dred_light());
+    if std::env::var_os("VICTORY_TEST_REMOVAL_CHILD").is_some() {
+        let device = host().unwrap().device.cast::<ID3D12Device5>().unwrap();
+        // SAFETY: isolated child with a dedicated software device.
+        unsafe { device.RemoveDevice() };
+        log_removal_context(); // consume the nonfatal reporter's once gate
+        on_failure(|_| std::process::exit(73));
+        fail(format_args!("WARP removal smoke"));
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .creation_flags(0x08000000)
+        .args(["--exact", "host::fatal_warp_dred", "--ignored", "--nocapture", "--test-threads=8"])
+        .env("VICTORY_TEST_REMOVAL_CHILD", "1").output().unwrap();
+    let log = String::from_utf8_lossy(&out.stderr);
+    eprint!("{log}");
+    assert_eq!(out.status.code(), Some(73));
+    assert!(log.contains("device removed:") && log.contains("device-removed data")
+        && log.contains("page fault") && log.contains("breadcrumbs"));
 }
 
 static HOST: OnceLock<Option<Host>> = OnceLock::new();
@@ -854,7 +887,8 @@ fn enable_dred_settings() -> bool {
             dred.SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
         }
         dred.SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-        tracing::info!(breadcrumbs, markers = dred_on(), "crash tracing on (device-removed data)");
+        let mode = if dred_light() { "light" } else if dred_faults() { "faults" } else { "full" };
+        tracing::warn!(mode, breadcrumbs, page_faults = true, markers = dred_on(), "crash tracing on (device-removed data)");
     }
     true
 }
@@ -5925,8 +5959,12 @@ impl Host {
     /// at and what the draws and dispatches in flight there run (or, in
     /// lists that never started, the pipelines they bind).
     fn removal_data(&self, runs: &[&HostList]) -> String {
+        self.read_removal_data(runs, true)
+    }
+
+    fn read_removal_data(&self, runs: &[&HostList], enrich: bool) -> String {
         let Ok(dred) = self.device.cast::<ID3D12DeviceRemovedExtendedData1>() else {
-            return String::new();
+            return if enrich { String::new() } else { "; page fault and breadcrumbs unavailable (no DRED1)".into() };
         };
         let mut text = String::new();
         let mut fault_va = None;
@@ -5960,10 +5998,14 @@ impl Host {
                         text.push_str(&format!("; {what} {names:?}"));
                     }
                 }
-                text.push_str(&crate::shadow::near(va));
-                text.push_str(&crate::descriptor::host::near_heaps(va));
-                #[cfg(feature = "diagnostics")]
-                text.push_str(&crate::book::at_loss(va));
+                if enrich {
+                    text.push_str(&crate::shadow::near(va));
+                    text.push_str(&crate::descriptor::host::near_heaps(va));
+                    #[cfg(feature = "diagnostics")]
+                    text.push_str(&crate::book::at_loss(va));
+                }
+            } else if !enrich {
+                text.push_str("; page fault: no address reported");
             }
             // The plain output: the extended one (with marker texts) came
             // back without stopped lists on this host.
@@ -6011,6 +6053,10 @@ impl Host {
                     .next()
                     .unwrap_or_default();
                     text.push_str(&format!(" of \"{named}\""));
+                    if !enrich {
+                        plain = p.pNext;
+                        continue;
+                    }
                     // Not one of the caller's: by the name.
                     #[cfg(feature = "diagnostics")]
                     let by_name = list_number(&named).and_then(|n| {
