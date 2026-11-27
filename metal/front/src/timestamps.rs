@@ -31,7 +31,7 @@ pub const HEAP_TYPE_TIMESTAMP: u32 = 1;
 /// `D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP`.
 pub const HEAP_TYPE_COPY_QUEUE_TIMESTAMP: u32 = 5;
 /// `D3D12_QUERY_TYPE_TIMESTAMP`.
-pub const QUERY_TYPE_TIMESTAMP: u32 = 4;
+pub const QUERY_TYPE_TIMESTAMP: u32 = 2;
 
 /// Ticks per second of [`now`] (what `GetTimestampFrequency` answers).
 pub const FREQUENCY: u64 = 1_000_000_000;

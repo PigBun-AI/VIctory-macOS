@@ -310,6 +310,164 @@ unsafe fn copy_round_trip(env: &mut Env) -> Res<()> {
     }
 }
 
+/// `WriteBufferImmediate` (List2): 32-bit values at addresses inside a default buffer, in
+/// order with a copy, in the three modes; the readback shows them.
+unsafe fn write_buffer_immediate(env: &mut Env) -> Res<()> {
+    unsafe {
+        const N: usize = 256;
+        let up = env.upload(N as u64)?;
+        let def = env.default_buffer(N as u64)?;
+        let rb = env.readback(N as u64)?;
+        let base = vec![0xEEu8; N];
+        write(&up, 0, &base)?;
+        let list = env.list()?;
+        let list2: ID3D12GraphicsCommandList2 = list
+            .cast()
+            .map_err(|_| "no ID3D12GraphicsCommandList2".to_owned())?;
+        list.CopyBufferRegion(&def, 0, &up, 0, N as u64);
+        let va = def.GetGPUVirtualAddress();
+        let params = [
+            D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+                Dest: va + 4,
+                Value: 0x1111_2222,
+            },
+            D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+                Dest: va + 8,
+                Value: 0x3333_4444,
+            },
+            D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+                Dest: va + 252,
+                Value: 0x5555_6666,
+            },
+        ];
+        let modes = [
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT,
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN,
+            D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT,
+        ];
+        list2.WriteBufferImmediate(params.len() as u32, params.as_ptr(), Some(modes.as_ptr()));
+        // The same address twice in one call: the later value wins.
+        let again = [
+            D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+                Dest: va + 16,
+                Value: 1,
+            },
+            D3D12_WRITEBUFFERIMMEDIATE_PARAMETER {
+                Dest: va + 16,
+                Value: 2,
+            },
+        ];
+        list2.WriteBufferImmediate(again.len() as u32, again.as_ptr(), None);
+        list.ResourceBarrier(&[transition(&def, DEST, SRC)]);
+        list.CopyBufferRegion(&rb, 0, &def, 0, N as u64);
+        list.Close().map_err(e("Close"))?;
+        env.run(&[&list])?;
+        let mut want = base;
+        want[4..8].copy_from_slice(&0x1111_2222u32.to_le_bytes());
+        want[8..12].copy_from_slice(&0x3333_4444u32.to_le_bytes());
+        want[252..256].copy_from_slice(&0x5555_6666u32.to_le_bytes());
+        want[16..20].copy_from_slice(&2u32.to_le_bytes());
+        check_eq("readback", &read(&rb, N)?, &want)
+    }
+}
+
+/// Timestamp queries: `EndQuery` and `ResolveQueryData` into a readback buffer, `GetClockCalibration`,
+/// and PIX-style markers around them (`BeginEvent` / `SetMarker` / `EndEvent`, metadata 1 = ANSI).
+/// Checks only what holds for any clock: non-zero and non-decreasing, a non-zero frequency.
+unsafe fn timestamps_and_markers(env: &mut Env) -> Res<()> {
+    unsafe {
+        let heap: ID3D12QueryHeap = {
+            let mut h: Option<ID3D12QueryHeap> = None;
+            env.device
+                .CreateQueryHeap(
+                    &D3D12_QUERY_HEAP_DESC {
+                        Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
+                        Count: 4,
+                        NodeMask: 0,
+                    },
+                    &mut h,
+                )
+                .map_err(e("CreateQueryHeap"))?;
+            h.ok_or("CreateQueryHeap returned no heap")?
+        };
+        let rb = env.readback(64)?;
+        let list = env.list()?;
+        let name = b"e2e pass\0";
+        list.BeginEvent(1, Some(name.as_ptr() as *const c_void), name.len() as u32);
+        list.EndQuery(&heap, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        list.SetMarker(1, Some(name.as_ptr() as *const c_void), name.len() as u32);
+        list.EndQuery(&heap, D3D12_QUERY_TYPE_TIMESTAMP, 1);
+        list.EndEvent();
+        list.ResolveQueryData(&heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, &rb, 8);
+        list.Close().map_err(e("Close"))?;
+        let freq = env
+            .queue
+            .GetTimestampFrequency()
+            .map_err(e("GetTimestampFrequency"))?;
+        if freq == 0 {
+            return Err("GetTimestampFrequency is 0".to_owned());
+        }
+        let (mut gpu0, mut cpu0) = (0u64, 0u64);
+        env.queue
+            .GetClockCalibration(&mut gpu0, &mut cpu0)
+            .map_err(e("GetClockCalibration"))?;
+        env.run(&[&list])?;
+        let (mut gpu1, mut cpu1) = (0u64, 0u64);
+        env.queue
+            .GetClockCalibration(&mut gpu1, &mut cpu1)
+            .map_err(e("GetClockCalibration"))?;
+        if gpu1 < gpu0 || cpu1 < cpu0 || gpu0 == 0 || cpu0 == 0 {
+            return Err(format!(
+                "calibration went back or is 0: gpu {gpu0}->{gpu1}, cpu {cpu0}->{cpu1}"
+            ));
+        }
+        let b = read(&rb, 24)?;
+        let t = |i: usize| u64::from_le_bytes(b[8 + 8 * i..16 + 8 * i].try_into().unwrap());
+        if t(0) == 0 || t(1) < t(0) {
+            return Err(format!("timestamps {} then {}", t(0), t(1)));
+        }
+        if b[..8] != [0; 8] {
+            return Err("bytes outside the resolved range changed".to_owned());
+        }
+        // Queue-side markers and residency calls: accepted.
+        env.queue
+            .BeginEvent(1, Some(name.as_ptr() as *const c_void), name.len() as u32);
+        env.queue.EndEvent();
+        Ok(())
+    }
+}
+
+/// `EnqueueMakeResident` (Device3): the fence reaches the value; `SetBackgroundProcessingMode` (Device6) is accepted.
+unsafe fn enqueue_make_resident(env: &mut Env) -> Res<()> {
+    unsafe {
+        let d3: ID3D12Device3 = env
+            .device
+            .cast()
+            .map_err(|_| "no ID3D12Device3".to_owned())?;
+        let buf = env.default_buffer(4096)?;
+        let pageable: ID3D12Pageable = buf.cast().map_err(e("cast Pageable"))?;
+        d3.EnqueueMakeResident(
+            D3D12_RESIDENCY_FLAG_NONE,
+            &[Some(pageable)],
+            &env.fence,
+            env.value + 1,
+        )
+        .map_err(e("EnqueueMakeResident"))?;
+        env.value += 1;
+        env.wait(env.value)?;
+        if let Ok(d6) = env.device.cast::<ID3D12Device6>() {
+            d6.SetBackgroundProcessingMode(
+                D3D12_BACKGROUND_PROCESSING_MODE_ALLOWED,
+                D3D12_MEASUREMENTS_ACTION_KEEP_ALL,
+                None,
+                None,
+            )
+            .map_err(e("SetBackgroundProcessingMode"))?;
+        }
+        Ok(())
+    }
+}
+
 /// Sub-range copies at odd offsets and sizes through a default buffer, against a CPU model.
 unsafe fn copy_ranges(env: &mut Env) -> Res<()> {
     unsafe {
@@ -982,6 +1140,9 @@ pub fn run() -> i32 {
         );
         t.test("empty_execute", empty_execute(&mut env));
         t.test("large_copy", large_copy(&mut env));
+        t.test("write_buffer_immediate", write_buffer_immediate(&mut env));
+        t.test("timestamps_and_markers", timestamps_and_markers(&mut env));
+        t.test("enqueue_make_resident", enqueue_make_resident(&mut env));
         if want_perf {
             t.test("timing", timing(&mut env));
         }
