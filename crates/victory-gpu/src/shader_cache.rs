@@ -75,8 +75,6 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
-            // Colour exports clamped to +-65504, NaN -> 0 (emit::lower::sunclamp), every pixel program.
-            "VICTORY_EXPORT_F16_SAT",
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
             "VICTORY_TM_CLAMP_HDR",
         ] {
@@ -87,6 +85,11 @@ fn build() -> [u8; 32] {
             }
             bytes.push(0);
         }
+        // Colour exports clamped to +-65504, NaN -> 0 (emit::lower::sunclamp), default on:
+        // keyed by the effective state, so unset and "1" share entries and "0" differs.
+        bytes.extend_from_slice(b"VICTORY_EXPORT_F16_SAT=");
+        bytes.push(victory_shader::emit::export_sat() as u8);
+        bytes.push(0);
         // And which clean-up passes ran over the translated code.
         bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
         bytes

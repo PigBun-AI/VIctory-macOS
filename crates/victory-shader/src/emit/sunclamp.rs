@@ -8,7 +8,7 @@
 //!   (all four channels) is made NaN -> 0 and clamped to +-65504. SCOPE: the
 //!   translator has no per-texture hook, so this covers *every* image read of that
 //!   one program (its LUTs and +304 alike), not other shaders.
-//! * `VICTORY_EXPORT_F16_SAT=1` (B): in `Lower::export`, a float colour export
+//! * `VICTORY_EXPORT_F16_SAT` (B, default ON, `0` turns it off): in `Lower::export`, a float colour export
 //!   is NaN -> 0 and clamped to +-65504 before it is stored, for every pixel
 //!   program (the host's RGBA16F targets overflow to Inf otherwise).
 //!
@@ -50,10 +50,16 @@ pub(in crate::emit) fn samples_clamped() -> bool {
     CLAMP_SAMPLES.get()
 }
 
-/// B: `VICTORY_EXPORT_F16_SAT`.
-pub(in crate::emit) fn export_sat() -> bool {
+/// B on unless the value is exactly "0" (after trimming): unset means on, matching the
+/// Xbox export's saturation. Pure, for testing.
+pub(in crate::emit) fn export_sat_for(value: Option<&str>) -> bool {
+    value.map(str::trim) != Some("0")
+}
+
+/// B: `VICTORY_EXPORT_F16_SAT` (default on; "0" turns it off). Also part of the shader cache key.
+pub fn export_sat() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| on(std::env::var("VICTORY_EXPORT_F16_SAT").ok().as_deref()))
+    *ON.get_or_init(|| export_sat_for(std::env::var("VICTORY_EXPORT_F16_SAT").ok().as_deref()))
 }
 
 impl Lower<'_> {
@@ -76,6 +82,15 @@ fn switches_parse() {
     assert!(!on(None));
     assert!(!on(Some("0")));
     assert!(on(Some(" 1 ")));
+}
+
+#[test]
+fn export_sat_is_on_unless_zero() {
+    assert!(export_sat_for(None));
+    assert!(export_sat_for(Some("1")));
+    assert!(export_sat_for(Some("")));
+    assert!(!export_sat_for(Some("0")));
+    assert!(!export_sat_for(Some(" 0 ")));
 }
 
 #[test]
