@@ -146,6 +146,20 @@ element, the texture's `gpuResourceID`, the length in bytes and the typed flag (
   (rule 11); a descriptor in a heap owns nothing.
 * A range outside the buffer is `INVALID_ARG`.
 
+## What `victory-shader`'s tests still call that is not implemented
+
+`tools/metal/notimpl-stats.sh`, 2026-11-27, after typed buffer views (458 tests, ours 57 failed,
+D3DMetal 1; `metal/conformance/expected-fail.txt`):
+
+| calls | method |
+|---|---|
+| 42 | `ID3D12Device2::CreatePipelineState` (mesh/graphics stream) |
+| 41 | `ID3D12Device::CreateCommittedResource` (texture 2D, default heap) |
+| 6 | `ID3D12Device::CreateGraphicsPipelineState` |
+| 1 | `ID3D12Device::CreateUnorderedAccessView` (typed buffer, format 6 = `R32G32B32_FLOAT`: Metal has no such pixel format; D3DMetal substitutes `R32G32` and drops the store; the test tolerates it) |
+
+All but the last are M3 (textures and graphics).
+
 ## Known issues
 
 * TLAB layout rules: the two doubts above.
