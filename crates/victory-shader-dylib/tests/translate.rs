@@ -1,7 +1,7 @@
 //! The DLL's C ABI, and the DLL against the translator linked into this test: the same bytes.
 //!
 //! Containers: `*.cdxil` files (a game run's `VICTORY_SHADER_SAVE=<dir>` writes them; `VICTORY_LIVE_CORPUS`
-//! names the folder, else `D:\project\GTA6\build\livetr-corpus` and `D:\project\GTA6\build\rt1-work`).
+//! names the folder, or several separated like `PATH`; unset, the tests that need containers are skipped).
 //! The DLL is the one `cargo build -p victory-shader-dylib` (same profile as this test) wrote next
 //! to this test's `deps` folder.
 
@@ -17,9 +17,7 @@ use victory_shader_dylib as dylib;
 static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn corpus() -> Vec<(String, Vec<u8>)> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("VICTORY_LIVE_CORPUS").map(PathBuf::from).into_iter().collect();
-    dirs.push(r"D:\project\GTA6\build\livetr-corpus".into());
-    dirs.push(r"D:\project\GTA6\build\rt1-work".into());
+    let dirs: Vec<PathBuf> = std::env::var_os("VICTORY_LIVE_CORPUS").map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for dir in dirs {
@@ -121,7 +119,10 @@ fn abi_round_trip() {
 fn dll_and_linked_translator_agree_byte_for_byte() {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let corpus = corpus();
-    assert!(!corpus.is_empty(), "no containers: set VICTORY_LIVE_CORPUS to a folder of .cdxil");
+    if corpus.is_empty() {
+        eprintln!("skipped: no containers; set VICTORY_LIVE_CORPUS to a folder of .cdxil");
+        return;
+    }
     // The host's numbers, set for the linked copy (the DLL is given them per call).
     victory_shader::emit::set_host_max_wave(32);
     victory_shader::emit::set_view_heap_limit(999_999);

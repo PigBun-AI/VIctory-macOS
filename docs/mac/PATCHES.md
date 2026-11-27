@@ -186,6 +186,16 @@ plus `victory_loader::mac::in_title_image` (`threads.rs`, 8 lines). Under Wine o
 of ours suspended while Wine held its virtual-memory lock left the lock held for good (#50).
 Remove when CrossOver Wine fixes the lock (retest after a Wine bump from 26.3) or with G2.
 
+### T1 — `victory-shader-dylib/tests/translate.rs`: corpus folders from the environment
+
+The test had two build-machine paths of the Windows team written in (`...\build\livetr-corpus`,
+`...\build\rt1-work`), which do not belong in a public history. Changed in place (about 6 lines,
+Windows file, only the new `mac:` commit touches it; the Windows line's history is as it was):
+`VICTORY_LIVE_CORPUS` now holds one or several folders (separated like `PATH`: `;` on Windows), and
+when it is unset the container test returns with a "skipped" message instead of asserting. To get
+the old behaviour on the Windows machine, set `VICTORY_LIVE_CORPUS` to the two folders. Remove this
+patch if the Windows line makes the same change.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
