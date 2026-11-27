@@ -8,6 +8,7 @@
 //! payload in place; this decoder does not need that and works on any slice.
 
 use crate::ids::*;
+use crate::render::*;
 use crate::status::{Error, Status};
 use crate::sync::SyncOp;
 use crate::types::*;
@@ -17,7 +18,7 @@ use alloc::vec::Vec;
 open_enum! {
     /// Opcode of a command. Ranges: 0x0001 framing and queue ops, 0x0100 state,
     /// 0x0200 compute/copy work, 0x0300 barriers, 0x0400-0x04FF texture work;
-    /// 0x0500-0x09FF reserved for M2/M3 (see [`reserved_range`]); 0x0F00
+    /// 0x0501-0x0601 render state, draws and passes (m4-render); the rest of 0x0500-0x09FF reserved for M2/M3 (see [`reserved_range`]); 0x0F00
     /// replay-only records; 0x8000 and up are never assigned.
     pub struct Opcode(u16) {
         BEGIN_LIST = 0x0001,
@@ -45,6 +46,20 @@ open_enum! {
         COPY_RESOURCE = 0x0401,
         CLEAR_UAV_TEXTURE = 0x0402,
 
+        SET_VIEWPORTS = 0x0501,
+        SET_SCISSORS = 0x0502,
+        SET_BLEND_FACTOR = 0x0503,
+        SET_STENCIL_REF = 0x0504,
+        SET_PRIMITIVE_TOPOLOGY = 0x0505,
+        SET_INDEX_BUFFER = 0x0506,
+        SET_VERTEX_BUFFERS = 0x0507,
+        DRAW = 0x0510,
+        DRAW_INDEXED = 0x0511,
+        DISPATCH_MESH = 0x0512,
+        CLEAR_ATTACHMENT = 0x0520,
+        BEGIN_RENDER_PASS = 0x0600,
+        END_RENDER_PASS = 0x0601,
+
         SYNC_RECORD = 0x0F00,
         BUFFER_DATA = 0x0F01,
     }
@@ -57,12 +72,12 @@ pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
     (
         0x0500,
         0x05FF,
-        "render state, draws, mesh dispatch (M3, m3-gfx)",
+        "render state, draws, mesh dispatch, clears in a pass (m4-render; numbers not yet used)",
     ),
     (
-        0x0600,
+        0x0602,
         0x06FF,
-        "render passes and render-encoder bindings (M3, m3-gfx)",
+        "render passes and render-encoder bindings (m4-render; numbers not yet used)",
     ),
     (0x0700, 0x07FF, "present (M3)"),
     (0x0800, 0x08FF, "queries and timestamps (M2)"),
@@ -91,6 +106,7 @@ pub const fn opcode_version(op: Opcode) -> u8 {
     match op.0 {
         0x0001..=0x0005 | 0x0100..=0x0105 | 0x0200 | 0x0201 | 0x0210..=0x0212 | 0x0300 => 1,
         0x0400..=0x0402 => 1,
+        0x0501..=0x0507 | 0x0510..=0x0512 | 0x0520 | 0x0600 | 0x0601 => 1,
         0x0F00 | 0x0F01 => 1,
         _ => 0,
     }
@@ -469,6 +485,19 @@ pub enum Command<'a> {
     CopyTextureRegion(CopyTextureRegion),
     CopyResource(CopyResource),
     ClearUavTexture(ClearUavTexture),
+    BeginRenderPass(BeginRenderPass),
+    EndRenderPass(EndRenderPass),
+    SetViewports(SetViewports),
+    SetScissors(SetScissors),
+    SetBlendFactor(SetBlendFactor),
+    SetStencilRef(SetStencilRef),
+    SetPrimitiveTopology(SetPrimitiveTopology),
+    SetIndexBuffer(SetIndexBuffer),
+    SetVertexBuffers(SetVertexBuffers),
+    Draw(Draw),
+    DrawIndexed(DrawIndexed),
+    DispatchMesh(DispatchMesh),
+    ClearAttachment(ClearAttachment),
     SyncRecord(SyncRecord<'a>),
     BufferData(BufferData<'a>),
 }
@@ -486,6 +515,47 @@ fn check_bind_point(op: Opcode, b: BindPoint) -> Result<(), Error> {
     } else {
         Err(bad(op, "bind_point"))
     }
+}
+
+fn check_begin_pass(op: Opcode, c: &BeginRenderPass) -> Result<(), Error> {
+    if c.rt_count as usize > MAX_RENDER_TARGETS || c.flags != 0 {
+        return Err(bad(op, "rt_count"));
+    }
+    for (i, a) in c.rt.iter().enumerate() {
+        let used = i < c.rt_count as usize;
+        if !used {
+            if *a != <RenderAttachment as Wire>::ZERO {
+                return Err(bad(op, "attachment past the count"));
+            }
+            continue;
+        }
+        if a.clear.iter().any(|f| f.is_nan()) {
+            return Err(bad(op, "clear value"));
+        }
+        if a.res.is_null() {
+            continue;
+        }
+        if !a.load.is_known() || !a.dimension.is_known() || a.dimension == TexViewDim::NONE {
+            return Err(bad(op, "attachment"));
+        }
+        if a.slice_count == 0 {
+            return Err(bad(op, "slice_count"));
+        }
+    }
+    let d = &c.ds;
+    if d.clear_depth.is_nan() {
+        return Err(bad(op, "clear depth"));
+    }
+    if !d.res.is_null()
+        && (!d.depth_load.is_known()
+            || !d.stencil_load.is_known()
+            || !d.dimension.is_known()
+            || d.dimension == TexViewDim::NONE
+            || d.slice_count == 0)
+    {
+        return Err(bad(op, "depth attachment"));
+    }
+    Ok(())
 }
 
 impl Command<'_> {
@@ -511,6 +581,19 @@ impl Command<'_> {
             Command::CopyTextureRegion(_) => Opcode::COPY_TEXTURE_REGION,
             Command::CopyResource(_) => Opcode::COPY_RESOURCE,
             Command::ClearUavTexture(_) => Opcode::CLEAR_UAV_TEXTURE,
+            Command::BeginRenderPass(_) => Opcode::BEGIN_RENDER_PASS,
+            Command::EndRenderPass(_) => Opcode::END_RENDER_PASS,
+            Command::SetViewports(_) => Opcode::SET_VIEWPORTS,
+            Command::SetScissors(_) => Opcode::SET_SCISSORS,
+            Command::SetBlendFactor(_) => Opcode::SET_BLEND_FACTOR,
+            Command::SetStencilRef(_) => Opcode::SET_STENCIL_REF,
+            Command::SetPrimitiveTopology(_) => Opcode::SET_PRIMITIVE_TOPOLOGY,
+            Command::SetIndexBuffer(_) => Opcode::SET_INDEX_BUFFER,
+            Command::SetVertexBuffers(_) => Opcode::SET_VERTEX_BUFFERS,
+            Command::Draw(_) => Opcode::DRAW,
+            Command::DrawIndexed(_) => Opcode::DRAW_INDEXED,
+            Command::DispatchMesh(_) => Opcode::DISPATCH_MESH,
+            Command::ClearAttachment(_) => Opcode::CLEAR_ATTACHMENT,
             Command::SyncRecord(_) => Opcode::SYNC_RECORD,
             Command::BufferData(_) => Opcode::BUFFER_DATA,
         }
@@ -573,6 +656,55 @@ impl Command<'_> {
                 }
                 Ok(())
             }
+            Command::BeginRenderPass(c) => check_begin_pass(op, c),
+            Command::EndRenderPass(c) => {
+                let known = c.rt_store.iter().all(|s| s.is_known())
+                    && c.depth_store.is_known()
+                    && c.stencil_store.is_known();
+                if known { Ok(()) } else { Err(bad(op, "store")) }
+            }
+            Command::SetViewports(c) => {
+                let nan = c.vp.iter().any(|v| {
+                    [v.x, v.y, v.width, v.height, v.min_depth, v.max_depth]
+                        .iter()
+                        .any(|f| f.is_nan())
+                });
+                if c.count as usize > MAX_VIEWPORTS || nan {
+                    return Err(bad(op, "viewport"));
+                }
+                Ok(())
+            }
+            Command::SetBlendFactor(c) if c.color.iter().any(|f| f.is_nan()) => {
+                Err(bad(op, "color"))
+            }
+            Command::SetScissors(c) if c.count as usize > MAX_VIEWPORTS => Err(bad(op, "count")),
+            Command::SetPrimitiveTopology(c) if !c.topology.is_known() => Err(bad(op, "topology")),
+            Command::SetIndexBuffer(c) if !c.format.is_known() => Err(bad(op, "format")),
+            Command::SetVertexBuffers(c) => {
+                if c.count as usize > MAX_VERTEX_BUFFERS
+                    || u64::from(c.start_slot) + u64::from(c.count) > MAX_VERTEX_BUFFERS as u64
+                {
+                    return Err(bad(op, "count"));
+                }
+                Ok(())
+            }
+            Command::ClearAttachment(c) => {
+                if c.target > CLEAR_TARGET_DEPTH_STENCIL {
+                    return Err(bad(op, "target"));
+                }
+                if c.rect_count as usize > MAX_CLEAR_RECTS {
+                    return Err(bad(op, "rect_count"));
+                }
+                if c.color.iter().any(|f| f.is_nan()) || c.clear_depth.is_nan() {
+                    return Err(bad(op, "clear value"));
+                }
+                if c.target == CLEAR_TARGET_DEPTH_STENCIL
+                    && (c.flags == 0 || c.flags & !(CLEAR_DEPTH | CLEAR_STENCIL) != 0)
+                {
+                    return Err(bad(op, "flags"));
+                }
+                Ok(())
+            }
             Command::SyncRecord(r) if r.args.len() > MAX_PAYLOAD || r.blob.len() > MAX_PAYLOAD => {
                 Err(Error::TooLarge)
             }
@@ -629,6 +761,19 @@ impl Command<'_> {
             Command::CopyTextureRegion(c) => c.put(out),
             Command::CopyResource(c) => c.put(out),
             Command::ClearUavTexture(c) => c.put(out),
+            Command::BeginRenderPass(c) => c.put(out),
+            Command::EndRenderPass(c) => c.put(out),
+            Command::SetViewports(c) => c.put(out),
+            Command::SetScissors(c) => c.put(out),
+            Command::SetBlendFactor(c) => c.put(out),
+            Command::SetStencilRef(c) => c.put(out),
+            Command::SetPrimitiveTopology(c) => c.put(out),
+            Command::SetIndexBuffer(c) => c.put(out),
+            Command::SetVertexBuffers(c) => c.put(out),
+            Command::Draw(c) => c.put(out),
+            Command::DrawIndexed(c) => c.put(out),
+            Command::DispatchMesh(c) => c.put(out),
+            Command::ClearAttachment(c) => c.put(out),
             Command::SyncRecord(c) => {
                 SyncRecordHead {
                     op: c.op,
@@ -750,6 +895,19 @@ pub fn decode_one<'a>(buf: &'a [u8]) -> Result<(Command<'a>, usize), Error> {
         Opcode::COPY_TEXTURE_REGION => fixed!(CopyTextureRegion, CopyTextureRegion),
         Opcode::COPY_RESOURCE => fixed!(CopyResource, CopyResource),
         Opcode::CLEAR_UAV_TEXTURE => fixed!(ClearUavTexture, ClearUavTexture),
+        Opcode::BEGIN_RENDER_PASS => fixed!(BeginRenderPass, BeginRenderPass),
+        Opcode::END_RENDER_PASS => fixed!(EndRenderPass, EndRenderPass),
+        Opcode::SET_VIEWPORTS => fixed!(SetViewports, SetViewports),
+        Opcode::SET_SCISSORS => fixed!(SetScissors, SetScissors),
+        Opcode::SET_BLEND_FACTOR => fixed!(SetBlendFactor, SetBlendFactor),
+        Opcode::SET_STENCIL_REF => fixed!(SetStencilRef, SetStencilRef),
+        Opcode::SET_PRIMITIVE_TOPOLOGY => fixed!(SetPrimitiveTopology, SetPrimitiveTopology),
+        Opcode::SET_INDEX_BUFFER => fixed!(SetIndexBuffer, SetIndexBuffer),
+        Opcode::SET_VERTEX_BUFFERS => fixed!(SetVertexBuffers, SetVertexBuffers),
+        Opcode::DRAW => fixed!(Draw, Draw),
+        Opcode::DRAW_INDEXED => fixed!(DrawIndexed, DrawIndexed),
+        Opcode::DISPATCH_MESH => fixed!(DispatchMesh, DispatchMesh),
+        Opcode::CLEAR_ATTACHMENT => fixed!(ClearAttachment, ClearAttachment),
         Opcode::SYNC_RECORD => {
             let head = SyncRecordHead::get(&mut r)?;
             let (a, b) = (head.args_len as usize, head.blob_len as usize);
