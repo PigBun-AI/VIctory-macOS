@@ -842,6 +842,31 @@ pub(crate) fn host() -> Option<&'static Host> {
     .as_ref()
 }
 
+// Process-wide DRED settings, before creating a device (including WARP).
+fn enable_dred_settings() -> bool {
+    let mut dred: Option<ID3D12DeviceRemovedExtendedDataSettings> = None;
+    // SAFETY: these settings need no device or adapter; dred owns the interface.
+    unsafe {
+        if D3D12GetDebugInterface(&mut dred).is_err() { return false; }
+        let Some(dred) = dred else { return false };
+        let breadcrumbs = dred_on() || dred_light();
+        if breadcrumbs {
+            dred.SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        }
+        dred.SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        tracing::info!(breadcrumbs, markers = dred_on(), "crash tracing on (device-removed data)");
+    }
+    true
+}
+
+#[test]
+#[ignore = "process-wide settings: run alone with VICTORY_D3D12_DRED=light"]
+fn light_dred_settings_without_device() {
+    assert!(dred_any() && dred_light() && !dred_on() && !dred_faults());
+    assert!(enable_dred_settings());
+    eprintln!("INFO DRED light settings applied: breadcrumbs and page faults forced on, no device created");
+}
+
 fn create() -> windows::core::Result<Host> {
     // SAFETY: plain D3D12 object creation with valid descriptions.
     unsafe {
@@ -873,23 +898,8 @@ fn create() -> windows::core::Result<Host> {
         }
         // Diagnostics: device-removed data (the command that faulted, the
         // faulting address), read when the device is removed.
-        if dred_any() {
-            let mut dred: Option<ID3D12DeviceRemovedExtendedDataSettings> = None;
-            if D3D12GetDebugInterface(&mut dred).is_ok()
-                && let Some(dred) = dred
-            {
-                if dred_on() || dred_light() {
-                    dred.SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-                }
-                dred.SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-                tracing::info!(
-                    breadcrumbs = dred_on() || dred_light(),
-                    markers = dred_on(),
-                    "crash tracing on (device-removed data)"
-                );
-            } else {
-                tracing::warn!("crash tracing asked for and not there: no device-removed data settings");
-            }
+        if dred_any() && !enable_dred_settings() {
+            tracing::warn!("crash tracing asked for and not there: no device-removed data settings");
         }
         let mut device: Option<ID3D12Device> = None;
         // Diagnostics: the software adapter, on which a shader's wild access
@@ -1675,7 +1685,7 @@ pub(crate) fn dred_on() -> bool {
 pub(crate) fn dred_light() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_DRED").is_some_and(|v| v == "light")
+        std::env::var_os("VICTORY_D3D12_DRED").is_some_and(|v| v == "light")
     })
 }
 
@@ -1690,7 +1700,7 @@ pub(crate) fn dred_any() -> bool {
 pub(crate) fn dred_faults() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        cfg!(feature = "diagnostics") && std::env::var_os("VICTORY_D3D12_DRED").is_some_and(|v| v == "faults")
+        std::env::var_os("VICTORY_D3D12_DRED").is_some_and(|v| v == "faults")
     })
 }
 
@@ -2482,6 +2492,11 @@ fn relay_exact() -> bool {
     // since the walls of the first room were found drawn in every run with
     // this set and in fewer than half without it).
     *ON.get_or_init(|| relay() && std::env::var_os("VICTORY_RELAY").is_none_or(|v| v == "2"))
+}
+
+/// Effective stage for reporting; use the same decisions as the submit path.
+fn relay_stage() -> u8 {
+    u8::from(relay()) + u8::from(relay_exact())
 }
 
 /// Whether the pieces the relay fetches from the card's memory come over the
@@ -3334,11 +3349,11 @@ fn late_threads() {
         if relay() {
             // Without it nothing would ever land.
             if let Err(e) = std::thread::Builder::new().name("victory-relay".into()).spawn(relay_worker) {
-                fail(format_args!("no thread to land submissions sent ahead (VICTORY_RELAY=1): {e}"));
+                fail(format_args!("no thread to land submissions sent ahead (VICTORY_RELAY={}): {e}", relay_stage()));
             }
             tracing::info!(
                 exact = relay_exact(),
-                "what shaders wrote is copied back by a thread of its own, beside the submitting thread (VICTORY_RELAY=1)"
+                "what shaders wrote is copied back by a thread of its own, beside the submitting thread (VICTORY_RELAY={})", relay_stage()
             );
         }
     });
@@ -3412,7 +3427,7 @@ fn relay_worker() {
     };
     // SAFETY: a plain event of our own.
     let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
-        fail(format_args!("no event for the thread that lands submissions sent ahead (VICTORY_RELAY=1)"));
+        fail(format_args!("no event for the thread that lands submissions sent ahead (VICTORY_RELAY={})", relay_stage()));
     };
     let mut fetch: Option<RelayFetch> = None;
     loop {
@@ -3622,10 +3637,11 @@ fn late_line(frames: f64) {
     if relay() {
         let r: Vec<f64> = RELAY_STATS.iter().map(|r| r.swap(0, Ordering::Relaxed) as f64 / frames).collect();
         tracing::info!(
-            "the relay per frame (VICTORY_RELAY=1): {:.1} flights landed in {:.1} landings by the thread that copies back, \
+            "the relay per frame (VICTORY_RELAY={}): {:.1} flights landed in {:.1} landings by the thread that copies back, \
              beside the submitting thread; that thread waited {:.1} ms for the card with nothing to land and {:.1} ms for \
              fetches of card copies' pieces, and was {:.1} ms landing in all (the frame line's \"copying back\" is its time; \
              \"settles\" above are waits of other threads for it)",
+            relay_stage(),
             r[1],
             r[0],
             r[2] / 1000.0,
@@ -4072,23 +4088,25 @@ impl Host {
             let pipelines = std::sync::Arc::<Mutex<std::collections::BTreeSet<String>>>::default();
             #[cfg(feature = "diagnostics")]
             let indirects = indirects::Shared::default();
-            #[cfg(feature = "diagnostics")]
             if dred_on() || dred_light() {
                 static NUMBER: AtomicU32 = AtomicU32::new(0);
                 let number = NUMBER.fetch_add(1, Ordering::Relaxed);
                 name(&list, || format!("victory host list {number}"));
-                let mut all = LIST_NOTES.lock().unwrap_or_else(|e| e.into_inner());
-                if number.is_multiple_of(256) {
-                    all.retain(|_, l| l.0.strong_count() > 0);
+                #[cfg(feature = "diagnostics")]
+                {
+                    let mut all = LIST_NOTES.lock().unwrap_or_else(|e| e.into_inner());
+                    if number.is_multiple_of(256) {
+                        all.retain(|_, l| l.0.strong_count() > 0);
+                    }
+                    all.insert(
+                        number,
+                        (
+                            std::sync::Arc::downgrade(&notes),
+                            std::sync::Arc::downgrade(&pipelines),
+                            std::sync::Arc::downgrade(&indirects),
+                        ),
+                    );
                 }
-                all.insert(
-                    number,
-                    (
-                        std::sync::Arc::downgrade(&notes),
-                        std::sync::Arc::downgrade(&pipelines),
-                        std::sync::Arc::downgrade(&indirects),
-                    ),
-                );
             }
             Ok(HostList {
                 allocator,
@@ -4707,14 +4725,14 @@ impl Host {
             return;
         }
         let Some(f) = fetch.as_mut() else {
-            fail(format_args!("no list, fence or event to fetch what shaders wrote to the card's memory (VICTORY_RELAY=1)"));
+            fail(format_args!("no list, fence or event to fetch what shaders wrote to the card's memory (VICTORY_RELAY={})", relay_stage()));
         };
         if f.buffer.as_ref().is_none_or(|b| b.2 < total) {
             let size = total.next_multiple_of(16 << 20);
             f.buffer = self.shared_buffer(size).map(|(buffer, data)| (buffer, data as usize, size));
         }
         let Some((buffer, data, _)) = f.buffer.clone() else {
-            fail(format_args!("no memory to fetch what shaders wrote to the card's memory ({total} bytes, VICTORY_RELAY=1)"));
+            fail(format_args!("no memory to fetch what shaders wrote to the card's memory ({total} bytes, VICTORY_RELAY={})", relay_stage()));
         };
         f.sent += 1;
         let ((allocator, list), fence, event, sent) = (f.list.clone(), f.fence.clone(), f.event, f.sent);
@@ -4767,7 +4785,7 @@ impl Host {
         };
         let after = match ran {
             Ok(after) => after,
-            Err(e) => fail(format_args!("what shaders wrote to the card's memory could not be fetched ({e}, VICTORY_RELAY=1)")),
+            Err(e) => fail(format_args!("what shaders wrote to the card's memory could not be fetched ({e}, VICTORY_RELAY={})", relay_stage())),
         };
         let us = waiting.elapsed().as_micros() as u64;
         RELAY_STATS[3].fetch_add(us, Ordering::Relaxed);
@@ -4862,8 +4880,9 @@ impl Host {
                 if unsafe { self.device.GetDeviceRemovedReason() }.is_err() {
                     let runs: Vec<&HostList> = flights.iter().flat_map(|f| f.order.iter().map(|&i| f.lists[i].host())).collect();
                     fail(format_args!(
-                        "host GPU device removed after {} submissions sent ahead (VICTORY_RELAY=1) of {} lists{}{}",
+                        "host GPU device removed after {} submissions sent ahead (VICTORY_RELAY={}) of {} lists{}{}",
                         flights.len(),
+                        relay_stage(),
                         runs.len(),
                         self.removal_data(&runs),
                         last_notes(&runs)
