@@ -20,17 +20,18 @@
 //! `IRDescriptorTableSetBuffer`, `IRDescriptorTableGetBufferMetadata`,
 //! `IRDescriptorTableSetTexture`, `IRDescriptorTableSetSampler`, the
 //! `kIR*BindPoint` and `kIRBufSize*`/`kIRTexView*`/`kIRTypedBuffer*`
-//! constants). That header is **not installed on this machine** (no Metal
-//! Shader Converter). The text used is the vendored copy in
-//! `Traverse-Research/saxaboom`, `bindings_generator/vendor/
-//! metal_irconverter_runtime/metal_irconverter_runtime.h` at commit
-//! `efd8085` (`main` on 2026-11-27; PR #40 "Upgrade metal_irconverter
-//! headers and bindings to 4.0 beta 3", merged 2026-10-28; `IR_VERSION`
-//! 4.0.3; the PR states the runtime headers did not change from 4.0 beta
-//! 2 to 3), read on 2026-11-27, cross-checked against Apple's own prose
-//! in `apple/game-porting-toolkit` `docs/metal-shader-converter/
-//! binding-model.md` (`4f42344`, 2026-06-07). **To be re-checked against
-//! the installed MSC 4.0b3 header** (待用已安装的 MSC 4.0b3 头文件复核).
+//! constants). Checked on 2026-11-27 against the header installed with
+//! Metal Shader Converter 4.0.3 (`/usr/local/include/metal_irconverter_runtime/
+//! metal_irconverter_runtime.h`, `IR_VERSION` 4.0.3, "4.0 beta 3" in
+//! saxaboom's naming): the entry layout, the metadata masks and shifts and
+//! the bind points below match it; it differs from the copy first used
+//! here (saxaboom `efd8085`, `bindings_generator/vendor/`, PR #40) only in
+//! `extern` declarations of the `kIR*` constants and where the
+//! `IR_PRIVATE_IMPLEMENTATION` block sits, not in any value. Details and
+//! the comparison are in docs/metal/msc.md. The prose of Apple's
+//! `apple/game-porting-toolkit` `docs/metal-shader-converter/
+//! binding-model.md` (`4f42344`, 2026-06-07) agrees except for the point
+//! below.
 //!
 //! One place where the prose and the header disagree: the prose says the
 //! texture-buffer-view offset in a buffer entry's metadata is "stored in 2
