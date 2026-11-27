@@ -225,6 +225,8 @@ struct Program {
     ops: BTreeMap<String, u64>,
     dpp: u64,
     gds: u64,
+    /// `s_setreg_*` by target: `<hwreg id>@<offset>+<size>[=<immediate>]`.
+    setreg: BTreeMap<String, u64>,
     error: Option<String>,
 }
 
@@ -256,6 +258,7 @@ fn program_row(p: &victory_shader::NativeProgram) -> Program {
         ops: BTreeMap::new(),
         dpp: 0,
         gds: 0,
+        setreg: BTreeMap::new(),
         error: None,
     };
     match gfx10::decode(&p.code) {
@@ -279,16 +282,37 @@ fn program_row(p: &victory_shader::NativeProgram) -> Program {
                 if let Ok(Fields::Ds { gds: true, .. }) = &f {
                     row.gds += 1;
                 }
+                // Which register an `s_setreg` writes (hwreg 1 is MODE: float round and
+                // denorm modes, IEEE and DX10 clamp bits).
+                if let Ok(Fields::Sop {
+                    imm: Some(imm),
+                    src,
+                    ..
+                }) = &f
+                    && name_is_setreg(i.name())
+                {
+                    let (id, off, size) = (imm & 0x3f, (imm >> 6) & 0x1f, ((imm >> 11) & 0x1f) + 1);
+                    let mut key = format!("hwreg{id}@{off}+{size}");
+                    if let Some(victory_shader::gfx10::Operand::Literal(v)) = src.first() {
+                        key.push_str(&format!("={v:#x}"));
+                    }
+                    *row.setreg.entry(key).or_default() += 1;
+                }
             }
         }
     }
     row
 }
 
+fn name_is_setreg(n: Option<&str>) -> bool {
+    matches!(n, Some("s_setreg_b32" | "s_setreg_imm32_b32"))
+}
+
 fn program_json(p: &Program) -> Value {
     json!({
         "stage": p.stage, "wave64": p.wave64, "lds_bytes": p.lds_bytes, "insts": p.insts,
-        "code": p.code, "ops": p.ops, "dpp": p.dpp, "gds": p.gds, "error": p.error,
+        "code": p.code, "ops": p.ops, "dpp": p.dpp, "gds": p.gds, "setreg": p.setreg,
+        "error": p.error,
     })
 }
 
@@ -446,6 +470,7 @@ pub fn summarize(rows: &[Value], research: &std::path::Path) -> Result<(), Strin
     let mut lds: BTreeMap<&'static str, u64> = BTreeMap::new();
     let mut lds_max = (0u32, String::new());
     let mut lds_users = 0u64;
+    let mut setregs: BTreeMap<String, Tally> = BTreeMap::new();
     for row in rows {
         containers += 1;
         let hash = row["hash"].as_str().unwrap_or("?");
@@ -486,6 +511,12 @@ pub fn summarize(rows: &[Value], research: &std::path::Path) -> Result<(), Strin
             }
             if bytes > 0 {
                 lds_users += 1;
+            }
+            for (key, n) in p["setreg"].as_object().into_iter().flatten() {
+                setregs
+                    .entry(key.clone())
+                    .or_default()
+                    .add(hash, p, n.as_u64().unwrap_or(0));
             }
             let ops = p["ops"].as_object().cloned().unwrap_or_default();
             let (dpp, gds) = (
@@ -537,6 +568,7 @@ pub fn summarize(rows: &[Value], research: &std::path::Path) -> Result<(), Strin
         "instructions": instructions, "decode_errors": decode_errors,
         "stages": stages.iter().map(|(k, v)| (k.clone(), json!({"programs": v.0, "instructions": v.1}))).collect::<BTreeMap<_, _>>(),
         "lds": {"cs_ms_programs_by_size": lds, "programs_with_lds": lds_users, "max_bytes": lds_max.0, "max_sample": lds_max.1},
+        "setreg": setregs.iter().map(|(k, v)| (k.clone(), v.json())).collect::<BTreeMap<_, _>>(),
         "classes": class_json,
         "mnemonics": mnemonic_json,
     });
@@ -545,13 +577,20 @@ pub fn summarize(rows: &[Value], research: &std::path::Path) -> Result<(), Strin
         serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    std::fs::write(research.join("opcodes.md"), markdown(&summary, &mnemonics))
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        research.join("opcodes.md"),
+        markdown(&summary, &mnemonics, &setregs),
+    )
+    .map_err(|e| e.to_string())?;
     println!("opcodes: wrote {}", research.join("opcodes.json").display());
     Ok(())
 }
 
-fn markdown(s: &Value, mnemonics: &BTreeMap<String, Tally>) -> String {
+fn markdown(
+    s: &Value,
+    mnemonics: &BTreeMap<String, Tally>,
+    setregs: &BTreeMap<String, Tally>,
+) -> String {
     let mut o = String::new();
     o.push_str("# GFX10 instruction census (opcodes), 2026-11-27\n\n");
     o.push_str("Made by `victory-census opcodes` (metal/census, branch `gaps`): every unique shader container of the game package (BLAKE3 hash as the game log names it), its native programs through `victory_shader::native_programs`, their instructions through `victory_shader::gfx10::decode` (reachable instructions from offset 0), counted by AMD mnemonic. Counts are per *program* (a container may hold several), 'unique code' counts programs with distinct code bytes, 'instructions' is the decoded instruction count. Hashes only, no game names.\n\n");
@@ -596,6 +635,12 @@ fn markdown(s: &Value, mnemonics: &BTreeMap<String, Tally>) -> String {
         "\n## LDS\n\nCompute and mesh programs by LDS bytes per thread group (from the program's registers): {}. Programs with LDS > 0: {}. Largest: {} bytes (`{}`).\n",
         s["lds"]["cs_ms_programs_by_size"], s["lds"]["programs_with_lds"], s["lds"]["max_bytes"], s["lds"]["max_sample"].as_str().unwrap_or("")
     ));
+    o.push_str("\n## s_setreg targets\n\n`hwreg<id>@<offset>+<size>[=<immediate>]` (hwreg 1 is MODE: bits 0-3 float round modes, 4-7 denorm modes, 9 DX10 clamp, 10 IEEE).\n\n| target | programs | instructions |\n|---|---:|---:|\n");
+    let mut regs: Vec<(&String, &Tally)> = setregs.iter().collect();
+    regs.sort_by(|a, b| b.1.programs.cmp(&a.1.programs).then(a.0.cmp(b.0)));
+    for (k, t) in regs.iter().take(40) {
+        o.push_str(&format!("| {k} | {} | {} |\n", t.programs, t.count));
+    }
     o.push_str("\n## Every mnemonic, by number of programs\n\n| mnemonic | programs | unique code | instructions |\n|---|---:|---:|---:|\n");
     let mut all: Vec<(&String, &Tally)> = mnemonics.iter().collect();
     all.sort_by(|a, b| b.1.programs.cmp(&a.1.programs).then(a.0.cmp(b.0)));
