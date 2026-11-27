@@ -39,6 +39,19 @@ through a sync op whose arguments are recordable.
   (`VICTORY_CAPTURE`-style host captures of the presented frames), and also
   keep our own last-good replay output as a baseline for regressions.
 
+### No hands in the loop
+
+Every game run is scripted (`tools/metal/run.sh`, defaults since 1134d03):
+`VICTORY_KEYS=8-900/3:Enter` walks the intro and the account screen (Enter is
+pad A through the keyboard's stand-in pad), and
+`VICTORY_INPUT_REPLAY=tools/metal/input/world-neutral.txt` owns the pad from
+world frame 1 on. The pair is part of the fixed scene: a recording names the
+key spec and input file it was made with (and `input_script_sha256` from the
+bench JSON), the recording window is counted in world frames, and the same
+pair under D3DMetal gives the reference frames. A scene that needs movement
+gets its own input file (declarative ranges by world frame) next to the
+neutral one.
+
 ## Layer 2: shader hot swap
 
 - The back keys every pipeline by the hash of its inputs (DXIL bytes + root
