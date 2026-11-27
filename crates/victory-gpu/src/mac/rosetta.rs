@@ -19,12 +19,14 @@ use std::sync::LazyLock;
 /// rewrites both as plain stores whenever tracking runs under Rosetta
 /// ([`stores_need_patching`]). Earlier Rosetta also stops on a plain 32-byte
 /// `vmovups` across pages (macOS 26.6, #1), and #144 hung on an M1 with both
-/// switches on, so under Rosetta tracking stays off unless
-/// `VICTORY_FAULT_TRACKING=1` asks for it. `0` turns tracking off anywhere.
-/// Tests keep it on: their stores do not cross pages.
+/// switches on. Tracking is on by default everywhere, Rosetta included (G2
+/// in docs/mac/PATCHES.md): G6 made our own `vpmaskmovd` stores plain `mov`s
+/// and the loader patches the title's masked stores, which were what
+/// stopped the process. `VICTORY_FAULT_TRACKING=0` turns tracking off (the
+/// title memory is then copied whole, ~15 GB a frame in the world).
 pub fn fault_tracking() -> bool {
     static ON: LazyLock<bool> = LazyLock::new(|| {
-        decide(std::env::var("VICTORY_FAULT_TRACKING").ok().as_deref(), cfg!(test) || !rosetta())
+        decide(std::env::var("VICTORY_FAULT_TRACKING").ok().as_deref(), true)
     });
     *ON
 }
@@ -94,13 +96,16 @@ mod tests {
         assert!(decide(Some("1"), false));
         assert!(!decide(Some("0"), true));
         assert!(decide(None, true) && !decide(Some("x"), false));
-        assert!(fault_tracking(), "tests keep tracking on");
+        // The default is on (also under Rosetta); only an explicit 0 turns it off.
+        if std::env::var_os("VICTORY_FAULT_TRACKING").is_none() {
+            assert!(fault_tracking(), "tracking is on by default");
+        }
         // Whether this is Rosetta depends on where the tests run (a PC, a
         // Mac under Wine, natively on macOS): what follows from it must hold
         // on each. Off Windows it is never Rosetta.
         let under = rosetta();
         assert!(!under || cfg!(windows));
-        assert_eq!(stores_need_patching(), under, "tracking is on in tests");
-        assert_eq!(wait_for_overlapped_reads(), under);
+        assert_eq!(stores_need_patching(), fault_tracking() && under);
+        assert_eq!(wait_for_overlapped_reads(), fault_tracking() && under);
     }
 }

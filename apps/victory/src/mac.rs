@@ -28,23 +28,24 @@ pub fn plan(info: &victory_pe::ImageInfo, original: &mut Vec<u8>, hash: &str) ->
     // Rosetta cannot resume these when they fault partway (#14, #50).
     let found = masked::masked_stores(info, original);
     println!("masked stores  {}", masked::summary(&found));
-    // Under Rosetta, tracking is off unless asked for, and the stores it
-    // cannot resume are patched when it is on (`fault_tracking`).
+    // Under Rosetta, tracking is on unless `VICTORY_FAULT_TRACKING=0`, and the
+    // stores it cannot resume are patched whenever it is on (`fault_tracking`).
     println!(
         "fault tracking {}",
         if fault_tracking() {
             "on"
         } else if rosetta() {
-            "off (title memory copied whole; VICTORY_FAULT_TRACKING=1 turns it on, which also patches the stores Rosetta cannot resume)"
+            "off (VICTORY_FAULT_TRACKING=0: title memory copied whole, ~15 GB a frame in the world)"
         } else {
             "off (title memory copied whole)"
         }
     );
     let needs_patch = stores_need_patching();
     let mut requested = std::env::var("VICTORY_PATCH_MASKED").ok();
-    // An explicit `VICTORY_PATCH_MASKED` always wins over the list for the
-    // one build it was made for.
-    if needs_patch && requested.is_none() && hash == BUILD_1_0_2_1 {
+    // For the one build the extra sites were found in, unset or a plain `all`
+    // also takes them (a plain `all` skipped them before, so `run.sh`, which
+    // set it, never patched them); any other explicit value is taken as it is.
+    if needs_patch && hash == BUILD_1_0_2_1 && matches!(requested.as_deref(), None | Some("all")) {
         requested = Some(BUILD_1_0_2_1_EXTRA.into());
     }
     let masked = masked::choice(requested, needs_patch).map(|which| (which, std::mem::take(original)));
@@ -74,7 +75,7 @@ pub fn apply(plan: Plan, image: &victory_loader::LoadedImage, execute: bool) {
         unsafe { resolution::apply_asked(image.base(), size) };
     }
     // Masked stores redone as plain stores Rosetta can resume, so fault
-    // tracking (`VICTORY_FAULT_TRACKING=1`) can run under Rosetta (#50).
+    // tracking (on by default) can run under Rosetta (#50).
     if let Some((which, original)) = plan.masked {
         let wanted = masked::wanted_from(Some(&which));
         let n = masked::patch(image.base() as u64, image.info(), &original, &wanted);

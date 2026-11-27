@@ -45,7 +45,6 @@ export WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d;d3d12,d3d12core,dxgi=b"
 export ROSETTA_ADVERTISE_AVX=1 VICTORY_SKIP_CPU_CHECK=1
 export VICTORY_GAME_DIR="${GAME_DIR:-$G/GTA6.Xbox.v1.0.2.1}"
 export VICTORY_CACHE_DIR="$cache" VICTORY_DATA_DIR="$data"
-export VICTORY_PATCH_MASKED="${VICTORY_PATCH_MASKED:-all}"
 [ -n "$tracking" ] && export VICTORY_FAULT_TRACKING="$tracking"
 if [ -n "$keys" ]; then export VICTORY_KEYS="$keys"; else unset VICTORY_KEYS; fi
 # DXC front end for the helper shaders (x86_64, run under Rosetta)

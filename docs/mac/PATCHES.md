@@ -85,32 +85,36 @@ New files only. `env.sh` reuses the toolchain of a sibling `VIctory-macOS/target
 
 ### G1 — see M1 (the stand-ins of victory-gpu).
 
-### G2 — fault tracking off under Wine on Rosetta (commit `7deccf01`)
+### G2 — fault tracking under Wine on Rosetta: on by default, `VICTORY_FAULT_TRACKING=0` turns it off
 
-*What.* New `victory-gpu/src/mac/rosetta.rs`: `rosetta()` (ntdll `wine_get_host_version` says
-"Darwin"), `fault_tracking()` (default on, off under Rosetta, `VICTORY_FAULT_TRACKING=1/0`
-overrides, always on in tests), `stores_need_patching()`, `wait_for_overlapped_reads()`.
-Hooks: `watch.rs` `writes()` returns `None` when tracking is off (the one entry to `guard()` and
-the kernel write watch, so every caller copies the memory whole), `xmem.rs` leaves out
-`MEM_WRITE_WATCH` on the pools, `files.rs` `ReadFile` waits for an overlapped read when tracking
-runs under Rosetta; `victory-hle` re-exports the module for the app.
+*What.* `victory-gpu/src/mac/rosetta.rs`: `rosetta()` (ntdll `wine_get_host_version` says "Darwin"),
+`fault_tracking()` (on by default everywhere, Rosetta included; `VICTORY_FAULT_TRACKING=0` forces it off, `=1` on),
+`stores_need_patching()` (tracking on and Rosetta), `wait_for_overlapped_reads()`. Hooks (unchanged since the
+first version): `watch.rs` `writes()` returns `None` when tracking is off (every caller then copies the title
+memory whole), `xmem.rs` leaves out `MEM_WRITE_WATCH` on the pools, `files.rs` `ReadFile` waits for an
+overlapped read when tracking runs under Rosetta; `victory-hle` re-exports the module for the app. Only the
+default changed (it was "off under Rosetta"): the file is Mac layer, no upstream file is touched.
 
-*Why not needed on Windows.* Windows resumes a store that faults partway; Rosetta 2 cannot
-("unexpectedly need to EmulateForward on a synchronous exception", process hangs; VIctory-macOS
-#1, #14, #50, #144). On a PC `rosetta()` is false and every hook does what it did before.
+*Why it can be on now (G6, L1).* It was off because Rosetta cannot resume a store that faults partway
+("unexpectedly need to EmulateForward on a synchronous exception"; VIctory-macOS #1, #14, #50, #144) and the
+first run found our own `vpmaskmovd` in `safecopy.rs` doing just that. G6 (`b7943221`) put plain `mov`s in
+its place, and with tracking on the loader patches the title's masked stores at load (L1), the 8 extra sites
+of #144 included (log: `masked stores  1242 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
+Runs with tracking on after G6 (3 before the change, the stability series after it, see the report
+`2026-11-27-tracking-report.md`) show no EmulateForward. Off, a world frame copies ~15 GB of title memory
+(~4 s a frame); on, the copies are the changed pages only.
 
-*Caveat for review.* The Mac fork had a different tracker (`Tracked`); this line's journal
-(`GetWriteWatch` plus guards in `watch.rs`) was hooked at `writes()`/`track()` by reading, because
-all its `VirtualProtect` calls on views sit behind `guard()`, which only `writes()` calls. Other
-users of title-memory protection (`titlewrite.rs`, `shadow.rs`, `inplace.rs`, `safecopy.rs`) were
-read, not run. **First thing to check on a run under Rosetta.**
+*Why not needed on Windows.* Windows resumes a store that faults partway. On a PC `rosetta()` is false and
+every hook does what it did before.
 
-*Test.* `mac::rosetta::tests::the_variable_decides_and_tests_track` asserted `!rosetta()`, so it always failed
-under Rosetta; it now asserts what follows from `rosetta()` (`stores_need_patching`, `wait_for_overlapped_reads`),
-which holds on a PC, under Wine on a Mac and natively.
+*Test.* `mac::rosetta::tests::the_variable_decides_and_tests_track`: the variable decides, the default is on,
+`stores_need_patching` and `wait_for_overlapped_reads` follow from tracking and `rosetta()`, which holds on a
+PC, under Wine on a Mac and natively.
 
-*Remove when.* A macOS/Rosetta release resumes such stores (retest with `VICTORY_FAULT_TRACKING=1`
-and without the patches), or the Metal backend replaces the D3D12 path on the Mac.
+*Remove when.* Never needed on a PC; here: the Metal backend replaces the D3D12 path, or a Rosetta release
+resumes all such stores (then L1, L2, L4, G6 go too). *Take the default back to off if* a Rosetta or tracking
+fault (EmulateForward, a hang in `titlewrite`/`shadow`/`inplace`/`safecopy`) shows up in the stability runs
+(`VICTORY_FAULT_TRACKING=0` is the switch meanwhile).
 
 ### G4 — helper shaders compiled by D3DMetal's DXC (`victory-gpu/src/mac/hlsl.rs`)
 
@@ -264,8 +268,14 @@ on to the world. No allocation failed (xmem logs no refusal).
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
-Rosetta can resume, whenever tracking runs under Rosetta (`VICTORY_PATCH_MASKED`: `all`, `none`
-or hex RVAs). `apps/victory/src/mac.rs` adds the extra RVAs of build 1.0.2.1 (hash `b99f876b…`).
+Rosetta can resume. Done whenever fault tracking runs under Rosetta, which is now the default (G2), so it
+needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`, a plain `wine victory.exe`,
+and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1242 patched to plain stores`.
+`VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `apps/victory/src/mac.rs`
+adds the 8 plain 256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
+variable is unset **or is plain `all`**: 1234 found by the scan + 8 = 1242. Before, an explicit `all` (which `run.sh`
+exported) replaced the list, so those 8 were never patched on a `run.sh` start; and with tracking off by default
+nothing was patched at all without the variable. With `VICTORY_FAULT_TRACKING=0` nothing is patched (nothing is guarded).
 Not needed on Windows: it resumes them. Remove with G2.
 
 ### L2 — 256-bit stores split into two 128-bit stores (`mac/wide.rs`, `xtask/src/wide_stores.rs`)
