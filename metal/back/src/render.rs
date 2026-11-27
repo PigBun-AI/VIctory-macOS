@@ -55,10 +55,12 @@ use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
+use objc2_foundation::{NSArray, NSString};
 use objc2_metal::{
-    MTL4AlphaToCoverageState, MTL4BlendState, MTL4Compiler, MTL4LibraryFunctionDescriptor,
-    MTL4MeshRenderPipelineDescriptor, MTL4PipelineDescriptor, MTL4RenderPipelineDescriptor,
+    MTL4AlphaToCoverageState, MTL4BlendState, MTL4Compiler, MTL4FunctionDescriptor,
+    MTL4LibraryFunctionDescriptor, MTL4MeshRenderPipelineDescriptor, MTL4PipelineDescriptor,
+    MTL4RenderPipelineDescriptor, MTL4SpecializedFunctionDescriptor, MTL4StaticLinkingDescriptor,
+    MTLDataType, MTLFunctionConstantValues,
     MTLAllocation, MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCompareFunction,
     MTLCullMode, MTLDepthClipMode, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice,
     MTLLibrary, MTLPixelFormat, MTLPrimitiveTopologyClass, MTLRenderPipelineState, MTLSize,
@@ -71,7 +73,7 @@ use crate::device::{Device, DeviceInner};
 use crate::error::Error;
 use crate::msc::{
     Compat, CompileOptions, Converted, GraphicsCompile, InputTopology, Msc, MscError, Reflection,
-    RootSignatureDesc, ShaderStage, TopLevelLayout,
+    RootSignatureDesc, ShaderStage, StageInElement, TopLevelLayout,
 };
 use crate::pipeline::Library;
 use crate::residency::{Retired, SetKind};
@@ -107,6 +109,9 @@ pub struct VertexElement {
     pub semantic: String,
     pub semantic_index: u32,
     pub format: MTLVertexFormat,
+    /// The DXGI format the element had (a geometry pipeline's stage-in
+    /// function is made from it).
+    pub dxgi_format: u32,
     /// Vertex buffer slot.
     pub slot: u32,
     pub offset: u32,
@@ -205,12 +210,14 @@ pub struct Raster {
 
 /// What a graphics or mesh pipeline is made of, in Metal's terms.
 pub struct GraphicsDesc<'a> {
-    /// DXIL containers of the stages. A vertex pipeline has `vs`; a mesh
-    /// pipeline has `ms` (and maybe `amp`); `ps` is optional in both.
+    /// DXIL containers of the stages. A vertex pipeline has `vs` (and maybe
+    /// `gs`); a mesh pipeline has `ms` (and maybe `amp`); `ps` is optional
+    /// in all.
     pub vs: Option<&'a [u8]>,
     pub ps: Option<&'a [u8]>,
     pub amp: Option<&'a [u8]>,
     pub ms: Option<&'a [u8]>,
+    pub gs: Option<&'a [u8]>,
     /// The root signature every stage is converted against.
     pub root: &'a RootSignatureDesc,
     /// Input layout (vertex pipelines).
@@ -251,9 +258,37 @@ impl GraphicsDesc<'_> {
                 sample_mask: self.sample_mask,
                 dual_source: self.targets.iter().any(TargetBlendUse::second_source),
                 depth_feedback: self.has_depth_target,
+                geometry_emulation: false,
             }),
             ..CompileOptions::default()
         }
+    }
+
+    /// The options of the vertex or geometry stage of a geometry pipeline:
+    /// converted for the emulation, the vertex stage with a separate
+    /// stage-in function for this input layout.
+    pub fn msc_options_geometry(&self, vertex_stage: bool) -> CompileOptions {
+        let mut o = self.msc_options();
+        if let Some(g) = o.graphics.as_mut() {
+            g.geometry_emulation = true;
+        }
+        if vertex_stage {
+            o.stage_in = Some(
+                self.inputs
+                    .iter()
+                    .map(|e| StageInElement {
+                        semantic: e.semantic.clone(),
+                        semantic_index: e.semantic_index,
+                        format: e.dxgi_format,
+                        slot: e.slot,
+                        offset: e.offset,
+                        per_instance: e.per_instance,
+                        step_rate: e.step_rate,
+                    })
+                    .collect(),
+            );
+        }
+        o
     }
 }
 
@@ -271,6 +306,22 @@ impl TargetBlendUse for ColorTarget {
 pub enum Kind {
     Vertex,
     Mesh,
+    /// A vertex pipeline with a geometry shader: emulated with an object
+    /// stage (the vertex shader) and a mesh stage (the geometry shader).
+    Geometry,
+}
+
+/// What a draw of a geometry pipeline needs (the converter's
+/// `IRRuntimeGeometryPipelineConfig` and the stage's reflection).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GeometryPipelineInfo {
+    /// Bytes of one vertex shader output (`gsVertexSizeInBytes`).
+    pub vertex_bytes: u32,
+    /// `gsMaxInputPrimitivesPerMeshThreadgroup`.
+    pub max_input_primitives: u32,
+    /// `IRInputPrimitive` of the geometry shader.
+    pub input_primitive: u32,
+    pub payload_bytes: u32,
 }
 
 /// The merged facts of a converted mesh pipeline.
@@ -292,15 +343,17 @@ pub struct PreparedGraphics {
     pub ps: Option<Converted>,
     pub amp: Option<Converted>,
     pub ms: Option<Converted>,
+    pub gs: Option<Converted>,
     /// The top-level argument buffer layout every stage agrees on.
     pub layout: TopLevelLayout,
     pub mesh: Option<MeshPipelineInfo>,
+    pub geometry: Option<GeometryPipelineInfo>,
 }
 
 impl PreparedGraphics {
     /// Bytes of all `metallib`s (diagnostics).
     pub fn metallib_bytes(&self) -> usize {
-        [&self.vs, &self.ps, &self.amp, &self.ms]
+        [&self.vs, &self.ps, &self.amp, &self.ms, &self.gs]
             .into_iter()
             .flatten()
             .map(|c| c.metallib.len())
@@ -315,7 +368,13 @@ fn convert(
     dxil: &[u8],
     desc: &GraphicsDesc<'_>,
 ) -> Result<Converted, MscError> {
-    let c = msc.compile(dxil, Some(desc.root), &desc.msc_options())?;
+    let options = if desc.gs.is_some() && matches!(want, ShaderStage::Vertex | ShaderStage::Geometry)
+    {
+        desc.msc_options_geometry(want == ShaderStage::Vertex)
+    } else {
+        desc.msc_options()
+    };
+    let c = msc.compile(dxil, Some(desc.root), &options)?;
     if c.reflection.stage != want {
         return Err(MscError::BadInput(format!(
             "the {stage_name} stage's DXIL is a {:?} shader",
@@ -338,12 +397,18 @@ fn same_layout(a: &TopLevelLayout, b: &TopLevelLayout) -> bool {
 /// Converts and checks every stage of `desc` (no device needed; safe to call
 /// from any thread, concurrently).
 pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, MscError> {
-    let kind = match (desc.vs.is_some(), desc.amp.is_some(), desc.ms.is_some()) {
-        (true, false, false) => Kind::Vertex,
-        (false, _, true) => Kind::Mesh,
+    let kind = match (
+        desc.vs.is_some(),
+        desc.amp.is_some(),
+        desc.ms.is_some(),
+        desc.gs.is_some(),
+    ) {
+        (true, false, false, false) => Kind::Vertex,
+        (true, false, false, true) => Kind::Geometry,
+        (false, _, true, false) => Kind::Mesh,
         _ => {
             return Err(MscError::BadInput(
-                "a pipeline has a vertex stage, or a mesh stage with an optional amplification stage".into(),
+                "a pipeline has a vertex stage (with an optional geometry stage), or a mesh stage with an optional amplification stage".into(),
             ));
         }
     };
@@ -357,17 +422,20 @@ pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, Msc
     let vs = stage("vertex", ShaderStage::Vertex, desc.vs)?;
     let amp = stage("amplification", ShaderStage::Amplification, desc.amp)?;
     let ms = stage("mesh", ShaderStage::Mesh, desc.ms)?;
+    let gs = stage("geometry", ShaderStage::Geometry, desc.gs)?;
     let ps = stage("pixel", ShaderStage::Fragment, desc.ps)?;
 
     // One root signature, one argument buffer: the stages must have been
     // laid out the same way, or the one buffer the encoder binds cannot
     // serve them all.
-    let all = [&vs, &amp, &ms, &ps];
+    let all = [&vs, &amp, &ms, &gs, &ps];
     let first = all
         .iter()
         .find_map(|c| c.as_ref())
         .ok_or_else(|| MscError::BadInput("no stage".into()))?;
-    for (name, c) in ["vertex", "amplification", "mesh", "pixel"].iter().zip(all) {
+    for (name, c) in ["vertex", "amplification", "mesh", "geometry", "pixel"]
+        .iter()
+        .zip(all) {
         if let Some(c) = c
             && !same_layout(&c.reflection.layout, &first.reflection.layout)
         {
@@ -390,14 +458,40 @@ pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, Msc
             amp.as_ref().map(|a| &a.reflection),
         )?),
     };
+    let geometry = match (&vs, &gs) {
+        (Some(vs), Some(gs)) => {
+            let info = gs
+                .reflection
+                .geometry
+                .ok_or_else(|| MscError::NoOutput("no geometry reflection".into()))?;
+            let vertex_bytes = vs
+                .reflection
+                .vertex
+                .as_ref()
+                .map(|v| v.output_bytes)
+                .ok_or_else(|| MscError::NoOutput("no vertex reflection".into()))?;
+            if vs.stage_in.is_none() {
+                return Err(MscError::NoOutput("no stage-in function".into()));
+            }
+            Some(GeometryPipelineInfo {
+                vertex_bytes,
+                max_input_primitives: info.max_input_primitives_per_mesh_threadgroup,
+                input_primitive: info.input_primitive,
+                payload_bytes: info.max_payload_bytes,
+            })
+        }
+        _ => None,
+    };
     Ok(PreparedGraphics {
         kind,
         vs,
         ps,
         amp,
         ms,
+        gs,
         layout,
         mesh,
+        geometry,
     })
 }
 
@@ -478,6 +572,7 @@ struct GraphicsInner {
     samples: u32,
     layout: TopLevelLayout,
     mesh: Option<MeshPipelineInfo>,
+    geometry: Option<GeometryPipelineInfo>,
     vertex_slots: Vec<u32>,
     needs_draw_params: bool,
     reflections: Vec<(ShaderStage, Reflection)>,
@@ -536,6 +631,11 @@ impl GraphicsPipeline {
         self.inner.mesh
     }
 
+    /// The facts a draw of a geometry pipeline needs.
+    pub fn geometry(&self) -> Option<GeometryPipelineInfo> {
+        self.inner.geometry
+    }
+
     /// Vertex buffer slots the input layout uses, ascending.
     pub fn vertex_slots(&self) -> &[u32] {
         &self.inner.vertex_slots
@@ -586,6 +686,55 @@ fn function_descriptor(
     f.setName(Some(&wanted));
     f.setLibrary(Some(library));
     Ok(f)
+}
+
+/// A function constant value.
+enum Constant {
+    Bool(bool),
+    Int(i32),
+}
+
+fn constants(values: &[(&str, Constant)]) -> Retained<MTLFunctionConstantValues> {
+    let c = MTLFunctionConstantValues::new();
+    for (name, v) in values {
+        let name = NSString::from_str(name);
+        // SAFETY: the value is read for the call (Metal copies it).
+        unsafe {
+            match v {
+                Constant::Bool(b) => {
+                    let b = *b;
+                    c.setConstantValue_type_withName(
+                        std::ptr::NonNull::from(&b).cast(),
+                        MTLDataType::Bool,
+                        &name,
+                    );
+                }
+                Constant::Int(i) => {
+                    let i = *i;
+                    c.setConstantValue_type_withName(
+                        std::ptr::NonNull::from(&i).cast(),
+                        MTLDataType::Int,
+                        &name,
+                    );
+                }
+            }
+        }
+    }
+    c
+}
+
+/// A library function with function constants.
+fn specialized(
+    library: &ProtocolObject<dyn MTLLibrary>,
+    entry: &str,
+    values: &MTLFunctionConstantValues,
+) -> Result<Retained<MTL4SpecializedFunctionDescriptor>, Error> {
+    let f = function_descriptor(library, entry)?;
+    let base: Retained<MTL4FunctionDescriptor> = Retained::into_super(f);
+    let d = MTL4SpecializedFunctionDescriptor::new();
+    d.setFunctionDescriptor(Some(&base));
+    d.setConstantValues(Some(values));
+    Ok(d)
 }
 
 /// The vertex descriptor for the shader's inputs from the layout elements.
@@ -771,6 +920,68 @@ impl Device {
                     color_attachments(&d.colorAttachments(), &desc.targets);
                     compile_render(compiler, &d, "vertex pipeline")
                 }
+                Kind::Geometry => {
+                    let g = prepared
+                        .geometry
+                        .expect("a geometry pipeline has geometry facts");
+                    let vs_c = prepared.vs.as_ref().expect("present");
+                    let gs_c = prepared.gs.as_ref().expect("present");
+                    let vs = library(&prepared.vs)?.expect("present");
+                    let gs = library(&prepared.gs)?.expect("present");
+                    let stage_in_lib = self
+                        .library_from_metallib(vs_c.stage_in.as_ref().expect("present"))
+                        .map_err(MscError::Metal)?;
+                    // The converter's runtime helper builds this pipeline
+                    // (`IRRuntimeNewGeometryEmulationPipeline`): the vertex
+                    // shader is the object function, the geometry shader the
+                    // mesh function, the stage-in function linked to the
+                    // object stage.
+                    let tess_off = constants(&[("tessellationEnabled", Constant::Bool(false))]);
+                    let object_name = format!(
+                        "{}.dxil_irconverter_object_shader",
+                        vs_c.reflection.entry
+                    );
+                    let object_fn = specialized(vs.0.raw(), &object_name, &tess_off).map_err(MscError::Metal)?;
+                    let mesh_consts = constants(&[
+                        ("tessellationEnabled", Constant::Bool(false)),
+                        ("vertex_shader_output_size_fc", Constant::Int(g.vertex_bytes as i32)),
+                    ]);
+                    let mesh_fn = specialized(gs.0.raw(), &gs_c.reflection.entry, &mesh_consts)
+                        .map_err(MscError::Metal)?;
+                    let stage_in_name = stage_in_lib
+                        .raw()
+                        .functionNames()
+                        .iter()
+                        .next()
+                        .map(|n| n.to_string())
+                        .ok_or_else(|| MscError::NoOutput("an empty stage-in library".into()))?;
+                    let stage_in_fn =
+                        function_descriptor(stage_in_lib.raw(), &stage_in_name).map_err(MscError::Metal)?;
+                    let d = MTL4MeshRenderPipelineDescriptor::new();
+                    d.setObjectFunctionDescriptor(Some(&object_fn));
+                    d.setMeshFunctionDescriptor(Some(&mesh_fn));
+                    if let Some(f) = &ps_fn {
+                        d.setFragmentFunctionDescriptor(Some(f));
+                    }
+                    let linking = MTL4StaticLinkingDescriptor::new();
+                    let linked: Retained<MTL4FunctionDescriptor> = Retained::into_super(stage_in_fn);
+                    linking.setFunctionDescriptors(Some(&NSArray::from_retained_slice(&[linked])));
+                    d.setObjectStaticLinkingDescriptor(Some(&linking));
+                    d.setMaxTotalThreadsPerMeshThreadgroup(
+                        g.max_input_primitives.max(1) as usize,
+                    );
+                    d.setMaxTotalThreadsPerObjectThreadgroup(256);
+                    d.setPayloadMemoryLength(g.payload_bytes.max(16384) as usize);
+                    // SAFETY: a sample count Metal checks at compile.
+                    unsafe { d.setRasterSampleCount(desc.sample_count as usize) };
+                    d.setAlphaToCoverageState(if desc.alpha_to_coverage {
+                        MTL4AlphaToCoverageState::Enabled
+                    } else {
+                        MTL4AlphaToCoverageState::Disabled
+                    });
+                    color_attachments(&d.colorAttachments(), &desc.targets);
+                    compile_mesh(compiler, &d)
+                }
                 Kind::Mesh => {
                     let info = prepared.mesh.expect("a mesh pipeline has mesh facts");
                     let ms = library(&prepared.ms)?;
@@ -815,6 +1026,7 @@ impl Device {
             (ShaderStage::Vertex, &prepared.vs),
             (ShaderStage::Amplification, &prepared.amp),
             (ShaderStage::Mesh, &prepared.ms),
+            (ShaderStage::Geometry, &prepared.gs),
             (ShaderStage::Fragment, &prepared.ps),
         ] {
             if let Some(c) = c {
@@ -854,6 +1066,7 @@ impl Device {
                 samples: desc.sample_count,
                 layout: prepared.layout.clone(),
                 mesh: prepared.mesh,
+                geometry: prepared.geometry,
                 vertex_slots,
                 needs_draw_params,
                 reflections,
@@ -943,6 +1156,7 @@ mod tests {
             }),
             vertex: None,
             fragment: None,
+            geometry: None,
             layout: TopLevelLayout {
                 entries: vec![],
                 static_sampler_table: None,
@@ -1006,6 +1220,7 @@ mod tests {
             ps: None,
             amp: None,
             ms: None,
+            gs: None,
             root: &root,
             inputs: vec![],
             targets: vec![float_target, int_target],

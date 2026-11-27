@@ -146,6 +146,48 @@ pub enum Primitive {
 }
 
 impl Primitive {
+    /// The `IRInputPrimitive` a geometry shader reading this primitive has.
+    fn geometry_input(self) -> u32 {
+        match self {
+            Primitive::PointList => 1,
+            Primitive::LineList | Primitive::LineStrip => 2,
+            Primitive::TriangleList | Primitive::TriangleStrip => 3,
+        }
+    }
+
+    /// `IRRuntimePrimitiveType`.
+    fn ir_type(self) -> u8 {
+        match self {
+            Primitive::PointList => 0,
+            Primitive::LineList => 1,
+            Primitive::LineStrip => 2,
+            Primitive::TriangleList => 3,
+            Primitive::TriangleStrip => 4,
+        }
+    }
+
+    /// Vertices one primitive reads.
+    fn vertex_count(self) -> u32 {
+        match self {
+            Primitive::PointList => 1,
+            Primitive::LineList | Primitive::LineStrip => 2,
+            Primitive::TriangleList | Primitive::TriangleStrip => 3,
+        }
+    }
+
+    /// Vertices a strip shares with the next primitive.
+    fn strip_overlap(self) -> u32 {
+        match self {
+            Primitive::LineStrip => 1,
+            Primitive::TriangleStrip => 2,
+            _ => 0,
+        }
+    }
+
+    fn is_strip(self) -> bool {
+        matches!(self, Primitive::LineStrip | Primitive::TriangleStrip)
+    }
+
     fn metal(self) -> MTLPrimitiveType {
         match self {
             Primitive::PointList => MTLPrimitiveType::Point,
@@ -208,6 +250,7 @@ struct IndexBuffer {
 struct VertexBuffer {
     va: u64,
     stride: u32,
+    size: u32,
 }
 
 const DIRTY_VIEWPORT: u8 = 1;
@@ -626,9 +669,9 @@ impl crate::record::CommandList {
         if start as usize + views.len() > MAX_VERTEX_BUFFERS {
             return Err(Error::BadArgument("vertex buffer slot past 15".into()));
         }
-        for (i, &(va, _size, stride)) in views.iter().enumerate() {
+        for (i, &(va, size, stride)) in views.iter().enumerate() {
             self.rstate.vertex[start as usize + i] =
-                (va != 0).then_some(VertexBuffer { va, stride });
+                (va != 0).then_some(VertexBuffer { va, stride, size });
         }
         Ok(())
     }
@@ -748,13 +791,23 @@ impl crate::record::CommandList {
     }
 
     fn vertex_pipeline_checks(&self, p: &GraphicsPipeline) -> Result<Primitive> {
-        if p.kind() != Kind::Vertex {
+        if p.kind() == Kind::Mesh {
             return Err(Error::BadArgument("a draw with a mesh pipeline".into()));
         }
         let prim = self
             .rstate
             .primitive
             .ok_or_else(|| Error::BadArgument("a draw without a primitive topology".into()))?;
+        if p.kind() == Kind::Geometry {
+            // The geometry shader declares the primitive it reads.
+            let want = p.geometry().map_or(0, |g| g.input_primitive);
+            if want != prim.geometry_input() {
+                return Err(Error::BadArgument(format!(
+                    "topology {prim:?} with a geometry shader that reads primitive kind {want}"
+                )));
+            }
+            return Ok(prim);
+        }
         if prim.class() != p.topology_class() {
             return Err(Error::BadArgument(format!(
                 "topology {prim:?} with a pipeline made for {:?} primitives",
@@ -769,6 +822,20 @@ impl crate::record::CommandList {
         let prim = self.vertex_pipeline_checks(p)?;
         if a.vertex_count == 0 || a.instance_count == 0 {
             return Ok(());
+        }
+        if p.kind() == Kind::Geometry {
+            return self.draw_geometry(
+                p,
+                prim,
+                None,
+                [
+                    a.vertex_count,
+                    a.instance_count,
+                    a.start_vertex,
+                    a.start_instance,
+                    0,
+                ],
+            );
         }
         self.bind_vertex_buffers(p)?;
         // `kIRNonIndexedDraw` is 0 in the converter's runtime.
@@ -815,12 +882,31 @@ impl crate::record::CommandList {
                 a.start_index, a.index_count, ib.size
             )));
         }
+        if p.kind() == Kind::Geometry {
+            return self.draw_geometry(
+                p,
+                prim,
+                // The emulation's object stage ignores the start index:
+                // it is folded into the index buffer address.
+                Some((
+                    ib.va + u64::from(a.start_index) * if ib.wide { 4 } else { 2 },
+                    ib.wide,
+                )),
+                [
+                    a.index_count,
+                    a.instance_count,
+                    0,
+                    a.base_vertex as u32,
+                    a.start_instance,
+                ],
+            );
+        }
         self.bind_vertex_buffers(p)?;
         // The runtime's `IRMetalIndexToIRIndex`: Metal's index type + 1.
         let (metal_index, ir_index) = if ib.wide {
-            (MTLIndexType::UInt32, 3u16)
+            (MTLIndexType::UInt32, 2u16)
         } else {
-            (MTLIndexType::UInt16, 2u16)
+            (MTLIndexType::UInt16, 1u16)
         };
         self.write_draw_params(
             [
@@ -847,6 +933,111 @@ impl crate::record::CommandList {
                 a.start_instance as usize,
             );
         }
+        self.stats.draws += 1;
+        Ok(())
+    }
+
+    /// A draw of a geometry pipeline, the way the converter's runtime does it
+    /// (`IRRuntime4Draw[Indexed]PrimitivesGeometryEmulation`): a mesh draw
+    /// whose object threadgroups each take a run of vertices (the vertex
+    /// shader), whose mesh threadgroups each take some of the primitives
+    /// those make (the geometry shader). `words` are the draw arguments as
+    /// `IRRuntimeDrawParams` has them (count, instances, start, base vertex,
+    /// start instance); `index` is the index buffer address and width of an
+    /// indexed draw. The vertex buffers go in one `IRRuntimeVertexBuffers`
+    /// block.
+    fn draw_geometry(
+        &mut self,
+        p: &GraphicsPipeline,
+        prim: Primitive,
+        index: Option<(u64, bool)>,
+        words: [u32; 5],
+    ) -> Result<()> {
+        let g = p
+            .geometry()
+            .ok_or_else(|| Error::BadArgument("a geometry pipeline without geometry facts".into()))?;
+        let verts = prim.vertex_count();
+        let overlap = prim.strip_overlap();
+        let count = words[0];
+        // The runtime's `IRRuntimeCalculateDrawInfoForGSEmulation`.
+        const PAYLOAD_TOTAL: u32 = 16384;
+        const PAYLOAD_METADATA: u32 = 32;
+        let by_payload = (((PAYLOAD_TOTAL - PAYLOAD_METADATA) / g.vertex_bytes.max(1)) / verts) * verts;
+        let by_amplification = 1024 * g.max_input_primitives;
+        let prims_per_object = (by_payload / verts)
+            .min(by_amplification)
+            .min(256 / verts);
+        if prims_per_object == 0 {
+            return Err(Error::BadArgument(format!(
+                "a geometry pipeline whose vertex is {} bytes does not fit the payload",
+                g.vertex_bytes
+            )));
+        }
+        let stride = prims_per_object * verts;
+        let non_provoking = if prim.is_strip() { overlap } else { 0 };
+        if count < non_provoking + verts.min(count) {
+            // Fewer vertices than one primitive.
+            if count < verts {
+                return Ok(());
+            }
+        }
+        let object_groups = (count - non_provoking).div_ceil(stride);
+        let object_threads = stride + overlap;
+        let mesh_threads = g.max_input_primitives;
+        let ir_index: u16 = match index {
+            None => 0,
+            Some((_, false)) => 1,
+            Some((_, true)) => 2,
+        };
+        let mut info = [0u8; 24];
+        info[0..2].copy_from_slice(&ir_index.to_le_bytes());
+        info[2] = prim.ir_type();
+        info[3] = verts as u8;
+        info[4..6].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+        info[6..8].copy_from_slice(&(stride as u16).to_le_bytes());
+        info[8..10].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+        info[10..12].copy_from_slice(&(words[1] as u16).to_le_bytes());
+        info[12..14].copy_from_slice(&(prims_per_object as u16).to_le_bytes());
+        info[14..16].copy_from_slice(&(verts as u16).to_le_bytes());
+        info[16..24].copy_from_slice(&index.map_or(0, |(va, _)| va).to_le_bytes());
+
+        // IRRuntimeVertexBuffers: 31 of { address, length, stride }.
+        let vb_block: RingAlloc = self.alloc_constants(31 * 16, 16)?;
+        let mut vbs = [0u8; 31 * 16];
+        for (slot, vb) in self.rstate.vertex.iter().enumerate().take(31) {
+            if let Some(vb) = vb {
+                vbs[slot * 16..slot * 16 + 8].copy_from_slice(&vb.va.to_le_bytes());
+                vbs[slot * 16 + 8..slot * 16 + 12].copy_from_slice(&vb.size.to_le_bytes());
+                vbs[slot * 16 + 12..slot * 16 + 16].copy_from_slice(&vb.stride.to_le_bytes());
+            }
+        }
+        vb_block.write_bytes(0, &vbs)?;
+        self.table
+            .set_address(bind_point::VERTEX_BUFFER as u32, vb_block.gpu_va)?;
+
+        let block: RingAlloc = self.alloc_constants(DRAW_BLOCK, 16)?;
+        let mut bytes = [0u8; 20];
+        for (i, w) in words.iter().enumerate() {
+            bytes[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        block.write_bytes(0, &bytes)?;
+        block.write_bytes(UNIFORMS_AT, &info)?;
+        self.table
+            .set_address(bind_point::DRAW_ARGUMENTS as u32, block.gpu_va)?;
+        self.table
+            .set_address(bind_point::UNIFORMS as u32, block.gpu_va + UNIFORMS_AT)?;
+
+        let enc = self.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
+        let size = |w: u32, h: u32| MTLSize {
+            width: w as usize,
+            height: h as usize,
+            depth: 1,
+        };
+        enc.drawMeshThreadgroups_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
+            size(object_groups, words[1]),
+            size(object_threads, 1),
+            size(mesh_threads, 1),
+        );
         self.stats.draws += 1;
         Ok(())
     }

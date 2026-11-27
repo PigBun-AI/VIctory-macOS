@@ -433,6 +433,13 @@ impl CommandList {
     /// pointers.
     pub fn set_root_arguments(&mut self, tlab: &RingAlloc) -> Result<()> {
         self.live()?;
+        // The object stage of a geometry pipeline (a vertex shader made
+        // for the emulation) reads the same arguments at the hull/domain
+        // point, too.
+        self.table.set_address(
+            bind_point::ARGUMENT_BUFFER_HULL_DOMAIN as u32,
+            tlab.gpu_va,
+        )?;
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER as u32, tlab.gpu_va)
     }

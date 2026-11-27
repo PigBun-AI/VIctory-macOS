@@ -1170,3 +1170,132 @@ fn outputs_beyond_the_pipelines_targets_are_dropped() {
     let got = g.read(t, cmds);
     assert_image(&got, &reference(bg, &[HALF]), "extra output dropped");
 }
+
+// ---------------------------------------------------------------------------
+// Geometry shaders (emulated with an object and a mesh stage).
+
+const GS_RECOLOUR: &str = "struct V { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+[maxvertexcount(3)]\n\
+void main(triangle V i[3], inout TriangleStream<V> s) {\n\
+  for (int k = 0; k < 3; k++) { V a = i[k]; a.col = float4(1, 0, 0, 1); s.Append(a); }\n\
+}\n";
+
+/// The triangle and a fourth vertex: a strip of two triangles.
+const GS_STRIP: &str = "struct V { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+[maxvertexcount(4)]\n\
+void main(triangle V i[3], inout TriangleStream<V> s) {\n\
+  V a = i[0]; a.col = float4(0, 1, 0, 1); s.Append(a);\n\
+  V b = i[1]; b.col = a.col; s.Append(b);\n\
+  V c = i[2]; c.col = a.col; s.Append(c);\n\
+  V d = i[2]; d.pos = float4(0.7, 0.8, 0.5, 1); d.col = a.col; s.Append(d);\n\
+}\n";
+
+fn geometry_pso(g: &Gfx, gs: &[u8]) -> PsoId {
+    let mut d = g.desc();
+    d.gs = StageCode::of(gs);
+    g.pso(d)
+}
+
+#[test]
+fn a_geometry_shader_rewrites_the_triangles_it_is_given() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour", "gs_6_6", GS_RECOLOUR) else { return };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let (_vb, va) = g.vertex_buffer(&HALF.vertices());
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.25, 1.0];
+    let mut cmds = g.state(pso, va, 3 * STRIDE);
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(draw(3));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    let red = Tri {
+        c: [1.0, 0.0, 0.0, 1.0],
+        ..HALF
+    };
+    assert_image(&got, &reference(bg, &[red]), "gs recolour");
+}
+
+#[test]
+fn a_geometry_shader_can_make_more_primitives_than_it_reads() {
+    let Some(gs) = dxil_or_skip("draw_gs_strip", "gs_6_6", GS_STRIP) else { return };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let c = [0.0, 1.0, 0.0, 1.0];
+    let tri = Tri {
+        p: [[-0.93, -0.87], [0.89, -0.87], [-0.93, 0.91]],
+        z: 0.5,
+        c,
+    };
+    let (_vb, va) = g.vertex_buffer(&tri.vertices());
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let mut cmds = g.state(pso, va, 3 * STRIDE);
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(draw(3));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    let second = Tri {
+        p: [[0.89, -0.87], [-0.93, 0.91], [0.7, 0.8]],
+        z: 0.5,
+        c,
+    };
+    assert_image(&got, &reference(bg, &[tri, second]), "gs strip");
+}
+
+#[test]
+fn indexed_draws_and_several_primitives_go_through_a_geometry_shader() {
+    let Some(gs) = dxil_or_skip("draw_gs_recolour2", "gs_6_6", GS_RECOLOUR) else { return };
+    let Some(g) = setup() else { return };
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let c = [0.0, 1.0, 0.0, 1.0];
+    let quad = |z| -> Vec<Vtx> {
+        vec![
+            ([0.0; 3], [0.0; 4]),
+            ([0.0; 3], [0.0; 4]),
+            ([-0.83, -0.77, z], c),
+            ([0.71, -0.77, z], c),
+            ([0.71, 0.69, z], c),
+            ([-0.83, 0.69, z], c),
+        ]
+    };
+    let (_vb, va) = g.vertex_buffer(&quad(0.5));
+    let ib = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    let idx: [u16; 9] = [0, 0, 0, 0, 1, 2, 0, 2, 3];
+    let words: Vec<u32> = idx
+        .chunks(2)
+        .map(|p| u32::from(p[0]) | (u32::from(*p.get(1).unwrap_or(&0)) << 16))
+        .collect();
+    cpu_write(ib.cpu_addr, &words);
+    let pso = geometry_pso(&g, &gs);
+    let bg = [0.0, 0.0, 0.0, 1.0];
+    let mut cmds = g.state(pso, va, 6 * STRIDE);
+    cmds.push(Command::SetIndexBuffer(SetIndexBuffer {
+        va: ib.gpu_va,
+        size: 18,
+        format: IndexFormat::U16,
+    }));
+    cmds.push(begin_pass(t, LoadAction::CLEAR, bg));
+    cmds.push(Command::DrawIndexed(DrawIndexed {
+        index_count: 6,
+        instance_count: 1,
+        start_index: 3,
+        base_vertex: 2,
+        start_instance: 0,
+        _pad: 0,
+    }));
+    cmds.push(end_pass());
+    let got = g.read(t, cmds);
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let t1 = Tri {
+        p: [[-0.83, -0.77], [0.71, -0.77], [0.71, 0.69]],
+        z: 0.5,
+        c: red,
+    };
+    let t2 = Tri {
+        p: [[-0.83, -0.77], [0.71, 0.69], [-0.83, 0.69]],
+        z: 0.5,
+        c: red,
+    };
+    assert_image(&got, &reference(bg, &[t1, t2]), "gs indexed quad");
+}

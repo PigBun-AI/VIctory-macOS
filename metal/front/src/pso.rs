@@ -23,15 +23,15 @@
 //! test less with writes, no stencil, every sample, one sample per pixel).
 //! The legacy description has every field explicitly.
 //!
-//! Not carried: stream output, tessellation and geometry stages (refused
-//! with `E_NOTIMPL` when present), view instancing, `RASTERIZER1/2` and
+//! Not carried: stream output and tessellation stages (refused
+//! with `E_NOTIMPL` when present; a geometry shader is carried), view instancing, `RASTERIZER1/2` and
 //! `DEPTH_STENCIL2` (their float depth bias / separate stencil masks have
 //! no use in the game's pipelines yet), cached PSO blobs and flags (ignored:
 //! the back has its own caching, the debug flag changes nothing).
 
 use victory_metal_proto::pso::{
     APPEND_ALIGNED, BlendFactor, BlendOp, CullMode, FillMode, GraphicsPsoDesc, InputClass,
-    InputElement, LogicOp, MAX_INPUT_ELEMENTS, SEMANTIC_NAME_BYTES, StageCode, StencilFace,
+    InputElement, LogicOp, MAX_INPUT_ELEMENTS, PsoKind, SEMANTIC_NAME_BYTES, StageCode, StencilFace,
     StencilOp, StripCut, TopologyType,
 };
 use victory_metal_proto::types::CompareFunc;
@@ -730,16 +730,12 @@ fn stencil_face(f: &StencilOps) -> Result<StencilFace, PsoError> {
 
 /// The proto description for `state` with its resolved input layout.
 ///
-/// Refused as `E_NOTIMPL` (the back has no such pipeline): hull, domain or
-/// geometry shaders, stream output, patch topologies, view instancing. A
+/// Refused as `E_NOTIMPL` (the back has no such pipeline): hull or domain
+/// shaders, stream output, patch topologies, view instancing. A
 /// depth-bounds test is dropped (the back says so when it builds the
 /// pipeline; the flag travels in the description).
 pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsPsoDesc, PsoError> {
-    for (code, name) in [
-        (&state.hs, "hull"),
-        (&state.ds, "domain"),
-        (&state.gs, "geometry"),
-    ] {
+    for (code, name) in [(&state.hs, "hull"), (&state.ds, "domain")] {
         if code.addr != 0 || code.len != 0 {
             return Err(notimpl(format!("a {name} shader")));
         }
@@ -768,9 +764,10 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
     d.ps = stage(state.ps, "pixel")?;
     d.amp = stage(state.amp, "amplification")?;
     d.ms = stage(state.ms, "mesh")?;
+    d.gs = stage(state.gs, "geometry")?;
     if d.kind().is_none() {
         return Err(invalid(
-            "a graphics pipeline has a vertex shader, or a mesh shader (with an optional amplification shader)",
+            "a graphics pipeline has a vertex shader (with an optional geometry shader), or a mesh shader (with an optional amplification shader)",
         ));
     }
 
@@ -985,9 +982,14 @@ mod tests {
         s.vs = Bytecode { addr: 8, len: 8 };
         let mut t = s.clone();
         t.gs = Bytecode { addr: 8, len: 8 };
+        let d = to_proto(&t, &[]).unwrap();
+        assert_eq!(d.kind(), Some(PsoKind::Geometry));
+        assert_eq!(d.gs.addr, 8);
+        let mut t = s.clone();
+        t.hs = Bytecode { addr: 8, len: 8 };
         let e = to_proto(&t, &[]).unwrap_err();
         assert_eq!(e.hr, Hr::E_NOTIMPL);
-        assert!(e.why.contains("geometry"));
+        assert!(e.why.contains("hull"));
         let mut t = s.clone();
         t.stream_output_entries = 1;
         assert_eq!(to_proto(&t, &[]).unwrap_err().hr, Hr::E_NOTIMPL);

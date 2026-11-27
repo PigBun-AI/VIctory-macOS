@@ -1,7 +1,8 @@
-# golden bytes of the GraphicsPsoDesc of the vertex+pixel stream (2056 bytes), synthetic. Hex words, 16 per line.
+# golden bytes of the GraphicsPsoDesc of the vertex+pixel stream (2072 bytes), synthetic. Hex words, 16 per line.
 # Regenerate: UPDATE_GOLDEN=1 cargo test (see the test that reads this file).
 00 20 00 00 00 00 00 00 00 01 00 00 00 00 00 00
 00 30 00 00 00 00 00 00 80 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 03 00 00 00 00 00 00 00 50 4f 53 49 54 49 4f 4e
