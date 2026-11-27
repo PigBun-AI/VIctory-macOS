@@ -17,6 +17,7 @@
 pub mod adapter;
 pub mod caps;
 pub mod descriptor;
+pub mod connect;
 pub mod convert;
 pub mod device;
 pub mod gpu;
@@ -28,5 +29,5 @@ pub mod resource;
 pub mod rootsig;
 pub mod state;
 
-// #[cfg(windows)]
-// pub mod shell;
+#[cfg(windows)]
+pub mod shell;

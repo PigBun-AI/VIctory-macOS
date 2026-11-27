@@ -205,6 +205,7 @@ version = "0.1.0"
 dependencies = [
  "victory-metal-proto",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
@@ -212,6 +213,7 @@ name = "victory-metal-front-d3d12"
 version = "0.1.0"
 dependencies = [
  "victory-metal-front",
+ "windows",
 ]
 
 [[package]]
@@ -219,6 +221,7 @@ name = "victory-metal-front-dxgi"
 version = "0.1.0"
 dependencies = [
  "victory-metal-front",
+ "windows",
 ]
 
 [[package]]

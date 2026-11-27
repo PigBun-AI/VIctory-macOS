@@ -18,6 +18,7 @@ victory-metal-proto = { path = "../proto" }
 # (crates.io latest of `windows`, checked 2026-11-27). Types and the
 # `#[implement]` macro only; no linking to anything beyond kernel32.
 [target.'cfg(windows)'.dependencies]
+windows-core = "0.62.2"
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
