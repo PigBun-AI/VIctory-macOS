@@ -505,6 +505,12 @@ impl Link for MockLink {
     }
 }
 
+impl MockLink {
+    pub fn gpu_va(&self, res: ResId) -> Option<u64> {
+        self.st.lock().unwrap().buffers.get(&res.0).map(|b| b.gpu_va)
+    }
+}
+
 // Buffers' CPU visibility is part of the mock's contract with tests.
 impl MockLink {
     pub fn is_cpu_visible(&self, res: ResId) -> Option<bool> {

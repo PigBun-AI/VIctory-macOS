@@ -17,7 +17,8 @@
 pub mod adapter;
 pub mod caps;
 pub mod descriptor;
-// pub mod device;
+pub mod convert;
+pub mod device;
 pub mod gpu;
 pub mod mock;
 pub mod footprint;

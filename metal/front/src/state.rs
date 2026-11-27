@@ -29,6 +29,15 @@ pub mod visibility {
 }
 
 // D3D12_RESOURCE_STATES
+// The numbers are proto's (one source of truth: the compiler checks).
+const _: () = {
+    use victory_metal_proto::types::{stage as p, visibility as v};
+    assert!(stage::VERTEX == p::VERTEX && stage::FRAGMENT == p::FRAGMENT && stage::TILE == p::TILE);
+    assert!(stage::OBJECT == p::OBJECT && stage::MESH == p::MESH && stage::DISPATCH == p::DISPATCH);
+    assert!(stage::BLIT == p::BLIT && stage::RESOURCE_STATE == p::RESOURCE_STATE && stage::ALL == p::ALL);
+    assert!(visibility::DEVICE == v::DEVICE && visibility::RESOURCE_ALIAS == v::RESOURCE_ALIAS);
+};
+
 pub const COMMON: u32 = 0;
 pub const PRESENT: u32 = 0;
 pub const VERTEX_AND_CONSTANT_BUFFER: u32 = 0x1;
@@ -128,9 +137,9 @@ pub const ALL_SUBRESOURCES: u32 = 0xffff_ffff;
 
 /// Tracks the state of every resource's subresources as the front has seen
 /// it, command list after command list. `ResourceBarrier` calls go through
-/// [`StateTracker::transition`]; split barriers record the state at BEGIN and
-/// emit at END's absence: *only at begin* (the architecture's rule: "split
-/// barrier: record at begin only").
+/// [`StateTracker::transition`]; a split barrier is sent at its END only
+/// (proto.md section 4: "send the barrier at the end point only"; the state
+/// changes there, as in D3D12).
 #[derive(Default)]
 pub struct StateTracker {
     resources: HashMap<u32, Vec<u32>>,
@@ -158,8 +167,8 @@ impl StateTracker {
     }
 
     /// Apply a transition and return the barrier to record, if any. `flags`
-    /// are the D3D12 barrier flags: END_ONLY records nothing (the barrier was
-    /// emitted at BEGIN), BEGIN_ONLY emits now and updates the state.
+    /// are the D3D12 barrier flags: BEGIN_ONLY records nothing and leaves the
+    /// state (the barrier is emitted at END), END_ONLY and 0 emit and update.
     pub fn transition(
         &mut self,
         resource: u32,
@@ -169,7 +178,7 @@ impl StateTracker {
         flags: u32,
     ) -> Result<Option<StageBarrier>, TransitionError> {
         let subs = self.resources.get_mut(&resource).ok_or(TransitionError::UnknownResource)?;
-        if flags & BARRIER_FLAG_END_ONLY != 0 {
+        if flags & BARRIER_FLAG_BEGIN_ONLY != 0 {
             return Ok(None);
         }
         let range = if subresource == ALL_SUBRESOURCES {
@@ -258,11 +267,12 @@ mod tests {
         assert_eq!(b.before, BLIT);
         assert_eq!(t.state(7, 1), Some(NON_PIXEL_SHADER_RESOURCE));
         assert_eq!(t.state(7, 0), Some(COPY_DEST));
-        // Split barrier: emitted at BEGIN, nothing at END.
+        // Split barrier: nothing at BEGIN, emitted at END.
         let begin = t.transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_BEGIN_ONLY).unwrap();
-        assert!(begin.is_some());
+        assert_eq!(begin, None);
+        assert_eq!(t.state(7, 0), Some(COPY_DEST));
         let end = t.transition(7, 0, COPY_DEST, UNORDERED_ACCESS, BARRIER_FLAG_END_ONLY).unwrap();
-        assert_eq!(end, None);
+        assert!(end.is_some());
         assert_eq!(t.state(7, 0), Some(UNORDERED_ACCESS));
         assert_eq!(t.transition(8, 0, 0, 1, 0), Err(TransitionError::UnknownResource));
         assert_eq!(t.transition(7, 3, 0, 1, 0), Err(TransitionError::SubresourceOutOfRange));
