@@ -317,8 +317,8 @@ pipeline it names was created 0..10 s before the line for at least 90% of them (
 if so it gives the draws that ran on no-op pipelines (`psoran`), else only the lines per world frame.
 
 *Run.* `tools/mac/drop-ab.sh` (warm = `--make-book` run if needed + `victory warm` + run, cold = empty cache, same
-`VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt` and Enter script; `run.sh` is called without arguments)
-and prints the share of each class over the first N world frames. *Remove when* the Metal backend replaces the D3DMetal path.
+input script and Enter keys as `run.sh` has them; both through `run.sh --backend d3dmetal --perf|--fidelity --data --cache --out`,
+and `victory warm` through `run.sh --exec -- warm`, so the prefix and the environment are `run.sh`'s) and prints the share of each class over the first N world frames. *Remove when* the Metal backend replaces the D3DMetal path.
 
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 

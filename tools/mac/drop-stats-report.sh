@@ -221,6 +221,8 @@ def pct(n, of):
 def show(sums, frames):
     rows = []
     cols = [s['run'].rstrip('/').split('/')[-1] for s in sums]
+    if len(set(cols)) < len(cols):   # drop-ab.sh's folders are all called run: add the folder above (cold/run, warm/run)
+        cols = ['/'.join(s['run'].rstrip('/').split('/')[-2:]) for s in sums]
     print(f'first {frames} world frames (frames actually logged: {[s["world_frames"] for s in sums]})')
     w = 24
     print(f'{"":{w}}' + ''.join(f'{c[:26]:>28}' for c in cols))

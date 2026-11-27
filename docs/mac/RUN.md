@@ -88,7 +88,8 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--sample SEC` | every SEC seconds a line in `<out>/mem.csv`: GPU memory in use and allocated (`ioreg`), GPU `recoveryCount`, swap, `vm_stat` pages, RSS of all `victory.exe` | off |
 | `--allow-concurrent` | start although another `victory.exe` runs (two games at once ran a 32 GB Mac out of GPU memory) | refused |
 | `--print-env`, `--dry-run` | print and exit | |
-| `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` | |
+| `--exec` | run `victory.exe ARGS` (the arguments after `--`, e.g. `-- warm --jobs 4`) in the foreground instead of the title, with the environment, prefix, DLLs, data and cache of a run; no keys, no time limit, no log folder, exit status is `victory.exe`'s | off |
+| `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` (with `--exec`: the whole `victory.exe` command line) | |
 
 Variables read: `GTA6_ROOT` (the parent of the checkouts and data, default: the checkout's parent), `GAME_DIR` / `VICTORY_GAME_DIR` (the game
 directory, default `GTA6.Xbox.v1.0.2.1` in `GTA6_ROOT`), `VICTORY_MAC_WINE_DIR` (Wine, default `VIctory-macOS/target/wine-cx`), `WINEDEBUG`

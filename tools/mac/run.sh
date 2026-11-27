@@ -5,6 +5,8 @@
 #
 #   tools/mac/run.sh [options] [-- arguments for the title]
 #   tools/mac/run.sh --print-env [options]     print the environment and the command, run nothing
+#   tools/mac/run.sh --exec [options] -- ARGS  run `victory.exe ARGS` (for example `warm --jobs 4`) instead of the title, in
+#                                              the very same environment and prefix; no keys, no time limit, no log folder
 #
 # What a run is made of (each has an option; the options only ever choose, the
 # rest below is the same for every combination):
@@ -33,6 +35,9 @@
 #   --console series-x|series-s  the title's console model (default series-x: no --console is passed)
 #   --build                      (metal) run tools/metal/build-unixlib.sh first
 #   --sample SEC                 every SEC seconds append memory, swap and GPU lines to <out>/mem.csv
+#   --exec                       run `victory.exe <the arguments after -->` in the foreground (stdout/stderr stay on the terminal,
+#                                the exit status is victory.exe's) with the environment of a run: same prefix, DLLs, data and cache
+#                                folders, DXC front end. For `victory.exe warm` (tools/mac/drop-ab.sh). Needs at least one argument.
 #   --allow-concurrent           start although another victory.exe is running (two can run the GPU out of memory)
 #
 # Other VICTORY_* / WINE* variables in the environment pass through unchanged.
@@ -56,7 +61,7 @@ backend="${VICTORY_MAC_BACKEND:-d3dmetal}"; profile="${VICTORY_MAC_PROFILE:-perf
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
-present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; settings_output="2560x1440"
+present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
         --backend) backend=${2:?--backend d3dmetal|metal}; shift ;;
@@ -75,6 +80,7 @@ while [ $# -gt 0 ]; do
         --console) console=${2:?}; shift ;; --build) build=1 ;; --sample) sample=${2:?}; shift ;;
         --allow-concurrent) concurrent=1 ;;
         --print-env|--dry-run) print_env=1 ;;
+        --exec) execmode=1 ;;
         -h|--help) usage ;;
         --) shift; break ;;
         *) echo "unknown option $1" >&2; usage ;;
@@ -172,12 +178,18 @@ helper="$ROOT/target/dxc-d3dmetal"
 export VICTORY_DXC_HELPER="$helper" VICTORY_DXC_DIR="$(dirname "$cache")/dxc"
 export DXC_LIB="$WDIR/lib/external/D3DMetal.framework/Versions/A/Resources/libdxcompiler.dylib"
 
-cmd=("$WINE" "$exe" run --execute "$game_dir/game_scarlett_master.exe")
-[ -z "$console" ] || [ "$console" = series-x ] || cmd+=(--console "$console")
-[ ${#title_args[@]} -eq 0 ] || cmd+=(-- "${title_args[@]}")
+if [ "$execmode" = 1 ]; then
+    [ ${#title_args[@]} -gt 0 ] || die "--exec needs the victory.exe arguments after --, for example: --exec -- warm"
+    cmd=("$WINE" "$exe" "${title_args[@]}")
+else
+    cmd=("$WINE" "$exe" run --execute "$game_dir/game_scarlett_master.exe")
+    [ -z "$console" ] || [ "$console" = series-x ] || cmd+=(--console "$console")
+    [ ${#title_args[@]} -eq 0 ] || cmd+=(-- "${title_args[@]}")
+fi
 
 describe() {
     echo "# backend: $backend    profile: $profile"
+    [ "$execmode" = 0 ] || echo "# --exec: victory.exe is run with these arguments instead of the title (no keys, no time limit, no log folder)"
     echo "# prefix: $prefix"
     if [ "$profile" = fidelity ]; then
         echo "# fidelity: Series X; settings.xml in the data directory is set to $settings_output (video/resolutionFullscreen) before the run; no resolution patch (VICTORY_OUTPUT=0)"
@@ -224,7 +236,9 @@ if [ "$derived" = 1 ]; then
         for d in data cache dxc; do [ -d "$seed/$d" ] && { cp -c -R "$seed/$d" "$base/$d" || cp -R "$seed/$d" "$base/$d"; }; done
     fi
 fi
-mkdir -p "$out" "$data" "$cache"
+mkdir -p "$data" "$cache"
+# a run has a log folder; --exec has none (the metal back's notimpl log path needs its folder)
+if [ "$execmode" = 0 ] || [ "$backend" = metal ]; then mkdir -p "$out"; fi
 if [ "$profile" = fidelity ]; then
     set -- "$data"/*/storage/settings/settings.xml
     [ $# -eq 1 ] && [ -f "$1" ] || { echo "fidelity: expected exactly one settings.xml under $data/<title id>/storage/settings (found $#): run the title once, or point --data at a copy that has it" >&2; exit 1; }
@@ -288,6 +302,14 @@ else
     done
 fi
 [ "$backend" != metal ] || : >"$out/notimpl.log"
+
+# --exec: victory.exe with other arguments, in the environment above, in the foreground
+if [ "$execmode" = 1 ]; then
+    "$SERVER" -k 2>/dev/null; "$SERVER" -w 2>/dev/null
+    "${cmd[@]}"; st=$?
+    "$SERVER" -k 2>/dev/null
+    exit "$st"
+fi
 
 # what this run is, kept with its logs
 print_environment >"$out/run-env.txt"
