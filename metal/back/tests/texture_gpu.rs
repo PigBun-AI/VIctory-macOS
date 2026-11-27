@@ -251,21 +251,25 @@ fn a_bc_footprint_of_a_mip_smaller_than_a_block_is_one_whole_block() {
         let t = d.create_texture(&desc).unwrap();
         for mip in 2..5 {
             let img = pattern(block as usize, fmt * 13 + mip);
-            let src = d.create_buffer(BufferKind::Upload, u64::from(block)).unwrap();
+            let src = d
+                .create_buffer(BufferKind::Upload, u64::from(block))
+                .unwrap();
             src.write(0, &img).unwrap();
             let mut l = q.begin_list().unwrap();
-            l.copy_buffer_to_texture(
-                &loc(&t, mip, 0),
-                &buf_loc(&src, fmt, block, 4),
-                [4, 4, 1],
-            )
-            .unwrap_or_else(|e| panic!("format {fmt} mip {mip}: upload of the 4x4 footprint: {e}"));
+            l.copy_buffer_to_texture(&loc(&t, mip, 0), &buf_loc(&src, fmt, block, 4), [4, 4, 1])
+                .unwrap_or_else(|e| {
+                    panic!("format {fmt} mip {mip}: upload of the 4x4 footprint: {e}")
+                });
             l.end().unwrap();
             run(&q, l);
-            let dst = d.create_buffer(BufferKind::Readback, u64::from(block)).unwrap();
+            let dst = d
+                .create_buffer(BufferKind::Readback, u64::from(block))
+                .unwrap();
             let mut l = q.begin_list().unwrap();
             l.copy_texture_to_buffer(&buf_loc(&dst, fmt, block, 4), &loc(&t, mip, 0), [4, 4, 1])
-                .unwrap_or_else(|e| panic!("format {fmt} mip {mip}: download of the 4x4 footprint: {e}"));
+                .unwrap_or_else(|e| {
+                    panic!("format {fmt} mip {mip}: download of the 4x4 footprint: {e}")
+                });
             l.end().unwrap();
             run(&q, l);
             let mut got = vec![0u8; block as usize];
@@ -316,16 +320,24 @@ fn bc_and_block_sized_uncompressed_textures_copy_into_each_other() {
         upload(&d, &q, &raw_tex, 0, 0, &img, pitch);
         // Uncompressed to compressed, whole (the size is in source texels).
         let mut l = q.begin_list().unwrap();
-        l.copy_texture(&loc(&bc_tex, 0, 0), &loc(&raw_tex, 0, 0), [blocks_w, blocks_h, 1])
-            .unwrap_or_else(|e| panic!("{bc} <- {raw}: {e}"));
+        l.copy_texture(
+            &loc(&bc_tex, 0, 0),
+            &loc(&raw_tex, 0, 0),
+            [blocks_w, blocks_h, 1],
+        )
+        .unwrap_or_else(|e| panic!("{bc} <- {raw}: {e}"));
         l.end().unwrap();
         run(&q, l);
         assert_eq!(download(&d, &q, &bc_tex, 0, 0, pitch), img, "{bc} <- {raw}");
         // Compressed to uncompressed, whole (the size is in the BC texels).
         let back = mk(raw, blocks_w, blocks_h);
         let mut l = q.begin_list().unwrap();
-        l.copy_texture(&loc(&back, 0, 0), &loc(&bc_tex, 0, 0), [4 * blocks_w, 4 * blocks_h, 1])
-            .unwrap_or_else(|e| panic!("{raw} <- {bc}: {e}"));
+        l.copy_texture(
+            &loc(&back, 0, 0),
+            &loc(&bc_tex, 0, 0),
+            [4 * blocks_w, 4 * blocks_h, 1],
+        )
+        .unwrap_or_else(|e| panic!("{raw} <- {bc}: {e}"));
         l.end().unwrap();
         run(&q, l);
         assert_eq!(download(&d, &q, &back, 0, 0, pitch), img, "{raw} <- {bc}");
@@ -334,9 +346,16 @@ fn bc_and_block_sized_uncompressed_textures_copy_into_each_other() {
         let zero = vec![0u8; (pitch * blocks_h) as usize];
         upload_bc_zero(&d, &q, &other, &zero, pitch);
         let mut l = q.begin_list().unwrap();
-        let src = TexLoc { origin: [1, 1, 0], ..loc(&raw_tex, 0, 0) };
-        let dst = TexLoc { origin: [8, 8, 0], ..loc(&other, 0, 0) };
-        l.copy_texture(&dst, &src, [2, 2, 1]).unwrap_or_else(|e| panic!("part {e}"));
+        let src = TexLoc {
+            origin: [1, 1, 0],
+            ..loc(&raw_tex, 0, 0)
+        };
+        let dst = TexLoc {
+            origin: [8, 8, 0],
+            ..loc(&other, 0, 0)
+        };
+        l.copy_texture(&dst, &src, [2, 2, 1])
+            .unwrap_or_else(|e| panic!("part {e}"));
         l.end().unwrap();
         run(&q, l);
         let got = download(&d, &q, &other, 0, 0, pitch);
