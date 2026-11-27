@@ -222,7 +222,13 @@ impl CommandList {
         self.encoder_ref()
     }
 
-    pub(crate) fn check_buffer(&self, buffer: &Buffer, offset: u64, size: u64, what: &str) -> Result<()> {
+    pub(crate) fn check_buffer(
+        &self,
+        buffer: &Buffer,
+        offset: u64,
+        size: u64,
+        what: &str,
+    ) -> Result<()> {
         if !buffer.belongs_to(self.queue.device()) {
             return Err(Error::BadArgument(format!(
                 "{what}: buffer of another device"
