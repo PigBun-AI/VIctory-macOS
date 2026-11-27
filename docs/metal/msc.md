@@ -135,7 +135,9 @@ Two facts that are not in the header:
   parameters, a pointer to a **table of sampler descriptors** (24 bytes each,
   `IrDescriptorTableEntry::sampler`) that the host fills (`static_sampler_table` is its index in
   `entries`). The order of the samplers in that table is assumed to be the order of
-  `static_samplers`; not yet verified on the GPU (the backend has no textures yet).
+  `static_samplers`. The static-sampler GPU test (`back/tests/exec_dxil.rs`) runs and passes with one
+  sampler; an order with two or more different samplers is **not verified**. Min/max reduction
+  filters are read as the standard ones (`Device::create_sampler` has no reduction mode).
 * **Heap use** is not in `IRShaderReflection`: its `ResourceUsages` word followed the kinds of
   resource a shader declares (observed 4, 6, 12 for UAV, SRV + UAV, sampler + SRV + UAV) and had
   nothing for heap indexing. `uses_resource_heap` /
@@ -144,6 +146,22 @@ Two facts that are not in the header:
   both verified (heap shader: `sfi=0x2000000`; sampler-heap shader reports the sampler heap).
   Heap indexing needs the root signature flags `HEAP_INDEXED` / `SAMPLER_HEAP_INDEXED` and the
   heaps bound at bind points 0 and 1 (`set_heaps`).
+
+## In the interpreter (`CREATE_COMPUTE_PIPELINE`)
+
+`exec/dxil.rs` converts the DXIL the front sends: the proto root signature (`RootSigDesc`) becomes
+the MSC description kept with the root signature (`RootSig.msc_desc`); `CREATE_ROOT_SIGNATURE`
+asks MSC for the layout (`layout_from_msc`, TLAB offsets from the reflection, static-sampler
+table pointer included) and keeps the rule-based layout only as a fallback when MSC is not
+installed; `CREATE_COMPUTE_PIPELINE` calls `Device::compute_pipeline_from_dxil`, checks that the
+pipeline's reflection agrees with the layout of the root signature, and `DISPATCH` takes the
+threads per group from the reflection. The static sampler table is built when the root
+signature is made, lives in a descriptor heap in the residency set and is written into the
+TLAB at `static_table_offset`. With MSC missing (`VICTORY_MSC_DYLIB` pointing nowhere) the status
+is `UNSUPPORTED` and `Executor::last_error` says why; there is no panic.
+GPU tests: `back/tests/exec_dxil.rs` (root UAV + constant, `ResourceDescriptorHeap[]`, 8x4
+threads from the reflection, static sampler, pipeline tied to its root signature),
+`exec_no_msc.rs`. They need DXC (`VICTORY_HELPER_DXC`, `DXC_LIB`), else they print SKIPPED.
 
 ## Tests
 

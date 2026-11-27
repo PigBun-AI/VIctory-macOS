@@ -23,3 +23,10 @@ Setup: the root `rust-toolchain.toml` applies; add the targets once with
     cd metal && cargo test && cargo clippy --all-targets -- -D warnings
     tools/metal/build-unixlib.sh          # stage PE + unixlib for Wine
     tools/metal/run-m0.sh --layer         # run the probe under Wine
+    tools/metal/test-e2e.sh               # front-e2e under Wine: D3DMetal, then our back (timings)
+    tools/metal/test-front-smoke.sh [--real]   # the front's ABI against D3DMetal's (mock / real back)
+    tools/metal/test-wine.sh --backend d3dmetal|metal   # victory's cargo tests under Wine on either backend
+    tools/metal/compare-tests.sh --run    # both of those, a per-test table; known gaps in
+                                          # metal/conformance/expected-fail.txt
+    tools/metal/notimpl-stats.sh          # which unimplemented D3D12 methods the tests call, by count
+    tools/metal/gen-front-stubs.sh        # regenerate front/src/shell/stubs.rs (--check in check.sh)
