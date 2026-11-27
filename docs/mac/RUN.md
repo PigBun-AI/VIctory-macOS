@@ -26,10 +26,15 @@ only ones): the backend choice, `WINEDLLPATH` / `WINEDLLOVERRIDES`, `VICTORY_MET
 
 ### Profiles
 
-- **fidelity**: Xbox Series X (no `--console`), the title's output size comes from its own settings, 2560x1440; the output is not
-  patched (`VICTORY_OUTPUT=0`); internal resolution, dynamic resolution and TAA upscaling are the title's own logic. Before the run
-  `video/resolutionFullscreen` in the *data directory's* `settings.xml` is set to `--settings-output` (default `2560x1440`, one of the
-  title's modes); the original is kept once as `settings.xml.before-fidelity`. The profile has its own data directory
+- **fidelity**: Xbox Series X (no `--console`); the output is not patched (`VICTORY_OUTPUT=0`); internal resolution, dynamic resolution and
+  TAA upscaling are the title's own logic. **The title outputs 4K (3840x2160) by itself**: neither `video/resolutionFullscreen` in its
+  `settings.xml` nor the display mode the HLE reports changes that (measured 2026-11-28 with 1280x720, 1920x1080 and 2560x1440 for each;
+  `PATCHES.md` P5). That is also what a Series X does: the title always renders for a 4K output and the system scales it to the television. Here
+  the host does it: the profile sets `VICTORY_PRESENT_MAX=2560x1440` (P1: the swap chain and the host's picture are at most 1440p, the title's
+  render targets are not changed) and `VICTORY_WINDOW_MAX=2560x1440` (the title's window), unless the environment or `--present-max` says
+  otherwise (`--present-max none`: the whole 4K picture). Before the run `video/resolutionFullscreen` in the *data directory's* `settings.xml` is
+  still set to `--settings-output` (default `2560x1440`, one of the title's modes; the original is kept once as `settings.xml.before-fidelity`),
+  but the title does not take its output size from it. The profile has its own data directory
   (see "Data directories" below), so the other runs' saves and settings are not touched. Refused in this profile: `--console series-s`, `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`, a `VICTORY_OUTPUT` that is not
   `0`/`none`. **Pool check rule:** the profile does *not* skip the back buffer pool check by default. If a real F0 run stops at it
   (title+0x247af25, `int3`), `--pool-check skip` becomes a fixed part of the fidelity profile; the log then carries a
@@ -129,10 +134,10 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--frametime-log` | `VICTORY_FRAMETIME_LOG=<out>/frametime.log` (frame, microseconds since the previous sample, draws) | off |
 | `--tracking 0\|1` | `VICTORY_FAULT_TRACKING` | 1 |
 | `--masked SPEC` | `VICTORY_PATCH_MASKED` | not set (follows tracking; the extra #144 sites on build 1.0.2.1) |
-| `--present-max WxH\|none` | `VICTORY_PRESENT_MAX`: host window and swap chain only (P1) | not set |
+| `--present-max WxH\|none` | `VICTORY_PRESENT_MAX`: host window and swap chain only (P1) | fidelity: `2560x1440` (and `VICTORY_WINDOW_MAX` the same); perf: not set |
 | `--pool-check skip\|keep` | `VICTORY_POOL_CHECK` (L3) | not set (kept) |
 | `--log-render-size` | `VICTORY_LOG_RENDER_SIZE=1` (P2): not for timing runs | off |
-| `--settings-output WxH` | fidelity only: what is written into `settings.xml` | `2560x1440` |
+| `--settings-output WxH` | fidelity only: what is written into `settings.xml` (the title's output size does not follow it, P5) | `2560x1440` |
 | `--console series-x\|series-s` | the console model the title sees; `series-x` passes no `--console` | `series-x` |
 | `--build` | metal: run `tools/metal/build-unixlib.sh` first | off |
 | `--sample SEC` | every SEC seconds a line in `<out>/mem.csv`: GPU memory in use and allocated (`ioreg`), GPU `recoveryCount`, swap, `vm_stat` pages, RSS of all `victory.exe` | off |

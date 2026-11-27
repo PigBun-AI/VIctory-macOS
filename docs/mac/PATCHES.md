@@ -673,6 +673,46 @@ draws (`VICTORY_WORLD_DRAWS`); with `w<N>` and no world ever reached, nothing tr
 *Fidelity.* None affected: it only chooses which frame is recorded or saved. *Remove when* the Windows line's
 recorder names world frames itself (then drop `frames.rs` and the three hooks; `world.rs` stays for I1).
 
+### P4 — the title window's client area is the size the title asks for (`victory-hle/src/modules/lifecycle.rs`, shared layer)
+
+*What.* A console title passes its picture size (3840x2160, or 1280x720 with L3) to `CreateWindowEx`, which on a PC
+is the size of the OUTER frame. Wine took the caption and borders off it: 1280x720 became a 1272x686 point client
+area (1.854:1), into which the 16:9 swap chain was stretched (4.3% vertical squash; Metal back, `present-size-20261127`).
+`fit()` now adds the frame (`AdjustWindowRectEx` with the window's own style, ex style and menu flag) to the asked
+size, shrinks the CLIENT size to what the work area (and `VICTORY_WINDOW_MAX`, which stays a limit of the outer frame)
+leaves after the frame, keeping its proportions, and creates the window with the outer size. Child windows and
+`CW_USEDEFAULT` are untouched. Log: `title window created asked=... outer=... client=...` for every top-level
+window (the client size must equal the asked one unless it was fitted to the screen), and the existing
+`title window fitted to the screen` now also names the frame.
+
+*Shared layer, no Mac condition.* The host's own window (`victory-gpu` `host.rs`) already does this with
+`AdjustWindowRect`; the title window did not, so on Windows the same code also made a client area that is smaller than
+the swap chain by the frame. Not a Wine quirk.
+
+*Test.* `lifecycle::tests::the_frame_is_added_to_the_client_size_the_title_asks_for`,
+`a_shrunk_window_keeps_a_16_by_9_client_area` (rules), `a_framed_title_window_has_the_client_area_the_title_asked_for`
+(a real framed window, client area 640x360); `lifecycle` is Windows-only, so run them with
+`tools/mac/wine-tests.sh -p victory-hle lifecycle`.
+*Remove when.* Never needed again: it is the right behaviour on every host.
+
+### P5 — fidelity: the title outputs 4K, the host shows it at most 1440p (`tools/mac/run.sh`, no title patch)
+
+*Finding (2026-11-28, Metal back, first screen's hint bar at present 320, no keys).* With the title unpatched (`VICTORY_OUTPUT=0`) the
+presented picture is 3840x2160 whatever `settings.xml` `resolutionFullscreen` (2560x1440, 1920x1080, 1280x720) and whatever display mode the HLE
+reports (`VICTORY_DISPLAY_MODE` 2560x1440, 1920x1080, unset); the title asks for a 3840x2160 window before it asks for the display mode. Its UI is laid
+out in 4K pixel units: the hint bar is 604x54 px in every run, anchored to the output's right and bottom edge (81 and 60 px), so 15.7% of the width at 4K
+and 47% (3.0x too big) with the L3 patch's 1280x720 output. Settings' `uiResolution` (0x0 in the seed) does not change it either; `settings.xml` was
+not read after it was written (atime equal to mtime), a weak sign. Logs and pictures: the `ui-scale-2026-11-28` log folder of the integration lead.
+
+*What.* The fidelity profile no longer pretends the title is asked for 1440p: it outputs 4K, as it does on a Series X, where the system scales to
+the television. `run.sh` fidelity sets `VICTORY_PRESENT_MAX=2560x1440` (P1) and `VICTORY_WINDOW_MAX=2560x1440` unless set (or `--present-max`), so the
+host shows the picture at most 2560x1440; the title's render targets and its UI are the 4K ones. `--print-env`, `run-env.txt` say so. The
+`settings.xml` write stays (the title's menus may read it), documented as not deciding the output.
+
+*Open.* Where the title takes 3840x2160 from is not found (not the display mode, probably not `settings.xml`); the perf profile's 1280x720 output has a UI that
+is 3x too big (a UI scale that L3 does not patch). Both are title facts to chase in the disassembly before any patch.
+*Remove when.* The title's own output size is found and can be set without a patch.
+
 ### S2 — mesh shader outputs numbered by alignment (`victory-shader/src/emit/mesh_order.rs`, 6 lines in `emit/mod.rs`)
 
 *What.* The translator numbers a mesh shader's vertex and primitive output elements as the console's signature
