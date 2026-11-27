@@ -32,6 +32,7 @@ mod list;
 mod objects;
 mod private;
 mod serialize;
+mod swapchain;
 #[rustfmt::skip]
 mod stubs;
 

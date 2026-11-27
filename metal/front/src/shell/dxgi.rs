@@ -7,10 +7,13 @@ use windows::Win32::Foundation::{HWND, LUID};
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{BOOL, ComObject, GUID, IUnknownImpl, Interface, Result as WResult, implement};
 
+use super::objects::QueueObj;
 use super::private::PrivateData;
+use super::swapchain::SwapChainObj;
 use super::{return_object, werr, wres};
 use crate::device::System;
 use crate::hresult::Hr;
+use crate::swapchain::SwapChainDesc;
 
 #[implement(IDXGIFactory7)]
 pub struct FactoryObj {
@@ -56,6 +59,84 @@ impl FactoryObj_Impl {
             return Err(werr(Hr::DXGI_ERROR_NOT_FOUND));
         }
         self.adapter().to_interface::<IDXGIAdapter4>().cast()
+    }
+
+    /// The queue a swap chain presents on: the `pDevice` argument of
+    /// `CreateSwapChain*` is the direct `ID3D12CommandQueue` for D3D12.
+    fn swap_queue(
+        &self,
+        pdevice: &windows::core::Ref<windows::core::IUnknown>,
+    ) -> WResult<ComObject<QueueObj>> {
+        let unk = pdevice.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        unk.cast_object::<QueueObj>()
+            .map_err(|_| werr(Hr::DXGI_ERROR_INVALID_CALL))
+    }
+
+    pub(super) fn x_CreateSwapChainForHwnd(
+        &self,
+        pdevice: windows::core::Ref<windows::core::IUnknown>,
+        hwnd: HWND,
+        pdesc: *const DXGI_SWAP_CHAIN_DESC1,
+        _pfullscreendesc: *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
+        _prestricttooutput: windows::core::Ref<IDXGIOutput>,
+    ) -> WResult<IDXGISwapChain1> {
+        // SAFETY: the caller's description.
+        let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_POINTER))?;
+        let queue = self.swap_queue(&pdevice)?;
+        let desc = SwapChainDesc {
+            width: d.Width,
+            height: d.Height,
+            format: d.Format.0 as u32,
+            buffer_count: d.BufferCount,
+            buffer_usage: d.BufferUsage.0,
+            sample_count: d.SampleDesc.Count,
+            swap_effect: d.SwapEffect.0 as u32,
+            flags: d.Flags,
+        };
+        if d.Stereo.as_bool() {
+            return Err(werr(Hr::DXGI_ERROR_UNSUPPORTED));
+        }
+        let sc = SwapChainObj::create(self.to_object(), queue, hwnd, desc, d.Scaling, d.AlphaMode)?;
+        sc.to_interface::<IDXGISwapChain4>().cast()
+    }
+
+    pub(super) fn x_CreateSwapChain(
+        &self,
+        pdevice: windows::core::Ref<windows::core::IUnknown>,
+        pdesc: *const DXGI_SWAP_CHAIN_DESC,
+        ppswapchain: windows::core::OutRef<IDXGISwapChain>,
+    ) -> windows::core::HRESULT {
+        let make = || -> WResult<IDXGISwapChain> {
+            // SAFETY: the caller's description.
+            let d = unsafe { pdesc.as_ref() }.ok_or_else(|| werr(Hr::E_POINTER))?;
+            let queue = self.swap_queue(&pdevice)?;
+            let desc = SwapChainDesc {
+                width: d.BufferDesc.Width,
+                height: d.BufferDesc.Height,
+                format: d.BufferDesc.Format.0 as u32,
+                buffer_count: d.BufferCount,
+                buffer_usage: d.BufferUsage.0,
+                sample_count: d.SampleDesc.Count,
+                swap_effect: d.SwapEffect.0 as u32,
+                flags: d.Flags,
+            };
+            let sc = SwapChainObj::create(
+                self.to_object(),
+                queue,
+                d.OutputWindow,
+                desc,
+                DXGI_SCALING_STRETCH,
+                windows::Win32::Graphics::Dxgi::Common::DXGI_ALPHA_MODE_IGNORE,
+            )?;
+            sc.to_interface::<IDXGISwapChain4>().cast()
+        };
+        match make() {
+            Ok(sc) => match ppswapchain.write(Some(sc)) {
+                Ok(()) => windows::core::HRESULT(0),
+                Err(e) => e.into(),
+            },
+            Err(e) => e.into(),
+        }
     }
 
     pub(super) fn x_IsCurrent(&self) -> BOOL {

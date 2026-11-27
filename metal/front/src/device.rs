@@ -356,6 +356,25 @@ impl Device {
         }
     }
 
+    /// A texture the back made on its own (a swap chain's back buffer) as a
+    /// resource that destroys it when dropped.
+    pub(crate) fn wrap_texture(
+        self: &Arc<Self>,
+        res: ResId,
+        desc: ResourceDesc,
+        initial_state: u32,
+    ) -> Resource {
+        self.track(
+            res,
+            0,
+            0,
+            HeapProps::of_type(resource::HEAP_DEFAULT),
+            desc,
+            initial_state,
+            None,
+        )
+    }
+
     /// `GetResourceAllocationInfo` for resources placed one after the other
     /// in a default heap: total size and the alignment to place them at.
     /// `None` for a description that cannot be made (the application gets
@@ -937,6 +956,11 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// The device that made the queue.
+    pub fn device(&self) -> &Arc<Device> {
+        &self.dev
+    }
+
     /// `ExecuteCommandLists`: one block, the lists in order.
     pub fn execute(&self, lists: &[Arc<[Item]>]) -> Result<()> {
         let block = encode_block(self.dev.sys.proto_caps, self.id, lists, || {
