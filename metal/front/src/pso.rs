@@ -178,6 +178,8 @@ pub struct PipelineState {
     pub gs: Bytecode,
     pub amp: Bytecode,
     pub ms: Bytecode,
+    /// The compute shader of a stream that makes a compute pipeline (no other stage then).
+    pub cs: Bytecode,
     /// `NumEntries` of the stream output (0 = none).
     pub stream_output_entries: u32,
     pub blend: Blend,
@@ -214,6 +216,7 @@ impl Default for PipelineState {
             gs: Bytecode::default(),
             amp: Bytecode::default(),
             ms: Bytecode::default(),
+            cs: Bytecode::default(),
             stream_output_entries: 0,
             blend: Blend {
                 alpha_to_coverage: false,
@@ -427,8 +430,9 @@ fn read_depth_stencil(c: &mut Cur, with_bounds: bool) -> Result<DepthStencil, Ps
 /// Parses a `D3D12_PIPELINE_STATE_STREAM_DESC` stream (see the module docs
 /// for the layout). A subobject type this does not know cannot be skipped
 /// (its size is unknown): `E_INVALIDARG`, as is one given twice, or a stream
-/// that ends inside a subobject. A compute shader subobject is refused here:
-/// compute pipelines have their own entry point.
+/// that ends inside a subobject. A compute shader subobject is carried in `cs`;
+/// `ID3D12Device2::CreatePipelineState` makes a compute pipeline of it (the caller
+/// refuses a stream that has other stages too).
 pub fn parse_stream(bytes: &[u8]) -> Result<PipelineState, PsoError> {
     use subobject as t;
     let mut s = PipelineState::default();
@@ -473,11 +477,7 @@ pub fn parse_stream(bytes: &[u8]) -> Result<PipelineState, PsoError> {
             t::GS => s.gs = c.bytecode()?,
             t::AS => s.amp = c.bytecode()?,
             t::MS => s.ms = c.bytecode()?,
-            t::CS => {
-                return Err(invalid(
-                    "a compute shader in a graphics pipeline state stream",
-                ));
-            }
+            t::CS => s.cs = c.bytecode()?,
             t::STREAM_OUTPUT => {
                 // pSODeclaration, NumEntries, pBufferStrides, NumStrides, RasterizedStream
                 c.u64()?;

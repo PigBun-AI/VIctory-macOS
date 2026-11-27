@@ -356,6 +356,21 @@ mod tests {
         Ok(b)
     }
 
+    /// OPTIONS3 is D3DMetal's answer byte for byte (docs/metal/m4-newbase.md, attributeAtVertex):
+    /// `BarycentricsSupported` (word 4) is 1 on both, so the 103 pipelines MSC refuses are not
+    /// a difference in what the host reports; victory-shader emits `attributeAtVertex` without
+    /// looking at it.
+    #[test]
+    fn options3_is_what_d3dmetal_reports_and_says_barycentrics_are_supported() {
+        let o = q(F_OPTIONS3, &[0; 20]).unwrap();
+        let w = |i: usize| u32::from_le_bytes(o[4 * i..4 * i + 4].try_into().unwrap());
+        assert_eq!(w(0), 0, "CopyQueueTimestampQueriesSupported");
+        assert_eq!(w(1), 1, "CastingFullyTypedFormatSupported");
+        assert_eq!(w(2), 0xd, "WriteBufferImmediateSupportFlags");
+        assert_eq!(w(3), 2, "ViewInstancingTier");
+        assert_eq!(w(4), 1, "BarycentricsSupported");
+    }
+
     #[test]
     fn what_the_front_does_not_build_is_not_advertised() {
         // OPTIONS: TiledResourcesTier (word 3) is 0 (no reserved resources); the

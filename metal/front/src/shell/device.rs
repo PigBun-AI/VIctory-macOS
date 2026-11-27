@@ -213,6 +213,16 @@ impl DeviceObj_Impl {
         let dxil = unsafe {
             std::slice::from_raw_parts(d.CS.pShaderBytecode.cast::<u8>(), d.CS.BytecodeLength)
         };
+        self.make_compute_pso(rs, dxil, riid, pppipelinestate)
+    }
+
+    fn make_compute_pso(
+        &self,
+        rs: &RootSigObj,
+        dxil: &[u8],
+        riid: *const GUID,
+        pppipelinestate: *mut *mut c_void,
+    ) -> WResult<()> {
         let pipeline = wres(self.dev.create_compute_pipeline(&rs.root_sig, dxil))?;
         let p = ComObject::new(PsoObj {
             private: PrivateData::default(),
@@ -255,6 +265,25 @@ impl DeviceObj_Impl {
         // the stream; borrowed for the call.
         let rs =
             unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }.or_werr(Hr::E_INVALIDARG)?;
+        if state.cs.len != 0 {
+            // A compute pipeline made through the stream (victory-gpu's helper
+            // passes and the replay's card compare do): the stage alone.
+            let others = [
+                state.vs, state.ps, state.ds, state.hs, state.gs, state.amp, state.ms,
+            ];
+            if others.iter().any(|b| b.len != 0) {
+                return Err(werr(Hr::E_INVALIDARG));
+            }
+            let rs = rs.cast_object_ref::<RootSigObj>()?;
+            // SAFETY: the application's shader bytecode: `len` readable bytes.
+            let dxil = unsafe {
+                std::slice::from_raw_parts(
+                    state.cs.addr as usize as *const u8,
+                    state.cs.len as usize,
+                )
+            };
+            return self.make_compute_pso(rs, dxil, riid, pppipelinestate);
+        }
         self.make_graphics_pso(rs, &state, riid, pppipelinestate)
     }
 

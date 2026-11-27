@@ -256,10 +256,11 @@ fn malformed_and_unsupported_streams_say_which() {
     s.add(t::SAMPLE_MASK, 4, &Stream::u32s(&[1]));
     s.add(t::SAMPLE_MASK, 4, &Stream::u32s(&[2]));
     assert_eq!(pso::parse_stream(&s.0).unwrap_err().hr, Hr::E_INVALIDARG);
-    // A compute shader.
+    // A compute shader is carried (CreatePipelineState makes a compute pipeline of it).
     let mut s = Stream::default();
     s.add(t::CS, 8, &Stream::code(8, 8));
-    assert_eq!(pso::parse_stream(&s.0).unwrap_err().hr, Hr::E_INVALIDARG);
+    let st = pso::parse_stream(&s.0).unwrap();
+    assert_eq!((st.cs.addr, st.cs.len), (8, 8));
     // Newer rasterizer/depth structures are not carried.
     let mut s = Stream::default();
     s.add(t::RASTERIZER2, 4, &Stream::u32s(&[0; 10]));

@@ -161,6 +161,31 @@ fn a_vertex_and_pixel_pipeline_is_made() {
     );
 }
 
+/// The 103 pipelines of the first game run on the new base (102 mesh): the translator
+/// (victory-shader, `lower.rs` `vertex_input`) reads a flat vertex value with
+/// `dx.op.attributeAtVertex`, whatever the host's `BarycentricsSupported` says, and MSC
+/// 4.0.3 refuses that instruction. Pinned here at the pipeline level (the instruction
+/// alone is pinned in `msc_features.rs`): a change of MSC that accepts it fails this
+/// test, and then the 103 pipelines are made and the note in docs/metal/m4-newbase.md goes.
+#[test]
+fn a_pixel_shader_that_reads_a_vertex_value_is_refused_by_msc_with_its_reason() {
+    let Some(vs) = dxil_or_skip("gfx_vs_flat", "vs_6_6", VS) else {
+        return;
+    };
+    let ps_src = "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; nointerpolation float4 col : COLOR0; };\n\
+float4 main(VSOut i) : SV_Target0 { return GetAttributeAtVertex(i.col, 1) + float4(i.uv, 0, 0); }\n";
+    let Some(ps) = dxil_or_skip("gfx_ps_flat", "ps_6_6", ps_src) else {
+        return;
+    };
+    let fx = Fx::new();
+    let sig = fx.root_sig(&root_desc());
+    let s = Stages { vs, ps };
+    let (st, _) = create(&fx, sig, vertex_desc(&s));
+    assert_eq!(st, Status::UNSUPPORTED);
+    let why = fx.executor().last_error().unwrap();
+    assert!(why.contains("attributeAtVertex"), "{why}");
+}
+
 #[test]
 fn a_dispatch_with_a_graphics_pipeline_is_refused() {
     let Some(s) = vertex_stages() else { return };
