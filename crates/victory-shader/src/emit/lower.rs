@@ -1190,11 +1190,11 @@ pub fn host_settings() -> [u32; 4] {
 /// there a pixel program reads the three vertices of an attribute as flat inputs the mesh stage fills
 /// (`vertex_flat`). Remove with the patch: when MSC takes `GetAttributeAtVertex`, or emits MSL's
 /// `vertex_value` and the lowest supported GPU has it.
-static HOST_ATTRIBUTE_AT_VERTEX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static HOST_ATTRIBUTE_AT_VERTEX: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Tells the translator whether the host takes `attributeAtVertex` ([`host_attribute_at_vertex`]).
 pub fn set_host_attribute_at_vertex(on: bool) {
-    HOST_ATTRIBUTE_AT_VERTEX.store(on, std::sync::atomic::Ordering::Relaxed);
+    HOST_ATTRIBUTE_AT_VERTEX.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -1203,13 +1203,22 @@ thread_local! {
     pub(super) static TEST_ATTRIBUTE_AT_VERTEX: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// Whether the host takes `attributeAtVertex` (default true).
+/// Whether the host takes `attributeAtVertex`: what [`set_host_attribute_at_vertex`] said, else the
+/// environment (`VICTORY_ATTRIBUTE_AT_VERTEX=0`: no; a tool that translates for the Metal chain sets it),
+/// else yes.
 pub fn host_attribute_at_vertex() -> bool {
     #[cfg(test)]
     if let Some(on) = TEST_ATTRIBUTE_AT_VERTEX.get() {
         return on;
     }
-    HOST_ATTRIBUTE_AT_VERTEX.load(std::sync::atomic::Ordering::Relaxed)
+    match HOST_ATTRIBUTE_AT_VERTEX.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *ENV.get_or_init(|| std::env::var_os("VICTORY_ATTRIBUTE_AT_VERTEX").is_none_or(|v| v != "0"))
+        }
+    }
 }
 
 static HOST_RDNA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
