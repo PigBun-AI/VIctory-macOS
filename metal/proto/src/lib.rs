@@ -14,7 +14,7 @@
 //! * [`root`]: [`RootSigDesc`] (constants, root descriptors, tables with ranges, static samplers).
 //! * [`sync`]: [`SyncOp`] and one `repr(C)` argument block per op ([`Link::call`]).
 //! * [`cmd`], [`stream`]: opcodes, payloads, [`Encoder`], zero-copy [`Decoder`] ([`Link::submit`]).
-//! * [`file`]: the dump/replay file (`FileHeader` + blocks).
+//! * [`mod@file`]: the dump/replay file (`FileHeader` + blocks).
 //! * [`link`]: [`Link`], [`LinkExt`], [`SurfaceProvider`], [`Status`].
 //!
 //! # Version rules (layering rule 4)
