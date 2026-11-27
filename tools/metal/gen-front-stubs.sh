@@ -203,12 +203,16 @@ def emit():
                     used.add((iface, name))
                     w("        self.x_%s(%s)" % (name, call_args))
                 elif ret is None:
+                    w('        super::note_notimpl("%s::%s");' % (iface, name))
                     w("        self.unsupported_call();" if struct in VOID_HOOK else "        ")
                 elif ret == "windows::core::HRESULT":
+                    w('        super::note_notimpl("%s::%s");' % (iface, name))
                     w("        E_NOTIMPL")
                 elif ret.startswith("windows::core::Result"):
+                    w('        super::note_notimpl("%s::%s");' % (iface, name))
                     w("        Err(windows::core::Error::from(E_NOTIMPL))")
                 else:
+                    w('        super::note_notimpl("%s::%s");' % (iface, name))
                     w("        unsafe { core::mem::zeroed() }")
                 w("    }")
             w("}")

@@ -36,14 +36,59 @@ mod stubs;
 
 pub use private::PrivateData;
 
+/// Every method the front has no implementation for calls this (the generated
+/// stubs do). With `VICTORY_METAL_NOTIMPL_LOG=<file>` set, one line
+/// `Interface::Method` is appended to that file per call: the data for "which
+/// unimplemented methods does this program call, how often"
+/// (`tools/metal/notimpl-stats.sh`). Without the variable it costs one
+/// environment lookup, cached.
+pub(crate) fn note_notimpl(what: &str) {
+    use std::io::Write;
+    use std::sync::OnceLock;
+    static LOG: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    let Some(path) = LOG.get_or_init(|| {
+        std::env::var_os("VICTORY_METAL_NOTIMPL_LOG")
+            .filter(|v| !v.is_empty())
+            .map(Into::into)
+    }) else {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{what}");
+    }
+}
+
+fn log_errors() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0"))
+}
+
 /// Core `Hr` → COM error.
+#[track_caller]
 pub(crate) fn werr(h: Hr) -> Error {
+    // `VICTORY_METAL_LOG=1`: every error the front hands back, with the caller.
+    if log_errors() {
+        eprintln!(
+            "victory-metal front: error {:#010x} returned from {}",
+            h.0 as u32,
+            std::panic::Location::caller()
+        );
+    }
     Error::from(HRESULT(h.0))
 }
 
 /// Core result → COM result.
+#[track_caller]
 pub(crate) fn wres<T>(r: Result<T>) -> WResult<T> {
-    r.map_err(werr)
+    match r {
+        Ok(v) => Ok(v),
+        Err(h) => Err(werr(h)),
+    }
 }
 
 /// Hand a new object to an `(riid, ppv)` pair: QueryInterface for `riid` on

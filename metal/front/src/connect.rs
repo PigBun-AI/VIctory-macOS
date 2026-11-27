@@ -38,8 +38,13 @@ pub fn link() -> Result<Arc<dyn Link>> {
 
 #[cfg(windows)]
 fn default_link() -> Result<Arc<dyn Link>> {
-    let l = victory_metal_bridge::pe::WineUnixlib::load("victory_metal_bridge.dll")
-        .map_err(|_| crate::hresult::Hr::DXGI_ERROR_UNSUPPORTED)?;
+    let l = victory_metal_bridge::pe::WineUnixlib::load("victory_metal_bridge.dll").map_err(|e| {
+        // `VICTORY_METAL_LOG=1`: say why (the HRESULT alone does not).
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            eprintln!("victory-metal front: cannot load the bridge: {e:?}");
+        }
+        crate::hresult::Hr::DXGI_ERROR_UNSUPPORTED
+    })?;
     Ok(Arc::new(l))
 }
 
