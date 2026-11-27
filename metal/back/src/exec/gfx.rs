@@ -508,7 +508,13 @@ impl Executor {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
             r.status()
         })?;
-        let pipeline = device.graphics_pipeline_from_dxil(&desc).map_err(|e| {
+        let made = match device.graphics_pipeline_from_dxil(&desc) {
+            // A mesh pipeline over Metal's 32 KB: once more with its
+            // outputs packed tighter (docs/metal/mesh32k.md).
+            Err(e) => crate::mesh_fit::retry(&device, &desc, &e).unwrap_or(Err(e)),
+            made => made,
+        };
+        let pipeline = made.map_err(|e| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {e}"));
             status_of_msc(&e)
         })?;
