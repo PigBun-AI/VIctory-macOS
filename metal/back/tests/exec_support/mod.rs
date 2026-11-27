@@ -36,6 +36,7 @@ pub fn small_options() -> ExecOptions {
             ring_segment_bytes: 1 << 16,
             ..QueueOptions::default()
         },
+        ..ExecOptions::default()
     }
 }
 

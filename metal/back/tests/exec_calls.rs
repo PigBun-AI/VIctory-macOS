@@ -510,7 +510,8 @@ fn root_signatures_are_checked_and_laid_out() {
     // An empty one is fine: no argument buffer.
     let empty = fx.root_sig(&Default::default());
     assert_eq!(fx.executor().tlab_layout(empty).unwrap().size(), 0);
-    // A static sampler takes no room (to be checked against MSC reflection).
+    // MSC reflection: 3 constants take 12 bytes, the UAV address starts at 16, and a
+    // static sampler adds one pointer (to its sampler table) after the parameters.
     let sig = victory_metal_proto::root::RootSigDesc {
         params: vec![constants_param(3), descriptor_param(RootParamKind::UAV)],
         static_samplers: vec![Default::default()],
@@ -524,7 +525,12 @@ fn root_signatures_are_checked_and_laid_out() {
             l.slot(1).unwrap().offset,
             l.size()
         ),
-        (0, 16, 24)
+        (0, 16, 32)
+    );
+    assert_eq!(
+        l.static_table_offset(),
+        Some(24),
+        "MSC adds a pointer to the static-sampler table after the parameters"
     );
     let mut d = DestroyRootSignatureArgs::new();
     d.root_sig = id;
@@ -534,23 +540,37 @@ fn root_signatures_are_checked_and_laid_out() {
 }
 
 #[test]
-fn pipelines_from_dxil_are_not_done_yet_but_their_arguments_are_checked() {
+fn pipelines_from_dxil_check_their_arguments_and_refuse_garbage() {
     let fx = Fx::new();
     let sig = fx.root_sig(&victory_metal_proto::root::RootSigDesc {
         params: vec![constants_param(1)],
         ..Default::default()
     });
-    let make = |sig: RootSigId, flags: u32| {
+    let garbage = b"this is not DXIL at all, only bytes the call can read".to_vec();
+    let make_at = |sig: RootSigId, flags: u32, addr: u64, len: u64| {
         let mut a = CreateComputePipelineArgs::new();
         a.root_sig = sig;
         a.flags = flags;
-        a.dxil_addr = 8;
-        a.dxil_len = 4;
+        a.dxil_addr = addr;
+        a.dxil_len = len;
         fx.status(a)
     };
-    assert_eq!(make(sig, 0), Status::UNSUPPORTED, "MSC is not wired in");
+    let make = |sig: RootSigId, flags: u32| {
+        make_at(sig, flags, garbage.as_ptr() as u64, garbage.len() as u64)
+    };
+    // Bytes MSC cannot read are a refusal (or, without MSC, UNSUPPORTED),
+    // never OK and never a crash.
+    let refused = make(sig, 0);
+    assert!(
+        refused == Status::UNSUPPORTED || refused == Status::INVALID_ARG,
+        "{refused:?}"
+    );
+    assert!(fx.executor().last_error().is_some());
     assert_eq!(make(sig, 1), Status::INVALID_ARG);
     assert_eq!(make(RootSigId(99), 0), Status::NOT_FOUND);
+    assert_eq!(make_at(sig, 0, 0, 4), Status::INVALID_ARG, "no address");
+    assert_eq!(make_at(sig, 0, 8, 4), Status::INVALID_ARG, "unmapped address");
+    assert_eq!(make_at(sig, 0, garbage.as_ptr() as u64, 0), Status::INVALID_ARG);
     let mut d = DestroyPipelineArgs::new();
     d.pso = PsoId(5);
     assert_eq!(fx.status(d), Status::NOT_FOUND);

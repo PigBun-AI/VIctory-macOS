@@ -31,11 +31,19 @@
 //!   are used as they are: front and back share one address space, which is
 //!   the `Link` contract. `WRAP_MEMORY` still checks that the range is mapped.
 //!
-//! `CREATE_COMPUTE_PIPELINE` (DXIL through Metal Shader Converter) answers
-//! `UNSUPPORTED` until MSC is wired in; tests build pipelines from MSL with
+//! `CREATE_COMPUTE_PIPELINE` converts the DXIL with Metal Shader Converter
+//! ([`crate::msc`], loaded on first use) against the root signature, takes the
+//! thread-group size from its reflection and checks that the signature's
+//! argument-buffer layout is the one the shader reads. `CREATE_ROOT_SIGNATURE`
+//! already asks MSC for that layout (including the static-sampler table
+//! pointer MSC appends); without MSC it falls back to the rule-based layout of
+//! [`tlab`], and `CREATE_COMPUTE_PIPELINE` answers `UNSUPPORTED`. Tests can
+//! also build pipelines from MSL with
 //! [`Executor::create_compute_pipeline_from_msl`], which does not touch the
-//! wire protocol.
+//! wire protocol. [`Executor::last_error`] keeps the text of the last refused
+//! conversion (and `VICTORY_METAL_LOG=1` prints it to stderr).
 
+mod dxil;
 mod handles;
 mod stream;
 mod sync;
@@ -63,6 +71,9 @@ pub struct ExecOptions {
     /// inter-submit barrier on and room for a frame's worth of root
     /// arguments (4 segments of 4 MiB) and for many lists in one block.
     pub queue: QueueOptions,
+    /// What MSC adds to converted shaders to behave like the original API
+    /// (the default checks buffer bounds: an out-of-range read gives 0).
+    pub compat: crate::msc::Compat,
 }
 
 impl Default for ExecOptions {
@@ -73,6 +84,7 @@ impl Default for ExecOptions {
                 ring_segment_bytes: 4 << 20,
                 ..QueueOptions::default()
             },
+            compat: crate::msc::Compat::BOUNDS_CHECK,
         }
     }
 }
@@ -81,7 +93,14 @@ impl Default for ExecOptions {
 /// made from it (or from reflection).
 pub(crate) struct RootSig {
     pub(crate) desc: victory_metal_proto::root::RootSigDesc,
+    /// The same description for the converter.
+    pub(crate) msc_desc: crate::msc::RootSignatureDesc,
     pub(crate) layout: TlabLayout,
+    /// The table of static samplers MSC makes the shader read through a
+    /// pointer at the end of the argument buffer (24 bytes per sampler, in
+    /// the heap residency set). Its entries stay zero until the back has
+    /// samplers (textures, M2): no compute shader without textures can use them.
+    pub(crate) static_table: Option<crate::descriptors::DescriptorHeap>,
 }
 
 /// A compute pipeline with what a dispatch needs besides the Metal object.
@@ -151,6 +170,7 @@ pub(crate) fn typed<A: SyncArgs>(
 pub struct Executor {
     pub(crate) options: ExecOptions,
     pub(crate) state: Mutex<Option<State>>,
+    last_error: Mutex<Option<String>>,
 }
 
 impl Default for Executor {
@@ -170,7 +190,21 @@ impl Executor {
         Executor {
             options,
             state: Mutex::new(None),
+            last_error: Mutex::new(None),
         }
+    }
+
+    /// The text of the last failed `CREATE_COMPUTE_PIPELINE` (why the
+    /// converter or Metal refused), for diagnostics: the wire only has a status.
+    pub fn last_error(&self) -> Option<String> {
+        lock(&self.last_error).clone()
+    }
+
+    pub(crate) fn note_error(&self, what: String) {
+        if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+            eprintln!("victory-metal back: {what}");
+        }
+        *lock(&self.last_error) = Some(what);
     }
 
     /// Runs `f` on the state, or `NOT_INITIALIZED` before `HELLO`.
@@ -192,6 +226,7 @@ impl Executor {
             }
             SyncOp::DESTROY_QUEUE => typed(args, len, |a| self.destroy_queue(a)),
             SyncOp::FENCE_WAIT => typed(args, len, |a| self.fence_wait(a)),
+            SyncOp::CREATE_COMPUTE_PIPELINE => typed(args, len, |a| self.create_compute_pipeline(a)),
             op if op.is_known() => match self.with_state(|st| st.call(op, args, len)) {
                 Ok(s) => s,
                 Err(s) => s,

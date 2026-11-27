@@ -93,6 +93,10 @@ pub struct TlabLayout {
     slots: Vec<Slot>,
     size: u32,
     from_reflection: bool,
+    /// Byte offset of the pointer to the static-sampler table, which MSC
+    /// appends to the argument buffer when a root signature has static
+    /// samplers (reflection layouts only).
+    static_table: Option<u32>,
 }
 
 fn align_up(v: u32, a: u32) -> u32 {
@@ -159,6 +163,7 @@ impl TlabLayout {
             slots,
             size: align_up(at, 8),
             from_reflection: false,
+            static_table: None,
         })
     }
 
@@ -169,6 +174,18 @@ impl TlabLayout {
     pub fn from_reflection(
         desc: &RootSigDesc,
         offsets: &[u32],
+        size: u32,
+    ) -> Result<TlabLayout, LayoutError> {
+        TlabLayout::from_reflection_with_static(desc, offsets, None, size)
+    }
+
+    /// [`TlabLayout::from_reflection`] with the offset of the static-sampler
+    /// table pointer MSC adds after the root parameters (`None`: no static
+    /// samplers).
+    pub fn from_reflection_with_static(
+        desc: &RootSigDesc,
+        offsets: &[u32],
+        static_table: Option<u32>,
         size: u32,
     ) -> Result<TlabLayout, LayoutError> {
         if offsets.len() != desc.params.len() {
@@ -199,11 +216,19 @@ impl TlabLayout {
                 size: bytes,
             });
         }
-        let mut by_offset: Vec<&Slot> = slots.iter().collect();
-        by_offset.sort_by_key(|s| s.offset);
+        let mut by_offset: Vec<(u32, u32)> = slots.iter().map(|s| (s.offset, s.size)).collect();
+        if let Some(at) = static_table {
+            if !at.is_multiple_of(8) || u64::from(at) + 8 > u64::from(size) {
+                return Err(LayoutError::Invalid(format!(
+                    "the static-sampler table pointer at {at} does not fit {size} bytes"
+                )));
+            }
+            by_offset.push((at, 8));
+        }
+        by_offset.sort_by_key(|s| s.0);
         if by_offset
             .windows(2)
-            .any(|w| w[0].offset + w[0].size > w[1].offset)
+            .any(|w| w[0].0 + w[0].1 > w[1].0)
         {
             return Err(LayoutError::Invalid("two root parameters overlap".into()));
         }
@@ -211,6 +236,7 @@ impl TlabLayout {
             slots,
             size,
             from_reflection: true,
+            static_table,
         })
     }
 
@@ -232,6 +258,12 @@ impl TlabLayout {
     /// No root parameters.
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+
+    /// Where the static-sampler table pointer sits, when the root signature
+    /// has static samplers and the layout came from reflection.
+    pub fn static_table_offset(&self) -> Option<u32> {
+        self.static_table
     }
 
     /// Whether the offsets came from MSC reflection rather than the rules.

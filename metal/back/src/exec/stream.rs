@@ -336,6 +336,12 @@ impl Run<'_> {
             return Ok(());
         }
         bound.shadow = vec![0; sig.layout.size() as usize];
+        // The pointer to the static-sampler table MSC appends is the one
+        // entry no root parameter sets.
+        if let (Some(at), Some(table)) = (sig.layout.static_table_offset(), &sig.static_table) {
+            let at = at as usize;
+            bound.shadow[at..at + 8].copy_from_slice(&table.gpu_va().to_le_bytes());
+        }
         bound.sig = Some(sig);
         bound.dirty = true;
         Ok(())

@@ -387,15 +387,16 @@ fn golden_sync_blocks_replay_as_single_calls() {
     let (s, sig) = fx.root_sig_status(&rs);
     assert_eq!(s, Status::OK);
     let l = fx.executor().tlab_layout(sig).unwrap();
-    // Constants (2) at 0, the CBV pointer at 8, the table pointer at 16; the
-    // static sampler takes no room (to be checked against MSC reflection).
+    // MSC reflection: constants (2) at 0, the CBV pointer at 8, the table
+    // pointer at 16, then the pointer to the static-sampler table at 24.
     assert_eq!(
         (0..3)
             .map(|i| l.slot(i).unwrap().offset)
             .collect::<Vec<_>>(),
         [0, 8, 16]
     );
-    assert_eq!(l.size(), 24);
+    assert_eq!(l.size(), 32);
+    assert_eq!(l.static_table_offset(), Some(24));
     // The recorded block of the dump's second call is not a valid root
     // signature when its blob is cut: refused, not a panic.
     for cut in [0, 1, 15, 16, rs.len() - 1] {

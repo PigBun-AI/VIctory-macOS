@@ -27,7 +27,7 @@ const MAX_ROOT_SIG_BYTES: u64 = 1 << 20;
 /// How long `DESTROY_QUEUE` and `SHUTDOWN` wait for a queue to drain.
 const DRAIN_MS: u64 = 10_000;
 
-fn exhausted<T>(_: T) -> Status {
+pub(super) fn exhausted<T>(_: T) -> Status {
     Status::OUT_OF_MEMORY
 }
 
@@ -92,16 +92,6 @@ impl State {
                     .remove(a.root_sig.0)
                     .map(drop)
                     .ok_or(Status::NOT_FOUND)
-            }),
-            // DXIL needs Metal Shader Converter, which is not wired in yet.
-            // The root signature handle is still checked first: a dead one
-            // is NOT_FOUND whatever the converter can do.
-            SyncOp::CREATE_COMPUTE_PIPELINE => typed::<CreateComputePipelineArgs>(args, len, |a| {
-                if a.flags != 0 || a.reserved != [0; 4] {
-                    return Err(Status::INVALID_ARG);
-                }
-                self.root_sigs.get(a.root_sig.0).ok_or(Status::NOT_FOUND)?;
-                Err(Status::UNSUPPORTED)
             }),
             SyncOp::DESTROY_PIPELINE => typed::<DestroyPipelineArgs>(args, len, |a| {
                 self.psos.remove(a.pso.0).map(drop).ok_or(Status::NOT_FOUND)
@@ -347,8 +337,29 @@ impl State {
             unsafe { std::slice::from_raw_parts(a.data_addr as *const u8, a.data_len as usize) };
         let desc = RootSigDesc::decode(bytes).map_err(|_| Status::INVALID_ARG)?;
         debug_assert_eq!(desc.flags & !root_flags::ALL_BITS, 0);
-        let layout = TlabLayout::from_desc(&desc).map_err(|_| Status::INVALID_ARG)?;
-        let sig = Arc::new(RootSig { desc, layout });
+        let msc_desc = super::dxil::to_msc(&desc);
+        // MSC decides where each parameter sits in the argument buffer: ask it
+        // (reflection). Without MSC the rule-based layout stands in; a
+        // pipeline cannot be made then anyway.
+        let layout = match crate::msc::Msc::get().and_then(|m| m.layout(&msc_desc)) {
+            Ok(l) => super::dxil::layout_from_msc(&desc, &l).map_err(|_| Status::INVALID_ARG)?,
+            Err(_) => TlabLayout::from_desc(&desc).map_err(|_| Status::INVALID_ARG)?,
+        };
+        let static_table = if desc.static_samplers.is_empty() || layout.static_table_offset().is_none()
+        {
+            None
+        } else {
+            Some(
+                DescriptorHeap::new(&self.device, desc.static_samplers.len() as u32)
+                    .map_err(|e| status_of(&e))?,
+            )
+        };
+        let sig = Arc::new(RootSig {
+            desc,
+            msc_desc,
+            layout,
+            static_table,
+        });
         a.root_sig = RootSigId(self.root_sigs.insert(sig).map_err(exhausted)?);
         Ok(())
     }
@@ -422,7 +433,9 @@ impl State {
         // and a dispatch with both refuses.
         let new = Arc::new(RootSig {
             desc: old.desc.clone(),
+            msc_desc: old.msc_desc.clone(),
             layout,
+            static_table: old.static_table.clone(),
         });
         self.root_sigs.replace(root_sig.0, new);
         Ok(())
@@ -437,7 +450,7 @@ impl State {
 /// `msync` with `MS_ASYNC` answers `ENOMEM` for a range with a hole in it
 /// and does nothing to a mapped one (`mincore` does not notice holes on
 /// macOS, tested).
-fn range_is_mapped(addr: usize, len: usize) -> bool {
+pub(super) fn range_is_mapped(addr: usize, len: usize) -> bool {
     // SAFETY: `msync` only inspects the mappings of the range; it reads or
     // writes none of the memory.
     let rc = unsafe { libc::msync(addr as *mut libc::c_void, len, libc::MS_ASYNC) };
