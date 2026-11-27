@@ -1,4 +1,4 @@
-//! `EXECUTE_INDIRECT`: the commands of an `ID3D12CommandSignature`, read by
+//! `EXECUTE_INDIRECT`: the commands of an application's command signature, read by
 //! the GPU from a buffer.
 //!
 //! The command carries the whole signature (the argument list, the record
@@ -8,7 +8,7 @@
 //!
 //! One record is the arguments of the signature one after the other, packed
 //! (no padding), `stride` bytes apart. [`IndirectArgKind`] has the numbers of
-//! `D3D12_INDIRECT_ARGUMENT_TYPE`, all of them: a back answers `UNSUPPORTED`
+//! the application API's indirect argument types, all of them: a back answers `UNSUPPORTED`
 //! for those it does not do (draws wait for the render encoder), the numbers
 //! stay put.
 
@@ -24,7 +24,7 @@ pub const MAX_INDIRECT_ARGS: usize = 32;
 
 open_enum! {
     /// What one argument of a record is. The numbers are those of
-    /// `D3D12_INDIRECT_ARGUMENT_TYPE`.
+    /// The application API's indirect argument type number.
     pub struct IndirectArgKind(u32) {
         /// `{vertex count, instance count, start vertex, start instance}`, 16 bytes. Action.
         DRAW = 0,
@@ -146,7 +146,9 @@ impl<'a> ExecuteIndirect<'a> {
     /// The arguments, decoded (the decoder has checked them).
     pub fn arguments(&self) -> impl Iterator<Item = IndirectArg> + '_ {
         self.signature
-            .chunks_exact(IndirectArg::SIZE)
+            .as_chunks::<{ IndirectArg::SIZE }>()
+            .0
+            .iter()
             .map(|c| IndirectArg::get(&mut Reader::new(c)).unwrap_or(<IndirectArg as Wire>::ZERO))
     }
 

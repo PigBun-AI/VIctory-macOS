@@ -27,9 +27,11 @@ B5G6R5, B5G5R5A1, BC1–BC7 (UNORM, sRGB, BC4/5 SNORM, BC6H UF/SF), depth (D16, 
 plane views. Typeless formats are only views: the texture keeps the family
 and views reinterpret (`PixelFormatView`); a view of another family is `INVALID_ARG`.
 
+`B8G8R8X8_UNORM`, `_TYPELESS` and `_UNORM_SRGB` are stored as BGRA8 (see
+"B8G8R8X8" below).
+
 Not covered (refused with `UNSUPPORTED`, nothing created): `R32G32B32_*` (no
-96-bit Metal format), `B8G8R8X8_*` (no format with an unused channel; mapping
-to BGRA8 would change what alpha reads as), `B4G4R4A4_UNORM`, `R1_UNORM`,
+96-bit Metal format), `B4G4R4A4_UNORM`, `R1_UNORM`,
 `R10G10B10_XR_BIAS_A2_UNORM`, video/planar and palette formats, `R8G8_B8G8`,
 `G8R8_G8B8`.
 
@@ -107,10 +109,34 @@ Metal on Apple silicon has one memory; the mapping (`front/src/resource.rs`,
 
 ## Known gaps
 
-* `CreateCommittedResource3`, `CreatePlacedResource2` (Device10, enhanced barriers,
-  castable formats): not implemented; `victory-gpu` falls back to the older calls.
-* `B8G8R8X8_*`: refused (see above); `victory-gpu`'s host UAV test for it fails there.
 * Reserved resources and tile mappings, `OpenExistingHeapFromAddress`: not done.
 * Buffer UAV clears through `ClearUnorderedAccessView*` stay `E_NOTIMPL` in the shell
   (texture ones are done).
 * Layout barriers (`BARRIER{LAYOUT}`) are `UNSUPPORTED`: not needed (private textures).
+
+## B8G8R8X8, CreateCommittedResource3, CreatePlacedResource2 (M4)
+
+* **B8G8R8X8** has no Metal format. The back stores it as BGRA8 (and `_SRGB`
+  as BGRA8 sRGB). The difference: D3D12 reads the unused X channel of a
+  shader view as 1; here the stored byte is a real alpha byte. A shader
+  resource view of such a texture (plane 0, not a UAV) therefore gets the
+  swizzle `[R, G, B, One]`, so reads give alpha 1 whatever is stored. What is
+  still different: a render target, a UAV write and a copy keep the byte they
+  were given (D3D12 leaves it undefined), and blending into one with alpha
+  factors changes the byte (nobody reads it through a view). Tests:
+  `format.rs`, `texture_gpu::the_unused_channel_of_a_bgrx_texture_reads_as_one`,
+  `exec_compat::a_bgrx_srv_gets_alpha_one`.
+* **CreateCommittedResource3 / CreatePlacedResource2** take the layout
+  (`D3D12_BARRIER_LAYOUT`) and a list of castable formats. The layout is the
+  initial *state* of the texture here (`state::state_of_layout`; layouts do
+  not exist on the back, textures are private). The castable list is one
+  flag, `tex_usage::CAST` (proto: bit 4 of the texture usage, `ALL_BITS` =
+  0x1F): the texture is made with `PixelFormatView` and views of **any
+  format of the same texel size** are allowed (`format::view_pixel_format`),
+  not only formats of the same family, which is what the castable list of
+  D3D12 permits. The list itself is not enforced (a view of a format outside
+  it succeeds where D3D12 fails it). Tests: `format.rs`,
+  `texture_gpu::a_castable_texture_is_read_in_another_format_family`.
+* Typed UAV support (`caps::format_support`) now also lists the 2-channel and
+  packed formats (RG32, RGB10A2, R11G11B10, RG16, RG8, ...): placed views of
+  a castable texture are made in them, and Apple GPUs write them all.

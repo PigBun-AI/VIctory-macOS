@@ -520,10 +520,10 @@ impl Run<'_> {
         }
         // The signature was made for a root signature; the list's must be
         // the same one (or an identical one).
-        if let Some(made_for) = &signature_root {
-            if !made_for.compatible_with(&sig) {
-                return Err(Status::INVALID_ARG);
-            }
+        if let Some(made_for) = &signature_root
+            && !made_for.compatible_with(&sig)
+        {
+            return Err(Status::INVALID_ARG);
         }
         let plan = super::indirect::plan(c, Some(&sig))?;
         let spec = crate::indirect::IndirectDispatch {

@@ -12,7 +12,7 @@
 //! library": the application then makes the pipeline itself and stores it.
 //! Because only names and fingerprints are kept, replaying a recorded call
 //! sequence gives the same handles, and `Serialize` carries the entries to the
-//! next run (no `MTL4Archive`: the compiled code is not in the blob).
+//! next run (the compiled code is not in the blob).
 //!
 //! Pure Rust: the shell object is in `shell/library.rs`.
 
