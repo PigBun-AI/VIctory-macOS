@@ -1109,8 +1109,7 @@ fn f16_nearest_on() -> bool {
     if let Some(on) = TEST_F16_NEAREST.get() {
         return on;
     }
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_F16_NEAREST").is_some_and(|v| v == "1"))
+    crate::emit::live::var_os("VICTORY_F16_NEAREST").is_some_and(|v| v == "1")
 }
 
 #[cfg(test)]
@@ -1122,8 +1121,7 @@ thread_local! {
 /// `VICTORY_WAVE_OWN_BITS=0`: a wave OR where not every lane runs is refused as before
 /// ([`super::own_bits`]).
 fn own_bits_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_WAVE_OWN_BITS").is_none_or(|v| v != "0"))
+    crate::emit::live::var_os("VICTORY_WAVE_OWN_BITS").is_none_or(|v| v != "0")
 }
 
 /// What the translator was told of the host, for a cache's key: the widest
@@ -1676,7 +1674,7 @@ impl<'a> Lower<'a> {
                 // first half only the second half reads is gone before lowering.
                 // Only in the second translation of a program the first
                 // one refused for it ([`with_first_half_pairs`]).
-                if FIRST_HALF_PAIRS.get() && std::env::var_os("VICTORY_FIRST_HALF").is_none_or(|v| v != "0") {
+                if FIRST_HALF_PAIRS.get() && crate::emit::live::var_os("VICTORY_FIRST_HALF").is_none_or(|v| v != "0") {
                     for (_, i) in &x.io.interps {
                         if let Interp::Interpolated { first, .. } = i {
                             for s in first {
@@ -4726,7 +4724,7 @@ impl<'a> Lower<'a> {
             // still emitted with the lower maxima (drivers take them);
             // refuse them here if one hangs.
             // Experiment (`VICTORY_MESH_OUTPUT_STRICT=1`): they are refused.
-            if !fits(mesh) && std::env::var_os("VICTORY_MESH_OUTPUT_STRICT").is_some() {
+            if !fits(mesh) && crate::emit::live::var_os("VICTORY_MESH_OUTPUT_STRICT").is_some() {
                 return Err("a mesh shader whose outputs pass the host's 32 KiB");
             }
             self.s.mesh = Some(mesh);
@@ -8936,8 +8934,7 @@ impl<'a> Lower<'a> {
                         // first lane, exact when the value is the same in every lane of
                         // the console wave (the ray-tracing builder's scans read a sum of
                         // scalars this way, inside a loop whose exit is per console wave).
-                        static OWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-                        if *OWN.get_or_init(|| std::env::var_os("VICTORY_FIRSTLANE_OWN").is_some_and(|v| v == "1")) {
+                        if crate::emit::live::var_os("VICTORY_FIRSTLANE_OWN").is_some_and(|v| v == "1") {
                             return int(self, mine);
                         }
                         need(self.cur_ir);
@@ -12722,8 +12719,7 @@ impl<'a> Lower<'a> {
         // stop by name with it (vehicle paint pixel shaders at "the first
         // half of an interpolation", foliage mesh shaders); until those are
         // lowered they keep drawing with that zero.
-        static STRICT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let strict = *STRICT.get_or_init(|| std::env::var_os("VICTORY_STRICT_JOINS").is_some());
+        let strict = crate::emit::live::var_os("VICTORY_STRICT_JOINS").is_some();
         let mut work: Vec<Value> = if strict {
             self.read_phis.iter().copied().collect()
         } else {

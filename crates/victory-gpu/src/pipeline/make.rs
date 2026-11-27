@@ -32,7 +32,11 @@ use super::host::{GraphicsState, HostPipeline};
 /// What a host pipeline is made from, and the host pipeline once made.
 pub(crate) struct Pending {
     shaders: Vec<Arc<Shader>>,
-    pub(crate) graphics: Option<Box<GraphicsState>>,
+    pub(crate) graphics: Option<Arc<GraphicsState>>,
+    /// The live-toggle generation it is translated under (`victory_shader::emit::live`).
+    snapshot: Arc<victory_shader::emit::live::Snapshot>,
+    /// Made for a generation after a live change: counted in [`live_progress`].
+    live: bool,
     queue_state: AtomicU8,
     /// Taken by a worker from [`Queue::slow`].
     was_slow: AtomicBool,
@@ -107,7 +111,30 @@ unsafe impl Send for Pending {}
 unsafe impl Sync for Pending {}
 
 impl Pending {
-    pub(crate) fn new(shaders: Vec<Arc<Shader>>, graphics: Option<Box<GraphicsState>>) -> Pending {
+    pub(crate) fn new(shaders: Vec<Arc<Shader>>, graphics: Option<Arc<GraphicsState>>) -> Pending {
+        Pending::under(shaders, graphics, victory_shader::emit::live::current(), false)
+    }
+
+    /// A pipeline for the switches of snapshot, after a live change; counted until it is made
+    /// (`live_progress`).
+    pub(crate) fn for_snapshot(
+        shaders: Vec<Arc<Shader>>,
+        graphics: Option<Arc<GraphicsState>>,
+        snapshot: Arc<victory_shader::emit::live::Snapshot>,
+    ) -> Pending {
+        let p = Pending::under(shaders, graphics, snapshot, true);
+        if p.left_out.is_none() {
+            LIVE_CREATED.fetch_add(1, Ordering::Relaxed);
+        }
+        p
+    }
+
+    fn under(
+        shaders: Vec<Arc<Shader>>,
+        graphics: Option<Arc<GraphicsState>>,
+        snapshot: Arc<victory_shader::emit::live::Snapshot>,
+        live: bool,
+    ) -> Pending {
         let mut key = blake3::Hasher::new();
         for s in &shaders {
             key.update(s.stage.as_bytes());
@@ -120,6 +147,8 @@ impl Pending {
             || scene_input;
         let left_out = left_out(&shaders);
         Pending {
+            snapshot,
+            live,
             screen,
             scene_input,
             left_out,
@@ -133,6 +162,10 @@ impl Pending {
         }
     }
 
+    pub(super) fn snapshot(&self) -> Arc<victory_shader::emit::live::Snapshot> {
+        self.snapshot.clone()
+    }
+
     pub(super) fn key(&self) -> &str {
         &self.key
     }
@@ -140,8 +173,14 @@ impl Pending {
     fn make(&self) {
         self.made.get_or_init(|| {
             let began = Instant::now();
-            let made = HostPipeline::new(&self.shaders, self.graphics.as_deref());
+            // Under the switches it was asked for, whatever the live generation is by now.
+            let made = victory_shader::emit::live::scoped(&self.snapshot, || {
+                HostPipeline::new(&self.shaders, self.graphics.as_deref())
+            });
             super::library::note_time(&self.key, began.elapsed().as_millis() as u64);
+            if self.live {
+                LIVE_MADE.fetch_add(1, Ordering::Relaxed);
+            }
             made
         });
         let (lock, done) = &DONE;
@@ -161,7 +200,7 @@ pub(crate) fn missing(p: &Pending) -> Option<String> {
             let failed: Vec<String> = p
                 .shaders
                 .iter()
-                .filter(|s| matches!(s.translated.get(), Some(None)))
+                .filter(|s| s.failed())
                 .map(|s| format!("{} {}", s.stage, s.hash))
                 .collect();
             Some(if failed.is_empty() {
@@ -208,6 +247,15 @@ fn screen_budget() -> Duration {
 /// Whether passes over the screen go before the others.
 fn screens_first() -> bool {
     !screen_budget().is_zero()
+}
+
+/// Pipelines made for a live generation (not the first): asked for, and made.
+static LIVE_CREATED: AtomicU64 = AtomicU64::new(0);
+static LIVE_MADE: AtomicU64 = AtomicU64::new(0);
+
+/// Host pipelines asked for after live changes so far, and how many of them are made.
+pub(crate) fn live_progress() -> (u64, u64) {
+    (LIVE_CREATED.load(Ordering::Relaxed), LIVE_MADE.load(Ordering::Relaxed))
 }
 
 /// Pipelines queued and not made yet.

@@ -24,6 +24,7 @@ static MISSES: AtomicU64 = AtomicU64::new(0);
 
 /// Keeps translated shaders in `dir` from now on.
 pub fn use_shader_cache(dir: PathBuf) {
+    crate::live::start_from_env();
     match Cache::open(dir) {
         Ok(cache) => {
             let _ = CACHE.set(cache);
@@ -45,8 +46,10 @@ fn build() -> [u8; 32] {
     // The view heap's null slot differs by host GPU: a translation cached
     // without the clamp must not be served (`host_settings` below).
     crate::descriptor::host::probe_view_limit();
-    static FIXED: OnceLock<Vec<u8>> = OnceLock::new();
-    let fixed = FIXED.get_or_init(|| {
+    // One per live-toggle generation (`victory_shader::emit::live`): the switches below are read from
+    // the snapshot this thread works under, so the key and the translation agree.
+    let snap = victory_shader::emit::live::snapshot();
+    let fixed = snap.key.get_or_init(|| victory_shader::emit::live::scoped(&snap, || {
         let limit = victory_shader::emit::loop_limit();
         if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
             tracing::warn!(
@@ -75,6 +78,8 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
+            // The sun-speed branch's legacy multiply (no effect on a build without that code).
+            "VICTORY_LEGACY_MUL_FAST",
             // Ray-tracing programs keep their last page-directory entries in group-shared memory.
             "VICTORY_RT_PAGECACHE",
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
@@ -82,7 +87,7 @@ fn build() -> [u8; 32] {
         ] {
             bytes.extend_from_slice(name.as_bytes());
             bytes.push(b'=');
-            if let Some(value) = std::env::var_os(name) {
+            if let Some(value) = victory_shader::emit::live::var_os(name) {
                 bytes.extend_from_slice(value.as_encoded_bytes());
             }
             bytes.push(0);
@@ -94,8 +99,8 @@ fn build() -> [u8; 32] {
         bytes.push(0);
         // And which clean-up passes ran over the translated code.
         bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
-        bytes
-    });
+        *blake3::hash(&bytes).as_bytes()
+    }));
     let mut hash = blake3::Hasher::new();
     hash.update(fixed);
     for value in victory_shader::emit::host_settings() {
@@ -107,6 +112,11 @@ fn build() -> [u8; 32] {
 /// What tells one set of translations from another ([`build`]).
 pub(crate) fn translation() -> [u8; 32] {
     build()
+}
+
+/// [`translation`] as it is under snapshot (a live-toggle generation).
+pub(crate) fn translation_of(snapshot: &std::sync::Arc<victory_shader::emit::live::Snapshot>) -> [u8; 32] {
+    victory_shader::emit::live::scoped(snapshot, build)
 }
 
 /// Puts the translation of `container` into the cache before any title asks
@@ -422,6 +432,38 @@ mod tests {
         // Failures are not stored.
         let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
         assert!(cached(&cache, &build, b"other", fail).is_err());
+    }
+
+    /// A change of a live switch changes the key (`translation_of`); the entry under the first key
+    /// is still there when the switch is put back: translated once per state, not per switch.
+    #[test]
+    fn live_switches_key_the_cache_and_put_back_hits() {
+        use victory_shader::emit::live::snapshot_of;
+        let on = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), "1".into())]).unwrap();
+        let off = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), "0".into())]).unwrap();
+        let none = snapshot_of(&[]).unwrap();
+        let none_again = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), String::new())]).unwrap();
+        let (k_on, k_off, k_none) = (translation_of(&on), translation_of(&off), translation_of(&none));
+        assert!(k_on != k_off && k_on != k_none && k_off != k_none);
+        assert_eq!(k_none, translation_of(&none_again), "empty is unset");
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Ok(shader())
+        };
+        let c = b"a console container".as_slice();
+        let at = |key: &[u8; 32]| cached(&cache, key, c, translate).unwrap();
+        at(&k_none);
+        at(&k_on);
+        at(&k_off);
+        assert_eq!(runs.load(Ordering::Relaxed), 3, "each state translates once");
+        at(&k_none);
+        at(&k_on);
+        at(&k_off);
+        at(&k_on);
+        assert_eq!(runs.load(Ordering::Relaxed), 3, "put back: all hit");
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

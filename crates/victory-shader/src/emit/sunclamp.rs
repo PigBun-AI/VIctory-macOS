@@ -42,7 +42,7 @@ pub(in crate::emit) fn wanted(switch: Option<&str>, bytes: &[u8], stage: HwStage
 }
 
 pub(in crate::emit) fn scope(bytes: &[u8], stage: HwStage) -> Scope {
-    let switch = std::env::var("VICTORY_TM_CLAMP_HDR").ok();
+    let switch = crate::emit::live::var("VICTORY_TM_CLAMP_HDR");
     Scope(CLAMP_SAMPLES.replace(wanted(switch.as_deref(), bytes, stage)))
 }
 
@@ -58,8 +58,7 @@ pub(in crate::emit) fn export_sat_for(value: Option<&str>) -> bool {
 
 /// B: `VICTORY_EXPORT_F16_SAT` (default on; "0" turns it off). Also part of the shader cache key.
 pub fn export_sat() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| export_sat_for(std::env::var("VICTORY_EXPORT_F16_SAT").ok().as_deref()))
+    export_sat_for(crate::emit::live::var("VICTORY_EXPORT_F16_SAT").as_deref())
 }
 
 impl Lower<'_> {
@@ -129,12 +128,12 @@ fn game_tonemap_container() -> Vec<u8> {
 #[ignore = "needs the game (VICTORY_GAME_DIR) and its own process (sets VICTORY_TM_CLAMP_HDR)"]
 fn tonemap_clamp_changes_only_with_the_switch() {
     let bytes = game_tonemap_container();
-    unsafe { std::env::remove_var("VICTORY_TM_CLAMP_HDR") };
+    crate::emit::live::apply(&[]).unwrap();
     let off = crate::emit::translate(&bytes).unwrap();
-    unsafe { std::env::set_var("VICTORY_TM_CLAMP_HDR", "1") };
+    crate::emit::live::apply(&[("VICTORY_TM_CLAMP_HDR".into(), "1".into())]).unwrap();
     let on = crate::emit::translate(&bytes).unwrap();
     assert_ne!(off.dxil, on.dxil, "the switch changed nothing");
-    unsafe { std::env::set_var("VICTORY_TM_CLAMP_HDR", "0") };
+    crate::emit::live::apply(&[("VICTORY_TM_CLAMP_HDR".into(), "0".into())]).unwrap();
     assert_eq!(off.dxil, crate::emit::translate(&bytes).unwrap().dxil);
     if let Some(dir) = std::env::var_os("VICTORY_SUNCLAMP_OUT") {
         let dir = std::path::PathBuf::from(dir);

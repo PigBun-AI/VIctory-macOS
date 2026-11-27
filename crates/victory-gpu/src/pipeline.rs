@@ -64,8 +64,11 @@ pub(crate) struct Shader {
     /// Its part in the stand-in for the indirect light.
     #[cfg(windows)]
     pub(crate) ambient: Option<crate::ambient::Role>,
+    /// Its translation under each live-toggle generation's key (shader_cache::translation);
+    /// one entry unless VICTORY_LIVE_FILE changed a switch. Entries are never freed: a host
+    /// pipeline made from one may still be on the GPU.
     #[cfg(windows)]
-    translated: OnceLock<Option<Translated>>,
+    translated: std::sync::RwLock<HashMap<[u8; 32], &'static OnceLock<Option<Translated>>>>,
 }
 
 impl std::fmt::Debug for Shader {
@@ -117,7 +120,7 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 #[cfg(windows)]
                 ambient: (stage == "compute").then(|| crate::ambient::role(bytes)).flatten(),
                 #[cfg(windows)]
-                translated: OnceLock::new(),
+                translated: Default::default(),
             })
         })
         .clone()
@@ -147,8 +150,14 @@ pub(crate) struct Translated {
 impl Shader {
     /// The translation, made on first use; a shader that does not
     /// translate is logged once.
-    pub(crate) fn translated(&self) -> Option<&Translated> {
-        self.translated
+    pub(crate) fn translated(&self) -> Option<&'static Translated> {
+        let key = crate::shader_cache::translation();
+        let cell = self.translated.read().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
+        let cell = cell.unwrap_or_else(|| {
+            let mut all = self.translated.write().unwrap_or_else(|e| e.into_inner());
+            *all.entry(key).or_insert_with(|| Box::leak(Box::new(OnceLock::new())))
+        });
+        cell
             .get_or_init(|| {
                 let done = translate(&self.container);
                 // `VICTORY_SHADER_SAVE=<dir>`: each shader as the title gave it (`.cdxil`) and as
@@ -184,6 +193,13 @@ impl Shader {
                 done.ok()
             })
             .as_ref()
+    }
+
+    /// Whether a translation was tried under any key and failed (diagnostics).
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn failed(&self) -> bool {
+        let all = self.translated.read().unwrap_or_else(|e| e.into_inner());
+        all.values().any(|c| matches!(c.get(), Some(None)))
     }
 }
 
@@ -431,6 +447,20 @@ struct Pipeline {
     /// (by a worker: the title may release the pipeline meanwhile).
     #[cfg(windows)]
     host: Arc<make::Pending>,
+    /// The graphics state, to make the host pipeline again under other switches.
+    #[cfg(windows)]
+    graphics: Option<Arc<host::GraphicsState>>,
+    /// Host pipelines of other live-toggle generations, by translation key; never freed (the GPU
+    /// may still run one). A key equal to [`host`]'s is [`host`] itself.
+    #[cfg(windows)]
+    alts: Mutex<HashMap<[u8; 32], Box<Arc<make::Pending>>>>,
+    /// The generation last looked up, and the pending pipeline for it (an address inside
+    /// [`host`] or a box in [`alts`]; they live as long as this pipeline).
+    #[cfg(windows)]
+    current: std::sync::RwLock<(u64, usize)>,
+    /// [`host`]'s translation key, once asked.
+    #[cfg(windows)]
+    host_key: OnceLock<[u8; 32]>,
     /// One of the ray-tracing structure builder's ([`Builder`]).
     #[cfg(windows)]
     builder: bool,
@@ -469,7 +499,58 @@ pub(crate) fn host_pipeline<'a>(this: This) -> Option<&'a host::HostPipeline> {
     if this.is_null() {
         return None;
     }
-    make::ready(&pipeline(this).host)
+    let p = pipeline(this);
+    if victory_shader::emit::live::generation() == 0 {
+        return make::ready(&p.host);
+    }
+    make::ready(p.host_now())
+}
+
+#[cfg(windows)]
+impl Pipeline {
+    /// The pending host pipeline for the current live generation: this pipeline's own host if
+    /// the switches translate alike (a switch put back finds its pipeline again), else the one
+    /// made for that translation, started on its first use.
+    fn host_now<'a>(&'a self) -> &'a Arc<make::Pending> {
+        use victory_shader::emit::live;
+        let generation = live::generation();
+        let (seen, at) = *self.current.read().unwrap_or_else(|e| e.into_inner());
+        if seen == generation && at != 0 {
+            // SAFETY: `at` is an address inside `self` or a box in `alts`, neither moves or is freed
+            // while self lives.
+            return unsafe { &*(at as *const Arc<make::Pending>) };
+        }
+        let snap = live::current();
+        let key = crate::shader_cache::translation_of(&snap);
+        let own = *self.host_key.get_or_init(|| crate::shader_cache::translation_of(&self.host.snapshot()));
+        let at = if key == own {
+            &raw const self.host as usize
+        } else {
+            let mut alts = self.alts.lock().unwrap_or_else(|e| e.into_inner());
+            let boxed = alts.entry(key).or_insert_with(|| {
+                Box::new(Arc::new(make::Pending::for_snapshot(
+                    self.shaders.clone(),
+                    self.graphics.clone(),
+                    snap.clone(),
+                )))
+            });
+            &raw const **boxed as usize
+        };
+        *self.current.write().unwrap_or_else(|e| e.into_inner()) = (snap.generation, at);
+        // SAFETY: as above.
+        unsafe { &*(at as *const Arc<make::Pending>) }
+    }
+}
+
+/// Host pipelines asked for after live changes, and how many of them are made (`live`).
+#[cfg(windows)]
+pub(crate) fn live_progress() -> (u64, u64) {
+    make::live_progress()
+}
+
+#[cfg(not(windows))]
+pub(crate) fn live_progress() -> (u64, u64) {
+    (0, 0)
 }
 
 /// Host pipelines queued and not made yet.
@@ -574,13 +655,13 @@ fn copy(stage: &'static str, code: &Bytecode) -> Option<Arc<Shader>> {
 
 fn hand_out(
     shaders: Vec<Arc<Shader>>,
-    #[cfg(windows)] graphics: Option<Box<host::GraphicsState>>,
+    #[cfg(windows)] graphics: Option<Arc<host::GraphicsState>>,
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
     tracing::trace!(?shaders, "pipeline state");
     #[cfg(windows)]
-    let host = Arc::new(make::Pending::new(shaders.clone(), graphics));
+    let host = Arc::new(make::Pending::new(shaders.clone(), graphics.clone()));
     #[cfg(windows)]
     known::note(host.key(), &shaders, host.graphics.as_deref());
     #[cfg(windows)]
@@ -599,6 +680,14 @@ fn hand_out(
         packet: [0; 8],
         #[cfg(windows)]
         host,
+        #[cfg(windows)]
+        graphics,
+        #[cfg(windows)]
+        alts: Mutex::new(HashMap::new()),
+        #[cfg(windows)]
+        current: std::sync::RwLock::new((u64::MAX, 0)),
+        #[cfg(windows)]
+        host_key: OnceLock::new(),
         #[cfg(windows)]
         builder,
         shaders,
@@ -745,7 +834,7 @@ pub(crate) extern "system" fn create_stream(
     hand_out(
         shaders,
         #[cfg(windows)]
-        Some(Box::new(graphics)),
+        Some(Arc::new(graphics)),
         iid,
         out,
     )
@@ -802,6 +891,32 @@ pub fn use_pipeline_cache(dir: std::path::PathBuf) {
 #[cfg(windows)]
 pub fn save_pipeline_cache() {
     library::save(true);
+}
+
+/// For live's test: a pipeline of two dummy shaders, and the address of the pending host pipeline
+/// it would use now.
+#[cfg(all(test, windows))]
+pub(crate) fn test_pipeline() -> This {
+    let (vs, ps) = ([1u8, 2, 3], [4u8; 5]);
+    let none = || Bytecode { code: std::ptr::null(), size: 0 };
+    let desc = GraphicsHead {
+        root: std::ptr::null(),
+        stages: [
+            Bytecode { code: vs.as_ptr(), size: vs.len() },
+            Bytecode { code: ps.as_ptr(), size: ps.len() },
+            none(),
+            none(),
+            none(),
+        ],
+    };
+    let mut p = std::ptr::null();
+    assert_eq!(create_graphics(std::ptr::null(), &desc, &PIPELINE_IIDS[0], &mut p), object::S_OK);
+    p
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn test_host_address(this: This) -> usize {
+    Arc::as_ptr(pipeline(this).host_now()) as usize
 }
 
 #[cfg(test)]

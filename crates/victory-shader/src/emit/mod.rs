@@ -81,6 +81,7 @@
 //!   It binds nothing.
 
 mod bitcode;
+pub mod live;
 mod container;
 #[cfg(all(test, windows))]
 mod cube_lod_tests;
@@ -154,8 +155,7 @@ pub fn loop_limit() -> u32 {
 /// lane's (`lower.rs` `first_lane`); on unless `VICTORY_HELPER_OWN=0`. Part of the translation:
 /// the shader cache keys on it.
 pub fn helper_own() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_HELPER_OWN").is_none_or(|v| v != "0"))
+    crate::emit::live::var_os("VICTORY_HELPER_OWN").is_none_or(|v| v != "0")
 }
 
 /// Which of a translated program's group barriers wait for the whole
@@ -177,20 +177,18 @@ pub fn helper_own() -> bool {
 /// Part of the translation: the shader cache keys on it (`victory-gpu`'s
 /// does).
 pub fn group_sync() -> u8 {
-    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| match std::env::var("VICTORY_GROUP_SYNC").ok().as_deref().map(str::trim) {
+    match crate::emit::live::var("VICTORY_GROUP_SYNC").as_deref().map(str::trim) {
         Some("0") => 0,
         Some("1") => 1,
         _ => 2,
-    })
+    }
 }
 
 /// Whether buffer atomics of the ray-tracing structure builder stand between
 /// two fences (`VICTORY_BVH_FENCES=0`: they do not). Part of the
 /// translation: the shader cache keys on it.
 pub fn builder_fences() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_FENCES").is_none_or(|v| v != "0"))
+    crate::emit::live::var_os("VICTORY_BVH_FENCES").is_none_or(|v| v != "0")
 }
 
 /// Whether the structure builder's accesses through its root views stay near
@@ -198,8 +196,7 @@ pub fn builder_fences() -> bool {
 /// (`VICTORY_BVH_BOUNDS=0`: neither). Part of the translation: the shader
 /// cache keys on it.
 pub fn builder_bounds() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_BOUNDS").is_none_or(|v| v != "0"))
+    crate::emit::live::var_os("VICTORY_BVH_BOUNDS").is_none_or(|v| v != "0")
 }
 
 #[cfg(test)]
@@ -221,8 +218,7 @@ pub fn rt_pagecache() -> bool {
     if let Some(on) = RT_PAGECACHE_TEST.get() {
         return on;
     }
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_RT_PAGECACHE").is_some_and(|v| v == "1"))
+    crate::emit::live::var_os("VICTORY_RT_PAGECACHE").is_some_and(|v| v == "1")
 }
 
 /// The clean-up passes that run over a translated program before it is
@@ -243,8 +239,7 @@ pub fn rt_pagecache() -> bool {
 /// Part of the translation: the shader cache keys on it (`victory-gpu`'s
 /// does).
 pub fn shader_opt() -> u32 {
-    static PASSES: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *PASSES.get_or_init(|| parse_shader_opt(std::env::var("VICTORY_SHADER_OPT").ok().as_deref()))
+    parse_shader_opt(crate::emit::live::var("VICTORY_SHADER_OPT").as_deref())
 }
 
 /// On a host whose shaders run on the console's own kind of hardware (AMD
@@ -492,13 +487,13 @@ pub fn emit(
         let done = |r: &Result<(HostShader, Option<u32>), ShaderError>| matches!(r, Ok((_, wave)) if *wave != Some(64));
         // Each host wave as a wave of its own (`lower::with_local_waves`),
         // for programs still stopped where not every lane runs.
-        let local_on = std::env::var_os("VICTORY_WAVE_LOCAL").is_none_or(|v| v != "0");
+        let local_on = crate::emit::live::var_os("VICTORY_WAVE_LOCAL").is_none_or(|v| v != "0");
         // Where the wave operations are the allocation idiom
         // ([`lower::wave_local`]) that is exact. Other programs are taken
         // the same way last of all, each half-wave giving its own results
         // (approximate: a tile-wide result becomes two half-tile ones);
         // `VICTORY_WAVE_LOCAL=idiom` refuses those instead.
-        let strict = std::env::var_os("VICTORY_WAVE_LOCAL").is_some_and(|v| v == "idiom");
+        let strict = crate::emit::live::var_os("VICTORY_WAVE_LOCAL").is_some_and(|v| v == "idiom");
         let idiom = |p: &ir::Program, st: &structure::Structured| match lower::wave_local(p, st) {
             Ok(()) => true,
             Err((offset, what)) => {
@@ -564,7 +559,7 @@ pub fn emit(
         // lost the card in a submission of two programs that had just moved to it
         // (`ptfx_CS_lightAtlas_Sprite` and `_Trail`). The 32-lane programs' form below, which
         // has no barrier, stays on.
-        let wide_option = std::env::var_os("VICTORY_WAVE_WIDE");
+        let wide_option = crate::emit::live::var_os("VICTORY_WAVE_WIDE");
         // Both archived kernels use one logical wave per group and have
         // validated wave32 PSOs on RTX. Explicit policy wins.
         let scene_kernel = matches!(native.io, crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64)
@@ -591,7 +586,7 @@ pub fn emit(
                 // ([`ir::without_skips`], `deep`): most of the body is then code every
                 // lane runs, where the two host waves can exchange.
                 // (`VICTORY_WAVE_DEEP_SKIPS=0` and `VICTORY_WAVE_WIDE=0` turn the two off.)
-                let deep_on = std::env::var_os("VICTORY_WAVE_DEEP_SKIPS").is_none_or(|v| v != "0");
+                let deep_on = crate::emit::live::var_os("VICTORY_WAVE_DEEP_SKIPS").is_none_or(|v| v != "0");
                 let deep = if deep_on { form("without skips, scalars followed", ir::without_skips(p, true)) } else { None };
                 if let Some((p, st, io, res)) = &deep {
                     let again = emit_program(c, native, p, st, io, res);
@@ -671,7 +666,7 @@ pub fn emit(
         Err(ShaderError::Unsupported { what, .. })
             if native.stage == HwStage::Cs
                 && what == lower::LANE_MASK
-                && std::env::var_os("VICTORY_WAVE_WIDE").is_none_or(|v| v != "0") =>
+                && crate::emit::live::var_os("VICTORY_WAVE_WIDE").is_none_or(|v| v != "0") =>
         {
             let again = widen(c, native, p, std::env::var_os("VICTORY_WAVE_WHY").is_some(), false);
             match again {

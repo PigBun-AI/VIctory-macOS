@@ -358,6 +358,9 @@ pub(crate) fn bounded_root_srvs() -> bool {
 /// One stage of a host pipeline and where its bindings go.
 pub(crate) struct Stage {
     pub(crate) shader: Arc<Shader>,
+    /// The translation this pipeline was made from (a live change of switches makes another
+    /// pipeline; this one keeps its own).
+    translated: &'static Translated,
     /// The root parameter of its user data, and its size in dwords.
     pub(crate) user_data: Option<(u32, u32)>,
     /// Root parameters of its root views: (title root parameter, ours).
@@ -369,10 +372,8 @@ pub(crate) struct Stage {
 }
 
 impl Stage {
-    pub(crate) fn translated(&self) -> &Translated {
-        self.shader
-            .translated()
-            .expect("host pipelines are made from translated shaders")
+    pub(crate) fn translated(&self) -> &'static Translated {
+        self.translated
     }
 }
 
@@ -475,9 +476,11 @@ impl HostPipeline {
         let mut samplers = Vec::new();
         let mut bound = Vec::new();
         for &(shader, visibility) in &stages {
-            let t = &shader.translated()?.host;
+            let translated = shader.translated()?;
+            let t = &translated.host;
             let mut stage = Stage {
                 shader: shader.clone(),
+                translated,
                 user_data: None,
                 root_cbvs: Vec::new(),
                 root_srvs: Vec::new(),

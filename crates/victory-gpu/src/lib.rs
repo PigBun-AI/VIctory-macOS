@@ -72,6 +72,7 @@ mod safecopy;
 mod sampler;
 #[cfg(windows)]
 pub mod shader_cache;
+pub mod live;
 #[cfg(windows)]
 mod memory;
 #[cfg(windows)]
