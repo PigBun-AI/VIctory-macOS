@@ -96,6 +96,8 @@ pub struct FenceObj {
     pub private: PrivateData,
     pub device_obj: ComObject<DeviceObj>,
     pub fence: Arc<dv::Fence>,
+    /// The thread behind `SetEventOnCompletion`.
+    pub waiter: crate::fence_wait::Waiter<dv::Fence>,
 }
 
 impl FenceObj_Impl {
@@ -121,13 +123,10 @@ impl FenceObj_Impl {
             wres(self.fence.wait(value, u64::MAX))?;
             return Ok(());
         }
-        let fence = self.fence.clone();
         let handle = hevent.0 as isize;
-        std::thread::spawn(move || {
-            if fence.wait(value, u64::MAX).unwrap_or(false) {
-                // SAFETY: the event handle stays the application's until it is signalled.
-                let _ = unsafe { SetEvent(HANDLE(handle as *mut c_void)) };
-            }
+        self.waiter.when_reached(value, move || {
+            // SAFETY: the event handle stays the application's until it is signalled.
+            let _ = unsafe { SetEvent(HANDLE(handle as *mut c_void)) };
         });
         Ok(())
     }

@@ -9,12 +9,21 @@
 //!   game's fences; the queue signals it with `signalEvent:value:`, waits for it
 //!   with `waitForEvent:value:`, the CPU with
 //!   [`Fence::wait`] (`waitUntilSignaledValue:timeoutMS:`);
+//! * the commit of a submission, and a fence's signal or wait, are made by
+//!   the queue's own thread, in the order the calls were made (a [`Submitter`]
+//!   FIFO). The calling thread settles everything that gives a call its
+//!   identity first (the timeline value, the constant ring's seal, the
+//!   allocator's busy mark), so what happens on the GPU does not depend on
+//!   when the thread runs. A caller that must see the work done waits on the
+//!   timeline or the fence, as it always had to;
 //! * completion news arrives through `MTL4CommitOptions
 //!   addFeedbackHandler:` and is mapped as in architecture note 2.6, item 9
 //!   ([`status_for_error_code`]).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -207,6 +216,169 @@ impl Default for QueueOptions {
     }
 }
 
+/// One thing for the queue's submit thread to do, in the order the calls
+/// that made it were made.
+enum Job {
+    /// Commit these command buffers, then signal the queue's timeline.
+    Commit {
+        buffers: Vec<Retained<ProtocolObject<dyn MTL4CommandBuffer>>>,
+        timeline: Arc<Timeline>,
+        value: u64,
+        sink: Arc<Sink>,
+    },
+    /// `signalEvent:value:` of a fence.
+    Signal {
+        event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
+        value: u64,
+    },
+    /// `waitForEvent:value:` for later work.
+    Wait {
+        event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
+        value: u64,
+    },
+}
+
+// The Metal objects in a job are thread-safe to hand over; a command buffer
+// is not touched by anyone else once it is submitted.
+unsafe impl Send for Job {}
+
+/// How long the submit thread keeps looking for work after the last job
+/// before it sleeps: calls that follow each other closely (a game's frame)
+/// then find it awake and pay no wake-up.
+const SUBMIT_SPIN: Duration = Duration::from_micros(150);
+
+/// The hand-over to a queue's submit thread: a FIFO that the thread empties.
+/// Commit order, fence signals and waits keep the order of the calls, and
+/// the values and handles are all given out by the calling thread before a
+/// job is queued, so what the thread does is a function of the call sequence
+/// alone.
+struct Submitter {
+    jobs: Mutex<VecDeque<Job>>,
+    wake: Condvar,
+    /// Jobs queued and not yet taken: the spinning thread looks at this
+    /// alone, so that it does not fight the callers for the lock.
+    pending: AtomicU64,
+    sleeping: AtomicBool,
+    closed: AtomicBool,
+}
+
+/// The submit thread works for the thread that is waiting on it: it runs at
+/// the top quality of service, as the game's threads do.
+fn interactive_qos() {
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    }
+    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+    // SAFETY: a plain call on the calling thread; a failure leaves the default.
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+}
+
+struct RawQueue(Retained<ProtocolObject<dyn MTL4CommandQueue>>);
+// An MTL4CommandQueue is thread-safe.
+unsafe impl Send for RawQueue {}
+
+impl Submitter {
+    fn start(raw: Retained<ProtocolObject<dyn MTL4CommandQueue>>) -> Arc<Submitter> {
+        let me = Arc::new(Submitter {
+            jobs: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            pending: AtomicU64::new(0),
+            sleeping: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+        });
+        let (thread, raw) = (me.clone(), RawQueue(raw));
+        std::thread::Builder::new()
+            .name("victory-metal submit".into())
+            .spawn(move || {
+                interactive_qos();
+                thread.run(raw.0)
+            })
+            .expect("the submit thread starts");
+        me
+    }
+
+    fn push(&self, job: Job) {
+        lock(&self.jobs).push_back(job);
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        if self.sleeping.load(Ordering::SeqCst) {
+            // Taking the lock makes the thread either see the job or be
+            // waiting when this notifies.
+            drop(lock(&self.jobs));
+            self.wake.notify_one();
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        drop(lock(&self.jobs));
+        self.wake.notify_one();
+    }
+
+    fn run(&self, raw: Retained<ProtocolObject<dyn MTL4CommandQueue>>) {
+        let mut idle_since = Instant::now();
+        loop {
+            let job = if self.pending.load(Ordering::Acquire) > 0 {
+                let job = lock(&self.jobs).pop_front();
+                if job.is_some() {
+                    self.pending.fetch_sub(1, Ordering::SeqCst);
+                }
+                job
+            } else {
+                None
+            };
+            match job {
+                Some(job) => {
+                    Self::perform(&raw, job);
+                    idle_since = Instant::now();
+                }
+                None if self.closed.load(Ordering::SeqCst) => return,
+                None if idle_since.elapsed() < SUBMIT_SPIN => std::hint::spin_loop(),
+                None => {
+                    let mut jobs = lock(&self.jobs);
+                    self.sleeping.store(true, Ordering::SeqCst);
+                    while jobs.is_empty() && !self.closed.load(Ordering::SeqCst) {
+                        jobs = self.wake.wait(jobs).unwrap_or_else(|e| e.into_inner());
+                    }
+                    self.sleeping.store(false, Ordering::SeqCst);
+                    idle_since = Instant::now();
+                }
+            }
+        }
+    }
+
+    fn perform(raw: &ProtocolObject<dyn MTL4CommandQueue>, job: Job) {
+        match job {
+            Job::Commit {
+                mut buffers,
+                timeline,
+                value,
+                sink,
+            } => {
+                let mut ptrs: Vec<NonNull<ProtocolObject<dyn MTL4CommandBuffer>>> =
+                    buffers.iter_mut().map(|b| NonNull::from(&**b)).collect();
+                // SAFETY: `ptrs` holds valid, ended command buffers that
+                // `buffers` keeps alive for the call.
+                unsafe {
+                    raw.commit_count_options(
+                        NonNull::new(ptrs.as_mut_ptr()).expect("non-empty"),
+                        ptrs.len(),
+                        &commit_options(&sink),
+                    );
+                }
+                let event: &ProtocolObject<dyn MTLEvent> =
+                    ProtocolObject::from_ref(&*timeline.event);
+                raw.signalEvent_value(event, value);
+            }
+            Job::Signal { event, value } => {
+                raw.signalEvent_value(ProtocolObject::from_ref(&*event), value)
+            }
+            Job::Wait { event, value } => {
+                raw.waitForEvent_value(ProtocolObject::from_ref(&*event), value)
+            }
+        }
+    }
+}
+
 pub(crate) struct Slot {
     pub(crate) allocator: Retained<ProtocolObject<dyn MTL4CommandAllocator>>,
     pub(crate) cb: Retained<ProtocolObject<dyn MTL4CommandBuffer>>,
@@ -226,6 +398,14 @@ pub(crate) struct QueueInner {
     sink: Arc<Sink>,
     attached: Mutex<u32>,
     submissions: AtomicU64,
+    submitter: Arc<Submitter>,
+}
+
+impl Drop for QueueInner {
+    fn drop(&mut self) {
+        // The thread finishes what is queued, then ends.
+        self.submitter.close();
+    }
 }
 
 // The Metal objects are thread-safe (queue, event) or only used with a lock
@@ -302,6 +482,7 @@ impl Queue {
         device.register_timeline(&timeline);
         let ring = ConstantRing::new(device, options.ring_segment_bytes, options.ring_segments)?;
         let sink = Arc::new(Sink::default());
+        let submitter = Submitter::start(raw.clone());
         Ok(Queue {
             inner: Arc::new(QueueInner {
                 device: device.clone(),
@@ -315,6 +496,7 @@ impl Queue {
                 sink,
                 attached: Mutex::new(sets.len() as u32),
                 submissions: AtomicU64::new(0),
+                submitter,
             }),
         })
     }
@@ -422,14 +604,18 @@ impl Queue {
 
     /// `signalEvent:value:` on the queue: after all work submitted so far.
     pub fn signal(&self, fence: &Fence, value: u64) {
-        let event: &ProtocolObject<dyn MTLEvent> = ProtocolObject::from_ref(&*fence.event);
-        self.inner.raw.signalEvent_value(event, value);
+        self.inner.submitter.push(Job::Signal {
+            event: fence.event.clone(),
+            value,
+        });
     }
 
     /// `waitForEvent:value:` on the queue: later work waits for the fence.
     pub fn wait_fence(&self, fence: &Fence, value: u64) {
-        let event: &ProtocolObject<dyn MTLEvent> = ProtocolObject::from_ref(&*fence.event);
-        self.inner.raw.waitForEvent_value(event, value);
+        self.inner.submitter.push(Job::Wait {
+            event: fence.event.clone(),
+            value,
+        });
     }
 
     /// Takes a pooled allocator + command buffer, waiting for a busy one
@@ -567,19 +753,21 @@ impl Queue {
         // The value is reserved before the commit: anything destroyed from
         // now on waits for it (see `DeviceInner::in_flight_waits`).
         let value = self.inner.timeline.submitted.fetch_add(1, Ordering::AcqRel) + 1;
-        let mut buffers: Vec<NonNull<ProtocolObject<dyn MTL4CommandBuffer>>> =
-            lists.iter().map(CommandList::raw_command_buffer).collect();
-        // SAFETY: `buffers` holds valid, ended command buffers for the call.
-        unsafe {
-            self.inner.raw.commit_count_options(
-                NonNull::new(buffers.as_mut_ptr()).expect("non-empty"),
-                buffers.len(),
-                &commit_options(&self.inner.sink),
-            );
-        }
-        let event: &ProtocolObject<dyn MTLEvent> =
-            ProtocolObject::from_ref(&*self.inner.timeline.event);
-        self.inner.raw.signalEvent_value(event, value);
+        // The commit itself is made by the queue's submit thread, in the
+        // order of these calls. The value above, the ring's seal and the
+        // lists' slots (busy until `value`, which the thread signals after
+        // the commit) are settled here, so nothing the thread does depends
+        // on when it runs.
+        let buffers = lists
+            .iter()
+            .map(CommandList::retained_command_buffer)
+            .collect();
+        self.inner.submitter.push(Job::Commit {
+            buffers,
+            timeline: self.inner.timeline.clone(),
+            value,
+            sink: self.inner.sink.clone(),
+        });
         lock(&self.inner.ring).seal(value);
         self.inner.submissions.fetch_add(1, Ordering::Relaxed);
         for list in lists {

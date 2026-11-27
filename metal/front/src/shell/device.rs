@@ -981,6 +981,7 @@ impl DeviceObj_Impl {
         let f = ComObject::new(FenceObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),
+            waiter: crate::fence_wait::Waiter::new(fence.clone()),
             fence,
         });
         return_object(&f.to_interface::<IUnknown>(), riid, ppfence)

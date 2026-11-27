@@ -254,3 +254,45 @@ fn perf() {
         );
     }
 }
+
+/// Where the time of one `ExecuteCommandLists` of a 4 KiB copy goes on the
+/// calling thread: begin, record, end, submit (commit), and what the next
+/// call pays for the previous one's retirement.
+#[test]
+#[ignore = "timing"]
+fn call_split() {
+    let d = Device::new().unwrap();
+    let q = queue(&d, false);
+    let a = d.create_buffer(BufferKind::Default, 4096).unwrap();
+    let b = d.create_buffer(BufferKind::Default, 4096).unwrap();
+    let mut t = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for i in 0..3200 {
+        let s0 = Instant::now();
+        let mut l = q.begin_list().unwrap();
+        let s1 = Instant::now();
+        l.copy_buffer(&b, 0, &a, 0, 4096).unwrap();
+        let s2 = Instant::now();
+        l.end().unwrap();
+        let s3 = Instant::now();
+        let v = q.submit(vec![l]).unwrap();
+        let s4 = Instant::now();
+        if i >= 200 {
+            t[0].push((s1 - s0).as_secs_f64() * 1e6);
+            t[1].push((s2 - s1).as_secs_f64() * 1e6);
+            t[2].push((s3 - s2).as_secs_f64() * 1e6);
+            t[3].push((s4 - s3).as_secs_f64() * 1e6);
+        }
+        // Let the GPU finish between calls, as a spinning application would.
+        q.wait_for(v, 10_000).unwrap();
+    }
+    for (name, v) in ["begin_list", "copy", "end", "submit"]
+        .iter()
+        .zip(t.iter_mut())
+    {
+        println!(
+            "PERF call_split {name} = p50 {:.1} / p99 {:.1} us",
+            pct(&mut v.clone(), 0.5),
+            pct(v, 0.99)
+        );
+    }
+}

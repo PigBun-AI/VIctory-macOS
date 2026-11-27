@@ -21,7 +21,6 @@ use objc2_metal::{
     MTL4CommandAllocator, MTL4CommandBuffer, MTL4CommandEncoder, MTL4ComputeCommandEncoder, MTLSize,
 };
 use std::collections::HashMap;
-use std::ptr::NonNull;
 
 use crate::barrier::{Action, EncoderKind, Tracker};
 use crate::descriptors::{ArgumentTable, DescriptorHeap, RingAlloc, bind_point};
@@ -120,8 +119,10 @@ impl CommandList {
         self.ended
     }
 
-    pub(crate) fn raw_command_buffer(&self) -> NonNull<ProtocolObject<dyn MTL4CommandBuffer>> {
-        NonNull::from(self.cb())
+    pub(crate) fn retained_command_buffer(
+        &self,
+    ) -> Retained<ProtocolObject<dyn MTL4CommandBuffer>> {
+        self.slot.as_ref().expect("list is live").cb.clone()
     }
 
     /// The list was committed with timeline value `value`: its allocator
