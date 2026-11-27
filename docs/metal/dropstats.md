@@ -6,7 +6,7 @@ the files are derived from the game).
 
 ```sh
 VICTORY_METAL_DROPSTATS=<dir> tools/metal/run.sh ...      # the run's logs: --out
-python3 tools/metal/dropstats-report.py --out summary.md NAME=RUNDIR [NAME=RUNDIR ...]
+tools/metal/dropstats-report.sh --out summary.md NAME=RUNDIR [NAME=RUNDIR ...]
 ```
 
 `run.sh` passes the variable on and sets no default. Both halves of the backend (the PE front and the unixlib
@@ -40,13 +40,13 @@ Front: lists whose `Close` returns an error (the reason carries the source line 
 What the front and the back cannot see: the draws `victory-gpu` drops before it calls D3D12 (no host pipeline,
 refused, being made, indirect not run). Those are in the shared layer's own log; with a diagnostics build
 (`VICTORY_DIAGNOSTICS=1`, `tools/macos/victory.sh`) it prints per second `dropped N/frame without a host pipeline:
-<why>` and `dropstats-report.py` reads them and maps the refused pipelines to ours by the order of the
+<why>` and `dropstats-report.sh` reads them and maps the refused pipelines to ours by the order of the
 refusals. That part of the report is an estimate (one-second averages, aligned by time), and says so.
 
 ## Archives
 
 `VICTORY_METAL_ARCHIVE=<dir>` opens `cs/ms/ps/vs.mtl4a` from `<dir>` (what `victory-census` wrote, see
-`census.md`) when the back is created, and every pipeline compile looks there first. The report estimates the
+`docs/metal/census.md` on the `census` branch) when the back is created, and every pipeline compile looks there first. The report estimates the
 hit rate from the compiler time (a compile under 5 ms; a found pipeline takes about 0.3 ms).
 
 ## Tests

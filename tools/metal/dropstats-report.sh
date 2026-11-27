@@ -1,3 +1,7 @@
+#!/bin/sh
+# Summary of VICTORY_METAL_DROPSTATS runs (docs/metal/dropstats.md): the program is the Python below
+# (a .py file is not on the asset policy's allowlist). usage: dropstats-report.sh --out summary.md NAME=RUNDIR ...
+exec python3 - "$@" <<'PYEOF'
 #!/usr/bin/env python3
 """Summary of VICTORY_METAL_DROPSTATS runs (docs/metal/dropstats.md).
 
@@ -320,8 +324,7 @@ def section(run, min_frames, shots):
             f"{tot_sub_d / len(fr):.0f}/frame, so this is what reaches the front), {nohost / frames:.0f} dropped without a host "
             f"pipeline, {ind / frames:.0f} indirect executions not run (the log also prints a count of pipelines being made, "
             f"{made / frames:.1f} on average; that counts pipelines, not draws). "
-            f"Title draws about {total / frames:.0f}/frame, so about **{100 * (nohost + ind) / max(1, total):.1f} %** "
-            f"are dropped before the front (**{100 * ran / max(1, total):.1f} %** run).")
+            f"The title draws that did not run are in the next paragraphs (draws and dispatches are counted together in these two fields).")
         add("")
         add("(`dropped ... without a host pipeline` counts draws, mesh dispatches and dispatches; "
             "the log's `indirect` is executions of ExecuteIndirect not run; their reasons are in the same per-pipeline lines.)")
@@ -332,8 +335,12 @@ def section(run, min_frames, shots):
             for why, n in w["reasons"]:
                 n *= w["frames"]
                 if why == "being made":
-                    c = "compiling: pipeline being made"
-                    key = ("(being made)", "?", "compiling")
+                    # The shared layer's own label. In this base nearly all of these are the
+                    # ~1000 ray-tracing resolve / ray-activation compute programs it leaves out on
+                    # purpose (`make.rs left_out`): never requested, dispatches. A pipeline really
+                    # in compilation is told by the queue counter (see below).
+                    c = "never requested: RT resolve/activate compute left out (the log calls it 'being made')"
+                    key = ("(being made / left out)", "CS", c)
                 elif why.startswith("refused ["):
                     k = why[len("refused ["):-1]
                     info = rmap.get(k)
@@ -373,7 +380,27 @@ def section(run, min_frames, shots):
                  fmt(n / frames, 1), f"{100 * n / max(1, seen):.1f} %") for t, n in types.most_common()]
         add("\n".join(table(["type (victory-gpu layer)", "draws/frame (est.)", "share of itemised drops"], rows)))
         gpu["cats"] = cats
-        gpu["made_draws"] = cats.get("compiling: pipeline being made", 0)
+        gpu["made_draws"] = cats.get("never requested: RT resolve/activate compute left out (the log calls it 'being made')", 0)
+        draws_dropped = sum(n for k, n in keys.items() if k[1] in ("MS", "VS"))
+        disp_dropped = sum(n for k, n in keys.items() if k[1] == "CS")
+        other_dropped = seen - draws_dropped - disp_dropped
+        gpu.update(draws_dropped=draws_dropped, disp_dropped=disp_dropped, other_dropped=other_dropped,
+                   title_draws=ran + draws_dropped)
+        waiting = [w for w in wins if w["made"] > 0]
+        gpu["waiting_windows"] = len(waiting)
+        base = [sum(v for k, v in w["reasons"] if k == "being made") for w in wins if w["made"] == 0]
+        busy = [sum(v for k, v in w["reasons"] if k == "being made") for w in waiting]
+        gpu["made_idle"], gpu["made_busy"] = mean(base), mean(busy)
+        add("")
+        add(f"Draws (mesh and vertex pipelines) separated from dispatches (compute): itemised drops are "
+            f"{draws_dropped / frames:.0f} draws/frame, {disp_dropped / frames:.0f} dispatches/frame, "
+            f"{other_dropped / frames:.0f}/frame of unclassified kind. Title draws (ran + dropped draws, a lower bound "
+            f"since the diagnostics list only 40 reasons a second) about {(ran + draws_dropped) / frames:.0f}/frame: "
+            f"**{100 * draws_dropped / max(1, ran + draws_dropped):.1f} %** of the draws do not reach the front.")
+        add("")
+        add(f"Compile timing check: the log's count of pipelines queued and not yet made was above 0 in {len(waiting)} of {len(wins)} "
+            f"windows. The 'being made' draws per frame were {mean(base):.0f} in windows with nothing queued"
+            + (f" and {mean(busy):.0f} in windows with something queued." if waiting else "."))
         gpu["keys"] = keys
         # attributeAtVertex
         attr_keys = {k: n for k, n in keys.items() if "attributeAtVertex" in cause(
@@ -389,8 +416,9 @@ def section(run, min_frames, shots):
         add(f"**attributeAtVertex pipelines.** The back refused {n_attr_pipes} pipeline creations over the run "
             f"for `dx.op.attributeAtVertex` ({len(shaders)} distinct mesh/vertex shaders; the lead's 103 is the count of "
             f"distinct shaders/pipelines in an earlier census, ours counts every creation). In the world they account "
-            f"for **{attr_draws / frames:.0f} draws/frame, {100 * attr_draws / max(1, total):.1f} % of the title's draws "
+            f"for **{attr_draws / frames:.0f} draws/frame, {100 * attr_draws / max(1, ran + draws_dropped):.1f} % of the title's draws "
             f"and {100 * attr_draws / max(1, seen):.1f} % of the itemised drops** (estimate).")
+        gpu["attr_draws"] = attr_draws
         gpu["attr_pct_total"] = 100 * attr_draws / max(1, total)
         gpu["attr_pct_drops"] = 100 * attr_draws / max(1, seen)
         gpu["attr_pipes"] = n_attr_pipes
@@ -516,19 +544,21 @@ def main():
     row("ours: dropped / frame (mean / median / p95)", lambda s: f"{s['drop_mean']:.0f} / {s['drop_med']} / {s['drop_p95']}")
     row("ours: dropped % of submitted (mean / median / p95)", lambda s: f"{s['ratio_mean']:.1f} / {s['ratio_med']:.1f} / {s['ratio_p95']:.1f}")
     row("ours: draws dropped % (median / p95)", lambda s: f"{s['dratio_med']:.1f} / {s['dratio_p95']:.1f}")
-    row("victory-gpu (est.): title draws / frame", lambda s: fmt(s["gpu"]["total"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
+    row("victory-gpu (est.): title draws / frame (ran + dropped draws, lower bound)", lambda s: fmt(s["gpu"]["title_draws"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
     row("victory-gpu (est.): draws run on the host / frame", lambda s: fmt(s["gpu"]["ran"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
     row("victory-gpu (est.): dropped without a host pipeline / frame", lambda s: fmt(s["gpu"]["nohost"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
-    row("victory-gpu (est.): of the drops, pipeline still being made / frame (itemised)",
+    row("victory-gpu (est.): draws dropped before the front / frame (mesh+vertex pipelines)",
+        lambda s: fmt(s["gpu"]["draws_dropped"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
+    row("victory-gpu (est.): draws dropped, % of title draws",
+        lambda s: f"{100 * s['gpu']['draws_dropped'] / max(1, s['gpu']['title_draws']):.1f} %" if s["gpu"] else "-")
+    row("victory-gpu (est.): dispatches dropped / frame (compute)",
+        lambda s: fmt(s["gpu"]["disp_dropped"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
+    row("  of which 'being made' in the log = never requested (RT left out) / frame",
         lambda s: fmt(s["gpu"].get("made_draws", 0) / s["gpu"]["frames"], 0) if s["gpu"] else "-")
-    row("victory-gpu (est.): of the drops, refused (translation, MSC, Metal limit) / frame (itemised)",
-        lambda s: fmt(sum(n for c, n in s["gpu"].get("cats", {}).items() if c.startswith("refused")) / s["gpu"]["frames"], 0) if s["gpu"] else "-")
-    row("victory-gpu (est.): of the drops, never requested (RT builder off) / frame (itemised)",
-        lambda s: fmt(sum(n for c, n in s["gpu"].get("cats", {}).items() if c.startswith("never")) / s["gpu"]["frames"], 0) if s["gpu"] else "-")
+    row("  windows with pipelines queued, i.e. compiling",
+        lambda s: str(s["gpu"]["waiting_windows"]) if s["gpu"] else "-")
     row("victory-gpu (est.): indirect not run / frame", lambda s: fmt(s["gpu"]["ind"] / s["gpu"]["frames"], 0) if s["gpu"] else "-")
-    row("victory-gpu (est.): dropped before the front, % of title draws",
-        lambda s: f"{100 * (s['gpu']['nohost'] + s['gpu']['ind']) / max(1, s['gpu']['total']):.1f} %" if s["gpu"] else "-")
-    row("attributeAtVertex pipelines: % of title draws (est.)", lambda s: f"{s['gpu'].get('attr_pct_total', 0):.1f} %" if s["gpu"] else "-")
+    row("attributeAtVertex pipelines: % of title draws (est.)", lambda s: f"{100 * s['gpu'].get('attr_draws', 0) / max(1, s['gpu']['title_draws']):.1f} %" if s["gpu"] else "-")
     row("archive hit rate (est.)", lambda s: f"{s['hit']:.1f} %" if s["hit"] is not None else "no archive")
     L += table(["", *names], rows)
     L += [""]
@@ -539,3 +569,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+PYEOF
