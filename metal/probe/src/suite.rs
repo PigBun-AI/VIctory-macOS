@@ -1,4 +1,4 @@
-//! The M0 measurements, written once against `Link` so the same code runs
+//! The M0 measurements, written once against `RawLink` so the same code runs
 //! through Wine's unixlib (PE) and in-process (native baseline).
 
 use std::ffi::c_void;
@@ -140,7 +140,7 @@ fn batches(reps: u32, batch: u32, mut f: impl FnMut()) -> Vec<f64> {
 
 /// A CPU-side pattern, then the GPU sums it; then the GPU rewrites it and
 /// the CPU reads it back; then the CPU writes again and the GPU sums again.
-fn coherence<L: Link>(link: &L, r: &mut Report, label: &str, memory: &mut Region, handle: u32) {
+fn coherence<L: RawLink>(link: &L, r: &mut Report, label: &str, memory: &mut Region, handle: u32) {
     let words = memory.len / 4;
     let data = memory.words();
     for (i, w) in data.iter_mut().enumerate() {
@@ -207,7 +207,7 @@ fn coherence<L: Link>(link: &L, r: &mut Report, label: &str, memory: &mut Region
     );
 }
 
-fn wrap<L: Link>(link: &L, memory: &Region) -> (Option<u32>, f64) {
+fn wrap<L: RawLink>(link: &L, memory: &Region) -> (Option<u32>, f64) {
     let mut args = WrapArgs {
         ptr: memory.ptr.as_ptr() as u64,
         len: memory.len as u64,
@@ -220,14 +220,20 @@ fn wrap<L: Link>(link: &L, memory: &Region) -> (Option<u32>, f64) {
     (ok(status).then_some(args.handle), us)
 }
 
-fn release<L: Link>(link: &L, handle: u32) {
+fn release<L: RawLink>(link: &L, handle: u32) {
     let mut args = HandleArgs { handle, _pad: 0 };
     link.call(OP_RELEASE, ptr(&mut args));
 }
 
 /// GPU read bandwidth of each source in GB/s. The sources take turns round
 /// by round, so a GPU clock that moves (a warming Mac) hits all of them alike.
-fn bandwidth<L: Link>(link: &L, r: &mut Report, sources: &[(String, u32)], len: usize, reps: u32) {
+fn bandwidth<L: RawLink>(
+    link: &L,
+    r: &mut Report,
+    sources: &[(String, u32)],
+    len: usize,
+    reps: u32,
+) {
     const WARMUP: u32 = 30;
     let mut gpu: Vec<Vec<f64>> = vec![Vec::new(); sources.len()];
     let mut wall: Vec<Vec<f64>> = vec![Vec::new(); sources.len()];
@@ -271,7 +277,7 @@ fn bandwidth<L: Link>(link: &L, r: &mut Report, sources: &[(String, u32)], len: 
     }
 }
 
-fn empty_cbs<L: Link>(link: &L, r: &mut Report, cfg: &Config, kind: u32, name: &str) {
+fn empty_cbs<L: RawLink>(link: &L, r: &mut Report, cfg: &Config, kind: u32, name: &str) {
     // From the caller: one call per command buffer, timed one by one.
     let mut per_call = Vec::new();
     for _ in 0..cfg.reps {
@@ -327,7 +333,7 @@ fn empty_cbs<L: Link>(link: &L, r: &mut Report, cfg: &Config, kind: u32, name: &
 }
 
 /// Runs everything that does not need a window.
-pub fn run<L: Link>(link: &L, cfg: &Config) -> Report {
+pub fn run<L: RawLink>(link: &L, cfg: &Config) -> Report {
     let mut r = Report::default();
 
     r.section("device");

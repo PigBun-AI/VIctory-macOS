@@ -1,0 +1,33 @@
+[package]
+name = "victory-metal-front"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "D3D12/DXGI front end of the Metal backend: D3D12 semantics (pure Rust) and the COM shell (Windows only)"
+
+# `sem` is pure Rust and builds and tests natively on macOS; `shell` (COM
+# objects for d3d12.dll and dxgi.dll) exists on Windows targets only. The two
+# dlls are the cdylib crates `front/d3d12` and `front/dxgi`, which export
+# the entry points and call into this one.
+
+[dependencies]
+victory-metal-proto = { path = "../proto" }
+
+# windows 0.62.2 / windows-core 0.62.2: the versions of the root Cargo.lock
+# (crates.io latest of `windows`, checked 2026-11-27). Types and the
+# `#[implement]` macro only; no linking to anything beyond kernel32.
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62.2"
+# The PE half of the bridge (WineUnixlib, a proto Link). Windows targets only: on
+# macOS the bridge pulls in the back, which the front must not depend on.
+victory-metal-bridge = { path = "../bridge" }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }

@@ -1,0 +1,17 @@
+[package]
+name = "victory-metal-front-dxgi"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "dxgi.dll of the Metal backend (exports only; the code is in victory-metal-front)"
+
+[lib]
+name = "dxgi"
+crate-type = ["cdylib"]
+
+[dependencies]
+victory-metal-front = { path = ".." }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
