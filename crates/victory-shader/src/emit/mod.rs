@@ -94,6 +94,7 @@ mod intersect_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
 pub mod host;
 mod lower;
+mod mesh_order; // mac S2
 mod own_bits;
 #[cfg(all(test, windows))]
 mod permlane_tests;
@@ -913,6 +914,11 @@ fn emit_program(
     prims.retain(|e| !matches!(e.kind, 10 | 30));
     for e in &mut prims {
         e.interp = 1;
+    }
+    // mac S2: a mesh shader's outputs numbered for the least padding in Metal's struct.
+    if matches!(native.io, crate::native::StageIo::Ms(_)) {
+        mesh_order::vertex(&mut outputs); // mac S2
+        mesh_order::primitive(&mut prims); // mac S2
     }
     // A mesh group's id arrives multiplied by max(threads, vertices,
     // primitives) (the code divides by that); the thread count is in PSV0
