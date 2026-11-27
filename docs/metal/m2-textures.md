@@ -59,6 +59,10 @@ Semantic differences, all written in the module docs:
   Metal's texture-to-texture blit (formats differ). The back does it through a private staging
   buffer (texture → buffer in the source's format, buffer → texture in the destination's); the region is
   counted in the source's texels. Any other mix of formats is still refused.
+* Also through the same staging buffer: `CopyResource` / region copies between formats of one
+  layout that Metal names differently (`R8G8B8A8_TYPELESS` ↔ `_UNORM_SRGB`: bytes move as they are), and one plane of a
+  depth-stencil texture (to the same plane of another, or the depth plane into a depth-only texture;
+  Metal's blit moves both planes or none). The D24 depth plane is still refused.
 * Samplers: Metal has no min/max reduction filter, so a sampler with one is
   refused (`WRITE_DESCRIPTOR` → `UNSUPPORTED`; tested). Metal has three border colours
   (transparent black, opaque black, opaque white): any other D3D12 border colour
