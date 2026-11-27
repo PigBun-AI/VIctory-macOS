@@ -12652,7 +12652,6 @@ impl<'a> Lower<'a> {
         let sat = sunclamp::export_sat() && matches!(e.target, Target::Color(_));
         for (id, col, value, half) in stores {
             let mut x = self.i32_of(value)?;
-            let bits = x; // mac S1
             if let Some(high) = half {
                 // An f16 half, declared a 32-bit float on the host.
                 let c = self.cur;
@@ -12666,6 +12665,7 @@ impl<'a> Lower<'a> {
                     .op(c, "legacyF16ToF32", Attr::ReadNone, f32t, 131, &[x]);
                 x = self.as_int(f);
             }
+            let bits = x; // mac S1: what the host's (32-bit) element holds, a 16-bit output converted
             let el = &mut elements(self, primitive)[id];
             el.usage |= 1 << col;
             let (suffix, x) = match el.comp {
@@ -12699,7 +12699,7 @@ impl<'a> Lower<'a> {
                 &args,
             );
             if mesh && !primitive {
-                self.vtx_store(id, col, bits, half.is_some())?; // mac S1
+                self.vtx_store(id, col, bits)?; // mac S1
             }
         }
         self.end_guarded(at, &[]);
@@ -12824,7 +12824,7 @@ impl<'a> Lower<'a> {
 
     /// mac S1, mesh: the vertex output channel (`id`, `col`) the pixel stage reads of other vertices,
     /// written to the exchange for this lane's vertex.
-    fn vtx_store(&mut self, id: usize, col: u8, bits: V, half: bool) -> Result<(), Why> {
+    fn vtx_store(&mut self, id: usize, col: u8, bits: V) -> Result<(), Why> {
         let Some(x) = self.vtx.clone() else {
             return Ok(());
         };
@@ -12832,9 +12832,6 @@ impl<'a> Lower<'a> {
         let Some(read) = vertex_flat::find(&self.vreads, &o.name, o.index, o.col + col) else {
             return Ok(());
         };
-        if half {
-            return Err("a 16-bit vertex output the pixel stage reads per vertex");
-        }
         let c = self.cur;
         let flat = self.mesh_thread();
         let stride = self.s.m.i32(x.stride);

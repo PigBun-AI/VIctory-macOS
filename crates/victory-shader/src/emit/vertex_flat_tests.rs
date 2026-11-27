@@ -92,6 +92,11 @@ fn pixel() -> Result<HostShader, ShaderError> {
 /// TEXCOORD0 = the same four floats, and primitive n = triangle (0, 1, 2). `outputs`: the mesh's
 /// vertex output signature beside the position.
 fn mesh(lanes: u32, max_vertices: u32, max_primitives: u32) -> Result<HostShader, ShaderError> {
+    mesh_with(lanes, max_vertices, max_primitives, false)
+}
+
+/// [`mesh`] whose TEXCOORD0 output is a 16-bit one (the host declares it a 32-bit float).
+fn mesh_with(lanes: u32, max_vertices: u32, max_primitives: u32, fp16: bool) -> Result<HostShader, ShaderError> {
     let words = [
         0xD765_0001u32, // v_mbcnt_lo_u32_b32 v1, -1, 0
         0x0001_00C1,
@@ -124,7 +129,7 @@ fn mesh(lanes: u32, max_vertices: u32, max_primitives: u32) -> Result<HostShader
         layout: vec![],
         used: vec![],
         io: StageIo::Ms(MeshIo {
-            outputs: vec![VsOutput { usage: Usage::Generic, row: 1, param: 0, fp16: false, pack2: false }],
+            outputs: vec![VsOutput { usage: Usage::Generic, row: 1, param: 0, fp16, pack2: false }],
             clip_cntl: 0,
             threads: lanes,
             max_vertices,
@@ -252,4 +257,12 @@ fn a_vertex_pipeline_gets_a_geometry_stage_that_carries_the_other_vertices() {
     // A read of a channel no vertex output has is refused.
     let r = vertex_flat::vertex_pipeline_gs(&vs, &ps, &[read("COLOR", 0, 0, 3)]);
     assert!(r.is_err());
+}
+
+#[test]
+fn a_16_bit_vertex_output_is_exchanged_as_the_host_32_bit_float_it_becomes() {
+    let reads = [read("TEXCOORD", 0, 0, 3)];
+    let (ms, stored) = calls("storePrimitiveOutput", || vertex_flat::with_reads(&reads, || mesh_with(32, 32, 32, true)));
+    ms.unwrap();
+    assert!(stored);
 }
