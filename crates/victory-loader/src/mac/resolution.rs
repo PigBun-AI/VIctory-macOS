@@ -63,6 +63,22 @@ pub const MODES: [(u32, u32); 5] = [
 /// `VICTORY_OUTPUT`: the smallest of the title's modes (docs/macos.md).
 pub const DEFAULT_OUTPUT: (u32, u32) = (1280, 720);
 
+/// `VICTORY_POOL_CHECK=skip`: with the output size left to the title (no
+/// `VICTORY_OUTPUT` size), still jump over the back buffer pool's left-over
+/// check ([`POOL_CHECK`]). The pool is sized for 3840x2160 (the check wants
+/// under 2 MB left), so a settings size other than 3840x2160 (the fidelity
+/// profile's 2560x1440, `tools/mac/run.sh`) stops at its `int3` when the
+/// title makes the back buffers, as 1920x1080 did in run res-1. It changes
+/// no size and no scale: the title's own resolution logic runs as it is. Off
+/// (the check stays) unless set, so a run says whether the title needs it.
+pub fn pool_check_skip_asked() -> bool {
+    pool_check_skip(std::env::var("VICTORY_POOL_CHECK").ok().as_deref())
+}
+
+fn pool_check_skip(spec: Option<&str>) -> bool {
+    spec.is_some_and(|v| v.trim().eq_ignore_ascii_case("skip"))
+}
+
 /// What the title's output size is asked to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Asked {
@@ -416,6 +432,12 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
         }
         asked.push((group, format!("{w}x{h}")));
     }
+    // Left to the title, the pool check alone (docs/mac/PATCHES.md, L3): not
+    // when the output is patched, which has the check in its group already.
+    let output_patched = matches!(asked_output(), Asked::Size((w, h)) if (w, h) != (3840, 2160));
+    if pool_check_skip_asked() && !output_patched {
+        asked.push((vec![(&POOL_CHECK, pool_check_code())], "skip".to_string()));
+    }
     if let Some(s) = asked_render_scale() {
         asked.push((vec![(&OWN_SCALE, own_scale_code(s))], format!("{s}")));
     }
@@ -429,6 +451,11 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
         let parts: Vec<(&Site, &[u8])> = group.iter().map(|(s, c)| (*s, c.as_slice())).collect();
         // SAFETY: the caller's promise.
         let done = unsafe { write_together(base, size, &parts) };
+        // The one line a run's log carries for a title output that is not the
+        // one the title's settings name (a fidelity run must not have it).
+        if done == Patched::Done && parts.iter().any(|(site, _)| site.at == OUTPUT.at) {
+            println!("non-fidelity: output patched to {value}");
+        }
         for (site, _) in &parts {
             let offset = format!("{:#x}", site.at);
             match done {
@@ -453,6 +480,15 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pool_check_is_skipped_only_when_asked() {
+        assert!(!pool_check_skip(None));
+        assert!(!pool_check_skip(Some("")));
+        assert!(!pool_check_skip(Some("keep")));
+        assert!(pool_check_skip(Some("skip")));
+        assert!(pool_check_skip(Some(" Skip ")));
+    }
 
     #[test]
     fn switches_parse() {
