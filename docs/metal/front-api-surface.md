@@ -4,7 +4,7 @@ Written 2026-11-27 for milestone M1, from a scan of `crates/victory-gpu/src` and
 `crates/victory-shader/src` (every `.Method(` that is a D3D12 / DXGI method name,
 cross-checked against the `windows` 0.62.2 interface tables). Call sites are
 `victory-gpu` as `gpu/…` and `victory-shader` as `shader/…`, line numbers of the
-scanned tree (worktree `m1-front`, branched from 1afeb16's parent).
+scanned tree (worktree `m1-front`).
 
 ## 1. Milestone tags
 
@@ -294,8 +294,8 @@ Reasons:
   `E_NOTIMPL` / no-op otherwise. `--check` fails if the generated file is stale.
 * The same crate and types the game side already uses (`victory-gpu` links
   `windows`), so GUIDs, `HRESULT` and struct layouts are not retyped.
-* Rejected: `com-rs` / `windows-implement` alone (less maintained / same macro),
-  hand-written vtables (≈ 1000 methods of ABI by hand).
+* Rejected: hand-written vtables (every method of every interface by hand, with no
+  generator to keep them in step with the `windows` definitions).
 
 The core (`metal/front/src`, no `windows` types) holds all D3D12 semantics and is
 tested natively on macOS; the shell is `cfg(windows)` and only does ABI,
