@@ -737,6 +737,30 @@ fn specialized(
     Ok(d)
 }
 
+/// Makes the function once through the library (a call that returns an error) before it goes
+/// into a pipeline descriptor. When Metal cannot materialize a function from the converter's
+/// AIR ("Failed to materializeAll."), `MTL4Compiler` does not return that error: the function
+/// of the descriptor becomes nil and the descriptor validation asserts (`meshFunction must not
+/// be nil`, SIGABRT), which kills the process. The 29 vertex shaders of the title that write
+/// `SV_ClipDistance` end there behind the rectangle-list geometry shader.
+fn check_materializes(
+    library: &ProtocolObject<dyn MTLLibrary>,
+    entry: &str,
+    values: &MTLFunctionConstantValues,
+    what: &str,
+) -> Result<(), MscError> {
+    let name = NSString::from_str(entry);
+    library
+        .newFunctionWithName_constantValues_error(&name, values)
+        .map(|_| ())
+        .map_err(|e| {
+            MscError::Unsupported(format!(
+                "Metal cannot make the {what} `{entry}` from the converted library: {}",
+                e.localizedDescription()
+            ))
+        })
+}
+
 /// The vertex descriptor for the shader's inputs from the layout elements.
 /// A shader input the layout does not supply is an error: Metal would read
 /// whatever the attribute defaults to.
@@ -939,6 +963,12 @@ impl Device {
                     let tess_off = constants(&[("tessellationEnabled", Constant::Bool(false))]);
                     let object_name =
                         format!("{}.dxil_irconverter_object_shader", vs_c.reflection.entry);
+                    check_materializes(
+                        vs.0.raw(),
+                        &object_name,
+                        &tess_off,
+                        "geometry emulation object function",
+                    )?;
                     let object_fn = specialized(vs.0.raw(), &object_name, &tess_off)
                         .map_err(MscError::Metal)?;
                     let mesh_consts = constants(&[
@@ -948,6 +978,12 @@ impl Device {
                             Constant::Int(g.vertex_bytes as i32),
                         ),
                     ]);
+                    check_materializes(
+                        gs.0.raw(),
+                        &gs_c.reflection.entry,
+                        &mesh_consts,
+                        "geometry emulation mesh function",
+                    )?;
                     let mesh_fn = specialized(gs.0.raw(), &gs_c.reflection.entry, &mesh_consts)
                         .map_err(MscError::Metal)?;
                     let stage_in_name = stage_in_lib

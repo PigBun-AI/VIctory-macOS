@@ -327,6 +327,7 @@ fn items(
     kind: &str,
     limit: usize,
     every: usize,
+    only: Option<&std::collections::HashSet<String>>,
 ) -> Vec<(String, HostShader)> {
     let want = kind_stage(kind);
     let mut hashes: Vec<String> = jsonl::read(&out.join("translate.jsonl"))
@@ -335,6 +336,9 @@ fn items(
         .filter_map(|r| r["hash"].as_str().map(str::to_owned))
         .collect();
     hashes.sort();
+    if let Some(only) = only {
+        hashes.retain(|h| only.contains(h));
+    }
     hashes
         .into_iter()
         .enumerate()
@@ -421,6 +425,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .unwrap_or(1)
         .max(1);
     let tag = arg(args, "--tag").unwrap_or_default();
+    // `--only LIST`: just these hashes. LIST is hashes separated by commas, or a file with one hash
+    // at the start of each line (a `mac-side.tsv` line works).
+    let only: Option<std::collections::HashSet<String>> = match arg(args, "--only") {
+        None => None,
+        Some(list) => {
+            let text = std::fs::read_to_string(&list).unwrap_or(list);
+            Some(
+                text.split([',', '\n'])
+                    .filter_map(|l| l.split_whitespace().next())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        }
+    };
     let variant = if flag(args, "--blended") {
         Variant::Blended
     } else {
@@ -478,7 +496,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     );
     for kind in &kinds {
-        let mut all = items(&out, kind, limit, every);
+        let mut all = items(&out, kind, limit, every, only.as_ref());
         let rows_path = out.join(format!("convert-{kind}{tag}.jsonl"));
         if resume {
             let done = jsonl::seen(&rows_path, "hash");
