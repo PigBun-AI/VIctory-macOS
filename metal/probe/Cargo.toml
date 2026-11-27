@@ -10,6 +10,7 @@ description = "M0 probe: unixlib call cost, empty command buffers, no-copy memor
 victory-metal-bridge = { path = "../bridge" }
 victory-metal-proto = { path = "../proto" }
 # Upstream crate by path, from a nested workspace: M0 check that this works.
+# (Nothing in the probe names it since mac/livetr, whose victory-formats has no `pagetable`.)
 victory-formats = { path = "../../crates/victory-formats" }
 
 [target.'cfg(windows)'.dependencies]

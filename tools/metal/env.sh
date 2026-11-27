@@ -27,3 +27,13 @@ if [ -z "${VICTORY_WINE_DIR:-}" ]; then
     done
 fi
 export VICTORY_WINE_DIR
+
+# mac/livetr has no `.cargo/config.toml` entry for x86_64-pc-windows-gnullvm (the
+# a509c3a base had one pointing at tools/macos/gnullvm-cc.sh). Name the same
+# wrapper here, as the line's own tools/macos/victory.sh does, unless the
+# caller (tools/mac/env.sh: llvm-mingw) has chosen a linker already.
+# (The scripts set `here` before sourcing this file.)
+_metal_root="$(cd "${here:-$(dirname "${BASH_SOURCE[0]:-$0}")}/../.." && pwd)"
+: "${CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER:=$_metal_root/tools/macos/gnullvm-cc.sh}"
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER
+unset _metal_root

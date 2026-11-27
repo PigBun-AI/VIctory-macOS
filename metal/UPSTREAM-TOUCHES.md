@@ -1,7 +1,7 @@
 # Upstream touches
 
 Every place where `metal-backend` changes a file that belongs to upstream
-(`pragyaangaur/VIctory-macOS` `origin/main`). Layering rules 1 and 10 and
+(base: the local branch `mac/livetr`, the Mac integration line; its `mac:` patch layer belongs to the Mac integration lead and is not counted here). Layering rules 1 and 10 and
 architecture note 3.3: only the hooks on the allow-list in
 `tools/metal/check-touches.sh` may appear, each at most 5 changed lines, each
 with a row below; `tools/metal/check-touches.sh` fails otherwise. Check it

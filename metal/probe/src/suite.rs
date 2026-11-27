@@ -10,8 +10,9 @@ use victory_metal_bridge::abi::*;
 use crate::platform::{self, METAL_PAGE, Region};
 use crate::stats::Stats;
 
-/// The title's page, as the repository defines it.
-const TITLE_PAGE: usize = victory_formats::pagetable::BLOCK;
+/// The title's page. The a509c3a base took this from `victory_formats::pagetable::BLOCK`;
+/// mac/livetr (feat/live-translator) has no `pagetable` module, so it is spelled out here.
+const TITLE_PAGE: usize = 4096;
 
 /// How much work each measurement does.
 #[derive(Clone, Copy)]
@@ -465,7 +466,7 @@ pub fn run<L: RawLink>(link: &L, cfg: &Config) -> Report {
         };
         let status = link.call(OP_WRAP, ptr(&mut args));
         r.info(
-            "wrap at +4 KiB (victory_formats::pagetable::BLOCK) inside the region",
+            "wrap at +4 KiB (TITLE_PAGE) inside the region",
             if ok(status) { "accepted" } else { "refused" },
         );
         if ok(status) {

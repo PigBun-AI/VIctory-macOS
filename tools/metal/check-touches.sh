@@ -3,8 +3,10 @@
 # nothing upstream except the allow-listed hooks, and every hook is written
 # down in metal/UPSTREAM-TOUCHES.md. Run before and after every rebase.
 #
-# What counts as a change: everything between the merge-base of origin/main and
-# HEAD (commits), plus uncommitted edits and untracked files, so it also
+# What counts as a change: everything between the merge-base of mac/livetr and
+# HEAD (commits; the base is the local branch mac/livetr, the Mac integration
+# line = the Windows line's feat/live-translator plus the "mac:" patch layer,
+# which belongs to the Mac integration lead and is not ours to count), plus uncommitted edits and untracked files, so it also
 # catches work that is not committed yet. Renames are not followed (a
 # moved-away upstream file shows up as a deletion).
 #
@@ -21,7 +23,7 @@
 #   tools/metal/check-touches.sh               check this checkout
 #   tools/metal/check-touches.sh --self-test   prove each rule on a scratch repo
 #
-# BASE_REF (default origin/main) and REPO_DIR / TOUCHES_DOC override where it looks.
+# BASE_REF (default mac/livetr) and REPO_DIR / TOUCHES_DOC override where it looks.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$here/../.." && pwd)
@@ -33,12 +35,12 @@ MAX_HOOK_LINES=5
 check() {
     repo=${REPO_DIR:-$ROOT}
     doc=${TOUCHES_DOC:-$repo/metal/UPSTREAM-TOUCHES.md}
-    base_ref=${BASE_REF:-origin/main}
+    base_ref=${BASE_REF:-mac/livetr}
     failed=0
     g() { git -C "$repo" "$@"; }
 
     if ! g rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null; then
-        echo "FAIL  no $base_ref here: git fetch origin first (the check needs the upstream to compare with)"
+        echo "FAIL  no $base_ref here: the branch must exist in this repository: the check needs the base to compare with"
         return 2
     fi
     base=$(g merge-base "$base_ref" HEAD) || { echo "FAIL  no merge-base of $base_ref and HEAD"; return 2; }
@@ -124,7 +126,7 @@ self_test() {
             printf '**当前 0 处** (current: 0).\n\n| file:line | why | recall |\n|---|---|---|\n' > metal/UPSTREAM-TOUCHES.md
             git add -A
             git commit -q -m base
-            git update-ref refs/remotes/origin/main HEAD
+            git branch mac/livetr
             git checkout -q -b work
         )
     }
@@ -191,9 +193,9 @@ self_test() {
     mkrepo; rm "$repo/metal/UPSTREAM-TOUCHES.md"; in_repo git rm -q --cached metal/UPSTREAM-TOUCHES.md
     expect "document missing" fail
 
-    mkrepo; in_repo git update-ref -d refs/remotes/origin/main
+    mkrepo; in_repo git branch -D mac/livetr
     got=$(REPO_DIR="$repo" check >/dev/null 2>&1; echo $?)
-    if [ "$got" = 2 ]; then echo "self-test ok   no origin/main (expected exit 2)"; else echo "self-test BAD  no origin/main: exit $got"; status=1; fi
+    if [ "$got" = 2 ]; then echo "self-test ok   no mac/livetr (expected exit 2)"; else echo "self-test BAD  no mac/livetr: exit $got"; status=1; fi
 
     return $status
 }

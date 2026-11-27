@@ -72,7 +72,9 @@ stop_our_wineserver
 
 # The DXC of D3DMetal for the shader tests, as tools/macos/victory.sh builds it.
 DXC_LIB="$(dirname "$WINE")/../lib/external/D3DMetal.framework/Versions/A/Resources/libdxcompiler.dylib"
-if [ -z "${VICTORY_HELPER_DXC:-}" ] && [ -f "$DXC_LIB" ]; then
+# mac/livetr: only where victory-gpu's build.rs reads it (this line's does not
+# yet, docs/mac/PATCHES.md G3), as in the line's own tools/macos/victory.sh.
+if [ -z "${VICTORY_HELPER_DXC:-}" ] && [ -f "$DXC_LIB" ] && grep -q VICTORY_HELPER_DXC crates/victory-gpu/build.rs 2>/dev/null; then
     helper="$ROOT/target/dxc-d3dmetal"
     mkdir -p "$ROOT/target"
     if [ ! -x "$helper" ] || [ tools/macos/dxc-d3dmetal.sh -nt "$helper" ]; then
