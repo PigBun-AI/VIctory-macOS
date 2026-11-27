@@ -475,6 +475,26 @@ plus `victory_loader::mac::in_title_image` (`threads.rs`, 8 lines). Under Wine o
 of ours suspended while Wine held its virtual-memory lock left the lock held for good (#50).
 Remove when CrossOver Wine fixes the lock (retest after a Wine bump from 26.3) or with G2.
 
+### H2 — `dbghelp.dll` stubbed instead of passed to the host
+
+`host.rs` no longer allows `dbghelp.dll`; new `victory-hle/src/modules/dbghelp.rs` answers for it
+(`MiniDumpWriteDump`, `SymInitialize(W)`, `SymCleanup`, `SymSetOptions`/`SymGetOptions`, `SymFromAddr(W)`,
+`SymGetLineFromAddr64`: all fail with `ERROR_NOT_SUPPORTED`, none reads a caller pointer;
+`MiniDumpWriteDump` logs "minidump skipped (dbghelp stubbed)"). The title imports nothing from dbghelp
+statically: it loads the DLL by name and looks up only `MiniDumpWriteDump`.
+
+*Why.* After the title's first fatal exception its crash handler calls `MiniDumpWriteDump`; Wine's
+dbghelp then parses `victory.exe`'s Rust DWARF (`SymInitializeW` -> `SymLoadModuleExW` ->
+`dwarf2_parse_subroutine_type`, dbghelp+0x2201e / +0x1d549) and reads garbage: a second crash that
+hides the first exception and misleads the classification. Evidence: 62 `stderr.log` files with an
+unhandled `dbghelp.dll+0x...` fault (report `reports/2026-11-28-crash-tory-sha.md`).
+
+*Scope.* Shared layer (no platform switch in `HostPolicy`; Windows' dbghelp does not crash, but a
+minidump is of no use to us anywhere and the title still writes its own `crash.log`). `crash.rs`
+(`RtlCaptureStackBackTrace`) and the timeline report (loads the system dbghelp itself) are unaffected.
+
+*Remove when* Wine's dbghelp parses Rust DWARF without crashing (retest after a Wine bump).
+
 ### T1 — `victory-shader-dylib/tests/translate.rs`: corpus folders from the environment
 
 The test had two build-machine paths of the Windows team written in (`...\build\livetr-corpus`,
