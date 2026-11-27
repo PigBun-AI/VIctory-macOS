@@ -96,6 +96,10 @@ pub fn encode(s: &HostShader) -> Vec<u8> {
             word(&mut out, value);
         }
     }
+    // mac S1: the vertex reads, after the views (a translation without them ends at the views).
+    if !s.vertex_reads.is_empty() {
+        out.extend(super::vertex_flat::encode(&s.vertex_reads));
+    }
     out
 }
 
@@ -164,7 +168,9 @@ pub fn decode(bytes: &[u8]) -> Option<HostShader> {
             shift: u8::try_from(r.word()?).ok().filter(|&s| s < 32)?,
         });
     }
-    r.0.is_empty().then_some(HostShader {
+    // mac S1: what follows the views is the vertex reads, if any.
+    let vertex_reads = if r.0.is_empty() { Vec::new() } else { super::vertex_flat::decode(r.0)? };
+    Some(HostShader {
         stage,
         dxil,
         user_data,
@@ -174,6 +180,7 @@ pub fn decode(bytes: &[u8]) -> Option<HostShader> {
         root_srvs,
         root_uavs,
         root_indexed_views,
+        vertex_reads,
     })
 }
 

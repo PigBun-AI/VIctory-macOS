@@ -415,6 +415,7 @@ mod tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         (
             host(crate::native::HwStage::Vs, vs),
