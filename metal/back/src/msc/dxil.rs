@@ -11,7 +11,14 @@
 
 /// `D3D_SHADER_REQUIRES_*` bits of `SFI0` that matter to MSC.
 pub mod feature {
+    /// `D3D_SHADER_REQUIRES_DOUBLES`: double-precision arithmetic.
     pub const DOUBLES: u64 = 0x1;
+    /// `D3D_SHADER_REQUIRES_11_1_DOUBLE_EXTENSIONS`: the D3D11.1 double
+    /// instructions (`rcp`, `div`, `fma` on doubles; DXC sets it with
+    /// `DOUBLES` for the double code it emits).
+    pub const DOUBLE_EXTENSIONS_11_1: u64 = 0x20;
+    /// Either double bit.
+    pub const ANY_DOUBLES: u64 = DOUBLES | DOUBLE_EXTENSIONS_11_1;
     pub const STENCIL_REF: u64 = 0x200;
     pub const WAVE_OPS: u64 = 0x4000;
     pub const INT64_OPS: u64 = 0x8000;
@@ -124,6 +131,25 @@ pub fn inspect(bytes: &[u8]) -> Option<Info> {
         }
     }
     Some(info)
+}
+
+/// The data of the container's first part named `fourcc`.
+pub fn part<'a>(bytes: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
+    if bytes.get(..4)? != b"DXBC" {
+        return None;
+    }
+    let count = u32_at(bytes, 28)? as usize;
+    if count > 64 {
+        return None;
+    }
+    for i in 0..count {
+        let off = u32_at(bytes, 32 + 4 * i)? as usize;
+        if bytes.get(off..off + 4)? == fourcc {
+            let size = u32_at(bytes, off + 4)? as usize;
+            return bytes.get(off + 8..off + 8 + size);
+        }
+    }
+    None
 }
 
 /// Whether the container holds DXBC bytecode (a `SHDR` or `SHEX` part and no

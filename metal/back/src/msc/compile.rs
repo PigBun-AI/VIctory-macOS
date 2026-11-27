@@ -388,6 +388,9 @@ impl Msc {
         if dxil_bytes.is_empty() {
             return Err(MscError::BadInput("empty DXIL".into()));
         }
+        // What MSC aborts the process on is refused before it runs
+        // (guard.rs: a denylisted input by its hash, double precision).
+        let original = dxil_bytes;
         let converted_dxbc;
         let dxil_bytes = if dxil::is_dxbc(dxil_bytes) {
             converted_dxbc = super::dxbc::DxbcConverter::get()?.convert(dxil_bytes)?;
@@ -396,6 +399,7 @@ impl Msc {
             dxil_bytes
         };
         let info = dxil::inspect(dxil_bytes);
+        super::guard::check(original, dxil_bytes, info.as_ref())?;
         let api = self.api;
         let c_root = root.map(CRootSignature::new);
         // Declared before the compiler: dropped after it, since the compiler

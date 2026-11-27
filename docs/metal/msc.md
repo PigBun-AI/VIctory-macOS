@@ -340,14 +340,14 @@ DXC from D3DMetal, converted with no root signature (33 cases; the test file is 
 | `SV_StencilRef` output | no | accepted (converter-side warning-free) |
 | `SV_ShadingRate` input | no (VRS) | accepted, MSC warns `Unsupported: shadingrate` |
 | rasterizer-ordered view | - | accepted |
-| `double` arithmetic | (`FP64Usage` exists) | accepted |
+| `double` arithmetic | (`FP64Usage` exists) | accepted; a double-typed wave reduction aborts the process (below), so the back refuses all double shaders first |
 | `Sample(..., clamp)` min-LOD clamp | no, with texture read | accepted |
 | pack/unpack intrinsics | no, error-detected | accepted (not checked whether this DXC emits the opcode) |
 | mesh, amplification, geometry, ray query in compute, derivatives in compute, `groupshared` 32 KB, dual-source outputs, `SV_Coverage` out, `SV_RenderTargetArrayIndex` from VS | yes / - | accepted |
 
 Accepted-but-unsupported (`SV_StencilRef`, shading rate, ROV, `double`) means MSC ignores or
 approximates them; only a GPU comparison can say how. Rejections are errors with a code and a
-text (`MscError::Rejected`), never a crash.
+text (`MscError::Rejected`), with the exceptions of "What is refused before MSC runs" below.
 
 ## What this means for `victory-shader` and the M1 acceptance
 
@@ -382,6 +382,35 @@ text (`MscError::Rejected`), never a crash.
    compiling off the interpreter's thread are later work.
 9. **Descriptor heap and TLAB are the backend's job**: MSC says nothing about residency; every
    buffer behind a heap entry or a root address must be resident (already the rule in `descriptors`).
+
+## What is refused before MSC runs (`msc/guard.rs`, 2026-11-28)
+
+MSC 4.0.3 does not always return an error. For some inputs it prints `metal-shaderconverter:
+[getMinMaxConstants:8246] Fatal: Unhandled LLVM type for getMinMaxConstants` and **aborts the process**
+(`SIGABRT`; `victory-census convert --isolate` measures: the child dies in under a second, no hang). Inside the
+game under Wine the abort does not end the process: the qualify run 20261128-0217 printed two such lines,
+then ran 14 minutes at 300 % CPU stuck around present 745, never reaching the world. A `Result` cannot catch it,
+so `Msc::compile` asks `guard::check` first and answers `Unsupported` without calling MSC:
+
+| refused | how it is recognised | reason (`Error::Unsupported`) |
+|---|---|---|
+| double precision | `SFI0` has `D3D_SHADER_REQUIRES_DOUBLES` (0x1) or `D3D_SHADER_REQUIRES_11_1_DOUBLE_EXTENSIONS` (0x20); a container with no `SFI0` part: a `double` in the bitcode type table (`bitcode.rs`) | `MSC 4.0.3 cannot convert double-precision` |
+| a hash on the census denylist | FNV-1a of the input bytes (`hash_parts(&[dxil])`, what the drop statistics call the stage) is a line of the file `VICTORY_METAL_MSC_DENYLIST` names (re-read when its time stamp changes) | `census: MSC fatal` |
+
+Bit values: `d3d12shader.h` `D3D_SHADER_REQUIRES_*` = DXC `ShaderFeatureInfo_*`; DXC 6.6 (the D3DMetal front end)
+puts 0x21 on a double-arithmetic compute shader and 0x4021 on `WaveActiveSum(double)`. The shader translator
+sets 0x1 only where it emits a `double` operation (the wave sum of 64-bit floats, `lower.rs` `active_f64_sum`),
+and of the package's 25 780 translated shaders exactly the five `CS_TransmissionVolumetrics*` with it
+(`..._Tiled`, `..._`, `..._VolumePortalsOnly`, `..._Submerged`, `..._Tiled_LocalLights`) abort MSC: the SFI0
+bit is reliable here, the bitcode scan is the fallback for containers from other makers. The guard refuses
+every double shader, not only the aborting form: MSC "accepts" plain double arithmetic (table above) but
+converts it with f32 (the result would be wrong), and no shader of the package has it. With `VICTORY_METAL_LOG=1`
+each refusal prints `MSC guard refused <hash>`. Tests: `back/tests/msc_f64_guard.rs` (the first one aborts the
+test process without the guard), `msc/guard.rs` unit tests.
+
+`victory-census denylist` (and the end of every `convert --isolate`) writes the denylist from the rows that ended
+in an abort or a timeout (docs/metal/census.md). Other fatal paths of MSC and what an isolating helper process
+would cost: docs/metal/msc-isolation.md (to come).
 
 ## Known issues
 

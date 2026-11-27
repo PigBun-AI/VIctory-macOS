@@ -25,6 +25,9 @@ use common_msc::dxil_result;
 enum Outcome {
     Accepted,
     Refused(&'static str),
+    /// Turned away by the back's own guard before MSC ran (`msc/guard.rs`):
+    /// the text of its reason.
+    Guarded(&'static str),
 }
 
 struct Case {
@@ -36,7 +39,7 @@ struct Case {
     hlsl: &'static str,
 }
 
-use Outcome::{Accepted, Refused};
+use Outcome::{Accepted, Guarded, Refused};
 
 fn cases() -> Vec<Case> {
     vec![
@@ -114,7 +117,9 @@ fn cases() -> Vec<Case> {
             name: "double_arithmetic",
             profile: "cs_6_6",
             manual: "-",
-            want: Accepted,
+            // MSC converts plain double arithmetic (with f32), but aborts the
+            // process on a double wave reduction: the back refuses both.
+            want: Guarded("MSC 4.0.3 cannot convert double-precision"),
             hlsl: "RWByteAddressBuffer o;\n[numthreads(32,1,1)] void main(uint3 t : SV_DispatchThreadID) { double d = (double)t.x * 1.5; o.Store(t.x*4, asuint((float)(d*d))); }",
         },
         Case {
@@ -306,6 +311,7 @@ fn feature_table() {
             Accepted => got == "Accepted",
             Refused("?") => got.starts_with("Refused"),
             Refused(code) => got.starts_with(&format!("Refused({code})")),
+            Guarded(why) => got == format!("Other(not supported: {why})"),
         };
         if !ok {
             mismatches.push(format!("{}: wanted {:?}, got {got}", c.name, c.want));

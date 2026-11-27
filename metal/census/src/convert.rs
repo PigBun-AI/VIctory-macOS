@@ -52,6 +52,12 @@ pub fn classify(e: &MscError) -> (&'static str, String) {
         MscError::BadInput(_) => ("msc", "BadInput".into()),
         MscError::Mismatch(_) => ("msc", "StageMismatch".into()),
         MscError::Limit(m) => ("metal-limit", limit_class(m)),
+        MscError::Unsupported(m) if m.contains("double-precision") => {
+            ("backend", "Refused:Doubles".into())
+        }
+        MscError::Unsupported(m) if m.contains("census: MSC fatal") => {
+            ("backend", "Refused:Denylist".into())
+        }
         MscError::Unsupported(m) => ("backend", format!("Unsupported:{}", first_words(m))),
         MscError::Metal(inner) => {
             let m = inner.to_string();
@@ -374,17 +380,57 @@ fn select(all: &mut Vec<(String, HostShader)>, args: &[String]) {
     }
 }
 
-/// Runs the conversion in a child process (one thread), and when Metal
-/// aborts the child on an assertion (it does not return an error), records
-/// the shader it was on as a failure and starts again after it.
+/// How long one child may run without finishing a shader before it is
+/// taken for hung (`--timeout SECONDS`, default 300; MSC's slowest shader of
+/// the package takes seconds).
+fn child_timeout(args: &[String]) -> std::time::Duration {
+    std::time::Duration::from_secs(
+        arg(args, "--timeout")
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(300),
+    )
+}
+
+/// Waits for the child; kills it when it stays on one shader (the mark file
+/// is rewritten at each shader) longer than `limit`. `None`: it was killed.
+fn wait_child(
+    child: &mut std::process::Child,
+    mark: &std::path::Path,
+    limit: std::time::Duration,
+) -> Result<Option<std::process::ExitStatus>, String> {
+    let mut last = (String::new(), Instant::now());
+    loop {
+        if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(Some(s));
+        }
+        let now = std::fs::read_to_string(mark).unwrap_or_default();
+        if now != last.0 {
+            last = (now, Instant::now());
+        } else if last.1.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Runs the conversion in a child process (one thread), and when the child
+/// dies (Metal aborts on an assertion, Metal Shader Converter prints `Fatal`
+/// and aborts: neither returns an error) or stays on one shader past
+/// `--timeout`, records the shader it was on as a failure and starts again
+/// after it. At the end the denylist for the back is written
+/// ([`crate::denylist`]).
 fn isolate(args: &[String], out: &std::path::Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let kind = arg(args, "--kind").ok_or("--isolate needs one --kind")?;
     let tag = arg(args, "--tag").unwrap_or_default();
     let rows_path = out.join(format!("convert-{kind}{tag}.jsonl"));
     let mark = out.join(format!("current-{kind}{tag}.txt"));
+    let errs = out.join(format!("current-{kind}{tag}.stderr"));
+    let limit = child_timeout(args);
     let _ = std::fs::write(&rows_path, "");
-    let mut crashes = 0;
+    let (mut crashes, mut fatals, mut hangs) = (0, 0, 0);
     loop {
         let mut cmd = std::process::Command::new(&exe);
         cmd.arg("convert");
@@ -392,33 +438,84 @@ fn isolate(args: &[String], out: &std::path::Path) -> Result<(), String> {
         for a in args {
             if skip {
                 skip = false;
-            } else if a == "--isolate" || a == "--jobs" {
-                skip = a == "--jobs";
+            } else if a == "--isolate" || a == "--jobs" || a == "--timeout" || a == "--denylist" {
+                skip = a != "--isolate";
             } else {
                 cmd.arg(a);
             }
         }
         cmd.args(["--jobs", "1", "--resume", "--mark"]).arg(&mark);
         let _ = std::fs::remove_file(&mark);
-        let status = cmd.status().map_err(|e| e.to_string())?;
-        if status.success() {
+        // The child's messages are kept: Metal Shader Converter's `Fatal`
+        // line says whose abort it was, and are shown after the child.
+        let log = std::fs::File::create(&errs).map_err(|e| e.to_string())?;
+        cmd.stderr(log);
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let status = wait_child(&mut child, &mark, limit)?;
+        let said = std::fs::read_to_string(&errs).unwrap_or_default();
+        eprint!("{said}");
+        if status.is_some_and(|s| s.success()) {
             break;
         }
         let Ok(hash) = std::fs::read_to_string(&mark) else {
             return Err(format!(
-                "the child failed without naming a shader: {status}"
+                "the child failed without naming a shader: {status:?}"
             ));
         };
-        crashes += 1;
+        let fatal = said
+            .lines()
+            .find(|l| l.contains("metal-shaderconverter") && l.contains("Fatal"));
+        let row = match (status, fatal) {
+            (None, _) => {
+                hangs += 1;
+                json!({
+                    "hash": hash.trim(), "kind": kind, "ok": false, "fail_stage": "msc-timeout",
+                    "fail_class": "ProcessTimeout",
+                    "error": format!("no result after {} s: the child was killed", limit.as_secs()),
+                })
+            }
+            (Some(s), Some(line)) => {
+                fatals += 1;
+                json!({
+                    "hash": hash.trim(), "kind": kind, "ok": false, "fail_stage": "msc-fatal",
+                    "fail_class": "MscFatal",
+                    "error": format!("the process aborted ({s}): {}", one_line(line)),
+                })
+            }
+            (Some(s), None) => {
+                crashes += 1;
+                json!({
+                    "hash": hash.trim(), "kind": kind, "ok": false, "fail_stage": "metal-abort",
+                    "fail_class": "ProcessAbort",
+                    "error": format!("the process aborted ({s}) while building this pipeline"),
+                })
+            }
+        };
         let rows = jsonl::Appender::open(&rows_path)?;
-        rows.push(&json!({
-            "hash": hash.trim(), "kind": kind, "ok": false, "fail_stage": "metal-abort",
-            "fail_class": "ProcessAbort",
-            "error": format!("the process aborted ({status}) while building this pipeline"),
-        }));
+        rows.push(&row);
         rows.flush();
     }
-    println!("isolate {kind}: {crashes} aborts recorded");
+    println!(
+        "isolate {kind}: {} aborts recorded ({fatals} MSC Fatal, {crashes} other aborts, {hangs} timeouts)",
+        fatals + crashes + hangs
+    );
+    // The denylist: the whole file after a run over everything, merged into
+    // it after a run over a subset (or a `--tag`ged variant: those rows are
+    // not what the game builds, and the file reads the untagged ones).
+    let subset = [
+        "--only", "--hashes", "--limit", "--every", "--tag", "--compat",
+    ]
+    .iter()
+    .any(|f| args.iter().any(|a| a == f));
+    let file = arg(args, "--denylist")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::denylist::default_file(out));
+    let n = crate::denylist::write(out, &file, subset, &[(kind.as_str(), rows_path.clone())])?;
+    println!(
+        "denylist: {n} shaders in {} ({})",
+        file.display(),
+        if subset { "merged" } else { "rewritten" }
+    );
     Ok(())
 }
 
@@ -436,6 +533,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if flag(args, "--isolate") {
         return isolate(args, &out);
     }
+    // A census finds what aborts: the back's denylist must not hide it.
+    // SAFETY: before any thread of this process starts.
+    unsafe { std::env::remove_var(victory_metal_back::msc::guard::DENYLIST_ENV) };
     let resume = flag(args, "--resume");
     let mark = arg(args, "--mark").map(PathBuf::from);
     let threads = jobs(args);
@@ -592,4 +692,59 @@ pub fn run(args: &[String]) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn mark(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("victory-census-{name}-{}.txt", std::process::id()))
+    }
+
+    #[test]
+    fn a_child_that_finishes_is_not_killed() {
+        let m = mark("quick");
+        let mut c = std::process::Command::new("true").spawn().unwrap();
+        let s = wait_child(&mut c, &m, Duration::from_secs(5)).unwrap();
+        assert!(s.is_some_and(|s| s.success()));
+    }
+
+    #[test]
+    fn a_child_stuck_on_one_shader_is_killed_after_the_limit() {
+        let m = mark("stuck");
+        std::fs::write(&m, "0123456789abcdef").unwrap();
+        let mut c = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let s = wait_child(&mut c, &m, Duration::from_millis(300)).unwrap();
+        assert!(s.is_none(), "{s:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let _ = std::fs::remove_file(&m);
+    }
+
+    #[test]
+    fn a_child_that_keeps_moving_on_is_not_a_hang() {
+        let m = mark("moving");
+        std::fs::write(&m, "a").unwrap();
+        let mark2 = m.clone();
+        let writer = std::thread::spawn(move || {
+            for i in 0..8 {
+                std::thread::sleep(Duration::from_millis(100));
+                let _ = std::fs::write(&mark2, format!("shader{i}"));
+            }
+        });
+        let mut c = std::process::Command::new("sleep")
+            .arg("1")
+            .spawn()
+            .unwrap();
+        // 0.5 s limit, 1 s run: the mark changes every 0.1 s, so it is let be.
+        let s = wait_child(&mut c, &m, Duration::from_millis(500)).unwrap();
+        assert!(s.is_some_and(|s| s.success()));
+        writer.join().unwrap();
+        let _ = std::fs::remove_file(&m);
+    }
 }

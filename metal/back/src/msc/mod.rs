@@ -38,6 +38,7 @@ mod compile;
 pub mod dxbc;
 pub mod dxil;
 mod ffi;
+pub mod guard;
 mod pipeline;
 mod root;
 

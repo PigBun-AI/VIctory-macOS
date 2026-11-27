@@ -5,6 +5,9 @@
 //! ```text
 //! victory-census translate  [--game DIR] [--out DIR] [--jobs N] [--limit N]
 //! victory-census convert    [--out DIR] [--kind cs|vs|ps|ms|gs|all] [--jobs N] [--archive]
+//! victory-census denylist   [--out DIR] [--file PATH] [--merge]
+//!                           the shaders `convert --isolate` saw abort or hang, for the back
+//!                           (`VICTORY_METAL_MSC_DENYLIST`; written by `--isolate` as well)
 //! victory-census archive    [--out DIR] ...          cold compile against archive load
 //! victory-census report     [--out DIR] [--research DIR]
 //! victory-census opcodes    [--game DIR] [--out DIR] [--research DIR] [--jobs N] [--limit N]
@@ -21,6 +24,8 @@
 mod convert;
 #[cfg(target_vendor = "apple")]
 mod defaults;
+#[cfg(target_vendor = "apple")]
+mod denylist;
 #[cfg(target_vendor = "apple")]
 mod dxc;
 #[cfg(target_vendor = "apple")]
@@ -100,6 +105,7 @@ fn main() {
     let result = match cmd.as_str() {
         "translate" => translate::run(rest),
         "convert" => convert::run(rest),
+        "denylist" => denylist::run(rest),
         "report" => report::run(rest),
         "meshstat" => meshstat::run(rest),
         "meshfit" => meshfit::run(rest),

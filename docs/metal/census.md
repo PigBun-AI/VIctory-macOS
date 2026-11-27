@@ -17,6 +17,8 @@ victory-census translate                 # every container -> translate.jsonl, v
 victory-census convert --kind all        # cs vs ps ms gs -> convert-<kind>.jsonl
 victory-census convert --kind cs,vs,ps,ms --archive      # same, and an archive of every pipeline built
 victory-census report                    # census.json, mac-side.md/.tsv, shared-translator.md
+victory-census convert --kind cs --isolate  # one child process per run; an abort or a hang (--timeout S, default 300) is a row, not the end
+victory-census denylist                  # msc-denylist.txt from the abort / timeout rows (written by --isolate too)
 victory-census opcodes                   # GFX10 instruction counts -> opcodes.jsonl, research/census/opcodes.{json,md}
 ```
 
@@ -28,6 +30,17 @@ tells the translator: wave 32, view limit 2^21 - 1, raw views 2^21 (`victory-gpu
 `--archive`, `--archive-dir`, `--archive-name`, `--only LIST|FILE` (only these container hashes: a comma list, or a
 file with the hash first on each line; a failure sample or a program family can be rebuilt alone. With `--isolate`
 the row file is overwritten: always give a new `--tag`).
+
+`--isolate` runs the conversion in a child (one thread) and starts it again after the shader it died on: an
+`MscFatal` row when the child's stderr has Metal Shader Converter's `Fatal` line (`SIGABRT`), `ProcessAbort` for
+another abort (a Metal assertion), `ProcessTimeout` when the child stays on one shader longer than `--timeout`
+seconds (killed). When it ends it writes the **MSC denylist** `<out>/msc-denylist.txt` (`--denylist PATH`):
+one line per cs/vs/ps/ms shader of those rows, `<FNV-1a of the DXIL, 16 hex> TAB <census hash> TAB <kind> TAB <class>`,
+the file `VICTORY_METAL_MSC_DENYLIST` names for the back (`msc/guard.rs`, docs/metal/msc.md); rewritten after a run
+over everything, merged into after a subset (`--only`, `--limit`, `--every`, `--tag`; the tagged rows count).
+Geometry-shader rows are not listed: their input is a vertex shader that converts on its own. `convert` ignores
+`VICTORY_METAL_MSC_DENYLIST` (a census must see the aborts). A shader the guard refuses (double precision) is a
+`Refused:Doubles` row (`backend`), not an abort.
 
 `opcodes` does not translate: it decodes the native programs of every container (`native_programs`, `gfx10::decode`,
 read only) and counts instructions by AMD mnemonic and by class (GDS, BVH, mode registers, 64-bit atomics, lane
