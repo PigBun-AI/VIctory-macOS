@@ -485,8 +485,11 @@ impl CommandList {
         }
         let p = pipeline.clone();
         let key = p.identity();
+        // After `prepare`: it may open a new encoder, which has no pipeline
+        // set (and `last_pipeline` is forgotten with the old encoder).
+        self.prepare(DISPATCH)?;
         let new_pipeline = self.last_pipeline != Some(key);
-        let encoder = self.prepare(DISPATCH)?;
+        let encoder = self.encoder_ref()?;
         if new_pipeline {
             encoder.setComputePipelineState(p.raw());
         }
@@ -530,8 +533,11 @@ impl CommandList {
         }
         let p = pipeline.clone();
         let key = p.identity();
+        // After `prepare`: it may open a new encoder, which has no pipeline
+        // set (and `last_pipeline` is forgotten with the old encoder).
+        self.prepare(DISPATCH)?;
         let new_pipeline = self.last_pipeline != Some(key);
-        let encoder = self.prepare(DISPATCH)?;
+        let encoder = self.encoder_ref()?;
         if new_pipeline {
             encoder.setComputePipelineState(p.raw());
         }
