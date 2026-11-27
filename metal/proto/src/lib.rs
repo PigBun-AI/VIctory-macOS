@@ -42,6 +42,7 @@
 extern crate alloc;
 
 pub mod cmd;
+pub mod dropstats;
 pub mod file;
 pub mod ids;
 pub mod indirect;

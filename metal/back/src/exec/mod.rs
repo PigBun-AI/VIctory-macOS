@@ -250,6 +250,7 @@ impl Executor {
     }
 
     pub(crate) fn note_error(&self, what: String) {
+        crate::dropstats::note_reason(&what);
         if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
             eprintln!("victory-metal back: {what}");
         }
@@ -311,6 +312,7 @@ impl Executor {
         let header = match stream::validate(block) {
             Ok(caps) => caps,
             Err(s) => {
+                stream::count_refused_block(block, &format!("block refused before it ran: {s:?}"));
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
                     eprintln!(
                         "victory-metal back: a block of {} bytes was refused before it ran: {s:?}",
@@ -322,11 +324,14 @@ impl Executor {
         };
         let mut g = lock(&self.state);
         let Some(st) = g.as_mut() else {
+            stream::count_refused_block(block, "block refused: back not initialized");
             return Status::NOT_INITIALIZED;
         };
         let status = if header.0 & !victory_metal_proto::Caps::KNOWN.0 != 0 {
+            stream::count_refused_block(block, "block refused: unknown capability bits");
             Status::BAD_STREAM
         } else if !st.caps_bits().contains(header) {
+            stream::count_refused_block(block, "block refused: capability not available");
             Status::UNSUPPORTED
         } else {
             st.run_block(block)

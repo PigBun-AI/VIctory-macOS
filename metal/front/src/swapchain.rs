@@ -269,6 +269,8 @@ impl SwapChain {
             a.flags |= present_flags::ALLOW_TEARING;
         }
         let s = self.dev.gpu().call_status(&mut a);
+        // A frame of the drop statistics ends at every present.
+        crate::dropstats::end_frame();
         if s != Status::OK {
             return Err(hr_of(s));
         }

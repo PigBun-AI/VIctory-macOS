@@ -21,6 +21,7 @@ pub mod connect;
 pub mod convert;
 pub mod descriptor;
 pub mod device;
+pub mod dropstats;
 pub mod fence_wait;
 pub mod footprint;
 pub mod format;

@@ -24,7 +24,7 @@ use victory_metal_proto::cmd::{
     QueueWait, SetDescriptorHeaps, SetPipeline, SetRootConstants, SetRootDescriptor,
     SetRootSignature, SetRootTable,
 };
-use victory_metal_proto::ids::{HeapId, QueueId};
+use victory_metal_proto::ids::{HeapId, PsoId, QueueId};
 use victory_metal_proto::indirect::IndirectArgKind;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::Decoder;
@@ -248,7 +248,7 @@ fn crash_report() {
 impl State {
     /// Runs a block that [`validate`] accepted.
     pub(super) fn run_block(&mut self, block: &[u8]) -> Status {
-        let Ok(decoder) = Decoder::new(block) else {
+        let Ok(mut decoder) = Decoder::new(block) else {
             return Status::BAD_STREAM;
         };
         let mut run = Run {
@@ -258,19 +258,36 @@ impl State {
         };
         let mut failed: Option<(Status, String)> = None;
         run.st.note = None;
-        for c in decoder {
+        // The drop statistics (`VICTORY_METAL_DROPSTATS`): ops counted as they
+        // run, and what a failure loses with them.
+        let stats = crate::dropstats::get();
+        let mut counted = Counted::default();
+        while let Some(c) = decoder.next() {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
             if step_log() {
                 eprintln!("victory-metal step: {c:?}");
             }
-            if let Err(s) = run.command(&c) {
+            let before = stats.map(|s| counted.before(s, &c));
+            let result = run.command(&c);
+            if let (Some(s), Some(before)) = (stats, before) {
+                counted.after(s, &c, before, &result, &run);
+            }
+            if let Err(s) = result {
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
                     // `note` still holds the reason a refusal recorded (the
                     // block's own note below replaces it).
                     let why = run.st.note.as_deref().unwrap_or("no reason recorded");
                     eprintln!("victory-metal back: {:?} failed: {s:?}: {why}", c.opcode());
+                }
+                if let Some(st) = stats {
+                    let why = run.st.note.clone().unwrap_or_else(|| format!("{s:?}"));
+                    counted.stopped(
+                        st,
+                        &format!("block stopped at {:?}: {why}", c.opcode()),
+                        decoder.by_ref(),
+                    );
                 }
                 // Dropping `run` drops the open list and the unflushed ones.
                 failed = Some((s, format!("{c:?}")));
@@ -281,6 +298,12 @@ impl State {
             Some((s, what)) => Err((s, what)),
             None => run.flush_all().map_err(|s| (s, "commit".to_string())),
         };
+        if let (Some(st), Err((s, what))) = (stats, &result)
+            && what == "commit"
+        {
+            // The lists were run in the stream but their commit failed.
+            counted.lose_uncommitted(st, &format!("commit failed: {s:?}"));
+        }
         drop(run);
         match result {
             Ok(()) => Status::OK,
@@ -291,6 +314,153 @@ impl State {
                 self.note = Some(format!("block stopped with {s:?} at {what}"));
                 s
             }
+        }
+    }
+}
+
+/// A block that was refused before it ran (or never reached `run_block`):
+/// every op in it is submitted and dropped, for `why`.
+pub(super) fn count_refused_block(block: &[u8], why: &str) {
+    use victory_metal_proto::dropstats::{op_of, pipeline_of};
+    let Some(stats) = crate::dropstats::get() else {
+        return;
+    };
+    let Ok(decoder) = Decoder::new(block) else {
+        return;
+    };
+    let mut pso = PsoId::NULL;
+    for c in decoder.flatten() {
+        if matches!(c, Command::BeginList(_)) {
+            pso = PsoId::NULL;
+        }
+        if let Some(p) = pipeline_of(&c) {
+            pso = p;
+        }
+        if let Some(op) = op_of(&c) {
+            let label = stats.label_of(pso.0);
+            stats.submit(op, label);
+            stats.drop_ops(op, label, why, 1);
+        }
+    }
+}
+
+/// What one block's statistics need between commands.
+#[derive(Default)]
+struct Counted {
+    pso: PsoId,
+    queue: u32,
+    tracker: victory_metal_proto::dropstats::BlockTracker,
+}
+
+/// What `Counted::before` saw of a command.
+struct Before {
+    op: Option<(
+        victory_metal_proto::dropstats::Op,
+        victory_metal_proto::dropstats::Label,
+    )>,
+}
+
+impl Counted {
+    /// A command is about to run: an op is submitted with the bound pipeline.
+    fn before(&mut self, stats: &crate::dropstats::Collector, c: &Command<'_>) -> Before {
+        use victory_metal_proto::dropstats::{op_of, pipeline_of};
+        if let Command::BeginList(_) = c {
+            self.pso = PsoId::NULL;
+            self.tracker.begin_list();
+        }
+        if let Command::BeginList(b) = c {
+            self.queue = b.queue.0;
+        }
+        if let Some(p) = pipeline_of(c) {
+            self.pso = p;
+        }
+        let op = op_of(c).map(|op| (op, stats.label_of(self.pso.0)));
+        if let Some((op, label)) = op {
+            stats.submit(op, label);
+            // A skip noted by an earlier command must not be taken for this one.
+            crate::dropstats::take_skip();
+        }
+        Before { op }
+    }
+
+    /// The command ran (or failed): drops, no-ops, the lists' bookkeeping.
+    fn after(
+        &mut self,
+        stats: &crate::dropstats::Collector,
+        c: &Command<'_>,
+        before: Before,
+        result: &R,
+        run: &Run<'_>,
+    ) {
+        if let Some((op, label)) = before.op {
+            match result {
+                Ok(()) => match crate::dropstats::take_skip() {
+                    Some(why) => stats.drop_ops(op, label, &why, 1),
+                    None => {
+                        match c {
+                            Command::Draw(d) if d.vertex_count == 0 || d.instance_count == 0 => {
+                                stats.noop()
+                            }
+                            Command::DrawIndexed(d)
+                                if d.index_count == 0 || d.instance_count == 0 =>
+                            {
+                                stats.noop()
+                            }
+                            Command::DispatchMesh(d) if d.x == 0 || d.y == 0 || d.z == 0 => {
+                                stats.noop()
+                            }
+                            _ => {}
+                        }
+                        self.tracker.ran(op, label);
+                    }
+                },
+                Err(s) => {
+                    let why = run.st.note.clone().unwrap_or_else(|| format!("{s:?}"));
+                    stats.drop_ops(op, label, &format!("{:?} failed: {why}", c.opcode()), 1);
+                }
+            }
+        }
+        if result.is_ok()
+            && let Command::EndList(_) = c
+        {
+            self.tracker.end_list(self.queue);
+        }
+        self.tracker.sync(|q| {
+            run.batches
+                .iter()
+                .find(|b| b.queue_id == q)
+                .map_or(0, |b| b.lists.len())
+        });
+    }
+
+    /// A command stopped the block: the ops of the uncommitted lists and every
+    /// op still to come are lost.
+    fn stopped<'a>(
+        &mut self,
+        stats: &crate::dropstats::Collector,
+        why: &str,
+        rest: impl Iterator<Item = Result<Command<'a>, victory_metal_proto::Error>>,
+    ) {
+        self.lose_uncommitted(stats, &format!("lost with its block: {why}"));
+        use victory_metal_proto::dropstats::{op_of, pipeline_of};
+        for c in rest.flatten() {
+            if let Some(p) = pipeline_of(&c) {
+                self.pso = p;
+            }
+            if matches!(c, Command::BeginList(_)) {
+                self.pso = PsoId::NULL;
+            }
+            if let Some(op) = op_of(&c) {
+                let label = stats.label_of(self.pso.0);
+                stats.submit(op, label);
+                stats.drop_ops(op, label, &format!("not run after a stop: {why}"), 1);
+            }
+        }
+    }
+
+    fn lose_uncommitted(&mut self, stats: &crate::dropstats::Collector, why: &str) {
+        for (op, label) in self.tracker.lost() {
+            stats.drop_ops(op, label, why, 1);
         }
     }
 }

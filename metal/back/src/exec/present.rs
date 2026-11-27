@@ -292,6 +292,8 @@ impl State {
             a.sync_interval,
             a.flags & present_flags::ALLOW_TEARING != 0,
         );
+        // A frame of the drop statistics ends at every present.
+        crate::dropstats::end_frame();
         r.map_err(|err| {
             self.note = Some(format!("PRESENT: {err}"));
             match err {

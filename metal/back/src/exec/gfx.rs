@@ -16,6 +16,7 @@ use objc2_metal::{
     MTLDepthClipMode, MTLPixelFormat, MTLPrimitiveTopologyClass, MTLStencilOperation,
     MTLTriangleFillMode, MTLVertexFormat, MTLWinding,
 };
+use victory_metal_proto::dropstats::{Label, PipeType};
 use victory_metal_proto::pso::{
     APPEND_ALIGNED, BlendFactor, BlendOp, CullMode, DepthStencilDesc, FillMode, GraphicsPsoDesc,
     InputClass, LogicOp, PsoKind, StageCode, StencilFace as PStencilFace, StencilOp, TopologyType,
@@ -439,6 +440,35 @@ impl Executor {
         &self,
         a: &mut CreateGraphicsPipelineArgs,
     ) -> Result<(), Status> {
+        let Some(stats) = crate::dropstats::get() else {
+            return self.create_graphics_pipeline_inner(a, &mut Label::default());
+        };
+        crate::dropstats::take_reason();
+        let mut label = Label::NONE;
+        let r = self.create_graphics_pipeline_inner(a, &mut label);
+        let kind = match label.ty {
+            PipeType::Ms => "graphics-ms",
+            PipeType::Gs => "graphics-gs",
+            _ => "graphics-vs",
+        };
+        match &r {
+            Ok(()) => {
+                stats.register(a.pso.0, label);
+                stats.pso_created(kind, label.hash, Ok(a.pso.0));
+            }
+            Err(s) => {
+                let why = crate::dropstats::take_reason().unwrap_or_else(|| format!("{s:?}"));
+                stats.pso_created(kind, label.hash, Err(&why));
+            }
+        }
+        r
+    }
+
+    fn create_graphics_pipeline_inner(
+        &self,
+        a: &mut CreateGraphicsPipelineArgs,
+        label: &mut Label,
+    ) -> Result<(), Status> {
         if a.flags != 0 || a._pad != 0 {
             return Err(Status::INVALID_ARG);
         }
@@ -465,6 +495,15 @@ impl Executor {
             stage_bytes(&d.ms)?,
             stage_bytes(&d.gs)?,
         ];
+        if crate::dropstats::get().is_some() {
+            let ty = match (kind, code[4].is_some()) {
+                (PsoKind::Mesh, _) => PipeType::Ms,
+                (_, true) => PipeType::Gs,
+                _ => PipeType::Vs,
+            };
+            let parts: Vec<&[u8]> = code.iter().map(|c| c.unwrap_or(&[])).collect();
+            *label = crate::dropstats::label_of_stages(ty, &parts);
+        }
         let desc = describe(d, &sig.msc_desc, code, self.options.compat).map_err(|r| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
             r.status()

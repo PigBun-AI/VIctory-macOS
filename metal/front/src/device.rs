@@ -510,7 +510,18 @@ impl Device {
         a.root_sig = rs.id;
         a.dxil_addr = dxil.as_ptr() as u64;
         a.dxil_len = dxil.len() as u64;
-        self.gpu().call(&mut a)?;
+        let made = self.gpu().call(&mut a);
+        if let Some(stats) = crate::dropstats::get() {
+            let label = crate::dropstats::compute_label(dxil);
+            match &made {
+                Ok(()) => {
+                    stats.register(a.pso, label);
+                    stats.pso_created("compute", label.hash, Ok(a.pso));
+                }
+                Err(e) => stats.pso_created("compute", label.hash, Err(&format!("{e:?}"))),
+            }
+        }
+        made?;
         Ok(Pipeline {
             dev: self.clone(),
             id: a.pso,
@@ -529,7 +540,24 @@ impl Device {
         let mut a = CreateGraphicsPipelineArgs::new();
         a.root_sig = rs.id;
         a.desc = *desc;
-        self.gpu().call(&mut a)?;
+        let made = self.gpu().call(&mut a);
+        if let Some(stats) = crate::dropstats::get() {
+            // SAFETY: the stages' bytes are the caller's for the call.
+            let label = unsafe { crate::dropstats::graphics_label(desc) };
+            let kind = match label.ty {
+                victory_metal_proto::dropstats::PipeType::Ms => "graphics-ms",
+                victory_metal_proto::dropstats::PipeType::Gs => "graphics-gs",
+                _ => "graphics-vs",
+            };
+            match &made {
+                Ok(()) => {
+                    stats.register(a.pso, label);
+                    stats.pso_created(kind, label.hash, Ok(a.pso));
+                }
+                Err(e) => stats.pso_created(kind, label.hash, Err(&format!("{e:?}"))),
+            }
+        }
+        made?;
         Ok(Pipeline {
             dev: self.clone(),
             id: a.pso,
@@ -1013,10 +1041,18 @@ impl Queue {
 
     /// `ExecuteCommandLists`: one block, the lists in order.
     pub fn execute(&self, lists: &[Arc<[Item]>]) -> Result<()> {
-        let block = encode_block(self.dev.sys.proto_caps, self.id, lists, || {
+        let counted = crate::dropstats::get().map(|s| (s, s.submitted(lists)));
+        let result = encode_block(self.dev.sys.proto_caps, self.id, lists, || {
             self.dev.next_list_id()
-        })?;
-        self.dev.gpu().submit(&block)
+        })
+        .and_then(|block| self.dev.gpu().submit(&block));
+        if let (Some((stats, ops)), Err(e)) = (counted, &result) {
+            stats.dropped(
+                &ops,
+                &format!("ExecuteCommandLists refused {:#x}", e.0 as u32),
+            );
+        }
+        result
     }
 
     /// `ID3D12CommandQueue::Signal`.
@@ -1153,6 +1189,8 @@ pub struct CommandList {
     /// First error found while recording; reported by `close`, as D3D12's
     /// debug layer and drivers do.
     error: Option<Hr>,
+    /// Where the first error came from (for the drop statistics).
+    error_at: Option<&'static std::panic::Location<'static>>,
     /// Render pass derivation (`render.rs`).
     pub(crate) render: crate::render::RenderRec,
 }
@@ -1166,6 +1204,7 @@ impl CommandList {
             items: Vec::new(),
             state: ListState::Recording,
             error: None,
+            error_at: None,
             render: Default::default(),
         }
     }
@@ -1195,6 +1234,9 @@ impl CommandList {
                 std::panic::Location::caller()
             );
         }
+        if self.error.is_none() {
+            self.error_at = Some(std::panic::Location::caller());
+        }
         self.error.get_or_insert(e);
     }
 
@@ -1211,7 +1253,15 @@ impl CommandList {
         }
         self.state = ListState::Closed;
         match self.error {
-            Some(e) => Err(e),
+            Some(e) => {
+                if let Some(stats) = crate::dropstats::get() {
+                    let at = self
+                        .error_at
+                        .map_or_else(String::new, |l| format!(" at {l}"));
+                    stats.list_failed(&self.items, &format!("list failed {:#x}{at}", e.0 as u32));
+                }
+                Err(e)
+            }
             None => Ok(Arc::from(self.items.clone())),
         }
     }
@@ -1220,6 +1270,7 @@ impl CommandList {
     pub fn reset(&mut self) {
         self.items.clear();
         self.error = None;
+        self.error_at = None;
         self.render = Default::default();
         self.state = ListState::Recording;
     }

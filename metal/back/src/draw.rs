@@ -1093,6 +1093,7 @@ impl crate::record::CommandList {
         // `VICTORY_METAL_SKIP_GS_INDIRECT=1` these draws are not drawn, to tell
         // what they do to a picture from what the rest of a frame does.
         if std::env::var_os("VICTORY_METAL_SKIP_GS_INDIRECT").is_some_and(|v| v != "0") {
+            crate::dropstats::skip("indirect GS draw skipped (VICTORY_METAL_SKIP_GS_INDIRECT)");
             return Ok(());
         }
         let prim = self.vertex_pipeline_checks(p)?;

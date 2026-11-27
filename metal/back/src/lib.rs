@@ -33,6 +33,8 @@ pub mod device;
 pub mod draw;
 pub mod dump;
 #[cfg(target_vendor = "apple")]
+pub mod dropstats;
+#[cfg(target_vendor = "apple")]
 pub mod error;
 #[cfg(target_vendor = "apple")]
 pub mod exec;

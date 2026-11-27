@@ -18,6 +18,7 @@ use victory_metal_proto::types::{
 
 use std::sync::Arc;
 
+use victory_metal_proto::dropstats::{Label, PipeType};
 use victory_metal_proto::ids::PsoId;
 use victory_metal_proto::sync::CreateComputePipelineArgs;
 
@@ -261,6 +262,30 @@ impl Executor {
         &self,
         a: &mut CreateComputePipelineArgs,
     ) -> Result<(), Status> {
+        let Some(stats) = crate::dropstats::get() else {
+            return self.create_compute_pipeline_inner(a, &mut Label::default());
+        };
+        crate::dropstats::take_reason();
+        let mut label = Label::NONE;
+        let r = self.create_compute_pipeline_inner(a, &mut label);
+        match &r {
+            Ok(()) => {
+                stats.register(a.pso.0, label);
+                stats.pso_created("compute", label.hash, Ok(a.pso.0));
+            }
+            Err(s) => {
+                let why = crate::dropstats::take_reason().unwrap_or_else(|| format!("{s:?}"));
+                stats.pso_created("compute", label.hash, Err(&why));
+            }
+        }
+        r
+    }
+
+    fn create_compute_pipeline_inner(
+        &self,
+        a: &mut CreateComputePipelineArgs,
+        label: &mut Label,
+    ) -> Result<(), Status> {
         if a.flags != 0 || a.reserved != [0; 4] || a.dxil_addr == 0 || a.dxil_len == 0 {
             return Err(Status::INVALID_ARG);
         }
@@ -284,6 +309,9 @@ impl Executor {
         // the call (`CreateComputePipelineArgs::dxil_addr`).
         let dxil =
             unsafe { std::slice::from_raw_parts(a.dxil_addr as *const u8, a.dxil_len as usize) };
+        if crate::dropstats::get().is_some() {
+            *label = crate::dropstats::label_of_stages(PipeType::Cs, &[dxil]);
+        }
         let options = CompileOptions {
             compat: self.options.compat,
             ..CompileOptions::default()
