@@ -53,13 +53,15 @@ pub fn run(
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
     let cfg = victory_core::Config::load()?;
-    let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
+    let mut original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
     match victory_game::identify(&hash) {
         Some(build) => println!("build          {} ({hash})", build.label),
         None => println!("build          unknown ({hash})"),
     }
+    // Mac patches (docs/mac/PATCHES.md): nothing happens off Rosetta.
+    let mac = crate::mac::plan(&prepared.info, &mut original, &hash);
 
     let images = cfg.cache_subdir("images")?;
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
@@ -78,6 +80,7 @@ pub fn run(
         image.base(),
         image.info().image_base
     );
+    crate::mac::apply(mac, &image, execute);
     let resolver = HleResolver::new(if strict {
         HostPolicy::none()
     } else {

@@ -25,6 +25,8 @@
 mod console_insn;
 #[cfg(windows)]
 mod crash;
+// Mac patches (docs/mac/PATCHES.md): Rosetta/Wine workarounds, one module.
+pub mod mac;
 pub mod prepare;
 pub(crate) mod publish;
 pub mod resolve;

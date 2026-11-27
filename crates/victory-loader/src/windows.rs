@@ -84,6 +84,8 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
         // SAFETY: just mapped, and no title code has run.
         unsafe { crate::tls::redirect(loaded.base(), &loaded.info) }?;
     }
+    // Mac patch L2: a title DLL's 256-bit stores (VICTORY_PATCH_WIDE_DIR).
+    crate::mac::wide::patch_title_dll(&loaded, &prepared.original_hash.to_hex());
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
         preferred = format_args!("{:#x}", loaded.info.image_base),
