@@ -26,6 +26,8 @@ pub mod lifecycle;
 pub mod media;
 #[cfg(windows)]
 pub mod net;
+#[cfg(windows)]
+pub mod mac;
 pub mod rpcrt4;
 pub mod speech;
 pub mod storage;
@@ -67,6 +69,11 @@ pub(crate) fn all() -> Vec<HleModule> {
     all.push(lifecycle::module());
     #[cfg(windows)]
     all.push(net::module());
+    // Mac patch H1: only under Rosetta.
+    #[cfg(windows)]
+    if victory_gpu::mac::rosetta::rosetta() {
+        all.push(mac::module());
+    }
     all.push(rpcrt4::module());
     #[cfg(windows)]
     all.push(xmem::module());
