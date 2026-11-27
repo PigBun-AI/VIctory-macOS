@@ -384,35 +384,49 @@ impl CommandList {
         Ok(())
     }
 
-    /// A barrier: stages `after` must finish before stages `before` start,
-    /// with `vis` ([`stages`] bits). Nothing is encoded until a command
-    /// shows where it belongs.
-    pub fn barrier(&mut self, after: u16, before: u16, vis: u8) -> Result<()> {
+    /// A stage-to-stage barrier: the work of the `producer` stages must be
+    /// finished and visible (`vis`, [`stages`] bits) before the `consumer`
+    /// stages start. The wire call `BARRIER{MEMORY}` carries the same masks as
+    /// `before` = producer and `after` = consumer. Nothing is encoded until a
+    /// command shows where the barrier belongs.
+    pub fn barrier(&mut self, producer: u16, consumer: u16, vis: u8) -> Result<()> {
         self.live()?;
-        stages::to_mtl_stages(after)?;
-        stages::to_mtl_stages(before)?;
+        stages::to_mtl_stages(producer)?;
+        stages::to_mtl_stages(consumer)?;
         stages::to_mtl_visibility(vis)?;
-        self.tracker.barrier(after, before, vis);
+        // The tracker speaks Metal's words: `after` the producer stages,
+        // `before` the consumer stages.
+        self.tracker.barrier(producer, consumer, vis);
         Ok(())
     }
 
-    /// Start of a split barrier: only recorded.
-    pub fn split_barrier_begin(&mut self, id: u64, after: u16, vis: u8) -> Result<()> {
+    /// `BARRIER{ALIASING}`: memory that two resources share is reused; every
+    /// stage before is ordered against every stage after, with the alias
+    /// visibility.
+    pub fn aliasing_barrier(&mut self) -> Result<()> {
+        self.barrier(stages::ALL, stages::ALL, stages::VIS_RESOURCE_ALIAS)
+    }
+
+    /// Start of a split barrier: only recorded (D3D12 `BEGIN_ONLY`; the
+    /// wire protocol sends the barrier at the end point alone, so the
+    /// interpreter normally never calls this).
+    pub fn split_barrier_begin(&mut self, id: u64, producer: u16, vis: u8) -> Result<()> {
         self.live()?;
-        stages::to_mtl_stages(after)?;
+        stages::to_mtl_stages(producer)?;
         stages::to_mtl_visibility(vis)?;
-        self.splits.insert(id, (after, vis));
+        self.splits.insert(id, (producer, vis));
         Ok(())
     }
 
     /// End of a split barrier: this is where it is issued, as a normal
-    /// deferred barrier with the `after` and visibility given at the begin.
-    pub fn split_barrier_end(&mut self, id: u64, before: u16) -> Result<()> {
-        let (after, vis) = self
+    /// deferred barrier with the producer stages and visibility given at the
+    /// begin.
+    pub fn split_barrier_end(&mut self, id: u64, consumer: u16) -> Result<()> {
+        let (producer, vis) = self
             .splits
             .remove(&id)
             .ok_or_else(|| Error::BadArgument(format!("split barrier {id} was never begun")))?;
-        self.barrier(after, before, vis)
+        self.barrier(producer, consumer, vis)
     }
 
     /// Ends the current encoder: the next command starts a new one (barriers

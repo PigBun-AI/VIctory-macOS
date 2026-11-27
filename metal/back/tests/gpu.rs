@@ -84,6 +84,10 @@ fn copy_and_fill_match_the_cpu() {
     let gpu = d.create_buffer(BufferKind::Default, 4096).unwrap();
     let out = d.create_buffer(BufferKind::Readback, 4096).unwrap();
     let data: Vec<u8> = (0..4096u32).map(|i| (i * 7 + 3) as u8).collect();
+    // What CreateBuffer reports: cpu_addr 0 for GPU-only, alloc_size >= size.
+    assert_eq!(gpu.cpu_addr(), 0);
+    assert_ne!(src.cpu_addr(), 0);
+    assert!(gpu.alloc_size() >= 4096 && src.alloc_size() >= 4096);
     src.write(0, &data).unwrap();
     out.write(0, &[0u8; 4096]).unwrap();
 
@@ -216,6 +220,12 @@ fn descriptor_heap_and_root_arguments_reach_the_shader() {
     let q = Queue::new(&d).unwrap();
     let pso = d.compute_pipeline_from_msl(MSC_STYLE, "msc_style").unwrap();
     let heap = DescriptorHeap::new(&d, 64).unwrap();
+    assert_eq!(heap.stride(), 24);
+    assert_eq!(heap.cpu_addr(), heap.buffer().cpu_addr());
+    assert_eq!(
+        heap.entry_va(2) - heap.gpu_va(),
+        2 * u64::from(heap.stride())
+    );
     let src = d.create_buffer(BufferKind::Shared, 1024).unwrap();
     let out = d.create_buffer(BufferKind::Shared, 1024).unwrap();
     let words: Vec<u32> = (0..256).collect();
@@ -727,4 +737,53 @@ fn without_the_inter_submit_barrier_a_barrier_reaches_back_to_earlier_lists() {
         ),
         (1, 1, 1, 0)
     );
+}
+
+/// Observational: do two lists of one queue overlap when nothing orders
+/// them? Slow kernel in list 1, dependent kernel in list 2, no barrier of
+/// any kind (inter-submit barrier off), once as one commit of two lists and
+/// once as two commits. Printed, not asserted.
+#[test]
+fn unordered_lists_observation() {
+    let (_g, d) = setup();
+    let q = Queue::new(&d).unwrap();
+    q.set_inter_submit_barrier(false);
+    let a = d.compute_pipeline_from_msl(SLOW_A, "slow_a").unwrap();
+    let b = d.compute_pipeline_from_msl(SLOW_A, "plus_one").unwrap();
+    let input = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let mid = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let outb = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    let iters = d.create_buffer(BufferKind::Shared, 256).unwrap();
+    input.write_u32s(0, &[12345]).unwrap();
+    iters.write_u32s(0, &[ITERS]).unwrap();
+    let want = lcg(12345, ITERS).wrapping_add(1);
+    for (name, one_commit) in [("one commit", true), ("two commits", false)] {
+        let mut stale = 0;
+        for _ in 0..10 {
+            mid.write_u32s(0, &[0]).unwrap();
+            outb.write_u32s(0, &[0]).unwrap();
+            let mut l1 = q.begin_list().unwrap();
+            l1.set_address(0, input.gpu_va()).unwrap();
+            l1.set_address(1, mid.gpu_va()).unwrap();
+            l1.set_address(2, iters.gpu_va()).unwrap();
+            l1.dispatch(&a, [1, 1, 1], [1, 1, 1]).unwrap();
+            l1.end().unwrap();
+            let mut l2 = q.begin_list().unwrap();
+            l2.set_address(0, mid.gpu_va()).unwrap();
+            l2.set_address(1, outb.gpu_va()).unwrap();
+            l2.dispatch(&b, [1, 1, 1], [1, 1, 1]).unwrap();
+            l2.end().unwrap();
+            let v = if one_commit {
+                q.submit(vec![l1, l2]).unwrap()
+            } else {
+                q.submit(vec![l1]).unwrap();
+                q.submit(vec![l2]).unwrap()
+            };
+            q.wait_for(v, WAIT_MS).unwrap();
+            if outb.read_u32s(0, 1).unwrap()[0] != want {
+                stale += 1;
+            }
+        }
+        eprintln!("no inter-list barrier, {name}: {stale}/10 runs read a stale value");
+    }
 }

@@ -6,7 +6,7 @@
 //! descriptor tables are arrays of [`IrDescriptorTableEntry`] in a heap
 //! buffer at bind point 0 (resources) or 1 (samplers).
 //!
-//! Metal 4 has no `setBytes`. Root constants and root descriptors are
+//! Metal 4 has no inline byte binding. Root constants and root descriptors are
 //! written into the per-submission [`ConstantRing`] at the offsets the
 //! caller lays out (the layout comes later from MSC reflection:
 //! `IRRootSignatureGetResourceLocations`; MSC inserts alignment padding, so
@@ -213,6 +213,16 @@ impl DescriptorHeap {
     /// Number of entries.
     pub fn capacity(&self) -> u32 {
         self.capacity
+    }
+
+    /// Size of one slot in bytes (`CreateDescHeap` returns this as `stride`).
+    pub fn stride(&self) -> u32 {
+        ENTRY_SIZE as u32
+    }
+
+    /// CPU address of slot 0 (`CreateDescHeap` returns it as `cpu_addr`).
+    pub fn cpu_addr(&self) -> u64 {
+        self.buffer.cpu_ptr().map_or(0, |p| p as u64)
     }
 
     /// GPU address of entry 0: what is bound at bind point 0 / 1.

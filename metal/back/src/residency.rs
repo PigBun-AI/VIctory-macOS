@@ -1,7 +1,7 @@
 //! Residency sets, owned by the backend (architecture note 2.6, item 6;
 //! layering rule 11).
 //!
-//! Metal 4 has no `useResource` / `useHeap`: a resource the GPU may touch
+//! Metal 4 has no per-encoder residency calls: a resource the GPU may touch
 //! must be in a `MTLResidencySet` attached to the queue (or the command
 //! buffer). Bindless access (descriptor heaps) makes "may touch" mean
 //! "every live resource", so the backend keeps its own layered sets:

@@ -170,6 +170,18 @@ impl Buffer {
         self.inner.len
     }
 
+    /// `MTLBuffer.allocatedSize`: what the allocation really takes
+    /// (`CreateBuffer` returns it as `alloc_size`).
+    pub fn alloc_size(&self) -> u64 {
+        MTLResource::allocatedSize(&*self.inner.raw) as u64
+    }
+
+    /// `cpu_ptr` as an address, 0 when there is none (`cpu_addr` of the
+    /// wire calls).
+    pub fn cpu_addr(&self) -> u64 {
+        self.cpu_ptr().map_or(0, |p| p as u64)
+    }
+
     /// True for a zero-length buffer (never made; kept for clippy).
     pub fn is_empty(&self) -> bool {
         self.inner.len == 0
