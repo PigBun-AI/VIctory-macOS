@@ -151,6 +151,11 @@ struct Open {
     work: u32,
 }
 
+/// The key of a host list: its command list object. The address of the `HostList` itself is not the same in `bind`, `close` and `submit`, so a key made of it never met the closed segments again (every segment was lost).
+fn key_of(list: &HostList) -> usize {
+    windows::core::Interface::as_raw(&list.list) as usize
+}
+
 /// By host list: the segment being recorded, and the ones closed so far.
 static OPEN: Mutex<Option<HashMap<usize, Open>>> = Mutex::new(None);
 static CLOSED: Mutex<Option<HashMap<usize, Vec<Seg>>>> = Mutex::new(None);
@@ -159,7 +164,7 @@ static CLOSED: Mutex<Option<HashMap<usize, Vec<Seg>>>> = Mutex::new(None);
 /// segment of the program before and starts one for `p`.
 pub(crate) fn switch(list: &HostList, p: &HostPipeline, builder: bool) {
     let id = program(p, builder);
-    let key = std::ptr::from_ref::<HostList>(list) as usize;
+    let key = key_of(list);
     let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
     let open = open.get_or_insert_with(HashMap::new);
     if open.get(&key).is_some_and(|o| o.prog == id) {
@@ -182,7 +187,7 @@ pub(crate) fn switch(list: &HostList, p: &HostPipeline, builder: bool) {
 
 /// A draw or dispatch was recorded in `list`.
 pub(crate) fn work(list: &HostList) {
-    let key = std::ptr::from_ref::<HostList>(list) as usize;
+    let key = key_of(list);
     if let Some(o) = OPEN.lock().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|m| m.get_mut(&key)) {
         o.work += 1;
     }
@@ -191,7 +196,7 @@ pub(crate) fn work(list: &HostList) {
 /// In `HostList::close`: the title's last segment ends here, ahead of the
 /// work of ours at the end of the list.
 pub(super) fn end(list: &HostList) {
-    let key = std::ptr::from_ref::<HostList>(list) as usize;
+    let key = key_of(list);
     let Some(o) = OPEN.lock().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|m| m.remove(&key)) else {
         return;
     };
@@ -230,7 +235,7 @@ pub(super) fn attach(runs: &[&HostList], fence: u64) {
     let mut segs = Vec::new();
     if let Some(closed) = CLOSED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         for run in runs {
-            if let Some(mut s) = closed.remove(&(std::ptr::from_ref::<HostList>(run) as usize)) {
+            if let Some(mut s) = closed.remove(&key_of(run)) {
                 segs.append(&mut s);
             }
         }
