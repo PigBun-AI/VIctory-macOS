@@ -67,10 +67,11 @@ modules know nothing of the wire protocol.
 | QUERY_CAPS | implemented | strides 24, `max_queues` 16 |
 | SHUTDOWN | implemented | |
 | CREATE_QUEUE / DESTROY_QUEUE | implemented | kind checked, priority ignored (every queue is a Metal 4 queue); 16 max (`OUT_OF_MEMORY`); destroy drains first (`TIMEOUT` after 10 s keeps the queue) |
+| CREATE_TEXTURE / DESTROY_TEXTURE, CREATE_HEAP / DESTROY_HEAP, CREATE_PLACED_BUFFER, GET_RESOURCE_ALLOCATION_INFO (0x40–0x45) | implemented | [m2-textures.md](m2-textures.md) |
 | CREATE_BUFFER / DESTROY_BUFFER | implemented | DEFAULT, UPLOAD, READBACK, SHARED; size 0, WRAPPED, unknown kind, flags → `INVALID_ARG`; destroy is deferred while the GPU may use it |
 | WRAP_MEMORY | implemented | page aligned, mapped (`msync`: a hole → `INVALID_ARG`), `CONFLICT` if a page is behind another buffer |
 | CREATE_DESC_HEAP / DESTROY_DESC_HEAP | implemented for CBV_SRV_UAV and SAMPLER | RTV, DSV → `UNSUPPORTED` (M3); a heap that is not shader visible is a staging heap |
-| WRITE_DESCRIPTOR | partly | NONE, CBV, buffer SRV/UAV (RAW, STRUCTURED, TYPED) implemented. `HAS_COUNTER` (M3: append/consume buffers), SAMPLER → `UNSUPPORTED` |
+| WRITE_DESCRIPTOR | partly | NONE, CBV, buffer SRV/UAV (RAW, STRUCTURED, TYPED), texture SRV/UAV and SAMPLER implemented (see [m2-textures.md](m2-textures.md)). `HAS_COUNTER` (M3: append/consume buffers) → `UNSUPPORTED` |
 | COPY_DESCRIPTORS | implemented | same heap kind, memmove semantics |
 | CREATE_ROOT_SIGNATURE / DESTROY_ROOT_SIGNATURE | implemented | layout by the rules below |
 | CREATE_COMPUTE_PIPELINE | **placeholder**: `UNSUPPORTED` | arguments and the root-signature handle are still checked. Pipelines in tests come from `Executor::create_compute_pipeline_from_msl` (not on the wire) |
@@ -78,7 +79,7 @@ modules know nothing of the wire protocol.
 | CREATE_FENCE / DESTROY_FENCE / FENCE_VALUE / FENCE_WAIT / FENCE_SIGNAL | implemented | signal never lowers; wait forever = `u64::MAX` |
 | DEVICE_STATUS | implemented | worst state of any queue |
 | GET_SURFACE_LAYER | **placeholder**: `UNSUPPORTED` | M3 |
-| 0x40–0x7FFF | reserved: `UNSUPPORTED` | 24–0x3F and 0x8000+: `UNKNOWN_OP` |
+| 0x46–0x7FFF | reserved: `UNSUPPORTED` | 24–0x3F and 0x8000+: `UNKNOWN_OP` |
 
 ## Status of every command
 
@@ -94,10 +95,11 @@ modules know nothing of the wire protocol.
 | DISPATCH_INDIRECT | **placeholder**: `UNSUPPORTED` | |
 | COPY_BUFFER_REGION | implemented | same-buffer overlap → `INVALID_ARG` |
 | FILL_BUFFER | partly | only when the four bytes of the value are equal (a blit fill writes a byte); other patterns → `UNSUPPORTED` |
+| COPY_TEXTURE_REGION, COPY_RESOURCE, CLEAR_UAV_TEXTURE (0x0400–0x0402) | implemented | [m2-textures.md](m2-textures.md) |
 | CLEAR_UAV | partly | raw or `R32_UINT/SINT/FLOAT`, and the same byte-equal rule; other formats → `UNSUPPORTED` |
-| BARRIER | MEMORY and ALIASING implemented | LAYOUT → `UNSUPPORTED` (no textures) |
+| BARRIER | MEMORY and ALIASING implemented | LAYOUT → `UNSUPPORTED` (textures need no layout transition on the back: every texture is private storage and hazards are tracked per subresource) |
 | SYNC_RECORD / BUFFER_DATA | **not executed**: `UNSUPPORTED` | dump replay is the job of a replayer (`tests/exec_replay.rs`), which re-runs the sync calls, remaps handles and addresses, and applies the data |
-| reserved ranges (0x0400–0x09FF) | `UNSUPPORTED` | unknown opcodes `BAD_STREAM` |
+| reserved ranges (0x0403–0x09FF) | `UNSUPPORTED` | unknown opcodes `BAD_STREAM` |
 
 ## TLAB layout (root signature → top-level argument buffer)
 
@@ -154,11 +156,10 @@ D3DMetal 1; `metal/conformance/expected-fail.txt`):
 | calls | method |
 |---|---|
 | 42 | `ID3D12Device2::CreatePipelineState` (mesh/graphics stream) |
-| 41 | `ID3D12Device::CreateCommittedResource` (texture 2D, default heap) |
 | 6 | `ID3D12Device::CreateGraphicsPipelineState` |
 | 1 | `ID3D12Device::CreateUnorderedAccessView` (typed buffer, format 6 = `R32G32B32_FLOAT`: Metal has no such pixel format; D3DMetal substitutes `R32G32` and drops the store; the test tolerates it) |
 
-All but the last are M3 (textures and graphics).
+After textures and heaps (2026-11-27, ours 16 failed of 454, the 41 texture entries pass) the rest are M3 (graphics/mesh pipelines) and the typed `R32G32B32_FLOAT` case.
 
 ## Known issues
 
@@ -166,8 +167,7 @@ All but the last are M3 (textures and graphics).
 * DXIL pipelines (MSC) are not wired; so `DISPATCH`'s threads per group have no
   wire source yet (reflection's `numthreads`).
 * Not done: buffer counters (`HAS_COUNTER`; M3, needs an `R32Uint` texture buffer over the
-  counter and the `IRRuntimeCreateAppendBufferView` convention), sampler objects, textures,
-  RTV/DSV, graphics, indirect dispatch, non-byte fill patterns, labels.
+  counter and the `IRRuntimeCreateAppendBufferView` convention), RTV/DSV (the front keeps CPU records), graphics, indirect dispatch, non-byte fill patterns, labels.
 * One mutex covers a block. A block that has to wait for the GPU (ring or
   command-buffer pool full, up to 10 s then `TIMEOUT`) waits with it held; a
   `FENCE_SIGNAL` from another thread would queue behind it.
