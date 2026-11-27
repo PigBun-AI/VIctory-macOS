@@ -114,6 +114,8 @@ mod valu_tests;
 mod waterfall_tests;
 #[cfg(all(test, windows))]
 mod wave64_tests;
+#[cfg(test)]
+mod s3_tests; // mac S3
 mod wave;
 
 use crate::dxbc::{Container, FourCC};
@@ -782,14 +784,13 @@ fn widen(
         // (a program whose waves are the host's meets no one: no barrier, any group)
         crate::native::StageIo::Cs(_) if !(native.wave64 && lower::host_max_wave() == 32) => {}
         crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64 => {}
-        crate::native::StageIo::Cs(cs) => {
-            if why {
-                eprintln!("WAVE64-WIDE not tried: thread groups of {:?}", cs.threads);
-            }
-            return Err(NOT);
-        }
+        // mac S3: groups of several console waves are tried too; a group barrier in a wide
+        // branch's region refuses the result below (the waves decide apart)
+        crate::native::StageIo::Cs(_) => {} // mac S3
         _ => return Err(NOT),
     }
+    // mac S3: several console waves in the group
+    let multi_wave = matches!(native.io, crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() > 64); // mac S3
     let mut wide = std::collections::HashSet::new();
     loop {
         let st = structure::structure_wide(p, &wide)?;
@@ -798,6 +799,7 @@ fn widen(
         lower::take_needs();
         let r = emit_program(c, native, p, &st, &io, &res);
         let needs = lower::take_needs();
+        let barrier = lower::barrier_in_wide(); // mac S3
         // (or translated for 64-lane waves still: shared memory read and written where not
         // every lane runs, whose blocks the lowering names too)
         let stuck = matches!(&r, Err(ShaderError::Unsupported { what, .. })
@@ -822,6 +824,15 @@ fn widen(
                     .collect();
                 eprintln!("WAVE64-WIDE {} branches taken wave-wide: [{}]", wide.len(), desc.join(", "));
             }
+            // mac S3: with several console waves in the group, a group barrier (the title's, or
+            // the two halves' meeting) inside a branch the waves took apart waits for waves that
+            // never come: not translated (`NOT`), as it was before groups over 64 were tried
+            if barrier && r.is_ok() && !wide.is_empty() && multi_wave { // mac S3
+                if why { // mac S3
+                    eprintln!("WAVE64-WIDE refused: a group barrier inside a wave-wide branch, in a group of several console waves"); // mac S3
+                } // mac S3
+                return Err(NOT); // mac S3
+            } // mac S3
             return r;
         }
         let more: Vec<usize> = lower::branches_around(&st, &needs)
