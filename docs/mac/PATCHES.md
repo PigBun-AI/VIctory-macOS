@@ -798,6 +798,8 @@ is the same across the console wave; the three BVH-builder first-lane programs `
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
 
+*Risk.* An upstream comment records that the wide form lost an NVIDIA card; a Windows host that wants to use this patch must first turn it off (`VICTORY_WAVE_WIDE=0`).
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
