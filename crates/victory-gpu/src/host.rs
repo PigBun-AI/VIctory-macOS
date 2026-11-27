@@ -8641,6 +8641,7 @@ fn swap_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
 const BUFFERS: u32 = 2;
 
 struct Presenter {
+    thumb: Option<crate::frame_thumb::Thumb>,
     swap_chain: IDXGISwapChain3,
     width: u32,
     height: u32,
@@ -9211,8 +9212,7 @@ impl Host {
             };
             #[cfg(feature = "diagnostics")]
             p.panel.draw(self, copy, &back, (width, height), format);
-            #[cfg(not(feature = "diagnostics"))]
-            let _ = frame;
+            let thumb_slot = p.thumb.as_mut().and_then(|t| t.record(self, list, &back));
             if composed {
                 list.ResourceBarrier(&[transition(
                     &back,
@@ -9256,7 +9256,13 @@ impl Host {
             #[cfg(feature = "diagnostics")]
             crate::replay::record::present(texture, state);
             let mut showing = crate::timeline::span("the host's Present");
+            let thumb_stamp = p.thumb.as_mut().map(|t| {
+                (t.signal(&self.queue, thumb_slot), crate::frame_thumb::Thumb::clock())
+            });
             let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
+            if let Some((t, (ready, qpc))) = p.thumb.as_mut().zip(thumb_stamp) {
+                t.at_present(frame, ready, qpc);
+            }
             showing.next("the frame meter");
             #[cfg(feature = "diagnostics")]
             p.panel.frame(p.meter.line_due());
@@ -9283,6 +9289,7 @@ impl Host {
         // SAFETY: plain object creation for our window.
         unsafe {
             let factory: IDXGIFactory2 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
+            let thumb_on = crate::frame_thumb::enabled();
             let desc = DXGI_SWAP_CHAIN_DESC1 {
                 Width: width,
                 Height: height,
@@ -9291,7 +9298,11 @@ impl Host {
                     Count: 1,
                     Quality: 0,
                 },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferUsage: if thumb_on {
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT
+                } else {
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT
+                },
                 BufferCount: BUFFERS,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
                 ..Default::default()
@@ -9304,6 +9315,9 @@ impl Host {
             tracing::info!(width, height, format = format.0, "presenting to a window");
             self.log_video_memory("right after the swap chain is made");
             Ok(Presenter {
+                thumb: crate::frame_thumb::Thumb::configured(self, thumb_on, || {
+                    std::env::var_os("VICTORY_FRAME_THUMB_FILE").unwrap_or_else(|| "thumbs.bin".into()).into()
+                }),
                 swap_chain,
                 width,
                 height,
