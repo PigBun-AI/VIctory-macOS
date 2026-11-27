@@ -3,19 +3,22 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use victory_metal_proto::ids::{FenceId, HeapId, PsoId, QueueId, ResId, RootSigId};
+use victory_metal_proto::ids::{FenceId, HeapId, MemHeapId, PsoId, QueueId, ResId, RootSigId};
 use victory_metal_proto::root::{RootSigDesc, root_flags};
 use victory_metal_proto::status::Status;
 use victory_metal_proto::sync::*;
-use victory_metal_proto::types::{BufferForm, BufferKind, HeapKind, QueueKind, ViewKind};
+use victory_metal_proto::types::{
+    BufferForm, BufferKind, HeapKind, MemKind, QueueKind, ResKind, TexViewDim, ViewKind,
+};
 use victory_metal_proto::{Caps, PROTO_VERSION};
 
 use super::tlab::TlabLayout;
-use super::{ExecOptions, Executor, Heap, Pso, RootSig, State, lock, status_of, typed};
+use super::{ExecOptions, Executor, Heap, Pso, Res, RootSig, State, lock, status_of, typed};
 use crate::descriptors::{DescriptorHeap, ENTRY_SIZE, IrDescriptorTableEntry};
 use crate::device::Device;
 use crate::memory::{Buffer, BufferKind as CoreKind};
 use crate::queue::{DeviceStatus, Queue};
+use crate::texture::{TexDim, Texture, TextureDesc, ViewDim, ViewSpec};
 use crate::typed::{ViewAccess, typed_format};
 
 /// Queues one executor makes. Each has a constant ring and command
@@ -36,9 +39,12 @@ pub(super) fn exhausted<T>(_: T) -> Status {
 impl State {
     pub(super) fn new(device: Device, options: ExecOptions) -> State {
         State {
+            clear_kernels: device.clear_kernels(),
             device,
             options,
             resources: Default::default(),
+            mem_heaps: Default::default(),
+            samplers: Default::default(),
             heaps: Default::default(),
             root_sigs: Default::default(),
             psos: Default::default(),
@@ -73,12 +79,24 @@ impl State {
             SyncOp::QUERY_CAPS => typed(args, len, |a| self.query_caps(a)),
             SyncOp::CREATE_QUEUE => typed(args, len, |a| self.create_queue(a)),
             SyncOp::CREATE_BUFFER => typed(args, len, |a| self.create_buffer(a)),
-            SyncOp::DESTROY_BUFFER => typed::<DestroyBufferArgs>(args, len, |a| {
-                self.resources
-                    .remove(a.res.0)
+            SyncOp::DESTROY_BUFFER => {
+                typed::<DestroyBufferArgs>(args, len, |a| self.destroy_resource(a.res, false))
+            }
+            SyncOp::CREATE_TEXTURE => typed(args, len, |a| self.create_texture(a)),
+            SyncOp::DESTROY_TEXTURE => {
+                typed::<DestroyTextureArgs>(args, len, |a| self.destroy_resource(a.res, true))
+            }
+            SyncOp::CREATE_HEAP => typed(args, len, |a| self.create_mem_heap(a)),
+            SyncOp::DESTROY_HEAP => typed::<DestroyHeapArgs>(args, len, |a| {
+                self.mem_heaps
+                    .remove(a.heap.0)
                     .map(drop)
                     .ok_or(Status::NOT_FOUND)
             }),
+            SyncOp::CREATE_PLACED_BUFFER => typed(args, len, |a| self.create_placed_buffer(a)),
+            SyncOp::GET_RESOURCE_ALLOCATION_INFO => {
+                typed(args, len, |a| self.get_resource_allocation_info(a))
+            }
             SyncOp::WRAP_MEMORY => typed(args, len, |a| self.wrap_memory(a)),
             SyncOp::CREATE_DESC_HEAP => typed(args, len, |a| self.create_desc_heap(a)),
             SyncOp::DESTROY_DESC_HEAP => typed::<DestroyDescHeapArgs>(args, len, |a| {
@@ -186,7 +204,11 @@ impl State {
         a.gpu_va = buffer.gpu_va();
         a.cpu_addr = buffer.cpu_addr();
         a.alloc_size = buffer.alloc_size();
-        a.res = ResId(self.resources.insert(buffer).map_err(exhausted)?);
+        a.res = ResId(
+            self.resources
+                .insert(Res::Buffer(buffer))
+                .map_err(exhausted)?,
+        );
         Ok(())
     }
 
@@ -214,7 +236,11 @@ impl State {
             e => status_of(&e),
         })?;
         a.gpu_va = buffer.gpu_va();
-        a.res = ResId(self.resources.insert(buffer).map_err(exhausted)?);
+        a.res = ResId(
+            self.resources
+                .insert(Res::Buffer(buffer))
+                .map_err(exhausted)?,
+        );
         Ok(())
     }
 
@@ -243,6 +269,11 @@ impl State {
     }
 
     fn write_descriptor(&mut self, a: &mut WriteDescriptorArgs) -> Result<(), Status> {
+        let sampler = if a.view.kind == ViewKind::SAMPLER && self.heaps.get(a.heap.0).is_some() {
+            Some(self.sampler(&a.sampler)?)
+        } else {
+            None
+        };
         let h = self.heaps.get(a.heap.0).ok_or(Status::NOT_FOUND)?;
         let v = a.view;
         if !v.is_valid() {
@@ -253,9 +284,38 @@ impl State {
         }
         let result = match v.kind {
             ViewKind::NONE => h.heap.write(a.index, IrDescriptorTableEntry::default()),
-            // Sampler states are not made yet (they come with the texture
-            // work); the heap itself exists and descriptors can be copied.
-            ViewKind::SAMPLER => return Err(Status::UNSUPPORTED),
+            ViewKind::SAMPLER => {
+                if !h.sampler {
+                    return Err(Status::INVALID_ARG);
+                }
+                let sampler = sampler.ok_or(Status::INVALID_ARG)?;
+                h.heap.write(a.index, sampler.entry())
+            }
+            ViewKind::TEXTURE_SRV | ViewKind::TEXTURE_UAV => {
+                if h.sampler {
+                    return Err(Status::INVALID_ARG);
+                }
+                let uav = v.kind == ViewKind::TEXTURE_UAV;
+                let texture = match self.resources.get(v.resource.0).ok_or(Status::NOT_FOUND)? {
+                    Res::Texture(t) => t,
+                    Res::Buffer(_) => return Err(Status::INVALID_ARG),
+                };
+                let spec = view_spec(&v)?;
+                let usage = texture.desc().usage;
+                if usage & if uav { 2 } else { 1 } == 0 {
+                    return Err(Status::INVALID_ARG);
+                }
+                let id = match texture.view(&spec) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.note = Some(format!("WRITE_DESCRIPTOR: texture view: {e}"));
+                        return Err(status_of(&e));
+                    }
+                };
+                let min_lod = if uav { 0.0 } else { v.min_lod };
+                h.heap
+                    .write(a.index, IrDescriptorTableEntry::texture(id, min_lod, 0))
+            }
             ViewKind::CBV => {
                 if h.sampler {
                     return Err(Status::INVALID_ARG);
@@ -270,7 +330,10 @@ impl State {
                 }
                 let uav = v.kind == ViewKind::BUFFER_UAV;
                 let has_counter = v.flags & victory_metal_proto::ViewDesc::HAS_COUNTER != 0;
-                let buffer = self.resources.get(v.resource.0).ok_or(Status::NOT_FOUND)?;
+                let buffer = match self.resources.get(v.resource.0).ok_or(Status::NOT_FOUND)? {
+                    Res::Buffer(b) => b,
+                    Res::Texture(_) => return Err(Status::INVALID_ARG),
+                };
                 if has_counter {
                     // A counter belongs to a structured (or raw) UAV.
                     if !uav || v.form == BufferForm::TYPED {
@@ -498,7 +561,147 @@ impl State {
     }
 
     pub(super) fn buffer(&self, id: ResId) -> Result<&Buffer, Status> {
-        self.resources.get(id.0).ok_or(Status::NOT_FOUND)
+        match self.resources.get(id.0).ok_or(Status::NOT_FOUND)? {
+            Res::Buffer(b) => Ok(b),
+            Res::Texture(_) => Err(Status::INVALID_ARG),
+        }
+    }
+
+    pub(super) fn texture(&self, id: ResId) -> Result<&Texture, Status> {
+        match self.resources.get(id.0).ok_or(Status::NOT_FOUND)? {
+            Res::Texture(t) => Ok(t),
+            Res::Buffer(_) => Err(Status::INVALID_ARG),
+        }
+    }
+
+    /// `DESTROY_BUFFER` / `DESTROY_TEXTURE`: the handle must name that kind.
+    fn destroy_resource(&mut self, id: ResId, texture: bool) -> Result<(), Status> {
+        match self.resources.get(id.0).ok_or(Status::NOT_FOUND)? {
+            Res::Texture(_) if !texture => return Err(Status::INVALID_ARG),
+            Res::Buffer(_) if texture => return Err(Status::INVALID_ARG),
+            _ => {}
+        }
+        self.resources.remove(id.0);
+        Ok(())
+    }
+
+    fn create_texture(&mut self, a: &mut CreateTextureArgs) -> Result<(), Status> {
+        if a.flags != 0 || a._pad != 0 {
+            return Err(Status::INVALID_ARG);
+        }
+        let desc = texture_desc(
+            a.dimension,
+            a.format,
+            [a.width, a.height, a.depth_or_array],
+            a.mips,
+            a.samples,
+            a.usage,
+        )?;
+        let made = if a.heap.is_null() {
+            self.device.create_texture(&desc)
+        } else {
+            let heap = self.mem_heaps.get(a.heap.0).ok_or(Status::NOT_FOUND)?;
+            heap.create_texture(&self.device, a.heap_offset, &desc)
+        };
+        let texture = made.map_err(|e| self.refuse("CREATE_TEXTURE", &e))?;
+        a.alloc_size = texture.alloc_size();
+        a.res = ResId(
+            self.resources
+                .insert(Res::Texture(texture))
+                .map_err(exhausted)?,
+        );
+        Ok(())
+    }
+
+    /// The status of a refusal, with the reason kept for `Executor::last_error`.
+    pub(super) fn refuse(&mut self, what: &str, e: &crate::Error) -> Status {
+        self.note = Some(format!("{what}: {e}"));
+        match e {
+            crate::Error::Metal(_) => Status::OUT_OF_MEMORY,
+            e => status_of(e),
+        }
+    }
+
+    fn create_mem_heap(&mut self, a: &mut CreateHeapArgs) -> Result<(), Status> {
+        if a.flags != 0 || a._pad != 0 {
+            return Err(Status::INVALID_ARG);
+        }
+        let kind = mem_kind(a.kind)?;
+        let heap = self
+            .device
+            .create_heap(kind, a.size)
+            .map_err(|e| self.refuse("CREATE_HEAP", &e))?;
+        a.alloc_size = heap.size();
+        a.heap = MemHeapId(self.mem_heaps.insert(heap).map_err(exhausted)?);
+        Ok(())
+    }
+
+    fn create_placed_buffer(&mut self, a: &mut CreatePlacedBufferArgs) -> Result<(), Status> {
+        let heap = self.mem_heaps.get(a.heap.0).ok_or(Status::NOT_FOUND)?;
+        let buffer = heap
+            .create_buffer(&self.device, a.offset, a.size)
+            .map_err(|e| self.refuse("CREATE_PLACED_BUFFER", &e))?;
+        a.gpu_va = buffer.gpu_va();
+        a.cpu_addr = buffer.cpu_addr();
+        a.res = ResId(
+            self.resources
+                .insert(Res::Buffer(buffer))
+                .map_err(exhausted)?,
+        );
+        Ok(())
+    }
+
+    fn get_resource_allocation_info(
+        &mut self,
+        a: &mut GetResourceAllocationInfoArgs,
+    ) -> Result<(), Status> {
+        let kind = mem_kind(a.heap_kind)?;
+        let sa = match a.kind {
+            ResKind::BUFFER => {
+                if a.buffer_size == 0 {
+                    return Err(Status::INVALID_ARG);
+                }
+                self.device.heap_buffer_size_align(kind, a.buffer_size)
+            }
+            ResKind::TEXTURE => {
+                if kind != CoreKind::Default {
+                    return Err(Status::UNSUPPORTED);
+                }
+                let desc = texture_desc(
+                    a.dimension,
+                    a.format,
+                    [a.width, a.height, a.depth_or_array],
+                    a.mips,
+                    a.samples,
+                    a.usage,
+                )?;
+                self.device
+                    .heap_texture_size_align(&desc)
+                    .map_err(|e| self.refuse("GET_RESOURCE_ALLOCATION_INFO", &e))?
+            }
+            _ => return Err(Status::INVALID_ARG),
+        };
+        a.size = sa.size;
+        a.alignment = sa.align;
+        Ok(())
+    }
+
+    /// The sampler state for `desc`, made once and kept.
+    fn sampler(
+        &mut self,
+        desc: &victory_metal_proto::types::SamplerDesc,
+    ) -> Result<crate::sampler::Sampler, Status> {
+        let spec = super::dxil::sampler_spec(desc);
+        let key = format!("{spec:?}");
+        if let Some(s) = self.samplers.get(&key) {
+            return Ok(s.clone());
+        }
+        let s = self
+            .device
+            .create_sampler(&spec)
+            .map_err(|e| self.refuse("sampler", &e))?;
+        self.samplers.insert(key, s.clone());
+        Ok(s)
     }
 }
 
@@ -596,4 +799,79 @@ impl Executor {
             }
         }
     }
+}
+
+/// A proto memory kind as the core's buffer kind (heaps).
+fn mem_kind(k: MemKind) -> Result<CoreKind, Status> {
+    match k {
+        MemKind::DEFAULT => Ok(CoreKind::Default),
+        MemKind::UPLOAD => Ok(CoreKind::Upload),
+        MemKind::READBACK => Ok(CoreKind::Readback),
+        _ => Err(Status::INVALID_ARG),
+    }
+}
+
+/// The core's description of a texture from the wire's fields.
+fn texture_desc(
+    dim: victory_metal_proto::types::TexDim,
+    format: u32,
+    size: [u32; 3],
+    mips: u32,
+    samples: u32,
+    usage: u32,
+) -> Result<TextureDesc, Status> {
+    use victory_metal_proto::types::{TexDim as W, tex_usage};
+    let dim = match dim {
+        W::TEX1D => TexDim::D1,
+        W::TEX2D => TexDim::D2,
+        W::TEX3D => TexDim::D3,
+        _ => return Err(Status::INVALID_ARG),
+    };
+    if usage & !tex_usage::ALL_BITS != 0 {
+        return Err(Status::INVALID_ARG);
+    }
+    Ok(TextureDesc {
+        dim,
+        format,
+        width: size[0],
+        height: size[1],
+        depth_or_array: size[2],
+        mips,
+        samples,
+        usage,
+    })
+}
+
+/// The core's view request of a texture `ViewDesc`.
+fn view_spec(v: &victory_metal_proto::ViewDesc) -> Result<ViewSpec, Status> {
+    let dim = match v.dimension {
+        TexViewDim::TEX1D => ViewDim::D1,
+        TexViewDim::TEX1D_ARRAY => ViewDim::D1Array,
+        TexViewDim::TEX2D => ViewDim::D2,
+        TexViewDim::TEX2D_ARRAY => ViewDim::D2Array,
+        TexViewDim::TEX2D_MS => ViewDim::D2Ms,
+        TexViewDim::TEX2D_MS_ARRAY => ViewDim::D2MsArray,
+        TexViewDim::TEX3D => ViewDim::D3,
+        TexViewDim::CUBE => ViewDim::Cube,
+        TexViewDim::CUBE_ARRAY => ViewDim::CubeArray,
+        _ => return Err(Status::INVALID_ARG),
+    };
+    if v.plane > 1 || v.swizzle.iter().any(|&c| c > 5) {
+        return Err(Status::INVALID_ARG);
+    }
+    Ok(ViewSpec {
+        format: v.format,
+        dim,
+        mip_first: v.mip_first,
+        mip_count: v.mip_count,
+        slice_first: v.slice_first,
+        slice_count: v.slice_count,
+        plane: u32::from(v.plane),
+        swizzle: if v.swizzle == [0; 4] {
+            // A zero field is [R, R, R, R] by the proto's rule.
+            [0; 4]
+        } else {
+            v.swizzle
+        },
+    })
 }

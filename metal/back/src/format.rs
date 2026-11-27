@@ -873,7 +873,7 @@ pub fn view_pixel_format(texture: u32, view: u32, usage: u32) -> Result<MTLPixel
     let t = require(texture)?;
     let v = require(view)?;
     if t.family != v.family {
-        return Err(Error::Unsupported(format!(
+        return Err(Error::BadArgument(format!(
             "a view in {} of a {} texture (different format families)",
             v.name, t.name
         )));

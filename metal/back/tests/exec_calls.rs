@@ -445,7 +445,10 @@ fn write_descriptor_encodes_views_and_refuses_what_it_cannot() {
     assert_eq!(write(heap.heap, 0, counter), Status::INVALID_ARG);
     let mut sampler = ViewDesc::null();
     sampler.kind = ViewKind::SAMPLER;
-    assert_eq!(write(smp.heap, 0, sampler), Status::UNSUPPORTED);
+    // Sampler states exist now: the slot gets the state's id. A sampler into
+    // a resource heap is a mistake.
+    assert_eq!(write(smp.heap, 0, sampler), Status::OK);
+    assert_eq!(write(heap.heap, 0, sampler), Status::INVALID_ARG);
     // A failed write leaves the slot as it was.
     assert_eq!(entry(&heap, 4)[0], b.gpu_va);
 }
