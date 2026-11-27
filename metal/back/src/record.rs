@@ -105,7 +105,7 @@ impl Queue {
         slot.cb
             .setLabel(Some(&NSString::from_str("victory command list")));
         let ordered_after_prior = self.inter_submit_barrier();
-        Ok(CommandList {
+        let mut list = CommandList {
             queue: self.clone(),
             table: slot.table.clone(),
             slot: Some(slot),
@@ -123,7 +123,9 @@ impl Queue {
             splits: HashMap::new(),
             blit_writes: Vec::new(),
             stats: ListStats::default(),
-        })
+        };
+        list.refresh_mirrors()?;
+        Ok(list)
     }
 }
 

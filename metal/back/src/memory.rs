@@ -137,7 +137,7 @@ struct TextureView {
 
 pub(crate) struct BufferInner {
     pub(crate) raw: Retained<ProtocolObject<dyn MTLBuffer>>,
-    device: Arc<DeviceInner>,
+    pub(crate) device: Arc<DeviceInner>,
     kind: BufferKind,
     set: SetKind,
     len: u64,
@@ -151,6 +151,8 @@ pub(crate) struct BufferInner {
     /// Texture buffers made over this buffer ([`Buffer::texture_view`]);
     /// they live and die with it.
     views: Mutex<HashMap<ViewKey, TextureView>>,
+    /// Aligned copies of misaligned typed views ([`crate::mirror`]).
+    pub(crate) mirrors: Mutex<Vec<crate::mirror::Mirror>>,
 }
 
 // The Metal buffer is thread-safe; `cpu` is a pointer into its memory that
@@ -174,6 +176,11 @@ impl Drop for BufferInner {
             .pages
             .take()
             .map(|g| Box::new(g) as Box<dyn std::any::Any + Send>);
+        {
+            let mirrors = self.mirrors.get_mut().unwrap_or_else(|e| e.into_inner());
+            let bytes: u64 = mirrors.iter().map(|m| m.len).sum();
+            self.device.mirrors.release(mirrors.len(), bytes);
+        }
         let waits = self.device.in_flight_waits();
         // The texture buffers go with the buffer, after the same GPU work.
         let views = std::mem::take(self.views.get_mut().unwrap_or_else(|e| e.into_inner()));
@@ -595,6 +602,7 @@ impl Device {
                 managed,
                 _heap: heap,
                 views: Mutex::new(HashMap::new()),
+                mirrors: Mutex::new(Vec::new()),
             }),
         })
     }
