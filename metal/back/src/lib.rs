@@ -22,6 +22,8 @@ pub mod archive;
 #[cfg(target_vendor = "apple")]
 pub mod barrier;
 #[cfg(target_vendor = "apple")]
+pub mod bitcode;
+#[cfg(target_vendor = "apple")]
 pub mod clear;
 #[cfg(target_vendor = "apple")]
 pub mod copy;
