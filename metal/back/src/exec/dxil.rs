@@ -23,7 +23,7 @@ use victory_metal_proto::sync::CreateComputePipelineArgs;
 
 use super::sync::{exhausted, range_is_mapped};
 use super::tlab::{LayoutError, TlabLayout};
-use super::{Executor, Pso, status_of};
+use super::{Executor, Pso, PsoBody, status_of};
 use crate::msc::{self, CompileOptions, MscError};
 use crate::sampler::SamplerSpec;
 
@@ -243,9 +243,12 @@ pub(crate) fn status_of_msc(e: &MscError) -> Status {
     match e {
         // MSC is not installed (or is the wrong build), or it refused a
         // construct it does not convert: this back cannot make the pipeline.
-        MscError::Library { .. } | MscError::Rejected { .. } => Status::UNSUPPORTED,
+        MscError::Library { .. }
+        | MscError::Rejected { .. }
+        | MscError::Limit(_)
+        | MscError::Unsupported(_) => Status::UNSUPPORTED,
         MscError::RootSignature { .. } | MscError::BadInput(_) => Status::INVALID_ARG,
-        MscError::NoOutput(_) => Status::INTERNAL,
+        MscError::NoOutput(_) | MscError::Mismatch(_) => Status::INTERNAL,
         MscError::Metal(e) => status_of(e),
     }
 }
@@ -308,9 +311,11 @@ impl Executor {
             return Err(Status::INTERNAL);
         }
         let pso = Arc::new(Pso {
-            pipeline: made.pipeline,
+            body: PsoBody::Compute {
+                pipeline: made.pipeline,
+                threads,
+            },
             root_sig: sig,
-            threads,
         });
         a.pso = PsoId(self.with_state(|st| st.psos.insert(pso).map_err(exhausted))??);
         Ok(())
@@ -318,7 +323,7 @@ impl Executor {
 }
 
 /// Whether the reflected argument buffer is the one the root signature has.
-fn layout_agrees(sig: &super::RootSig, reflected: &msc::TopLevelLayout) -> bool {
+pub(super) fn layout_agrees(sig: &super::RootSig, reflected: &msc::TopLevelLayout) -> bool {
     let n = sig.desc.params.len();
     if reflected.size != sig.layout.size() || reflected.entries.len() < n {
         return false;

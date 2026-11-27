@@ -280,6 +280,7 @@ fn every_sync_block_round_trips() {
     check_block::<DestroyHeapArgs>();
     check_block::<CreatePlacedBufferArgs>();
     check_block::<GetResourceAllocationInfoArgs>();
+    check_block::<CreateGraphicsPipelineArgs>();
     // Nothing was forgotten: one block type per registry row.
     assert_eq!(SYNC_OPS.len(), SyncOp::KNOWN.len());
 }

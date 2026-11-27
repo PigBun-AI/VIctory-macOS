@@ -11,14 +11,16 @@
 //! Ids and addresses in output fields are chosen by the back.
 
 use crate::ids::{FenceId, HeapId, MemHeapId, PsoId, QueueId, ResId, RootSigId, SurfaceId};
+use crate::pso::GraphicsPsoDesc;
 use crate::status::Status;
 use crate::types::{Caps, MemKind, ResKind, SamplerDesc, TexDim, ViewDesc};
 use crate::wire::{Layout, Wire, open_enum, wire_struct};
 
 open_enum! {
-    /// Number of a sync call. 0x40-0x4F: textures and placement heaps; 0x50-0x5F:
-    /// graphics pipelines. 0x60 and up are reserved for M2/M3 (queries, swap
-    /// chains); 0x8000 and up are never assigned.
+    /// Number of a sync call. 0x40 and up are reserved for M2/M3: 0x40-0x4F
+    /// textures, heaps, formats, samplers, copies (m3-tex); 0x50-0x5F
+    /// graphics pipelines and rendering (m3-gfx); the rest (queries, swap
+    /// chains) later. 0x8000 and up are never assigned.
     pub struct SyncOp(u32) {
         NOP = 0,
         HELLO = 1,
@@ -51,6 +53,8 @@ open_enum! {
         DESTROY_HEAP = 0x43,
         CREATE_PLACED_BUFFER = 0x44,
         GET_RESOURCE_ALLOCATION_INFO = 0x45,
+
+        CREATE_GRAPHICS_PIPELINE = 0x50,
     }
 }
 
@@ -323,6 +327,28 @@ sync_block! {
         /// out
         pso: PsoId,
         _pad: u32,
+    }
+}
+
+sync_block! {
+    /// `CREATE_GRAPHICS_PIPELINE`: a vertex (`vs` + `ps`) or mesh (`amp` +
+    /// `ms` + `ps`) pipeline from DXIL, for a root signature, with all the
+    /// pipeline state of `desc` ([`GraphicsPsoDesc`]). The DXIL addresses in
+    /// `desc` are valid for the call only. The conversion and the Metal
+    /// compile take milliseconds to a second; the call returns when the
+    /// pipeline exists. `DESTROY_PIPELINE` frees it. Answers `UNSUPPORTED`
+    /// for what the back cannot make (a shader the converter refuses, state
+    /// Metal lacks) and says why in the back's last-error text.
+    CreateGraphicsPipelineArgs, CREATE_GRAPHICS_PIPELINE, 1, {
+        /// in
+        root_sig: RootSigId,
+        /// in: reserved, 0.
+        flags: u32,
+        /// out
+        pso: PsoId,
+        _pad: u32,
+        /// in
+        desc: GraphicsPsoDesc,
     }
 }
 

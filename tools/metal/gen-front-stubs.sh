@@ -53,6 +53,7 @@ OBJECTS = {
     "MemHeapObj": ("ID3D12Heap", "objects.rs"),
     "RootSigObj": ("ID3D12RootSignature", "objects.rs"),
     "PsoObj": ("ID3D12PipelineState", "objects.rs"),
+    "LibraryObj": ("ID3D12PipelineLibrary1", "library.rs"),
     "RootSigDeserializerObj": ("ID3D12RootSignatureDeserializer", "serialize.rs"),
     "VersionedDeserializerObj": ("ID3D12VersionedRootSignatureDeserializer", "serialize.rs"),
 }
@@ -180,6 +181,7 @@ def emit():
     w("")
     w("use super::device::*;")
     w("use super::dxgi::*;")
+    w("use super::library::*;")
     w("use super::list::*;")
     w("use super::objects::*;")
     w("use super::serialize::*;")

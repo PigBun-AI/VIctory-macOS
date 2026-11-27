@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
+use victory_metal_proto::pso::GraphicsPsoDesc;
 use victory_metal_proto::sync::*;
 use victory_metal_proto::types::{Caps, SamplerDesc, ViewDesc, ViewKind};
 use victory_metal_proto::{
@@ -112,6 +113,8 @@ struct State {
     mem_heaps: HashMap<u32, MemHeapRecord>,
     root_sigs: HashMap<u32, RootSigDesc>,
     pipelines: HashMap<u32, (u32, usize)>,
+    /// The description of every graphics pipeline made (by id).
+    graphics: HashMap<u32, GraphicsPsoDesc>,
     fences: HashMap<u32, u64>,
     queues: HashMap<u32, u32>,
     calls: Vec<CallRecord>,
@@ -199,6 +202,11 @@ impl MockLink {
 
     pub fn live_pipelines(&self) -> usize {
         self.st.lock().unwrap().pipelines.len()
+    }
+
+    /// The description a graphics pipeline was made from.
+    pub fn graphics_desc(&self, id: PsoId) -> Option<GraphicsPsoDesc> {
+        self.st.lock().unwrap().graphics.get(&id.0).copied()
     }
 
     pub fn live_root_signatures(&self) -> usize {
@@ -516,6 +524,32 @@ impl State {
         Status::OK
     }
 
+    fn create_graphics_pipeline(&mut self, a: &mut CreateGraphicsPipelineArgs) -> Status {
+        if !self.root_sigs.contains_key(&a.root_sig.0) {
+            return Status::NOT_FOUND;
+        }
+        if a.flags != 0 || a._pad != 0 || a.desc.check().is_err() {
+            return Status::INVALID_ARG;
+        }
+        let d = a.desc;
+        for s in [&d.vs, &d.ps, &d.amp, &d.ms] {
+            if s.is_present() {
+                // SAFETY: the stage's bytes are valid for the call (the front's contract).
+                let magic = unsafe {
+                    std::slice::from_raw_parts(s.addr as *const u8, 4.min(s.len as usize))
+                };
+                if magic != b"DXBC" {
+                    return Status::INVALID_ARG;
+                }
+            }
+        }
+        let id = self.new_id();
+        self.pipelines.insert(id, (a.root_sig.0, 0));
+        self.graphics.insert(id, d);
+        a.pso = PsoId(id);
+        Status::OK
+    }
+
     fn submit(&mut self, block: &[u8]) -> Status {
         let dec = match Decoder::new(block) {
             Ok(d) => d,
@@ -707,8 +741,12 @@ impl Link for MockLink {
             SyncOp::CREATE_COMPUTE_PIPELINE => {
                 s.create_compute_pipeline(args!(CreateComputePipelineArgs))
             }
+            SyncOp::CREATE_GRAPHICS_PIPELINE => {
+                s.create_graphics_pipeline(args!(CreateGraphicsPipelineArgs))
+            }
             SyncOp::DESTROY_PIPELINE => {
                 let a = args!(DestroyPipelineArgs);
+                s.graphics.remove(&a.pso.0);
                 if s.pipelines.remove(&a.pso.0).is_some() {
                     Status::OK
                 } else {

@@ -49,6 +49,54 @@ pub struct CompileOptions {
     /// Turn MSC's own validation off (`IRCompilerSetValidationFlags(None)`):
     /// faster, and an invalid input is then undefined.
     pub no_validation: bool,
+    /// What a vertex, fragment, mesh or amplification shader needs told about
+    /// the pipeline it joins (`None` for compute: nothing is set).
+    pub graphics: Option<GraphicsCompile>,
+}
+
+/// The primitive class a vertex shader is converted for
+/// (`IRCompilerSetInputTopology`; points need it to get `[[point_size]]`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum InputTopology {
+    #[default]
+    Undefined,
+    Point,
+    Line,
+    Triangle,
+}
+
+/// Pipeline facts MSC bakes into the converted code. The same converted
+/// shader is only valid for the pipelines that agree with these, so they are
+/// part of what a shader cache keys on.
+///
+/// Vertex input uses Metal vertex fetch (`IRStageInGenerationMode` =
+/// `UseMetalVertexFetch`, set for every graphics conversion): the pipeline's
+/// `MTLVertexDescriptor` feeds the shader, see `render.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphicsCompile {
+    pub input_topology: InputTopology,
+    /// Bit `i` set: render target `i` has an integer format (the converter
+    /// inserts the bitcast of the shader's output).
+    pub int_rt_mask: u8,
+    /// Fragment output sample mask (all samples: `u32::MAX`).
+    pub sample_mask: u32,
+    /// The pipeline blends with a second fragment output (`SRC1_*` factors).
+    pub dual_source: bool,
+    /// The pipeline has a depth target the fragment shader may write
+    /// (`SV_Depth`): the converter emits the depth output.
+    pub depth_feedback: bool,
+}
+
+impl Default for GraphicsCompile {
+    fn default() -> Self {
+        GraphicsCompile {
+            input_topology: InputTopology::Undefined,
+            int_rt_mask: 0,
+            sample_mask: u32::MAX,
+            dual_source: false,
+            depth_feedback: false,
+        }
+    }
 }
 
 /// The stage of the converted shader (`IRShaderStage`).
@@ -101,6 +149,37 @@ pub struct MeshInfo {
     pub max_primitives: u32,
 }
 
+/// One vertex shader input: the name MSC reflects and the attribute index
+/// the `MTLVertexDescriptor` must use for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VertexInput {
+    pub name: String,
+    /// Index into the vertex descriptor's `attributes`.
+    pub attribute_index: u32,
+}
+
+/// Vertex shader facts (`IRVSInfo_1_0`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VertexInfo {
+    pub inputs: Vec<VertexInput>,
+    /// Index of the `SV_VertexID` input, `-1` for none.
+    pub vertex_id_index: i32,
+    /// Index of the `SV_InstanceID` input, `-1` for none.
+    pub instance_id_index: i32,
+    /// The shader reads draw parameters (base vertex, base instance) that the
+    /// draw must supply.
+    pub needs_draw_params: bool,
+    pub output_bytes: u32,
+}
+
+/// Fragment shader facts (`IRFSInfo_1_0`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FragmentInfo {
+    pub num_render_targets: i32,
+    pub rt_index_int: u8,
+    pub discards: bool,
+}
+
 /// What a converted shader needs from the host, from MSC's reflection and
 /// the DXIL container.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +191,10 @@ pub struct Reflection {
     /// `num_threads` are in [`Reflection::mesh`]).
     pub threadgroup_size: [u32; 3],
     pub mesh: Option<MeshInfo>,
+    /// Vertex stage only.
+    pub vertex: Option<VertexInfo>,
+    /// Fragment stage only.
+    pub fragment: Option<FragmentInfo>,
     /// The top-level argument buffer: one entry per root parameter with its
     /// byte offset and size (from the root signature when one was given,
     /// otherwise from the shader's own).
@@ -245,7 +328,10 @@ impl Drop for Refl {
 }
 
 impl Msc {
-    /// Converts one DXIL container to a `metallib`.
+    /// Converts one DXIL container to a `metallib`. A DXBC container (the
+    /// output of `D3DCompile`, shader model 5.x) goes through the DXBC→DXIL
+    /// converter first ([`dxbc::DxbcConverter`](super::dxbc)); without that
+    /// library the answer is [`MscError::Library`].
     ///
     /// `root` is the global root signature (the shader's own, embedded one is
     /// used when it is `None`; a shader without either is refused with
@@ -261,6 +347,13 @@ impl Msc {
         if dxil_bytes.is_empty() {
             return Err(MscError::BadInput("empty DXIL".into()));
         }
+        let converted_dxbc;
+        let dxil_bytes = if dxil::is_dxbc(dxil_bytes) {
+            converted_dxbc = super::dxbc::DxbcConverter::get()?.convert(dxil_bytes)?;
+            converted_dxbc.as_slice()
+        } else {
+            dxil_bytes
+        };
         let info = dxil::inspect(dxil_bytes);
         let api = self.api;
         let c_root = root.map(CRootSignature::new);
@@ -287,6 +380,33 @@ impl Msc {
             (api.IRCompilerSetCompatibilityFlags)(compiler.raw, options.compat.0);
             if let Some(f) = options.min_gpu_family {
                 (api.IRCompilerSetMinimumGPUFamily)(compiler.raw, f);
+            }
+            if let Some(g) = &options.graphics {
+                use ffi::{feature_config as fc, input_topology as it};
+                (api.IRCompilerSetStageInGenerationMode)(
+                    compiler.raw,
+                    ffi::STAGE_IN_METAL_VERTEX_FETCH,
+                );
+                (api.IRCompilerSetInputTopology)(
+                    compiler.raw,
+                    match g.input_topology {
+                        InputTopology::Undefined => it::UNDEFINED,
+                        InputTopology::Point => it::POINT,
+                        InputTopology::Line => it::LINE,
+                        InputTopology::Triangle => it::TRIANGLE,
+                    },
+                );
+                (api.IRCompilerSetIntRTMask)(compiler.raw, g.int_rt_mask);
+                (api.IRCompilerSetSampleMask)(compiler.raw, g.sample_mask);
+                let on = |b: bool| {
+                    if b {
+                        fc::FORCE_ENABLED
+                    } else {
+                        fc::FORCE_DISABLED
+                    }
+                };
+                (api.IRCompilerSetDualSourceBlendingConfiguration)(compiler.raw, on(g.dual_source));
+                (api.IRCompilerSetDepthFeedbackConfiguration)(compiler.raw, on(g.depth_feedback));
             }
         }
         let entry = match &options.entry {
@@ -372,6 +492,8 @@ impl Msc {
 
         let mut threadgroup_size = [0; 3];
         let mut mesh = None;
+        let mut vertex = None;
+        let mut fragment = None;
         // SAFETY: each Copy*Info fills a struct this function owns; Release*
         // frees what the library attached.
         unsafe {
@@ -417,6 +539,49 @@ impl Msc {
                             max_primitives: 0,
                         });
                         (api.IRShaderReflectionReleaseAmplificationInfo)(&mut asi);
+                    }
+                }
+                ShaderStage::Vertex => {
+                    let mut vs = ffi::IRVersionedVSInfo::default();
+                    if (api.IRShaderReflectionCopyVertexInfo)(
+                        refl.raw,
+                        ffi::REFLECTION_VERSION_1_0,
+                        &mut vs,
+                    ) {
+                        let inputs = if vs.vertex_inputs.is_null() {
+                            Vec::new()
+                        } else {
+                            std::slice::from_raw_parts(vs.vertex_inputs, vs.num_vertex_inputs)
+                                .iter()
+                                .map(|i| VertexInput {
+                                    name: ffi::c_str(i.name),
+                                    attribute_index: u32::from(i.attributeIndex),
+                                })
+                                .collect()
+                        };
+                        vertex = Some(VertexInfo {
+                            inputs,
+                            vertex_id_index: vs.vertex_id_index,
+                            instance_id_index: vs.instance_id_index,
+                            needs_draw_params: vs.needs_draw_params,
+                            output_bytes: vs.vertex_output_size_in_bytes,
+                        });
+                        (api.IRShaderReflectionReleaseVertexInfo)(&mut vs);
+                    }
+                }
+                ShaderStage::Fragment => {
+                    let mut fs = ffi::IRVersionedFSInfo::default();
+                    if (api.IRShaderReflectionCopyFragmentInfo)(
+                        refl.raw,
+                        ffi::REFLECTION_VERSION_1_0,
+                        &mut fs,
+                    ) {
+                        fragment = Some(FragmentInfo {
+                            num_render_targets: fs.num_render_targets,
+                            rt_index_int: fs.rt_index_int,
+                            discards: fs.discards,
+                        });
+                        (api.IRShaderReflectionReleaseFragmentInfo)(&mut fs);
                     }
                 }
                 _ => {}
@@ -476,6 +641,8 @@ impl Msc {
             stage,
             threadgroup_size,
             mesh,
+            vertex,
+            fragment,
             layout,
             uses_resource_heap: features
                 .is_some_and(|f| f & dxil::feature::RESOURCE_DESCRIPTOR_HEAP_INDEXING != 0),

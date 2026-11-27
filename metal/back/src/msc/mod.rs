@@ -35,13 +35,15 @@
 //! in [`descriptors`](crate::descriptors).
 
 mod compile;
+pub mod dxbc;
 pub mod dxil;
 mod ffi;
 mod pipeline;
 mod root;
 
 pub use compile::{
-    Compat, CompileOptions, Converted, FunctionConstant, MeshInfo, Reflection, ShaderStage,
+    Compat, CompileOptions, Converted, FragmentInfo, FunctionConstant, GraphicsCompile,
+    InputTopology, MeshInfo, Reflection, ShaderStage, VertexInfo, VertexInput,
 };
 pub use pipeline::ShaderPipeline;
 pub use root::{
@@ -118,6 +120,15 @@ pub enum MscError {
     BadInput(String),
     /// MSC converted it but Metal did not take the result.
     Metal(crate::Error),
+    /// The converted stages of one pipeline do not fit together (argument
+    /// buffer layouts differ, the pixel shader writes more targets than the
+    /// pipeline has).
+    Mismatch(String),
+    /// A size Metal limits (mesh output, payload, threads): the text names
+    /// the number and the limit.
+    Limit(String),
+    /// State or a shader feature this back does not make.
+    Unsupported(String),
 }
 
 impl fmt::Display for MscError {
@@ -144,6 +155,9 @@ impl fmt::Display for MscError {
             MscError::NoOutput(what) => write!(f, "MSC produced no output: {what}"),
             MscError::BadInput(what) => write!(f, "bad MSC input: {what}"),
             MscError::Metal(e) => write!(f, "{e}"),
+            MscError::Mismatch(what) => write!(f, "the stages do not fit together: {what}"),
+            MscError::Limit(what) => write!(f, "over a Metal limit: {what}"),
+            MscError::Unsupported(what) => write!(f, "not supported: {what}"),
         }
     }
 }
@@ -156,6 +170,9 @@ impl From<MscError> for crate::Error {
             MscError::Metal(e) => e,
             MscError::Library { .. } => crate::Error::Unsupported(e.to_string()),
             MscError::BadInput(_) => crate::Error::BadArgument(e.to_string()),
+            MscError::Limit(_) | MscError::Unsupported(_) => {
+                crate::Error::Unsupported(e.to_string())
+            }
             other => crate::Error::Metal(other.to_string()),
         }
     }

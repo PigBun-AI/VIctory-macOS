@@ -188,3 +188,57 @@ fn a_sync_block_is_byte_for_byte_stable() {
         0x0000_0001_0000_0000
     );
 }
+
+/// A synthetic vertex pipeline: two stages, two inputs, two targets, one
+/// blended, depth, a cut strip (fixed addresses: the golden is bytes).
+fn synthetic_graphics_pipeline() -> CreateGraphicsPipelineArgs {
+    use victory_metal_proto::pso::*;
+    let mut a = CreateGraphicsPipelineArgs::new();
+    a.root_sig = RootSigId(3);
+    let d = &mut a.desc;
+    *d = GraphicsPsoDesc::new();
+    d.vs = StageCode {
+        addr: 0x1000,
+        len: 0x200,
+    };
+    d.ps = StageCode {
+        addr: 0x2000,
+        len: 0x100,
+    };
+    d.input_count = 2;
+    d.inputs[0] = InputElement::new("POSITION", 0, format::R32G32B32_FLOAT, 0, 0);
+    let mut uv = InputElement::new("TEXCOORD", 1, format::R16G16_FLOAT, 1, APPEND_ALIGNED);
+    uv.class = InputClass::PER_INSTANCE;
+    uv.step_rate = 1;
+    d.inputs[1] = uv;
+    d.rt_count = 2;
+    d.rt_formats[0] = format::R8G8B8A8_UNORM;
+    d.rt_formats[1] = format::R16G16B16A16_FLOAT;
+    d.blend.independent = 1;
+    d.blend.rt[0].enable = 1;
+    d.blend.rt[0].src = BlendFactor::SRC_ALPHA;
+    d.blend.rt[0].dst = BlendFactor::INV_SRC_ALPHA;
+    d.ds_format = format::D32_FLOAT;
+    d.strip_cut = StripCut::INDEX_0XFFFF;
+    d.raster.depth_bias = -4;
+    d.raster.slope_scaled_bias = 1.5;
+    a
+}
+
+#[test]
+fn a_graphics_pipeline_block_is_byte_for_byte_stable() {
+    let a = synthetic_graphics_pipeline();
+    a.desc.check().unwrap();
+    let bytes = golden("create-graphics-pipeline-args.vmsa", &wire_bytes(&a));
+    assert_eq!(bytes.len(), CreateGraphicsPipelineArgs::SIZE);
+    assert_eq!(u16::from_le_bytes([bytes[0], bytes[1]]), 1);
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+    // desc starts at 24: vs address, then length.
+    assert_eq!(
+        u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        0x1000
+    );
+    let back = CreateGraphicsPipelineArgs::get(&mut victory_metal_proto::wire::Reader::new(&bytes))
+        .unwrap();
+    assert_eq!(back, a);
+}

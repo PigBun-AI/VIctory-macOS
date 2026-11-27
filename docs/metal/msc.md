@@ -163,6 +163,79 @@ GPU tests: `back/tests/exec_dxil.rs` (root UAV + constant, `ResourceDescriptorHe
 threads from the reflection, static sampler, pipeline tied to its root signature),
 `exec_no_msc.rs`. They need DXC (`VICTORY_HELPER_DXC`, `DXC_LIB`), else they print SKIPPED.
 
+## Graphics and mesh pipelines (M3, m3-gfx, phase 1)
+
+`render.rs` + `exec/gfx.rs`. Decisions, with reasons:
+
+* **Stage-in: Metal vertex fetch, not MSC's synthesized stage-in function.** The back builds an
+  `MTLVertexDescriptor` from the proto input layout (semantic to the attribute MSC's reflection
+  names, `STAGE_IN_ATTRIBUTE_BASE` = 11 added to its index, buffers from base 6) and sets
+  `IRCompilerSetStageInGenerationMode(MetalVertexFetch)`. Reasons: the layout is known only at
+  pipeline creation, not at conversion, and a descriptor keeps one converted vertex function per
+  shader whatever the layout; strides are dynamic (`SET_VERTEX_BUFFERS` gives them), so a layout
+  that differs only by stride shares the pipeline; Metal does the format conversion (UNORM, SNORM,
+  packed) which a synthesized function would need written per format; the synthesized function
+  is a separate library to link and cache.
+* **Mesh:** object/mesh threadgroup sizes and the payload size come from the reflection; the
+  back checks the Metal limits (payload 16 KB, 256 vertices, 512 primitives, 1024 threads, total
+  mesh size) and answers `UNSUPPORTED` naming the number and the limit. Pixel inputs the mesh
+  stage does not write are Metal's refusal ("Fragment input(s) ... mismatching mesh shader
+  output"), reported as it comes.
+* **State:** the MTL4 render pipeline descriptor has no depth, cull, fill, bias or winding. Those
+  stay in `GraphicsPipeline` (raster state, `MTLDepthStencilState` made at creation) and are
+  applied at pipeline bind in phase 2. Blend, RT formats, sample count/mask and alpha-to-coverage
+  are in the descriptor. Depth bounds and geometry/tessellation stages are not carried.
+* **Thread safety:** `prepare_graphics` (the MSC step, a fresh `IRCompiler` per call) and
+  `Device::graphics_pipeline` (the Metal compile) can run on worker threads; tests build four
+  pipelines at once. The two-step split is where an async queue and an `MTL4Archive` lookup
+  (keyed by the prepared metallib hash and the state) would go; no cache yet.
+* **Reflection merging:** every stage's top-level argument buffer layout must equal the root
+  signature's (`Mismatch` otherwise); the pixel shader may write the pipeline's targets (+1 when
+  dual-source).
+
+### Survey: pipelines from the game's cache (2026-11-27)
+
+`back/tests/gfx_survey.rs` (ignored; reads the user's cache in place, aggregate numbers only; raw
+rows without names or hashes in `research/probe-results/m3-gfx-cache-raw-2026-11-27.txt`, summary
+in `m3-gfx-cache-summary-2026-11-27.txt`). 1923 entries, 83 refused by the translator:
+
+| Kind | Shaders | Converted | Pipeline built | Cold build ms (median / p95) |
+|---|---|---|---|---|
+| Pixel alone (convert + library; Metal has no pixel-only pipeline) | 641 | 641 | library 641 | convert 10.9 / 44 |
+| Vertex + default pixel | 166 | 166 | 164 | 6.2 / 14.6 (convert 1.1 / 4) |
+| Mesh + default pixel | 316 | 316 | 305 | 28.2 / 138 (convert 5.8 / 20.8) |
+
+The two vertex failures have mixed float/integer inputs (the survey feeds one format; a real
+layout does not). The 11 mesh failures are over a Metal limit (e.g. total mesh size 34816 against
+32768; the same shaders the upstream log shows): 3.5 % of the mesh shaders need a shader-side or
+fallback answer. A second run is 30 to 140 times faster (Metal's own cache): the cold numbers are
+what a first start pays, which is the case for the `MTL4Archive` cache.
+
+### DXBC input (`msc/dxbc.rs`)
+
+The game layer's runtime shaders (ambient, composite, indirect helpers) are `cs_5_1` from
+`D3DCompile`: DXBC, which MSC refuses (`UnrecognizedDXILHeader`). `Msc::compile` now detects a
+container with a `SHDR`/`SHEX` part and no `DXIL` part (`dxil::is_dxbc`) and converts it first
+with Microsoft's DXBC to DXIL converter, loaded by `dlopen` as D3DMetal ships it
+(`libdxilconv.dylib`, x86_64 only). Interface (DirectXShaderCompiler,
+`projects/dxilconv/include/DxbcConverter.h`, `main` branch read 2026-11-27; the library is the
+D3DMetal build, version not printed): `DxcCreateInstance(CLSID_DxbcConverter
+4900391E-B752-4EDD-A885-6FB76E25ADDB, IID_IDxbcConverter 5F956ED5-78D1-4B15-8247-F7187614A041)`,
+vtable `IUnknown` then `Convert(dxbc, size, wide options, &dxil, &dxil_size, &wide diag)`; outputs
+are `malloc`ed and freed by the caller. Search: `VICTORY_DXILCONV_DYLIB` (only that, if set), then
+`~/Documents/GTA6Project/VIctory-macOS/target/wine-cx/lib/external/D3DMetal.framework/Versions/A/Resources/libdxilconv.dylib`,
+then the bare name; the error lists every path with its dlopen message (on arm64: "incompatible
+architecture (have 'x86_64')"), so the DXBC path works in the x86_64 process (Rosetta, Wine's
+unixlib) and says so clearly in an arm64 one.
+Findings: the output is a DXIL 6.0 container without a root signature (the root comes from the
+caller, as for every shader of this project: `D3DCompile` under Wine has no embedded root
+signatures); SM 5.1 register spaces are carried (test: CBV `b1 space3`, SRV `t2 space1`, UAV
+`u1 space1` as root parameters run correctly). `back/tests/dxbc.rs`: DXBC made by
+`tools/metal/dxbc-compile.sh` (Wine's d3dcompiler, `VICTORY_DXBC_TOOL`); runs under Rosetta
+(`--target x86_64-apple-darwin`), SKIPPED on arm64. Wine's compiler itself cannot build some of the
+helper shaders (`indirect-clamp.hlsl`: `Load` on `RWByteAddressBuffer` is not implemented there),
+which no converter fixes.
+
 ## Tests
 
 | Test | What | Result 2026-11-27 |
@@ -315,8 +388,8 @@ text (`MscError::Rejected`), never a crash.
   on invalid input.
 * `IRCompilerSetMinimumGPUFamily` / deployment target are plumbed (family) or left unset
   (deployment); the defaults produced working pipelines on this M5 Max. Not tried on an older GPU.
-* Mesh/amplification pipelines and graphics roots convert and load as libraries, but the backend has
-  no pipeline objects for them yet: `compute_pipeline_from_dxil` refuses non-compute shaders.
+* Graphics, mesh and amplification pipelines exist (section above); draws are phase 2. Rectangle lists
+  (geometry shader) are not made: see `proto-render-draft.md`, open items.
 * The survey's root signature for graphics stages is per shader; the host shares one root signature
   per pipeline. Conversion of a combined pair is not tested.
 * The test DXC is a third-party (D3DMetal) build whose version is not printed by its front end; the

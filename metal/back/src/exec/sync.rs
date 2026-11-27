@@ -13,7 +13,9 @@ use victory_metal_proto::types::{
 use victory_metal_proto::{Caps, PROTO_VERSION};
 
 use super::tlab::TlabLayout;
-use super::{ExecOptions, Executor, Heap, Pso, Res, RootSig, State, lock, status_of, typed};
+use super::{
+    ExecOptions, Executor, Heap, Pso, PsoBody, Res, RootSig, State, lock, status_of, typed,
+};
 use crate::descriptors::{DescriptorHeap, ENTRY_SIZE, IrDescriptorTableEntry};
 use crate::device::Device;
 use crate::memory::{Buffer, BufferKind as CoreKind};
@@ -527,9 +529,8 @@ impl State {
             .compute_pipeline_from_msl(source, entry)
             .map_err(|e| status_of(&e))?;
         let pso = Arc::new(Pso {
-            pipeline,
+            body: PsoBody::Compute { pipeline, threads },
             root_sig: sig,
-            threads,
         });
         Ok(PsoId(self.psos.insert(pso).map_err(exhausted)?))
     }

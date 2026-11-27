@@ -25,8 +25,11 @@ pub fn dxil(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
 pub fn dxil_result(name: &str, profile: &str, hlsl: &str) -> Option<Result<Vec<u8>, String>> {
     let helper = std::env::var_os("VICTORY_HELPER_DXC")?;
     std::env::var_os("DXC_LIB")?;
+    // Tests run in parallel and may reuse a name: the folder is unique per call.
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir: PathBuf =
-        std::env::temp_dir().join(format!("victory-msc-{}-{name}", std::process::id()));
+        std::env::temp_dir().join(format!("victory-msc-{}-{n}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join(format!("{name}.hlsl"));
     let out = dir.join(format!("{name}.dxil"));
@@ -59,4 +62,37 @@ pub fn dxil_or_skip(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
         eprintln!("SKIPPED {name}: set VICTORY_HELPER_DXC and DXC_LIB (docs/metal/msc.md)");
     }
     d
+}
+
+/// DXBC of `hlsl` for `profile` (e.g. `cs_5_1`) from D3DCompile under Wine
+/// (`tools/metal/dxbc-compile.sh`, named by `VICTORY_DXBC_TOOL`), or `None`
+/// when that is not configured. The converter that reads it
+/// (`libdxilconv`) is x86_64 only, so a test using this also needs the
+/// x86_64 process (Rosetta) and prints SKIPPED on arm64.
+pub fn dxbc_or_skip(name: &str, profile: &str, hlsl: &str) -> Option<Vec<u8>> {
+    let Some(tool) = std::env::var_os("VICTORY_DXBC_TOOL") else {
+        eprintln!("SKIPPED {name}: VICTORY_DXBC_TOOL (tools/metal/dxbc-compile.sh) is not set");
+        return None;
+    };
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("victory-dxbc-{}-{n}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join(format!("{name}.hlsl"));
+    let out = dir.join(format!("{name}.dxbc"));
+    std::fs::write(&src, hlsl).unwrap();
+    let run = Command::new(tool)
+        .arg(&src)
+        .arg(&out)
+        .arg(profile)
+        .output()
+        .expect("run the DXBC tool");
+    assert!(
+        run.status.success() && out.exists(),
+        "D3DCompile refused {name}: {}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    Some(std::fs::read(&out).unwrap())
 }

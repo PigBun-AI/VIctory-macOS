@@ -21,6 +21,7 @@ use crate::descriptor::HeapDesc;
 use crate::device as dv;
 use crate::footprint;
 use crate::hresult::Hr;
+use crate::pso;
 use crate::resource::{self, HeapProps, ResourceDesc};
 use crate::view::{self, ViewParams};
 
@@ -207,6 +208,65 @@ impl DeviceObj_Impl {
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
 
+    pub(super) fn x_CreateGraphicsPipelineState(
+        &self,
+        pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+        riid: *const GUID,
+        pppipelinestate: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        let rs = d
+            .pRootSignature
+            .as_ref()
+            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let state = state_of_desc(d);
+        self.make_graphics_pso(rs, &state, riid, pppipelinestate)
+    }
+
+    pub(super) fn x_CreatePipelineState(
+        &self,
+        pdesc: *const D3D12_PIPELINE_STATE_STREAM_DESC,
+        riid: *const GUID,
+        pppipelinestate: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        if d.pPipelineStateSubobjectStream.is_null() || d.SizeInBytes == 0 {
+            return Err(werr(Hr::E_INVALIDARG));
+        }
+        // SAFETY: the application's stream: `SizeInBytes` readable bytes.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(d.pPipelineStateSubobjectStream.cast::<u8>(), d.SizeInBytes)
+        };
+        let state = pso::parse_stream(bytes).map_err(refuse)?;
+        let raw = state.root_sig as *mut c_void;
+        // SAFETY: the root signature interface pointer the application put in
+        // the stream; borrowed for the call.
+        let rs = unsafe { ID3D12RootSignature::from_raw_borrowed(&raw) }
+            .ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        self.make_graphics_pso(rs, &state, riid, pppipelinestate)
+    }
+
+    fn make_graphics_pso(
+        &self,
+        rs: &ID3D12RootSignature,
+        state: &pso::PipelineState,
+        riid: *const GUID,
+        pppipelinestate: *mut *mut c_void,
+    ) -> WResult<()> {
+        let rs = rs.cast_object_ref::<RootSigObj>()?;
+        // SAFETY: the application's input layout (elements and names) is
+        // valid for the call.
+        let inputs = unsafe { pso::read_input_layout(state.input_layout) }.map_err(refuse)?;
+        let desc = pso::to_proto(state, &inputs).map_err(refuse)?;
+        let pipeline = wres(self.dev.create_graphics_pipeline(&rs.root_sig, &desc))?;
+        let p = ComObject::new(PsoObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            pipeline,
+        });
+        return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
+    }
+
     pub(super) fn x_CheckFeatureSupport(
         &self,
         feature: D3D12_FEATURE,
@@ -270,6 +330,22 @@ impl DeviceObj_Impl {
             0..=3 => self.dev.descriptor_increment(descriptorheaptype.0 as u32),
             _ => 0,
         }
+    }
+
+    pub(super) fn x_CreatePipelineLibrary(
+        &self,
+        plibraryblob: *const c_void,
+        bloblength: usize,
+        riid: *const GUID,
+        pppipelinelibrary: *mut *mut c_void,
+    ) -> WResult<()> {
+        super::library::LibraryObj::create(
+            self.to_object(),
+            plibraryblob,
+            bloblength,
+            riid,
+            pppipelinelibrary,
+        )
     }
 
     pub(super) fn x_CreateRootSignature(
@@ -1011,3 +1087,120 @@ fn dsv_params(d: &D3D12_DEPTH_STENCIL_VIEW_DESC) -> crate::hresult::Result<ViewP
     }
     Ok(p)
 }
+
+/// A refused pipeline description: noted (when `VICTORY_METAL_NOTIMPL_LOG`
+/// is set, for what the back lacks) and returned as its HRESULT.
+fn refuse(e: pso::PsoError) -> windows::core::Error {
+    if e.hr == Hr::E_NOTIMPL {
+        super::note_notimpl(&format!("pipeline state: {}", e.why));
+    }
+    if super::log_errors() {
+        eprintln!("victory-metal front: pipeline state refused: {}", e.why);
+    }
+    werr(e.hr)
+}
+
+fn bytecode_of(b: &D3D12_SHADER_BYTECODE) -> pso::Bytecode {
+    pso::Bytecode {
+        addr: b.pShaderBytecode as usize as u64,
+        len: b.BytecodeLength as u64,
+    }
+}
+
+fn stencil_ops_of(f: &D3D12_DEPTH_STENCILOP_DESC) -> pso::StencilOps {
+    pso::StencilOps {
+        fail: f.StencilFailOp.0 as u32,
+        depth_fail: f.StencilDepthFailOp.0 as u32,
+        pass: f.StencilPassOp.0 as u32,
+        func: f.StencilFunc.0 as u32,
+    }
+}
+
+/// The fields of `D3D12_GRAPHICS_PIPELINE_STATE_DESC`, copied into the
+/// core's description (nothing is read through a pointer yet).
+#[allow(clippy::field_reassign_with_default)]
+fn state_of_desc(d: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> pso::PipelineState {
+    let mut s = pso::PipelineState::default();
+    s.vs = bytecode_of(&d.VS);
+    s.ps = bytecode_of(&d.PS);
+    s.ds = bytecode_of(&d.DS);
+    s.hs = bytecode_of(&d.HS);
+    s.gs = bytecode_of(&d.GS);
+    s.stream_output_entries = d.StreamOutput.NumEntries;
+    s.blend.alpha_to_coverage = d.BlendState.AlphaToCoverageEnable.as_bool();
+    s.blend.independent = d.BlendState.IndependentBlendEnable.as_bool();
+    for (out, r) in s.blend.rt.iter_mut().zip(&d.BlendState.RenderTarget) {
+        *out = pso::RtBlend {
+            enable: r.BlendEnable.as_bool(),
+            logic_enable: r.LogicOpEnable.as_bool(),
+            src: r.SrcBlend.0 as u32,
+            dst: r.DestBlend.0 as u32,
+            op: r.BlendOp.0 as u32,
+            src_alpha: r.SrcBlendAlpha.0 as u32,
+            dst_alpha: r.DestBlendAlpha.0 as u32,
+            op_alpha: r.BlendOpAlpha.0 as u32,
+            logic_op: r.LogicOp.0 as u32,
+            write_mask: r.RenderTargetWriteMask,
+        };
+    }
+    s.sample_mask = d.SampleMask;
+    let r = &d.RasterizerState;
+    s.raster = pso::Raster {
+        fill: r.FillMode.0 as u32,
+        cull: r.CullMode.0 as u32,
+        front_ccw: r.FrontCounterClockwise.as_bool(),
+        depth_bias: r.DepthBias,
+        depth_bias_clamp: r.DepthBiasClamp,
+        slope_scaled_bias: r.SlopeScaledDepthBias,
+        depth_clip: r.DepthClipEnable.as_bool(),
+        multisample: r.MultisampleEnable.as_bool(),
+        antialiased_line: r.AntialiasedLineEnable.as_bool(),
+        forced_sample_count: r.ForcedSampleCount,
+        conservative: r.ConservativeRaster.0 as u32,
+    };
+    let z = &d.DepthStencilState;
+    s.depth = pso::DepthStencil {
+        depth_enable: z.DepthEnable.as_bool(),
+        depth_write_mask: z.DepthWriteMask.0 as u32,
+        depth_func: z.DepthFunc.0 as u32,
+        stencil_enable: z.StencilEnable.as_bool(),
+        stencil_read_mask: z.StencilReadMask,
+        stencil_write_mask: z.StencilWriteMask,
+        front: stencil_ops_of(&z.FrontFace),
+        back: stencil_ops_of(&z.BackFace),
+        depth_bounds: false,
+    };
+    s.input_layout = pso::InputLayoutRef {
+        elements: d.InputLayout.pInputElementDescs as usize as u64,
+        count: d.InputLayout.NumElements,
+    };
+    s.strip_cut = d.IBStripCutValue.0 as u32;
+    s.topology = d.PrimitiveTopologyType.0 as u32;
+    s.rt_count = d.NumRenderTargets;
+    for (out, f) in s.rt_formats.iter_mut().zip(&d.RTVFormats) {
+        *out = f.0 as u32;
+    }
+    s.ds_format = d.DSVFormat.0 as u32;
+    s.sample_count = d.SampleDesc.Count;
+    s.sample_quality = d.SampleDesc.Quality;
+    s.node_mask = d.NodeMask;
+    s.flags = d.Flags.0 as u32;
+    s
+}
+
+// The layouts `crate::pso::parse_stream` and `read_input_layout` read by
+// hand (64-bit): checked against the bindings at compile time.
+const _: () = {
+    use std::mem::size_of;
+    assert!(size_of::<D3D12_SHADER_BYTECODE>() == 16);
+    assert!(size_of::<D3D12_RENDER_TARGET_BLEND_DESC>() == 40);
+    assert!(size_of::<D3D12_BLEND_DESC>() == 328);
+    assert!(size_of::<D3D12_RASTERIZER_DESC>() == 44);
+    assert!(size_of::<D3D12_DEPTH_STENCIL_DESC>() == 52);
+    assert!(size_of::<D3D12_DEPTH_STENCIL_DESC1>() == 56);
+    assert!(size_of::<D3D12_INPUT_ELEMENT_DESC>() == 32);
+    assert!(size_of::<D3D12_INPUT_LAYOUT_DESC>() == 16);
+    assert!(size_of::<D3D12_STREAM_OUTPUT_DESC>() == 32);
+    assert!(size_of::<D3D12_VIEW_INSTANCING_DESC>() == 24);
+    assert!(size_of::<D3D12_CACHED_PIPELINE_STATE>() == 16);
+};

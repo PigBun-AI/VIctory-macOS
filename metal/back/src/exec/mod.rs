@@ -44,6 +44,7 @@
 //! conversion (and `VICTORY_METAL_LOG=1` prints it to stderr).
 
 mod dxil;
+mod gfx;
 mod handles;
 mod stream;
 mod sync;
@@ -105,13 +106,23 @@ pub(crate) struct RootSig {
     pub(crate) static_samplers: Vec<crate::sampler::Sampler>,
 }
 
-/// A compute pipeline with what a dispatch needs besides the Metal object.
+/// A pipeline state: compute or graphics (vertex or mesh), made for one
+/// root signature.
 pub(crate) struct Pso {
-    pub(crate) pipeline: ComputePipeline,
+    pub(crate) body: PsoBody,
     pub(crate) root_sig: Arc<RootSig>,
-    /// Threads per threadgroup: from the shader (`numthreads`, which MSC
-    /// reflection reports) for converted pipelines, given for MSL tests.
-    pub(crate) threads: [u32; 3],
+}
+
+pub(crate) enum PsoBody {
+    /// A compute pipeline with what a dispatch needs besides the Metal object.
+    Compute {
+        pipeline: ComputePipeline,
+        /// Threads per threadgroup: from the shader (`numthreads`, which MSC
+        /// reflection reports) for converted pipelines, given for MSL tests.
+        threads: [u32; 3],
+    },
+    /// A render pipeline; drawing with it is the next milestone's.
+    Graphics(crate::render::GraphicsPipeline),
 }
 
 /// What a `ResId` names.
@@ -246,6 +257,9 @@ impl Executor {
             SyncOp::CREATE_COMPUTE_PIPELINE => {
                 typed(args, len, |a| self.create_compute_pipeline(a))
             }
+            SyncOp::CREATE_GRAPHICS_PIPELINE => {
+                typed(args, len, |a| self.create_graphics_pipeline(a))
+            }
             op if op.is_known() => {
                 match self.with_state(|st| (st.call(op, args, len), st.note.take())) {
                     Ok((s, note)) => {
@@ -338,6 +352,19 @@ impl Executor {
                 .get(root_sig.0)
                 .map(|r| r.static_table.clone())
                 .ok_or(Status::NOT_FOUND)
+        })?
+    }
+
+    /// The graphics pipeline behind a `PsoId` made by `CREATE_GRAPHICS_PIPELINE`
+    /// (tests, tools); `None` for a compute pipeline.
+    pub fn graphics_pipeline(
+        &self,
+        pso: PsoId,
+    ) -> Result<Option<crate::render::GraphicsPipeline>, Status> {
+        self.with_state(|st| match st.psos.get(pso.0).map(|p| &p.body) {
+            Some(PsoBody::Graphics(g)) => Ok(Some(g.clone())),
+            Some(_) => Ok(None),
+            None => Err(Status::NOT_FOUND),
         })?
     }
 

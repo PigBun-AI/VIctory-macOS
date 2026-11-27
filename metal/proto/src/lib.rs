@@ -12,6 +12,7 @@
 //! * [`ids`]: handle newtypes ([`ResId`], [`HeapId`], [`RootSigId`], [`PsoId`], [`FenceId`], [`QueueId`] ...).
 //! * [`types`]: buffer/heap/view kinds, [`ViewDesc`], [`SamplerDesc`], stage and visibility masks, [`Caps`], format ids.
 //! * [`root`]: [`RootSigDesc`] (constants, root descriptors, tables with ranges, static samplers).
+//! * [`pso`]: [`GraphicsPsoDesc`](pso::GraphicsPsoDesc), the graphics pipeline description (version 2).
 //! * [`sync`]: [`SyncOp`] and one `repr(C)` argument block per op ([`Link::call`]).
 //! * [`cmd`], [`stream`]: opcodes, payloads, [`Encoder`], zero-copy [`Decoder`] ([`Link::submit`]).
 //! * [`mod@file`]: the dump/replay file (`FileHeader` + blocks).
@@ -44,6 +45,7 @@ pub mod cmd;
 pub mod file;
 pub mod ids;
 pub mod link;
+pub mod pso;
 pub mod registry;
 pub mod root;
 pub mod status;

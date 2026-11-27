@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::{IUnknown, Interface, PCSTR};
+use windows::core::{IUnknown, Interface, PCSTR, w};
 
 fn gold(tag: &str, text: impl AsRef<str>) {
     println!("GOLD {tag}: {}", text.as_ref());
@@ -1895,6 +1895,26 @@ unsafe fn resource_checks(device: &ID3D12Device) {
                 );
             }
             let _ = PCSTR::null();
+        }
+        // A pipeline library that holds nothing: made with no blob, every load
+        // misses, it serializes to something its own creation accepts.
+        if let Ok(d1) = device.cast::<ID3D12Device1>() {
+            let lib: windows::core::Result<ID3D12PipelineLibrary> = d1.CreatePipelineLibrary(&[]);
+            gold("CreatePipelineLibrary no blob", hr(&lib));
+            if let Ok(lib) = lib {
+                let load: windows::core::Result<ID3D12PipelineState> = lib.LoadComputePipeline(
+                    w!("missing"),
+                    &D3D12_COMPUTE_PIPELINE_STATE_DESC::default(),
+                );
+                gold("library LoadComputePipeline miss", hr(&load));
+                let size = lib.GetSerializedSize();
+                gold("library serialized size > 0", format!("{}", size > 0));
+                let mut bytes = vec![0u8; size];
+                gold("library Serialize", hr(&lib.Serialize(&mut bytes)));
+                let again: windows::core::Result<ID3D12PipelineLibrary> =
+                    d1.CreatePipelineLibrary(&bytes);
+                gold("CreatePipelineLibrary from its own blob", hr(&again));
+            }
         }
         // Everything is released by drop; a leak would show in the final line.
         drop((upload, default, readback, heap, queue, alloc, list, fence));
