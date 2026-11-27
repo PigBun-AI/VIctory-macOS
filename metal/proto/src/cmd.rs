@@ -64,7 +64,11 @@ pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
         0x06FF,
         "render passes and render-encoder bindings (M3, m3-gfx)",
     ),
-    (0x0700, 0x07FF, "present (M3)"),
+    (
+        0x0700,
+        0x07FF,
+        "present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)",
+    ),
     (0x0800, 0x08FF, "queries and timestamps (M2)"),
     (0x0900, 0x09FF, "ExecuteIndirect (M2)"),
 ];

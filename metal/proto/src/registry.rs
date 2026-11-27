@@ -157,6 +157,24 @@ pub static SYNC_OPS: &[SyncInfo] = &[
         I,
         "in: root_sig, flags=0, desc (GraphicsPsoDesc: DXIL addr+len per stage, inputs, targets, blend, raster, depth); out: pso (UNSUPPORTED for a shader or state the back cannot make)",
     ),
+    sync::<CreateSwapchainArgs>(
+        I,
+        "in: window (WindowRef), width, height, format (DXGI), buffer_count, usage, flags (swapchain_flags), max_latency; out: swapchain, surface_format, buffers (ResId numbers of the back buffers)",
+    ),
+    sync::<ResizeSwapchainArgs>(
+        I,
+        "in: swapchain, width, height, format (0 = keep), buffer_count (0 = keep), usage (0 = keep); out: buffers (new ResId numbers)",
+    ),
+    sync::<DestroySwapchainArgs>(I, "in: swapchain (the back buffers stay the caller's)"),
+    sync::<PresentArgs>(
+        I,
+        "in: queue, swapchain, buffer (ResId), sync_interval, flags (present_flags): shows the buffer after the queue's earlier work",
+    ),
+    sync::<SwapchainInfoArgs>(
+        I,
+        "in: swapchain; out: drawable size, surface_format, presents, completed, probe_texel (swap chains made with PROBE)",
+    ),
+    sync::<SetSwapchainLatencyArgs>(I, "in: swapchain, max_latency (1 to 8)"),
 ];
 
 /// Every command, in opcode order.

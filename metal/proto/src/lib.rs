@@ -56,7 +56,7 @@ pub mod wire;
 
 /// Version of the whole protocol. Written into every stream and file header;
 /// readers accept exactly their own.
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 3;
 
 pub use cmd::{Command, Opcode};
 pub use file::{FileReader, FileWriter};

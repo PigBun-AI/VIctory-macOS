@@ -55,6 +55,13 @@ open_enum! {
         GET_RESOURCE_ALLOCATION_INFO = 0x45,
 
         CREATE_GRAPHICS_PIPELINE = 0x50,
+
+        CREATE_SWAPCHAIN = 0x60,
+        RESIZE_SWAPCHAIN = 0x61,
+        DESTROY_SWAPCHAIN = 0x62,
+        PRESENT = 0x63,
+        SWAPCHAIN_INFO = 0x64,
+        SET_SWAPCHAIN_LATENCY = 0x65,
     }
 }
 
@@ -559,6 +566,151 @@ sync_block! {
         size: u64,
         /// out: placement alignment in bytes.
         alignment: u64,
+    }
+}
+
+/// Most back buffers one swap chain has (the original API's limit).
+pub const MAX_SWAPCHAIN_BUFFERS: usize = 16;
+
+/// Bits of `CreateSwapchainArgs::flags`.
+pub mod swapchain_flags {
+    /// After every present the back reads one texel of what it wrote to the
+    /// surface and waits for the GPU to finish (tests and tools: it makes
+    /// `SWAPCHAIN_INFO` report that texel; it costs the frame's overlap).
+    pub const PROBE: u32 = 1 << 0;
+    pub const ALL_BITS: u32 = PROBE;
+}
+
+/// Bits of `PresentArgs::flags`.
+pub mod present_flags {
+    /// The application allows tearing (no wait for the display).
+    pub const ALLOW_TEARING: u32 = 1 << 0;
+    pub const ALL_BITS: u32 = ALLOW_TEARING;
+}
+
+sync_block! {
+    /// `CREATE_SWAPCHAIN`: binds a window's drawing surface (asked of the
+    /// `SurfaceProvider` the bridge installed) to `buffer_count` back
+    /// buffers the back makes as ordinary 2D textures (`res` numbers in
+    /// `buffers`, usable like any texture; destroy them with `DESTROY_TEXTURE`
+    /// like any other, the swap chain does not keep them). `format` is a DXGI
+    /// number. `max_latency` is how many presents may be queued before
+    /// `PRESENT` waits (0 = 3). `UNSUPPORTED` when there is no provider, no
+    /// surface for the window or the format cannot be presented.
+    CreateSwapchainArgs, CREATE_SWAPCHAIN, 1, {
+        /// in: `WindowRef` value (the window handle).
+        window: u64,
+        /// in: texels.
+        width: u32,
+        /// in: texels.
+        height: u32,
+        /// in: DXGI format of the back buffers.
+        format: u32,
+        /// in: 1 to 16.
+        buffer_count: u32,
+        /// in: `tex_usage` bits the back buffers get besides what presenting needs.
+        usage: u32,
+        /// in: `swapchain_flags` bits.
+        flags: u32,
+        /// in: frames in flight; 0 = the default (3).
+        max_latency: u32,
+        /// out
+        swapchain: SurfaceId,
+        /// out: the surface's own pixel format number (informational).
+        surface_format: u32,
+        _pad: u32,
+        /// out: `ResId` numbers of the back buffers, the first `buffer_count`.
+        buffers: [u32; 16],
+    }
+}
+
+sync_block! {
+    /// `RESIZE_SWAPCHAIN`: new back buffers of another size (and format and
+    /// count if given) and the surface set to the new size. The caller has
+    /// destroyed the old back buffers (or keeps them and gives them up: the
+    /// swap chain no longer uses them). Presents already queued still show
+    /// what they were given.
+    ResizeSwapchainArgs, RESIZE_SWAPCHAIN, 1, {
+        /// in
+        swapchain: SurfaceId,
+        /// in: texels.
+        width: u32,
+        /// in: texels.
+        height: u32,
+        /// in: DXGI format; 0 keeps the current one.
+        format: u32,
+        /// in: 1 to 16; 0 keeps the current count.
+        buffer_count: u32,
+        /// in: `tex_usage` bits; 0 keeps the current ones.
+        usage: u32,
+        /// out: the new `ResId` numbers.
+        buffers: [u32; 16],
+    }
+}
+
+sync_block! {
+    /// `DESTROY_SWAPCHAIN`: gives the window's surface back once the queued
+    /// presents are done. The back buffers are the caller's to destroy.
+    DestroySwapchainArgs, DESTROY_SWAPCHAIN, 1, {
+        swapchain: SurfaceId,
+        _pad: u32,
+    }
+}
+
+sync_block! {
+    /// `PRESENT`: shows back buffer `buffer` (a `ResId` of this swap chain)
+    /// after everything submitted to `queue` so far. The back waits for the
+    /// surface's next drawable, copies the buffer into it (converting the
+    /// format and scaling if the sizes differ), signals and presents it, and
+    /// blocks only while more than `max_latency` presents are in flight.
+    /// `sync_interval` 0 does not wait for the display.
+    PresentArgs, PRESENT, 1, {
+        /// in
+        queue: QueueId,
+        /// in
+        swapchain: SurfaceId,
+        /// in: the back buffer to show.
+        buffer: ResId,
+        /// in: 0 (now) or the number of display refreshes to wait.
+        sync_interval: u32,
+        /// in: `present_flags` bits.
+        flags: u32,
+        _pad: u32,
+    }
+}
+
+sync_block! {
+    /// `SWAPCHAIN_INFO`: what the back knows about a swap chain.
+    SwapchainInfoArgs, SWAPCHAIN_INFO, 1, {
+        /// in
+        swapchain: SurfaceId,
+        _pad: u32,
+        /// out: size of the surface's drawables in texels.
+        width: u32,
+        /// out
+        height: u32,
+        /// out: the surface's own pixel format number.
+        surface_format: u32,
+        /// out: 1 when `probe_texel` is valid (swap chain made with `PROBE`, one present done).
+        probe_valid: u32,
+        /// out: presents handed to the GPU.
+        presents: u64,
+        /// out: presents the GPU has finished.
+        completed: u64,
+        /// out: the texel at (`probe_x`, `probe_y`) of the last drawable, as stored (first 8 bytes of the pixel).
+        probe_texel: u64,
+        /// out
+        probe_x: u32,
+        /// out
+        probe_y: u32,
+    }
+}
+
+sync_block! {
+    /// `SET_SWAPCHAIN_LATENCY`: frames in flight (1 to 8).
+    SetSwapchainLatencyArgs, SET_SWAPCHAIN_LATENCY, 1, {
+        swapchain: SurfaceId,
+        max_latency: u32,
     }
 }
 
