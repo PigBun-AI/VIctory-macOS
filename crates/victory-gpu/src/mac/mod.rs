@@ -8,6 +8,7 @@ pub mod drop_stats;
 pub mod frames;
 pub mod hlsl;
 pub mod present_cap;
+pub mod pso_x;
 pub mod render_size;
 pub mod rosetta;
 pub mod world;
