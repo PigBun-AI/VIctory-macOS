@@ -73,11 +73,16 @@ pub fn run(
 
     // A 1440p output instead of the Series X's 4K one (`native_1440p`): the
     // patched image goes to a folder of its own, beside the stock one.
-    let render_1080p = std::env::var("VICTORY_RENDER_1080P").as_deref() == Ok("1");
-    let native_1440p = render_1080p || std::env::var("VICTORY_NATIVE_1440P").as_deref() == Ok("1");
+    // The scene's scale (`VICTORY_RENDER_SCALE`, 0.25..1; `VICTORY_RENDER_1080P=1`
+    // is 0.75), pinned there unless `VICTORY_RENDER_SCALE_PIN=0`
+    // (`victory_loader::render_scale`); 1080P alone keeps its old unpinned
+    // minimum unless the pin is asked for.
+    let render = RenderScale::from_env();
+    let native_1440p = render.is_some() || std::env::var("VICTORY_NATIVE_1440P").as_deref() == Ok("1");
+    let render = render.unwrap_or(RenderScale { scale: 1.0, pin: false, live: false });
     let images = if native_1440p {
         anyhow::ensure!(matches!(console, Console::SeriesX), "1440p output needs the Series X profile");
-        let (w, h) = native_1440p::prepare(&mut prepared, render_1080p)?;
+        let (w, h) = native_1440p::prepare(&mut prepared, render.image_scale(), render.pin)?;
         // SAFETY: nothing else runs yet; the title and the display mode list
         // read these later.
         unsafe {
@@ -85,7 +90,12 @@ pub fn run(
             std::env::set_var("VICTORY_NATIVE_1440P", "1");
         }
         println!("display        {}x{} SDR, scene {w}x{h}", native_1440p::WIDTH, native_1440p::HEIGHT);
-        cfg.cache_subdir(if render_1080p { "images/1080p-to-1440p-sdr" } else { "images/native-1440p-sdr" })?
+        if render.live {
+            println!("render scale   {} while VICTORY_AB has VICTORY_RENDER_SCALE on, 1.0 otherwise; pinned", render.scale);
+        } else {
+            println!("render scale   {}{}", render.scale, if render.pin { ", pinned" } else { ", the title's minimum" });
+        }
+        cfg.cache_subdir(&render.cache_name())?
     } else {
         cfg.cache_subdir("images")?
     };
@@ -222,6 +232,10 @@ pub fn run(
     if !execute {
         println!("not executing (pass --execute to start the title)");
         return Ok(());
+    }
+    #[cfg(all(windows, feature = "diagnostics"))]
+    if native_1440p && render.live {
+        render_scale_by_phase(image.base(), render.scale);
     }
     victory_loader::report_crashes();
     victory_loader::log_crashes_to(temp.with_file_name("crashes.log"));
@@ -369,6 +383,93 @@ fn poke(base: usize, size: usize) {
                 unsafe { ((base + rva) as *mut u8).write_volatile(byte) };
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    });
+}
+
+/// The scene's render scale asked for (`VICTORY_RENDER_SCALE`,
+/// `VICTORY_RENDER_1080P`, `VICTORY_RENDER_SCALE_PIN`; `VICTORY_AB` naming
+/// `VICTORY_RENDER_SCALE`: `live`, the scale changes while the title runs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RenderScale {
+    scale: f32,
+    pin: bool,
+    live: bool,
+}
+
+impl RenderScale {
+    fn from_env() -> Option<RenderScale> {
+        let var = |name: &str| std::env::var(name).ok();
+        Self::from(
+            var("VICTORY_RENDER_SCALE").as_deref(),
+            var("VICTORY_RENDER_1080P").as_deref(),
+            var("VICTORY_RENDER_SCALE_PIN").as_deref(),
+            var("VICTORY_AB").as_deref(),
+        )
+    }
+
+    /// From the switches' texts; None: no scale asked for (an unreadable
+    /// `VICTORY_RENDER_SCALE` is said and taken as not given).
+    fn from(scale: Option<&str>, render_1080p: Option<&str>, pin: Option<&str>, ab: Option<&str>) -> Option<RenderScale> {
+        let asked = scale.and_then(|s| {
+            let v = victory_loader::render_scale::parse_scale(s);
+            if v.is_none() {
+                println!("render scale   VICTORY_RENDER_SCALE={s} is not a number from 0.25 to 1: not used");
+            }
+            v
+        });
+        let (value, pinned_unless_zero) = match (asked, render_1080p == Some("1")) {
+            (Some(v), _) => (v, true),
+            (None, true) => (0.75, false),
+            (None, false) => return None,
+        };
+        let pin = match pin {
+            Some(p) => p.trim() != "0",
+            None => pinned_unless_zero,
+        };
+        let live = asked.is_some()
+            && ab.is_some_and(|ab| ab.split(',').skip(1).any(|s| s.trim() == "VICTORY_RENDER_SCALE"));
+        Some(RenderScale { scale: value, pin: pin || live, live })
+    }
+
+    /// The scale written into the image: the run starts at 1.0 when the
+    /// scale changes with `VICTORY_AB`'s phases (its first phase has every
+    /// switch off).
+    fn image_scale(&self) -> f32 {
+        if self.live { 1.0 } else { self.scale }
+    }
+
+    /// The folder of the patched image: one per scale and pin.
+    fn cache_name(&self) -> String {
+        let scale = self.image_scale();
+        match (scale, self.pin) {
+            (1.0, false) => "images/native-1440p-sdr".into(),
+            (0.75, false) => "images/1080p-to-1440p-sdr".into(),
+            _ => format!("images/scale-{:04}{}-1440p-sdr", (scale * 1000.0).round() as u32, if self.pin { "-pinned" } else { "" }),
+        }
+    }
+}
+
+/// `VICTORY_AB` naming `VICTORY_RENDER_SCALE`: the title's minimum scale is
+/// `scale` while the switch is on, 1.0 while off, looked at every 50 ms
+/// (`victory_loader::render_scale::set_live`); the image was pinned.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn render_scale_by_phase(base: usize, scale: f32) {
+    std::thread::spawn(move || {
+        let mut now = 1.0f32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let want = if victory_hle::switched("VICTORY_RENDER_SCALE") == Some(true) { scale } else { 1.0 };
+            if want != now {
+                // SAFETY: the mapped retail image, whose scale places were
+                // checked when it was patched.
+                let done = unsafe { victory_loader::render_scale::set_live(base, now, want) };
+                eprintln!("VIctory: render scale {now} -> {want} ({})", if done { "written" } else { "not written: the minimum differs" });
+                if !done {
+                    return;
+                }
+                now = want;
+            }
         }
     });
 }
@@ -623,4 +724,35 @@ mod cpu_check_tests {
 #[cfg(not(windows))]
 pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console) -> Result<()> {
     anyhow::bail!("running titles requires Windows")
+}
+
+#[cfg(test)]
+mod render_scale_tests {
+    use super::RenderScale;
+
+    fn rs(scale: f32, pin: bool, live: bool) -> Option<RenderScale> {
+        Some(RenderScale { scale, pin, live })
+    }
+
+    /// `VICTORY_RENDER_SCALE` pins unless `_PIN=0`; `RENDER_1080P=1` alone is
+    /// the old unpinned 0.75; `VICTORY_AB` naming the scale makes it live
+    /// (pinned, the image at 1.0); each scale and pin has its image folder.
+    #[test]
+    fn render_scale_switches_are_read() {
+        assert_eq!(RenderScale::from(None, None, None, None), None);
+        assert_eq!(RenderScale::from(Some("0.667"), None, None, None), rs(0.667, true, false));
+        assert_eq!(RenderScale::from(Some("0.75"), None, Some("0"), None), rs(0.75, false, false));
+        assert_eq!(RenderScale::from(None, Some("1"), None, None), rs(0.75, false, false));
+        assert_eq!(RenderScale::from(None, Some("1"), Some("1"), None), rs(0.75, true, false));
+        assert_eq!(RenderScale::from(Some("2"), None, None, None), None, "out of range: not used");
+        assert_eq!(RenderScale::from(Some("0.5"), Some("1"), None, None), rs(0.5, true, false), "the scale wins");
+        let live = RenderScale::from(Some("0.75"), None, Some("0"), Some("60,VICTORY_WC_NO_BACK,VICTORY_RENDER_SCALE"));
+        assert_eq!(live, rs(0.75, true, true));
+        assert_eq!(live.unwrap().image_scale(), 1.0);
+        assert_eq!(live.unwrap().cache_name(), "images/scale-1000-pinned-1440p-sdr");
+        assert_eq!(RenderScale::from(Some("0.75"), None, None, Some("VICTORY_RENDER_SCALE,VICTORY_X")), rs(0.75, true, false), "seconds first");
+        assert_eq!(rs(1.0, false, false).unwrap().cache_name(), "images/native-1440p-sdr");
+        assert_eq!(rs(0.75, false, false).unwrap().cache_name(), "images/1080p-to-1440p-sdr");
+        assert_eq!(rs(0.667, true, false).unwrap().cache_name(), "images/scale-0667-pinned-1440p-sdr");
+    }
 }

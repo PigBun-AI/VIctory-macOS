@@ -29,6 +29,7 @@ mod crash;
 pub mod mac;
 pub mod frame_rate;
 pub mod prepare;
+pub mod render_scale;
 pub(crate) mod publish;
 pub mod resolve;
 #[cfg(all(windows, feature = "diagnostics"))]
