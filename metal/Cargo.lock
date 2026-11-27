@@ -239,6 +239,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "victory-metal-front-present"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "victory-metal-front-smoke"
 version = "0.1.0"
 dependencies = [

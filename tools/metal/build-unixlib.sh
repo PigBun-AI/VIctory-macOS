@@ -32,7 +32,8 @@ MACHO=target/x86_64-apple-darwin/release
 cargo build --release --locked --target x86_64-pc-windows-gnullvm \
     -p victory-metal-bridge -p victory-metal-probe \
     -p victory-metal-front-d3d12 -p victory-metal-front-dxgi \
-    -p victory-metal-front-smoke -p victory-metal-front-e2e
+    -p victory-metal-front-smoke -p victory-metal-front-e2e \
+    -p victory-metal-front-present
 # Unixlib: x86_64, because Wine runs under Rosetta and loads x86_64 code.
 cargo build --release --locked --target x86_64-apple-darwin -p victory-metal-bridge
 
@@ -44,7 +45,7 @@ cp "$PE/victory_metal_bridge.dll" "$OUT/standin.dll"
 cp "$MACHO/libvictory_metal_bridge.dylib" "$OUT/x86_64-unix/victory_metal_bridge.so"
 cp "$PE/m0-probe.exe" "$OUT/m0-probe.exe"
 cp "$PE/d3d12.dll" "$PE/dxgi.dll" "$OUT/front/"
-cp "$PE/front-smoke.exe" "$PE/front-e2e.exe" "$OUT/"
+cp "$PE/front-smoke.exe" "$PE/front-e2e.exe" "$PE/front-present.exe" "$OUT/"
 
 # Checks: the mark is there, and the table Wine looks up is exported.
 if ! dd if="$OUT/x86_64-windows/victory_metal_bridge.dll" bs=1 skip=64 count=16 2>/dev/null | grep -q 'Wine builtin DLL'; then

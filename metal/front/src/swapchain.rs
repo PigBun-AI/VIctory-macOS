@@ -66,6 +66,13 @@ pub struct SwapChainDesc {
     pub flags: u32,
 }
 
+/// `VICTORY_METAL_PROBE_PRESENT` set (and not 0).
+fn probe() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_PROBE_PRESENT").is_some_and(|v| v != "0"))
+}
+
 fn check_format(format: u32) -> Result<()> {
     match format {
         FORMAT_R8G8B8A8_UNORM
@@ -183,6 +190,7 @@ impl SwapChain {
         a.format = desc.format;
         a.buffer_count = desc.buffer_count;
         a.usage = desc.usage();
+        a.flags = if probe() { swapchain_flags::PROBE } else { 0 };
         // The default of a swap chain with a waitable object is one frame.
         a.max_latency = if desc.waitable() { 1 } else { 0 };
         let s = dev.gpu().call_status(&mut a);
@@ -258,7 +266,23 @@ impl SwapChain {
         }
         st.current = (st.current + 1) % st.desc.buffer_count;
         st.presents = st.presents.wrapping_add(1);
+        if probe() {
+            self.log_probe(st.presents);
+        }
         Ok(())
+    }
+
+    /// `VICTORY_METAL_PROBE_PRESENT=1`: say on stderr which texel the drawable of
+    /// each present held (tests read it; costs the frame overlap).
+    fn log_probe(&self, n: u32) {
+        let mut a = SwapchainInfoArgs::new();
+        a.swapchain = self.id;
+        if self.dev.gpu().call_status(&mut a) == Status::OK && a.probe_valid != 0 {
+            eprintln!(
+                "victory-metal present: frame {n} size {}x{} probe ({},{}) texel {:#018x} surface-format {}",
+                a.width, a.height, a.probe_x, a.probe_y, a.probe_texel, a.surface_format
+            );
+        }
     }
 
     /// `ResizeBuffers`: new back buffers (the application released its own).
