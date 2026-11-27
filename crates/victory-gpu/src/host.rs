@@ -3739,6 +3739,7 @@ pub(crate) mod indirects;
 mod panel;
 mod place;
 mod send;
+mod split;
 pub(crate) use send::{goes_as_words, words_under};
 #[cfg(feature = "diagnostics")]
 pub(crate) mod spans;
@@ -5755,6 +5756,11 @@ impl Host {
         split.part(15);
         let prepared = std::time::Instant::now();
         stage.next("submit: sending");
+        // VICTORY_GPU_SPLIT: the card's time by kind of work, read later.
+        if split::on() {
+            split::drain(self);
+            split::instrument(runs, own.is_some(), card.as_ref().is_some_and(|c| c.check.is_some()), &mut lists, &mut firsts, *submitted + 1);
+        }
         // When it runs on the card, for the timeline.
         #[cfg(feature = "diagnostics")]
         let stamp = stamps::take();
@@ -6340,6 +6346,8 @@ impl HostList {
 
     pub(crate) fn close(&self) {
         let _closing = crate::timeline::span("closing a host list");
+        // VICTORY_GPU_SPLIT: where the title's work ends and ours begins.
+        split::mark(std::ptr::from_ref(self) as usize, &self.list);
         self.twins_to_depth();
         self.textures_back();
         let scratch = self.indirect_args.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -8817,6 +8825,7 @@ impl Meter {
         crate::shadow::exact_line(frames);
         crate::descriptor::sync_line(frames);
         late_line(frames);
+        split::line(frames);
         crate::queue::behind_line(frames);
         card_clock_line(frames, ms);
         #[cfg(feature = "diagnostics")]

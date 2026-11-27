@@ -680,7 +680,8 @@ impl Host {
                 DONE[3].fetch_add(1, Ordering::Relaxed);
                 #[cfg(feature = "diagnostics")]
                 refused(why);
-                let _ = why;
+                // Counted in every build; printed once a second by `split::line`.
+                super::split::refused(why);
                 None
             }
         }
