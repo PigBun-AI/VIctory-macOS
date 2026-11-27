@@ -120,8 +120,7 @@ environment and a diagnostics build (`docs/replay.md`); `run.sh` does not set th
 frame takes too long, is turned off (three jumps patched at load, build 1.0.2.1 only; otherwise it stays on and the log says why). The run is
 **non-fidelity**: the log carries `non-fidelity: title hang watchdog disabled`, and `--print-env`, `run-env.txt` and `start.txt` say so; no
 fidelity result may cite it. **Use it with a time limit.** With the watchdog off, a run that really hangs no longer crashes: nothing ends it
-but `--timeout SEC` (default 900 s, which stays; `--timeout 0` plus `--no-watchdog` makes the script warn). Check `summary.txt` for
-`time limit ... reached` in `stderr.log` to tell a hang that the limit ended from a run that finished by itself.
+but `--timeout SEC` (default 900 s, which stays; `--timeout 0` plus `--no-watchdog` makes the script warn). A `== time limit ...s reached` line in `stderr.log` tells a run the limit ended from one that finished by itself.
 
 **`--corpus`** is the preset for filling the capture corpus: `--record-at w<N>` plus `--no-watchdog`, with `N` from `--corpus-frame`
 (default **`w5`**). The default is low on purpose: with D3DMetal the game usually crashes within about 10 frames of entering the world, so
