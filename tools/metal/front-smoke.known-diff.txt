@@ -1,0 +1,7 @@
++ GOLD serialize bad (null parameters): 0x80070057 - err=false
++ GOLD serialize bad version 7: 0x80070057 - err=false
++ GOLD serialize null desc: 0x80070057 false
++ GOLD deserialize garbage: true
++ GOLD deserialize empty: true
++ GOLD CreateRootSignature garbage: true
++ GOLD CreateComputePipelineState junk bytecode: true

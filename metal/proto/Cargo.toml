@@ -1,0 +1,10 @@
+[package]
+name = "victory-metal-proto"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Seam B of the VIctory Metal backend: handles, POD types, command stream and sync calls (no_std + alloc)"
+
+# core and alloc only. check-layers.sh fails if a dependency shows up here.
+[dependencies]

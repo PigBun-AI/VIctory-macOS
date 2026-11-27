@@ -1,0 +1,21 @@
+[package]
+name = "victory-metal-back"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Metal side of the VIctory Metal backend: M0 bring-up subset and the M1 Metal 4 executor core"
+
+# `exec` is the one module that knows the wire protocol (seam B).
+[target.'cfg(target_vendor = "apple")'.dependencies.victory-metal-proto]
+path = "../proto"
+
+# Metal exists on Apple targets only; elsewhere this crate is empty.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+libc = "0.2.191"
+objc2 = "0.6.5"
+objc2-foundation = "0.3.2"
+objc2-metal = { version = "0.3.2", features = ["block2", "dispatch2"] }
+objc2-quartz-core = { version = "0.3.2", features = ["objc2-metal", "CAMetalLayer"] }

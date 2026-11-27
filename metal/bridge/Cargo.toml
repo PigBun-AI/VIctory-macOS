@@ -1,0 +1,26 @@
+[package]
+name = "victory-metal-bridge"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Wine unixlib bridge: PE half (x86_64-pc-windows-gnullvm) and Mach-O half (darwin)"
+
+[dependencies]
+victory-metal-proto = { path = "../proto" }
+
+[lib]
+# cdylib: the PE half becomes the Wine-marked anchor dll, the Mach-O half the
+# unixlib next to it. rlib: the probe links the PE client half.
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+libc = "0.2.191"
+victory-metal-back = { path = "../back" }

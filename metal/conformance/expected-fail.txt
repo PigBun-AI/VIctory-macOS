@@ -1,0 +1,26 @@
+# Known differences between Wine + D3DMetal and Wine + our Metal backend in
+# `-p victory-shader` (tools/metal/compare-tests.sh). TEST | SIDE | REASON
+# SIDE: ours = fails on ours, passes on D3DMetal; both = fails on both.
+# Written 2026-11-27 from the first full comparison (D3DMetal: 1 failed; ours: 63 failed of 454);
+# updated 2026-11-27 after typed buffer views (D3DMetal: 1 failed; ours: 57 failed of 458 tests with 6 ignored).
+# updated 2026-11-27 after textures, heaps and custom heaps (D3DMetal: 1 failed; ours: 16 failed of 454 tests with 5 ignored;
+# the 41 "textures:" entries are gone).
+# Only M3 scope (graphics/mesh pipelines) and entries with a known root cause are registered.
+# The reason names the first call a test makes that the front/back does not implement yet.
+
+emit::crosslane_tests::pixel_quad_swizzle_and_dpp_validate_and_create_pipeline | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::deltas::tests::non_provoking_vertex_values_reach_the_pixel_shader | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::deltas::tests::per_vertex_center_lowers_deltas_to_zero_and_interpolates_p0 | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::memory_tests::early_depth_stencil_skips_occluded_read_mark_pixel_shaders | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::mesh_index_tests::gpu::mesh_index_bounds_and_zero_vertex_on_gpu | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::rect::tests::rectangles_get_their_fourth_corner | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::edge_flagged_triangles_draw_as_unflagged_ones | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::half_mesh_outputs_reach_the_pixel_shader | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_and_pixel_prune_unused_outputs_under_32k_and_draw | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_repacks_interleaved_scalar_and_vector_outputs_and_prunes_primitives | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::linked_mesh_with_aligned_only_overflow_draws | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::mesh_shaders_at_metals_output_limit_draw | ours | graphics/mesh pipeline state: CreatePipelineState is not implemented (E_NOTIMPL, M3)
+emit::tests::stub_pipeline_is_created | ours | graphics/mesh pipeline state: CreateGraphicsPipelineState is not implemented (E_NOTIMPL, M3)
+emit::valu_tests::v_cvt_u16_and_i16_f16_saturate | ours | NaN handling of converted shaders: MSC 4.0 turns NaN/Inf optimization on by default (UserManual.md, 'NaN/Inf optimization'), so v_cvt_i16_f16(NaN) gives 0x8000 (console: 0). IRCompatibilityFlagDisableNanInfOptimization fixes it (verified on this test's DXIL through the back); not set globally: it is a performance/compile-time trade-off. D3DMetal passes
+emit::valu_tests::v_sin_and_v_cos_f16_reduce_large_turns | ours | same root cause: v_sin_f16(NaN) gives 0 (console: NaN) with MSC 4.0's default NaN/Inf optimization; IRCompatibilityFlagDisableNanInfOptimization gives 0x7e00 (verified on this test's DXIL through the back); not set globally; D3DMetal passes
+emit::semantics_tests::arithmetic_matches_the_hardware | both | legacy FMA/multiply (v_mac_legacy_f32, 0*inf = 0): 102 of 14440 inputs differ from the model on the Apple GPU through D3DMetal as through ours; known, on the list of legacy defects
