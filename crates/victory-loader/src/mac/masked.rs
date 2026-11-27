@@ -50,9 +50,13 @@ fn decode(code: &[u8], at: usize) -> Option<(MaskedKind, bool)> {
         (2, 0x8e) => MaskedKind::Vpmaskmovd,
         (2, 0x2e) => MaskedKind::Vmaskmovps,
         (2, 0x2f) => MaskedKind::Vmaskmovpd,
-        (3, 0x1d) if !w => MaskedKind::Vcvtps2ph,
-        (3, 0x19) if !w && b2 & 4 != 0 => MaskedKind::Vextractf128,
-        (3, 0x39) if !w && b2 & 4 != 0 => MaskedKind::Vextracti128,
+        // The three unmasked ones have no second source: VEX.vvvv must be 1111
+        // (otherwise the bytes are not that instruction: #UD on hardware). The
+        // title has one such look-alike, the immediate of `mov eax, 0x396dc3c4`
+        // at RVA 0x2d566d5, which the scan used to take for a `vextracti128`.
+        (3, 0x1d) if !w && b2 & 0x78 == 0x78 => MaskedKind::Vcvtps2ph,
+        (3, 0x19) if !w && b2 & 0x7c == 0x7c => MaskedKind::Vextractf128,
+        (3, 0x39) if !w && b2 & 0x7c == 0x7c => MaskedKind::Vextracti128,
         _ => return None,
     };
     Some((kind, b2 & 4 != 0))
@@ -186,6 +190,25 @@ mod tests {
             decode(&[0xc4, 0xe2, 0x45, 0x2f, 0x08], 0),
             Some((MaskedKind::Vmaskmovpd, true))
         );
+    }
+
+    #[test]
+    fn the_unmasked_stores_need_vvvv_1111() {
+        // vcvtps2ph [rax], ymm0, 0 and xmm0, vextractf128/vextracti128 [rax], ymm0, 1.
+        for (bytes, kind, wide) in [
+            ([0xc4, 0xe3, 0x7d, 0x1d, 0x00], MaskedKind::Vcvtps2ph, true),
+            ([0xc4, 0xe3, 0x79, 0x1d, 0x00], MaskedKind::Vcvtps2ph, false),
+            ([0xc4, 0xe3, 0x7d, 0x19, 0x00], MaskedKind::Vextractf128, true),
+            ([0xc4, 0xe3, 0x7d, 0x39, 0x00], MaskedKind::Vextracti128, true),
+        ] {
+            assert_eq!(decode(&bytes, 0), Some((kind, wide)), "{bytes:02x?}");
+            // The same with vvvv 1101 is no such instruction (the title's
+            // `mov eax, 0x396dc3c4` holds c4 c3 6d 39 b9 in its bytes).
+            let mut other = bytes;
+            other[2] = (other[2] & 0x87) | 0x68;
+            assert_eq!(decode(&other, 0), None, "{other:02x?}");
+        }
+        assert_eq!(decode(&[0xc4, 0xc3, 0x6d, 0x39, 0xb9], 0), None);
     }
 
     #[test]
@@ -473,6 +496,49 @@ fn tail(mut c: Vec<u8>, site: u64, len: usize, at: u64) -> Option<Vec<u8>> {
     c.push(0xe9);
     c.extend_from_slice(&i32::try_from(back - next).ok()?.to_le_bytes());
     Some(c)
+}
+
+/// What [`audit`] finds out about the stores the scan picks.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Audit {
+    /// Sites `decode_store` cannot decode (the patch would skip them).
+    pub undecoded: Vec<u32>,
+    /// Sites with no trampoline (a displacement out of range).
+    pub no_trampoline: Vec<u32>,
+    /// Sites with a segment-override or address-size byte right before the VEX
+    /// prefix, `(rva, byte)`: the trampoline's `lea` would not honour it.
+    pub prefixed: Vec<(u32, u8)>,
+}
+
+/// Runs the patch's own decoder and trampoline builder over every store the scan
+/// finds in `bytes`, without touching memory: the static half of L1/L6's check
+/// (`examples/masked_census.rs` prints it for a real image).
+pub fn audit(info: &ImageInfo, bytes: &[u8]) -> Audit {
+    let mut a = Audit::default();
+    for f in masked_stores(info, bytes) {
+        let Some(s) = info.sections.iter().find(|s| {
+            s.characteristics & MEM_EXECUTE != 0 && s.rva <= f.rva && f.rva - s.rva < s.file_size
+        }) else {
+            continue;
+        };
+        let start = s.file_offset as usize;
+        let Some(code) = bytes.get(start..start.saturating_add(s.file_size as usize)) else {
+            continue;
+        };
+        let at = (f.rva - s.rva) as usize;
+        match decode_store(code, at) {
+            None => a.undecoded.push(f.rva),
+            Some(st) => {
+                if trampoline(&st, 0x1_4000_0000 + u64::from(f.rva), 0x1_3000_0000).is_none() {
+                    a.no_trampoline.push(f.rva);
+                }
+            }
+        }
+        if at > 0 && matches!(code[at - 1], 0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65 | 0x67) {
+            a.prefixed.push((f.rva, code[at - 1]));
+        }
+    }
+    a
 }
 
 /// The bytes that replace the store at `site`: a jump to `to`, then

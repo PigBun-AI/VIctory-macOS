@@ -107,7 +107,7 @@ default changed (it was "off under Rosetta"): the file is Mac layer, no upstream
 ("unexpectedly need to EmulateForward on a synchronous exception"; VIctory-macOS #1, #14, #50, #144) and the
 first run found our own `vpmaskmovd` in `safecopy.rs` doing just that. G6 (`b7943221`) put plain `mov`s in
 its place, and with tracking on the loader patches the title's masked stores at load (L1), the 8 extra sites
-of #144 included (log: `masked stores  1242 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
+of #144 included (log: `masked stores  1241 patched to plain stores`, with no `VICTORY_PATCH_MASKED` set).
 Evidence (2026-11-27, 15 default-config runs after the change, 10 of them the series with neutral input and
 Enter every 3 s, release exe of commit `4ab34ad8`): no EmulateForward, no title-watchdog crash, no warning or error
 from `titlewrite`, `shadow`, `inplace`, `safecopy` or `watch`; one run lasted 7 minutes into the streaming world
@@ -384,13 +384,24 @@ slots (the records' format is then theirs), or when a batch run shows the title'
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
 Rosetta can resume. Done whenever fault tracking runs under Rosetta, which is now the default (G2), so it
 needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`, a plain `wine victory.exe`,
-and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1242 patched to plain stores`.
+and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1241 patched to plain stores`.
 `VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `apps/victory/src/mac.rs`
 adds the 8 plain 256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
-variable is unset **or is plain `all`**: 1234 found by the scan + 8 = 1242. Before, an explicit `all` (which `run.sh`
+variable is unset **or is plain `all`**: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
 exported) replaced the list, so those 8 were never patched on a `run.sh` start; and with tracking off by default
 nothing was patched at all without the variable. With `VICTORY_FAULT_TRACKING=0` nothing is patched (nothing is guarded).
 Not needed on Windows: it resumes them. Remove with G2.
+
+*Coverage (checked 2026-11-28 against the static census of build 1.0.2.1, `research/census/title-isa-20261127`;
+`cargo run --release -p victory-loader --example masked_census -- <image> <site lists>`).* The census (a real
+disassembly) has 1130 masked stores (`vpmaskmovd` 789, `vpmaskmovq` 160, `vmaskmovps` 180, `vmaskmovpd` 1), 70 `vcvtps2ph [mem]`
+and 33 `vextract{f,i}128 [mem]`, 1233 sites. The scan finds 1233, **the same 1233: 0 missed in each of the three classes**, and
+`mac::masked::audit` decodes each one and builds its trampoline (0 undecoded, 0 out of reach, none with a segment or `67` prefix
+in front of the VEX byte, which the trampoline's `lea` would not honour). The scan used to find **1234**: the extra one was a byte
+look-alike, `c4 c3 6d 39 b9` inside the immediate of `mov eax, 0x396dc3c4` at RVA `0x2d566d5`, taken for a `vextracti128` and so *patched*: its five bytes overwritten by a jump, which changed that constant
+and the `mov ecx, 0xae64642c` after it. A real `vextract*128`/`vcvtps2ph` has VEX.vvvv = 1111; the scan now requires it
+(test `the_unmasked_stores_need_vvvv_1111`), so the count is 1233 and 1241 with the 8 plain stores. `vcvtps2ph [mem]` is in this
+patch since the start (the 70 sites above); there is no separate patch for it (see "L1 and vcvtps2ph" below).
 
 ### L2 — 256-bit stores split into two 128-bit stores (`mac/wide.rs`, `xtask/src/wide_stores.rs`)
 
