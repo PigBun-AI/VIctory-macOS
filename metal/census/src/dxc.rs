@@ -80,7 +80,8 @@ impl Dxc {
         }
         let h = self.dir.join("dxc-d3dmetal-vd");
         if !h.exists() {
-            let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/macos/dxc-d3dmetal.sh");
+            let script =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/macos/dxc-d3dmetal.sh");
             let text = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
             let patched = text.replace("L\"-O3\"}", "L\"-O3\", L\"-Vd\"}");
             if patched == text {
@@ -107,8 +108,15 @@ impl Dxc {
     }
 
     /// As [`Dxc::compile`]; `unvalidated`: without DXC's validation (more than 32 signature rows).
-    pub fn compile_with(&self, profile: &str, hlsl: &str, unvalidated: bool) -> Result<Vec<u8>, String> {
-        let key = blake3::hash(format!("{profile}\n{unvalidated}\n{hlsl}").as_bytes()).to_hex()[..16].to_owned();
+    pub fn compile_with(
+        &self,
+        profile: &str,
+        hlsl: &str,
+        unvalidated: bool,
+    ) -> Result<Vec<u8>, String> {
+        let key = blake3::hash(format!("{profile}\n{unvalidated}\n{hlsl}").as_bytes()).to_hex()
+            [..16]
+            .to_owned();
         if let Some(r) = self
             .cache
             .lock()
@@ -172,7 +180,14 @@ fn exact_type(e: &Element) -> (String, &'static str) {
     let (ty, interp) = comp_type(e);
     let base = ty.trim_end_matches('4');
     let w = e.width();
-    (if w == 1 { base.to_owned() } else { format!("{base}{w}") }, interp)
+    (
+        if w == 1 {
+            base.to_owned()
+        } else {
+            format!("{base}{w}")
+        },
+        interp,
+    )
 }
 
 /// HLSL of a full-screen-triangle vertex shader that writes every ordinary
@@ -217,9 +232,16 @@ pub fn mesh_for(inputs: &[Element]) -> String {
     for (i, e) in els.iter().enumerate() {
         let (ty, interp) = exact_type(e);
         let zeros = ", 0".repeat(e.width() as usize - 1);
-        let value = if e.width() == 1 { format!("{}", i + 1) } else { format!("{ty}({}{zeros})", i + 1) };
+        let value = if e.width() == 1 {
+            format!("{}", i + 1)
+        } else {
+            format!("{ty}({}{zeros})", i + 1)
+        };
         if per_primitive(e) {
-            p.push_str(&format!("  nointerpolation {ty} v{i} : {}{};\n", e.name, e.index));
+            p.push_str(&format!(
+                "  nointerpolation {ty} v{i} : {}{};\n",
+                e.name, e.index
+            ));
             body_p.push_str(&format!("  prims[0].v{i} = {value};\n"));
         } else {
             v.push_str(&format!("  {interp}{ty} v{i} : {}{};\n", e.name, e.index));

@@ -200,7 +200,13 @@ impl Gfx {
     }
 
     /// `draw` with `state` (topology, vertex buffer) set before it, into a fresh target, read back.
-    fn run(&self, pso: PsoId, state: Vec<Command<'static>>, draw: Command<'static>, bg: [f32; 4]) -> Vec<u32> {
+    fn run(
+        &self,
+        pso: PsoId,
+        state: Vec<Command<'static>>,
+        draw: Command<'static>,
+        bg: [f32; 4],
+    ) -> Vec<u32> {
         let t = self.texture();
         let rb = self.fx.buffer(BufferKind::READBACK, (W * H * 4) as u64);
         cpu_write(rb.cpu_addr, &vec![0xDEAD_BEEF; (W * H) as usize]);
@@ -250,7 +256,10 @@ impl Gfx {
             Command::BeginRenderPass(pass),
             draw,
             Command::EndRenderPass(<EndRenderPass as Wire>::ZERO),
-            Command::Barrier(Barrier::memory(stage::FRAGMENT | stage::VERTEX, stage::BLIT)),
+            Command::Barrier(Barrier::memory(
+                stage::FRAGMENT | stage::VERTEX,
+                stage::BLIT,
+            )),
             Command::CopyTextureRegion(copy),
             end(1),
         ]);
@@ -450,6 +459,9 @@ fn a_geometry_stage_hands_the_other_vertices_to_a_vertex_pipelines_pixel_shader(
             );
         }
     }
-    assert!(painted > 150, "the triangles must cover many pixels ({painted})");
+    assert!(
+        painted > 150,
+        "the triangles must cover many pixels ({painted})"
+    );
     assert!(compared > 700);
 }

@@ -46,7 +46,10 @@ fn census(args: &[&str]) {
 fn the_corpus_translates_without_attribute_at_vertex_and_builds() {
     let (Some(game), Some(list)) = (env("VICTORY_GAME_DIR"), env("VICTORY_ATTR_PS_LIST")) else {
         eprintln!("SKIPPED: set VICTORY_GAME_DIR and VICTORY_ATTR_PS_LIST (the 4852 hashes)");
-        assert!(env("VICTORY_ATTR_REQUIRE").is_none(), "required, but no corpus is given");
+        assert!(
+            env("VICTORY_ATTR_REQUIRE").is_none(),
+            "required, but no corpus is given"
+        );
         return;
     };
     let out = env("VICTORY_ATTR_OUT").map_or_else(
@@ -56,7 +59,9 @@ fn the_corpus_translates_without_attribute_at_vertex_and_builds() {
     std::fs::create_dir_all(&out).unwrap();
     let out_s = out.to_str().unwrap();
     census(&["translate", "--game", &game, "--out", out_s, "--jobs", "4"]);
-    census(&["convert", "--kind", "ps", "--out", out_s, "--only", &list, "--jobs", "4"]);
+    census(&[
+        "convert", "--kind", "ps", "--out", out_s, "--only", &list, "--jobs", "4",
+    ]);
     let wanted: std::collections::HashSet<String> = std::fs::read_to_string(&list)
         .unwrap()
         .split_whitespace()
@@ -65,7 +70,9 @@ fn the_corpus_translates_without_attribute_at_vertex_and_builds() {
     let rows = std::fs::read_to_string(out.join("convert-ps.jsonl")).unwrap();
     let (mut seen, mut asked, mut limit, mut other) = (0, 0, 0, Vec::new());
     for line in rows.lines() {
-        let Some(hash) = field(line, "hash") else { continue };
+        let Some(hash) = field(line, "hash") else {
+            continue;
+        };
         if !wanted.contains(&hash) {
             continue;
         }
@@ -90,11 +97,21 @@ fn the_corpus_translates_without_attribute_at_vertex_and_builds() {
         eprintln!("SKIPPED: {why}");
         return;
     }
-    assert!(seen >= wanted.len().saturating_sub(1), "only {seen} of {} rows", wanted.len());
-    assert!(limit <= KNOWN_OVER_LIMIT, "{limit} programs over Metal's scalar limit (known: {KNOWN_OVER_LIMIT})");
+    assert!(
+        seen >= wanted.len().saturating_sub(1),
+        "only {seen} of {} rows",
+        wanted.len()
+    );
+    assert!(
+        limit <= KNOWN_OVER_LIMIT,
+        "{limit} programs over Metal's scalar limit (known: {KNOWN_OVER_LIMIT})"
+    );
     // The one program with a 64-bit atomic (MSC refuses it for that) is no business of this lowering.
     assert!(other.len() <= 1, "unexpected failures: {other:#?}");
-    eprintln!("{seen} pixel programs: {limit} over the scalar limit, {} other failures", other.len());
+    eprintln!(
+        "{seen} pixel programs: {limit} over the scalar limit, {} other failures",
+        other.len()
+    );
 }
 
 /// The string value of `"key":"..."` in one JSON line (the census writes flat objects).

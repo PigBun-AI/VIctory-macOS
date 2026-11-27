@@ -228,7 +228,8 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
         let made = match ctx.dxc.compile("vs_6_6", &hlsl) {
             Err(_) => {
                 row["partner"] = json!("ms");
-                ctx.dxc.compile_with("ms_6_6", &dxc::mesh_for(&inputs), true)
+                ctx.dxc
+                    .compile_with("ms_6_6", &dxc::mesh_for(&inputs), true)
             }
             other => other,
         };
