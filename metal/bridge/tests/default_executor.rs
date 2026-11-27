@@ -40,7 +40,7 @@ fn the_default_executor_runs_a_copy_round_trip() {
     assert_eq!(wine_call(&mut hello), Status::OK, "HELLO through the table");
     assert!(hello.device_name[0] != 0);
 
-    let mut mk = |kind: BufferKind, size: u64| {
+    let mk = |kind: BufferKind, size: u64| {
         let mut a = CreateBufferArgs::new();
         a.size = size;
         a.kind = kind.0;
