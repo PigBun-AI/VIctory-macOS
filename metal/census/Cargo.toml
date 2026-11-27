@@ -1,0 +1,22 @@
+[package]
+name = "victory-metal-census"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Offline census of every shader program of the game package: Xbox ISA -> DXIL (victory-shader) -> Metal Shader Converter -> MTL4Compiler, failure lists, timings, pipeline archive"
+
+# Metal and the translator's inputs exist on Apple targets only; elsewhere this
+# crate is an empty binary (the workspace still builds and lints for Windows).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+victory-metal-back = { path = "../back" }
+victory-shader = { path = "../../crates/victory-shader" }
+victory-game = { path = "../../crates/victory-game" }
+blake3 = "1.8.7"
+memchr = "2.8.3"
+serde_json = "1"
+walkdir = "2.5.1"
+
+[[bin]]
+name = "victory-census"
+path = "src/main.rs"

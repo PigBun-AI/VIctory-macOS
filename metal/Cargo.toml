@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = ["bridge", "back", "probe", "proto", "front", "front/d3d12", "front/dxgi", "front/smoke", "front/e2e", "front/present"]
+members = ["bridge", "back", "probe", "proto", "front", "front/d3d12", "front/dxgi", "front/smoke", "front/e2e", "front/present", "census"]
