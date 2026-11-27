@@ -395,7 +395,7 @@ so `Msc::compile` asks `guard::check` first and answers `Unsupported` without ca
 | refused | how it is recognised | reason (`Error::Unsupported`) |
 |---|---|---|
 | double precision | `SFI0` has `D3D_SHADER_REQUIRES_DOUBLES` (0x1) or `D3D_SHADER_REQUIRES_11_1_DOUBLE_EXTENSIONS` (0x20); a container with no `SFI0` part: a `double` in the bitcode type table (`bitcode.rs`) | `MSC 4.0.3 cannot convert double-precision` |
-| a hash on the census denylist | FNV-1a of the input bytes (`hash_parts(&[dxil])`, what the drop statistics call the stage) is a line of the file `VICTORY_METAL_MSC_DENYLIST` names (re-read when its time stamp changes) | `census: MSC fatal` |
+| a hash on the census denylist | FNV-1a of the input bytes (`hash_parts(&[dxil])`, what the drop statistics call the stage) is a line of a file `VICTORY_METAL_MSC_DENYLIST` names (several files: paths separated by `:`, the union applies; re-read when the value or a file's time stamp changes) | `census: MSC fatal` |
 
 Bit values: `d3d12shader.h` `D3D_SHADER_REQUIRES_*` = DXC `ShaderFeatureInfo_*`; DXC 6.6 (the D3DMetal front end)
 puts 0x21 on a double-arithmetic compute shader and 0x4021 on `WaveActiveSum(double)`. The shader translator

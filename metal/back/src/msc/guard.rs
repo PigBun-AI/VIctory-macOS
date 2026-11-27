@@ -26,13 +26,14 @@
 //!   FNV-1a hash of the converter's input bytes, as `hash_parts(&[dxil])`
 //!   (the hash the front's and the back's drop statistics name a stage by),
 //!   one per line; `#` starts a comment. `victory-census denylist` writes
-//!   the file.
+//!   the file. The variable may name several files separated by `:` (the
+//!   union applies), so the census lists each keep their own file.
 //!
 //! With `VICTORY_METAL_LOG=1` each refusal prints the hash.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -81,8 +82,10 @@ pub fn parse_denylist(text: &str) -> HashSet<u64> {
 }
 
 struct Loaded {
+    /// The variable's value as read, and the modification time of each file
+    /// it names (in order).
     path: OsString,
-    mtime: Option<SystemTime>,
+    mtimes: Vec<Option<SystemTime>>,
     hashes: Arc<HashSet<u64>>,
     pairs: Arc<HashSet<(u64, u64)>>,
 }
@@ -107,9 +110,10 @@ pub fn parse_pair_denylist(text: &str) -> HashSet<(u64, u64)> {
 
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
-/// The denylist `VICTORY_METAL_MSC_DENYLIST` names (read again when the
-/// path or the file's modification time changes; none if unset). An
-/// unreadable file is reported once on stderr and counts as empty.
+/// The denylist `VICTORY_METAL_MSC_DENYLIST` names: the union of the files
+/// of its `:`-separated path list (read again when the value or any file's
+/// modification time changes; none if unset). An unreadable file is reported
+/// on stderr and counts as empty.
 fn denylist() -> Option<Arc<HashSet<u64>>> {
     loaded().map(|l| l.0)
 }
@@ -121,26 +125,52 @@ pub fn denied_pair(ms: &[u8], ps: &[u8]) -> bool {
 
 type Lists = (Arc<HashSet<u64>>, Arc<HashSet<(u64, u64)>>);
 
+/// The files the variable names: paths separated by `:` (like `PATH`;
+/// `std::env::split_paths`), so a census can write its own file without
+/// overwriting the others (the double-precision census list, the `kind=pair`
+/// list of the mesh pipelines). Empty entries are skipped.
+pub fn denylist_paths(value: &OsStr) -> Vec<PathBuf> {
+    std::env::split_paths(value)
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect()
+}
+
+/// The union of the files' hashes and pairs; a file that cannot be read is
+/// reported on stderr and counts as empty (the others still apply).
+fn load_files(files: &[PathBuf]) -> (HashSet<u64>, HashSet<(u64, u64)>) {
+    let mut hashes = HashSet::new();
+    let mut pairs = HashSet::new();
+    for f in files {
+        match std::fs::read_to_string(f) {
+            Ok(t) => {
+                hashes.extend(parse_denylist(&t));
+                pairs.extend(parse_pair_denylist(&t));
+            }
+            Err(e) => eprintln!("victory-metal back: {DENYLIST_ENV} {f:?}: {e}"),
+        }
+    }
+    (hashes, pairs)
+}
+
 fn loaded() -> Option<Lists> {
     let path = std::env::var_os(DENYLIST_ENV).filter(|p| !p.is_empty())?;
-    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let files = denylist_paths(&path);
+    let mtimes: Vec<Option<SystemTime>> = files
+        .iter()
+        .map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok())
+        .collect();
     let mut cur = LOADED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(l) = cur.as_ref()
         && l.path == path
-        && l.mtime == mtime
+        && l.mtimes == mtimes
     {
         return Some((l.hashes.clone(), l.pairs.clone()));
     }
-    let (hashes, pairs) = match std::fs::read_to_string(Path::new(&path)) {
-        Ok(t) => (parse_denylist(&t), parse_pair_denylist(&t)),
-        Err(e) => {
-            eprintln!("victory-metal back: {DENYLIST_ENV} {path:?}: {e}");
-            (HashSet::new(), HashSet::new())
-        }
-    };
+    let (hashes, pairs) = load_files(&files);
     if log_on() {
         eprintln!(
-            "victory-metal back: MSC denylist {path:?}: {} hashes, {} pairs",
+            "victory-metal back: MSC denylist {path:?}: {} files, {} hashes, {} pairs",
+            files.len(),
             hashes.len(),
             pairs.len()
         );
@@ -148,7 +178,7 @@ fn loaded() -> Option<Lists> {
     let (hashes, pairs) = (Arc::new(hashes), Arc::new(pairs));
     *cur = Some(Loaded {
         path,
-        mtime,
+        mtimes,
         hashes: hashes.clone(),
         pairs: pairs.clone(),
     });
@@ -252,6 +282,42 @@ mod tests {
         let stages = parse_denylist(text);
         assert_eq!(stages.len(), 1);
         assert!(stages.contains(&0xcc));
+    }
+
+    #[test]
+    fn the_variable_names_files_separated_by_colons() {
+        let v = OsString::from("/a/one.txt::/b/two.txt:/c d/three.txt:");
+        let p = denylist_paths(&v);
+        assert_eq!(
+            p,
+            vec![
+                PathBuf::from("/a/one.txt"),
+                PathBuf::from("/b/two.txt"),
+                PathBuf::from("/c d/three.txt")
+            ]
+        );
+        assert_eq!(denylist_paths(OsStr::new("x")), vec![PathBuf::from("x")]);
+        assert!(denylist_paths(OsStr::new("")).is_empty());
+    }
+
+    #[test]
+    fn several_files_are_one_union_and_a_missing_one_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("victory-denylist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, gone) = (dir.join("a.txt"), dir.join("b.txt"), dir.join("gone.txt"));
+        std::fs::write(&a, "00000000000000aa\tcs\tAbort\n").unwrap();
+        std::fs::write(
+            &b,
+            "# pairs\n00000000000000b1:00000000000000b2\tkind=pair\n00000000000000bb\n",
+        )
+        .unwrap();
+        let (hashes, pairs) = load_files(&[a.clone(), gone, b.clone()]);
+        assert_eq!(hashes, HashSet::from([0xaa, 0xbb]));
+        assert_eq!(pairs, HashSet::from([(0xb1, 0xb2)]));
+        // The value of the variable, as the runner writes it.
+        let joined = std::env::join_paths([&a, &b]).unwrap();
+        assert_eq!(denylist_paths(&joined), vec![a, b]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A container with an `SFI0` part of `flags` (or none) and a DXIL part
