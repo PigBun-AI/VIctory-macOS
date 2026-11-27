@@ -410,7 +410,7 @@ test process without the guard), `msc/guard.rs` unit tests.
 
 `victory-census denylist` (and the end of every `convert --isolate`) writes the denylist from the rows that ended
 in an abort or a timeout (docs/metal/census.md). Other fatal paths of MSC and what an isolating helper process
-would cost: docs/metal/msc-isolation.md (to come).
+would cost: docs/metal/msc-isolation.md (proposal).
 
 ## Known issues
 
