@@ -2,7 +2,7 @@
 # Merges the translation matrices, prints the coverage summary and writes
 #   docs/metal/translation-unproven.md  (used=yes and status != proven, by freq)
 #   docs/metal/translation-stubbed.md   (disposition=stubbed, by freq)
-# Inputs: docs/metal/translation-matrix.csv (this line) and the Mac lead's
+# Inputs: docs/metal/translation-matrix.csv.txt (this line) and the Mac lead's
 # docs/mac/translation-matrix-mac.csv, looked for in this order:
 #   MATRIX_MAC=<file>            that file
 #   MAC_MATRIX_REF=<git ref>     `git show <ref>:docs/mac/translation-matrix-mac.csv`
@@ -20,7 +20,7 @@ export MATRIX_MAC="${MATRIX_MAC:-}" MAC_MATRIX_REF="${MAC_MATRIX_REF:-fork/mac/l
 exec python3 - <<'PY'
 import csv, os, sys, collections
 
-MAIN = 'docs/metal/translation-matrix.csv'
+MAIN = 'docs/metal/translation-matrix.csv.txt'
 import io, subprocess
 MAC_FILE = os.environ['MATRIX_MAC']
 MAC_REF = os.environ['MAC_MATRIX_REF']
@@ -44,11 +44,14 @@ def load_mac():
     """(rows, where from) of the Mac lead's matrix, or ([], None)."""
     if MAC_FILE:
         return load(MAC_FILE), MAC_FILE
-    g = subprocess.run(['git', 'show', f'{MAC_REF}:{MAC_PATH}'], capture_output=True, text=True)
-    if g.returncode == 0:
-        return parse(io.StringIO(g.stdout, newline=''), f'{MAC_REF}:{MAC_PATH}'), f'{MAC_REF}:{MAC_PATH}'
-    if os.path.exists(MAC_PATH):
-        return load(MAC_PATH), MAC_PATH
+    # The repo's asset policy has no .csv suffix, so either name is accepted.
+    for path in (MAC_PATH + '.txt', MAC_PATH):
+        g = subprocess.run(['git', 'show', f'{MAC_REF}:{path}'], capture_output=True, text=True)
+        if g.returncode == 0:
+            return parse(io.StringIO(g.stdout, newline=''), f'{MAC_REF}:{path}'), f'{MAC_REF}:{path}'
+    for path in (MAC_PATH + '.txt', MAC_PATH):
+        if os.path.exists(path):
+            return load(path), path
     return [], None
 
 rows = {r['id']: r for r in load(MAIN)}

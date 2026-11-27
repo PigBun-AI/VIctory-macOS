@@ -1,7 +1,7 @@
 # Translation map (v1, 2026-11-27)
 
 Two chains, every hop with its input, its output and where the rule lives (new base, branch `metal-livetr` 0093515c).
-Every unit of every hop is a row in `docs/metal/translation-matrix.csv` (ids below); `tools/metal/matrix.sh` merges it
+Every unit of every hop is a row in `docs/metal/translation-matrix.csv.txt` (ids below); `tools/metal/matrix.sh` merges it
 with the Mac lead's `docs/mac/translation-matrix-mac.csv` and writes the lists the work is taken from:
 
 * `docs/metal/translation-unproven.md` — used=yes and not proven, by frequency. **The only source of bug-fix work.**
