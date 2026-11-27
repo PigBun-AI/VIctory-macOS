@@ -878,9 +878,10 @@ fn view_spec(v: &victory_metal_proto::ViewDesc) -> Result<ViewSpec, Status> {
         slice_first: v.slice_first,
         slice_count: v.slice_count,
         plane: u32::from(v.plane),
-        swizzle: if v.swizzle == [0; 4] {
-            // A zero field is [R, R, R, R] by the proto's rule.
-            [0; 4]
+        // A zero field is [R, R, R, R] by the proto's rule: `v.swizzle` is
+        // taken as it stands.
+        swizzle: if v.plane == 1 && v.kind == ViewKind::TEXTURE_SRV {
+            crate::texture::stencil_plane_swizzle(v.swizzle)
         } else {
             v.swizzle
         },

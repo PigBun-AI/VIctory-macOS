@@ -234,6 +234,20 @@ impl ViewDim {
 /// Component sources of a swizzle: 0-3 = R, G, B, A, 4 = zero, 5 = one.
 pub const SWIZZLE_IDENTITY: [u8; 4] = [0, 1, 2, 3];
 
+/// The component sources of a swizzle (`[R, G, B, A]` as in [`ViewSpec::swizzle`]) after the
+/// stencil plane's own mapping has been applied underneath it.
+///
+/// D3D12 shows the stencil of a depth-stencil texture through
+/// `X32_TYPELESS_G8X24_UINT` / `X24_TYPELESS_G8_UINT` in the **green** channel
+/// (red, blue read 0, alpha 1); Metal's stencil-only view (`X32_Stencil8`) has
+/// it in **red**. A view of plane 1 therefore starts from `[Zero, R, Zero, One]`
+/// and the application's component mapping selects from that.
+pub fn stencil_plane_swizzle(app: [u8; 4]) -> [u8; 4] {
+    // What each D3D12 channel of the stencil format holds, as Metal sources.
+    const BASE: [u8; 4] = [4, 0, 4, 5];
+    app.map(|c| if c < 4 { BASE[c as usize] } else { c })
+}
+
 /// Which part of a texture a descriptor shows and how.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewSpec {

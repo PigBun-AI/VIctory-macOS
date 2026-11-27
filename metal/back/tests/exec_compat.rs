@@ -10,6 +10,7 @@ use victory_metal_proto::cmd::*;
 use victory_metal_proto::ids::*;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
+use victory_metal_proto::sync::CreateTextureArgs;
 use victory_metal_proto::types::*;
 
 const KERNELS: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
@@ -168,4 +169,48 @@ fn a_copy_after_two_chained_barriers_sees_the_shader_write() {
         }
         assert_eq!(cpu_read(readback.cpu_addr, 1), [x], "round {round}");
     }
+}
+/// A plane-1 SRV is D3D12's stencil format: the stencil is in green. The
+/// executor puts the mapping under the application's swizzle, so the identity
+/// request and an explicit `[Zero, G, Zero, One]` one (in D3D12's channels) are
+/// the same view, and another request is another view.
+#[test]
+fn a_stencil_plane_srv_gets_the_green_channel_mapping() {
+    let fx = Fx::new();
+    let mut a = CreateTextureArgs::new();
+    a.dimension = TexDim::TEX2D;
+    a.format = format::D32_FLOAT_S8X24_UINT;
+    (a.width, a.height, a.depth_or_array, a.mips, a.samples) = (8, 8, 1, 1, 1);
+    a.usage = tex_usage::SRV | tex_usage::DEPTH_STENCIL;
+    let t = fx.ok(a);
+    let heap = fx.heap(HeapKind::CBV_SRV_UAV, 8, true);
+    let entry = |i: u64| cpu_read_u64s(heap.cpu_addr + 24 * i, 3);
+    let mut v = ViewDesc::null();
+    v.kind = ViewKind::TEXTURE_SRV;
+    v.resource = t.res;
+    v.format = format::X32_TYPELESS_G8X24_UINT;
+    v.dimension = TexViewDim::TEX2D;
+    v.plane = 1;
+    v.swizzle = swizzle::IDENTITY;
+    fx.write_view(heap.heap, 0, v);
+    // D3D12's channels: R is unused (0), G the stencil.
+    v.swizzle = [swizzle::ZERO, swizzle::G, swizzle::ZERO, swizzle::ONE];
+    fx.write_view(heap.heap, 1, v);
+    v.swizzle = [swizzle::G, swizzle::G, swizzle::G, swizzle::G];
+    fx.write_view(heap.heap, 2, v);
+    // Identity on the plane = [Zero, R, Zero, One] on Metal's own stencil view
+    // (`texture::stencil_plane_swizzle`).
+    assert_ne!(entry(0)[1], 0);
+    assert_eq!(entry(0), entry(1));
+    // The application asking for green everywhere gets the stencil everywhere.
+    assert_ne!(entry(2)[1], entry(0)[1]);
+    // The depth plane is not remapped: its natural view is the texture.
+    let mut d = ViewDesc::null();
+    d.kind = ViewKind::TEXTURE_SRV;
+    d.resource = t.res;
+    d.format = format::R32_FLOAT_X8X24_TYPELESS;
+    d.dimension = TexViewDim::TEX2D;
+    d.swizzle = swizzle::IDENTITY;
+    fx.write_view(heap.heap, 3, d);
+    assert_ne!(entry(3)[1], entry(0)[1]);
 }

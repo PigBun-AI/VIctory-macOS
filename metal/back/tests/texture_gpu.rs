@@ -718,6 +718,65 @@ fn typeless_textures_are_viewed_in_other_formats() {
     assert_eq!(rig.read_u("read_u", &[1, 0, 0, 0])[0], 1.5f32.to_bits());
 }
 
+/// Regression (victory-gpu `a_depth_texture_written_through_unordered_views_reads_as_depth`):
+/// a shader reads the stencil plane as D3D12 shows it, in the green channel
+/// (`X32_TYPELESS_G8X24_UINT`). Metal's stencil view has it in red; without the
+/// mapping the shader read 0 and nothing failed.
+#[test]
+fn the_stencil_plane_reads_in_the_green_channel() {
+    let (_g, d, q) = setup();
+    let rig = Rig::new(&d, &q);
+    let t = d
+        .create_texture(&TextureDesc::tex2d(
+            dxgi::D32_FLOAT_S8X24_UINT,
+            8,
+            8,
+            DS | SRV,
+        ))
+        .unwrap();
+    let stencil = pattern(64, 5);
+    let up = d.create_buffer(BufferKind::Upload, 64).unwrap();
+    up.write(0, &stencil).unwrap();
+    let mut l = q.begin_list().unwrap();
+    let mut p1 = loc(&t, 0, 0);
+    p1.plane = 1;
+    l.copy_buffer_to_texture(&p1, &buf_loc(&up, dxgi::R8_TYPELESS, 8, 8), [8, 8, 1])
+        .unwrap();
+    l.end().unwrap();
+    run(&q, l);
+    // The view the executor makes for a plane-1 SRV of the identity mapping.
+    let mut spec = ViewSpec::whole(ViewDim::D2);
+    spec.format = dxgi::X32_TYPELESS_G8X24_UINT;
+    spec.plane = 1;
+    spec.swizzle = victory_metal_back::texture::stencil_plane_swizzle(SWIZZLE_IDENTITY);
+    assert_eq!(spec.swizzle, [4, 0, 4, 5]);
+    rig.srv(0, t.view(&spec).unwrap());
+    for (x, y) in [(0u32, 0u32), (5, 0), (3, 4), (7, 7)] {
+        let v = rig.read_u("read_u", &[0, x, y, 0]);
+        assert_eq!(
+            v,
+            [0, u32::from(stencil[(y * 8 + x) as usize]), 0, 1],
+            "texel {x},{y}"
+        );
+    }
+    // Without the mapping Metal's own view has the stencil in red (the bug).
+    spec.swizzle = SWIZZLE_IDENTITY;
+    rig.srv(1, t.view(&spec).unwrap());
+    let raw = rig.read_u("read_u", &[1, 5, 0, 0]);
+    assert_eq!(raw[0], u32::from(stencil[5]));
+    assert_eq!(raw[1], 0);
+    // The application's own mapping chooses from D3D12's channels: .rrrr is
+    // the red channel, which the stencil format leaves at 0.
+    assert_eq!(
+        victory_metal_back::texture::stencil_plane_swizzle([0; 4]),
+        [4, 4, 4, 4]
+    );
+    assert_eq!(
+        victory_metal_back::texture::stencil_plane_swizzle([1, 1, 1, 5]),
+        [0, 0, 0, 5]
+    );
+}
+
 #[test]
 fn mip_ranges_array_slices_cubes_and_swizzles() {
     let (_g, d, q) = setup();
