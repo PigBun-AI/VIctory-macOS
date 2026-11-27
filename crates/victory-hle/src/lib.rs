@@ -18,6 +18,7 @@ pub mod mac_counts;
 mod image_watch;
 #[cfg(all(windows, feature = "diagnostics"))]
 pub use victory_gpu::frame_phase;
+pub use victory_gpu::frames_begun;
 
 pub mod modules;
 mod registry;
