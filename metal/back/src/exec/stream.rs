@@ -64,7 +64,12 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
             Command::DebugLabel(_) => {}
             // Not implemented by this back (the status is the same wherever
             // they stand, so they are refused before anything runs).
-            Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
+            Command::SyncRecord(_)
+            | Command::BufferData(_)
+            | Command::DispatchIndirect(_)
+            | Command::CopyTextureRegion(_)
+            | Command::CopyResource(_)
+            | Command::ClearUavTexture(_) => {
                 return Err(Status::UNSUPPORTED);
             }
             other => {
@@ -175,9 +180,12 @@ impl Run<'_> {
             Command::ClearUav(c) => self.clear_uav(c),
             Command::Barrier(c) => self.barrier(c),
             // Refused by `validate`; kept as a status rather than a panic.
-            Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
-                Err(Status::UNSUPPORTED)
-            }
+            Command::SyncRecord(_)
+            | Command::BufferData(_)
+            | Command::DispatchIndirect(_)
+            | Command::CopyTextureRegion(_)
+            | Command::CopyResource(_)
+            | Command::ClearUavTexture(_) => Err(Status::UNSUPPORTED),
         }
     }
 

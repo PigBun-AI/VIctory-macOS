@@ -42,7 +42,7 @@ macro_rules! handle {
 }
 
 handle!(
-    /// A buffer: committed, wrapped title memory, or (M2+) a placed resource.
+    /// A resource: a buffer (committed, wrapped title memory or placed) or a texture.
     ResId
 );
 handle!(
@@ -50,7 +50,7 @@ handle!(
     HeapId
 );
 handle!(
-    /// A placement heap (memory without descriptors). Reserved for M2.
+    /// A placement heap: memory buffers and textures are placed in (no descriptors).
     MemHeapId
 );
 handle!(

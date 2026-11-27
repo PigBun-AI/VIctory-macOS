@@ -152,8 +152,9 @@ fn call_framing_errors_are_statuses() {
         "reserved range"
     );
     assert_eq!(
-        fx.link.call(SyncOp(SYNC_RESERVED_START), n, 0),
-        Status::UNSUPPORTED
+        fx.link.call(SyncOp(0x46), n, 0),
+        Status::UNSUPPORTED,
+        "first number after the texture calls"
     );
     assert_eq!(
         fx.link.call(SyncOp(SYNC_RESERVED_END), n, 0),

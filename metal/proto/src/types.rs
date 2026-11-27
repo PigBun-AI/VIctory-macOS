@@ -55,7 +55,97 @@ open_enum! {
         CBV = 3,
         /// The sampler is in `WriteDescriptorArgs::sampler`, not in the view.
         SAMPLER = 4,
+        /// A texture shader resource view (`resource` names a texture; the
+        /// texture fields of [`ViewDesc`] say which part and how).
+        TEXTURE_SRV = 5,
+        /// A texture unordered access view.
+        TEXTURE_UAV = 6,
     }
+}
+
+open_enum! {
+    /// Dimension of a texture resource.
+    pub struct TexDim(u32) {
+        TEX1D = 1,
+        TEX2D = 2,
+        TEX3D = 3,
+    }
+}
+
+open_enum! {
+    /// How a texture view sees its texture (the shader's texture type).
+    pub struct TexViewDim(u8) {
+        /// Not a texture view.
+        NONE = 0,
+        TEX1D = 1,
+        TEX1D_ARRAY = 2,
+        TEX2D = 3,
+        TEX2D_ARRAY = 4,
+        TEX2D_MS = 5,
+        TEX2D_MS_ARRAY = 6,
+        TEX3D = 7,
+        /// Six slices of a 2D array texture, from `slice_first`.
+        CUBE = 8,
+        /// `slice_count` / 6 cubes, from `slice_first`.
+        CUBE_ARRAY = 9,
+    }
+}
+
+open_enum! {
+    /// What a memory heap is for; decides where its memory lives.
+    pub struct MemKind(u32) {
+        /// GPU-only (private storage): buffers and textures.
+        DEFAULT = 0,
+        /// CPU-writable, GPU-readable (shared, write-combined): buffers.
+        UPLOAD = 1,
+        /// GPU-writable, CPU-readable (shared): buffers.
+        READBACK = 2,
+    }
+}
+
+open_enum! {
+    /// What `GET_RESOURCE_ALLOCATION_INFO` is asked about.
+    pub struct ResKind(u32) {
+        BUFFER = 0,
+        TEXTURE = 1,
+    }
+}
+
+open_enum! {
+    /// What a [`TextureLocation`] names.
+    pub struct LocKind(u8) {
+        /// One subresource of a texture: `res`, `plane`, `mip`, `slice`.
+        SUBRESOURCE = 0,
+        /// Bytes of a buffer laid out as a texture region: `res` (a buffer),
+        /// `offset`, `format`, `row_pitch`, `width`, `height`, `depth`.
+        FOOTPRINT = 1,
+    }
+}
+
+/// `CREATE_TEXTURE` usage bits (what the texture will be used for; the back
+/// turns them into Metal usage flags).
+pub mod tex_usage {
+    /// Sampled or read by shaders.
+    pub const SRV: u32 = 1 << 0;
+    /// Written (and read) by shaders as a UAV.
+    pub const UAV: u32 = 1 << 1;
+    /// A colour render target.
+    pub const RENDER_TARGET: u32 = 1 << 2;
+    /// A depth-stencil target.
+    pub const DEPTH_STENCIL: u32 = 1 << 3;
+    pub const ALL_BITS: u32 = 0xF;
+}
+
+/// Component sources of a texture view swizzle (`ViewDesc::swizzle`).
+pub mod swizzle {
+    pub const R: u8 = 0;
+    pub const G: u8 = 1;
+    pub const B: u8 = 2;
+    pub const A: u8 = 3;
+    pub const ZERO: u8 = 4;
+    pub const ONE: u8 = 5;
+    /// R, G, B, A: the view is not swizzled.
+    pub const IDENTITY: [u8; 4] = [R, G, B, A];
 }
 
 open_enum! {
@@ -228,6 +318,18 @@ pub mod format {
     pub const R8_UINT: u32 = 62;
     pub const R8_SINT: u32 = 64;
     pub const B8G8R8A8_UNORM: u32 = 87;
+    pub const R32G8X24_TYPELESS: u32 = 19;
+    pub const D32_FLOAT_S8X24_UINT: u32 = 20;
+    pub const R32_FLOAT_X8X24_TYPELESS: u32 = 21;
+    pub const X32_TYPELESS_G8X24_UINT: u32 = 22;
+    pub const R24G8_TYPELESS: u32 = 44;
+    pub const D24_UNORM_S8_UINT: u32 = 45;
+    pub const R24_UNORM_X8_TYPELESS: u32 = 46;
+    pub const X24_TYPELESS_G8_UINT: u32 = 47;
+    pub const D16_UNORM: u32 = 55;
+    pub const BC1_UNORM: u32 = 71;
+    pub const BC3_UNORM: u32 = 78;
+    pub const BC7_UNORM: u32 = 98;
 }
 
 /// Capability bits of a back (`QueryCaps`), also written into stream and file
@@ -308,6 +410,8 @@ wire_struct! {
     /// Buffer SRV/UAV: `resource`, `form`, `first_element`, `num_elements`,
     /// plus `format` (typed) or `structure_stride` (structured). CBV:
     /// `gpu_va` and `size_bytes` (a CBV is a GPU address, not a resource).
+    /// Texture SRV/UAV: `resource` (a texture), `format` (the view's format,
+    /// `UNKNOWN` = the texture's own), then the fields from `dimension` on.
     /// Fields a kind does not use are zero.
     pub struct ViewDesc {
         kind: ViewKind,
@@ -325,6 +429,27 @@ wire_struct! {
         counter_resource: ResId,
         _pad: u32,
         counter_offset: u64,
+        /// Texture views: how the shader sees the texture ([`TexViewDim`]).
+        dimension: TexViewDim,
+        /// Texture views: which plane of a depth-stencil texture (0 depth or
+        /// colour, 1 stencil).
+        plane: u8,
+        /// Texture views: component sources (see [`swizzle`]), `[R, G, B, A]`
+        /// for no swizzle. A zero field is `[R, R, R, R]`, not "unset".
+        swizzle: [u8; 4],
+        _pad2: u16,
+        /// Texture views: first mip level.
+        mip_first: u32,
+        /// Texture views: number of mip levels; 0 = all from `mip_first`.
+        mip_count: u32,
+        /// Texture views: first array slice (cube: first face; 3D UAV: first W slice).
+        slice_first: u32,
+        /// Texture views: number of array slices (cube: faces); 0 = all from
+        /// `slice_first`.
+        slice_count: u32,
+        /// Texture SRV: lowest LOD a sample may reach (`ResourceMinLODClamp`).
+        min_lod: f32,
+        _pad3: u32,
     }
 }
 
@@ -388,8 +513,28 @@ impl ViewDesc {
         v
     }
 
+    /// A texture SRV or UAV (`kind` is `TEXTURE_SRV` or `TEXTURE_UAV`) over
+    /// all mips and slices, not swizzled. Narrow it by setting the range fields.
+    pub const fn texture(
+        kind: ViewKind,
+        resource: ResId,
+        format: u32,
+        dimension: TexViewDim,
+    ) -> Self {
+        let mut v = <Self as Wire>::ZERO;
+        v.kind = kind;
+        v.resource = resource;
+        v.format = format;
+        v.dimension = dimension;
+        v.swizzle = swizzle::IDENTITY;
+        v
+    }
+
     /// `true` when every enum field holds a number this version defines.
     pub const fn is_valid(&self) -> bool {
-        self.kind.is_known() && self.form.is_known() && self.flags & !Self::HAS_COUNTER == 0
+        self.kind.is_known()
+            && self.form.is_known()
+            && self.dimension.is_known()
+            && self.flags & !Self::HAS_COUNTER == 0
     }
 }

@@ -52,7 +52,7 @@ fn registry_lists_every_opcode_once_with_a_version() {
     }
     // Opcodes that are not known have version 0.
     assert_eq!(opcode_version(Opcode(0x0000)), 0);
-    assert_eq!(opcode_version(Opcode(0x0400)), 0);
+    assert_eq!(opcode_version(Opcode(0x0403)), 0);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn registry_lists_every_sync_op_once() {
     assert_eq!(listed, known);
     for s in SYNC_OPS {
         assert_eq!(s.size % 8, 0, "{}", s.name);
-        assert_eq!(s.version, 1);
+        assert!(s.version >= 1);
         assert_eq!(s.fields[0].name, "head");
     }
 }
@@ -274,6 +274,12 @@ fn every_sync_block_round_trips() {
     check_block::<FenceSignalArgs>();
     check_block::<DeviceStatusArgs>();
     check_block::<GetSurfaceLayerArgs>();
+    check_block::<CreateTextureArgs>();
+    check_block::<DestroyTextureArgs>();
+    check_block::<CreateHeapArgs>();
+    check_block::<DestroyHeapArgs>();
+    check_block::<CreatePlacedBufferArgs>();
+    check_block::<GetResourceAllocationInfoArgs>();
     // Nothing was forgotten: one block type per registry row.
     assert_eq!(SYNC_OPS.len(), SyncOp::KNOWN.len());
 }
@@ -290,6 +296,28 @@ fn field_values_survive_where_set() {
     assert_eq!(a, b);
     assert!(b.view.is_valid());
     assert_eq!(b.view.format, 41);
+    // A texture view keeps its range fields.
+    let mut t = ViewDesc::texture(
+        ViewKind::TEXTURE_SRV,
+        ResId(6),
+        format::R8G8B8A8_UNORM,
+        TexViewDim::TEX2D_ARRAY,
+    );
+    t.mip_first = 1;
+    t.mip_count = 3;
+    t.slice_first = 2;
+    t.slice_count = 4;
+    t.min_lod = 1.5;
+    t.swizzle = [swizzle::B, swizzle::G, swizzle::R, swizzle::ONE];
+    a.view = t;
+    let bytes = wire_bytes(&a);
+    let b = WriteDescriptorArgs::get(&mut Reader::new(&bytes)).unwrap();
+    assert_eq!(a, b);
+    assert!(b.view.is_valid());
+    assert_eq!(
+        ViewDesc::texture(ViewKind::TEXTURE_UAV, ResId(1), 0, TexViewDim::TEX3D).swizzle,
+        swizzle::IDENTITY
+    );
     assert_eq!(ViewDesc::cbv(0x1000, 256).kind, ViewKind::CBV);
     assert_eq!(ViewDesc::null().kind, ViewKind::NONE);
     assert_eq!(

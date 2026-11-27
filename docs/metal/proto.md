@@ -1,6 +1,7 @@
 # victory-metal-proto: the contract between front and back (seam B)
 
-Crate `metal/proto` (`victory-metal-proto`), protocol **version 1**, written
+Crate `metal/proto` (`victory-metal-proto`), protocol **version 2** (version 1 was M1: buffers and compute; version 2 adds
+textures, placement heaps and texture copies, see sections 3 and 4), written
 2026-11-27 (Asia/Shanghai). `no_std` + `alloc`, no dependencies, builds for
 `x86_64-pc-windows-gnullvm` and for both Apple targets. It names no D3D12,
 DXGI or Metal type: layering rule 3 (`tools/metal/check-layers.sh` enforces it).
@@ -21,7 +22,7 @@ generated from the code (`tests/docs.rs` fails when they go stale).
 
 * **Little-endian only**, `repr(C)`, no implicit padding (explicit `_pad` fields; checked at compile time). Every block, payload and command is a multiple of 8 bytes.
 * **No pointers in POD.** An address is a `u64` (`gpu_va`, `cpu_addr`, `data_addr`). The two sides share one address space (same process), so an address the back returns is usable by the front as is.
-* **Handles** are `u32` newtypes (`ResId`, `HeapId`, `RootSigId`, `PsoId`, `FenceId`, `QueueId`, `ListId`, `SurfaceId`; `MemHeapId` is reserved for M2). **0 is null** and never a live object. The **back allocates** every handle and returns it from a sync call; the front only repeats them in the stream. `ListId` is the one exception: the front chooses it, it only means something inside one block.
+* **Handles** are `u32` newtypes (`ResId`, `HeapId`, `RootSigId`, `PsoId`, `FenceId`, `QueueId`, `ListId`, `SurfaceId`, `MemHeapId`). `ResId` names a buffer or a texture (one number space; an operation that needs the other kind answers `INVALID_ARG`). **0 is null** and never a live object. The **back allocates** every handle and returns it from a sync call; the front only repeats them in the stream. `ListId` is the one exception: the front chooses it, it only means something inside one block.
 * **GPU addresses**: `CreateBuffer` / `WrapMemory` return `gpu_va` (the buffer's GPU address) and, when the contents are CPU-visible, `cpu_addr`. `GetGPUVirtualAddress`, root descriptors (`SET_ROOT_DESCRIPTOR`) and CBV views all pass this `u64` through unchanged. `CreateDescHeap` returns `gpu_va` of slot 0 and the slot size `stride`; the front does handle arithmetic itself and sends `(heap, slot index)` in `SET_ROOT_TABLE`.
 * **Formats** are DXGI format numbers carried as `u32` (`types::format::*` names the ones the M1 front uses). What a number means, and which are supported, is the back's business.
 * **Enums are open**: a transparent integer with named constants (`BufferKind::UPLOAD`). Any number can be carried; `is_known()` says whether this version defines it. The decoder refuses unknown values where a command needs a known one (`Command::check`).
@@ -65,7 +66,8 @@ Notes the table cannot hold:
 * `DESTROY_*`: the back waits until the GPU is done with the object (residency rule 11); the front need not.
 * `CREATE_DESC_HEAP`: `kind` is a `HeapKind` (`CBV_SRV_UAV`, `SAMPLER`; `RTV`/`DSV` reserved for M3), `flags` bit 0 = shader visible.
 * `WRITE_DESCRIPTOR`: `view.kind == NONE` writes a null descriptor; `SAMPLER` reads `sampler` instead of `view`. Buffer SRV/UAV: `raw` counts 32-bit words; `typed` counts elements of `format`; `structured` counts elements of `structure_stride`. A CBV is `gpu_va` + `size_bytes`.
-* `CREATE_ROOT_SIGNATURE`: `data_addr/data_len` is `RootSigDesc::encode()` (section 5).
+* Textures (version 2). `CREATE_TEXTURE`: `dimension` is a `TexDim` (1D, 2D, 3D), `format` a DXGI number (typeless ones are views-of-any-format-of-their-family), `depth_or_array` is the depth of a 3D texture and the array size of the others (a cube map is a 2D array of 6 times n slices and a cube *view*), `usage` the `tex_usage` bits (`SRV`, `UAV`, `RENDER_TARGET`, `DEPTH_STENCIL`); `heap` null makes a committed texture, else it is placed at `heap_offset`. `alloc_size` is what Metal allocated. Memory: `CREATE_HEAP` (`MemKind` DEFAULT private, UPLOAD, READBACK shared) makes a placement heap, `CREATE_PLACED_BUFFER` a buffer in it, `GET_RESOURCE_ALLOCATION_INFO` answers `size`/`alignment` from Metal's `heapTextureSizeAndAlign` / `heapBufferSizeAndAlign` (the front rounds to the original API's 64 KiB). Resources placed on the same bytes are ordered by `BARRIER{ALIASING}`; the heap is resident while it lives. `DESTROY_TEXTURE` / `DESTROY_HEAP` wait for the GPU like every destroy.
+* `WRITE_DESCRIPTOR` (block version 2) texture views: `kind` `TEXTURE_SRV` / `TEXTURE_UAV`, `resource` a texture, `format` the view format (`UNKNOWN` = the texture's own; a different one needs the texture to be typeless or of the same family), `dimension` (`TexViewDim`), `plane` (depth-stencil: 0 depth, 1 stencil), `swizzle` (component sources, `[R,G,B,A]` = none), `mip_first`/`mip_count` and `slice_first`/`slice_count` (0 = all that remain), `min_lod` (SRV `ResourceMinLODClamp`). RTV/DSV have no descriptors in the back: the front keeps `(res, mip, slice, format)` records itself.
 * `CREATE_COMPUTE_PIPELINE`: `dxil_addr/dxil_len` is the DXIL container, valid for the call. The conversion (Metal Shader Converter) is not part of this milestone's proto work: until the back has it the call may answer `UNSUPPORTED`.
 * `FENCE_WAIT`: `timeout_ms == u64::MAX` waits forever; `TIMEOUT` when it runs out. `FENCE_VALUE` reads the completed value. The queue-side signal/wait are stream commands.
 * `DEVICE_STATUS.state`: 0 fine, 1 hung, 2 removed (front's `GetDeviceRemovedReason`).
@@ -85,6 +87,7 @@ command = opcode u16 | version u8 | flags u8 (=0) | len u32 | payload[len]      
 * Offsets from the start of a block are multiples of 8, so a reader with an 8-aligned buffer may also view payloads in place; the decoder does not need that.
 * **Readers refuse, never panic**: unknown opcode (`UnknownOpcode`), reserved range (`ReservedOpcode`, answer `UNSUPPORTED`), opcode version they do not know (`UnknownOpcodeVersion`), a length that runs past the block or is not what the opcode needs (`BadPayloadLength`), a count or total that is not honest (`CommandCountMismatch`, `BadTotalLength`, `TrailingBytes`), unknown enum values or stray mask bits (`BadValue`). `Error::status()` gives the `Status` to answer.
 * Reserved opcode ranges (listed at the end) are for M2/M3; the encoder cannot write them and the decoder refuses them.
+* Texture commands (version 2, opcodes 0x0400-0x0402). `COPY_TEXTURE_REGION` moves a region between a texture subresource (`TextureLocation{kind: SUBRESOURCE, res, plane, mip, slice}`) and a buffer footprint (`kind: FOOTPRINT, res, offset, format, row_pitch, width, height, depth`), or between two texture subresources; without `HAS_BOX` the source is the whole subresource or footprint. The front does the subresource index arithmetic (`D3D12CalcSubresource`), the back never sees a flat index. A row pitch or offset Metal cannot use is refused with `INVALID_ARG`, never copied wrong; block compressed formats are counted in blocks. `COPY_RESOURCE` copies every subresource of a resource to one of the same description. `CLEAR_UAV_TEXTURE` clears mip `mip`, slices `first_slice`.., optionally one rectangle, with four `f32` bit patterns (`float_values` = 1) or `u32` values.
 * Placeholders (`DISPATCH_INDIRECT`, `FILL_BUFFER`, `CLEAR_UAV`) have complete payloads and codecs; a back may answer `UNSUPPORTED` until M2.
 
 ## 5. Root signature description
@@ -160,7 +163,7 @@ only in dumps.
 | 8 | `WRAP_MEMORY` (`WrapMemoryArgs`) | 1 | 40 | Implemented | head: CallHead @0, addr: u64 @8, len: u64 @16, flags: u32 @24, res: ResId @28, gpu_va: u64 @32 | in: addr, len (page aligned), flags=0; out: res, gpu_va; CONFLICT if a page is already in another buffer |
 | 9 | `CREATE_DESC_HEAP` (`CreateDescHeapArgs`) | 1 | 48 | Implemented | head: CallHead @0, kind: u32 @8, capacity: u32 @12, flags: u32 @16, heap: HeapId @20, stride: u32 @24, gpu_va: u64 @32, cpu_addr: u64 @40 | in: kind (HeapKind), capacity, flags (bit0 shader visible); out: heap, stride, gpu_va, cpu_addr |
 | 10 | `DESTROY_DESC_HEAP` (`DestroyDescHeapArgs`) | 1 | 16 | Implemented | head: CallHead @0, heap: HeapId @8 | in: heap |
-| 11 | `WRITE_DESCRIPTOR` (`WriteDescriptorArgs`) | 1 | 112 | Implemented | head: CallHead @0, heap: HeapId @8, index: u32 @12, view: ViewDesc @16, sampler: SamplerDesc @72 | in: heap, index, view (or sampler when view.kind = SAMPLER) |
+| 11 | `WRITE_DESCRIPTOR` (`WriteDescriptorArgs`) | 2 | 144 | Implemented | head: CallHead @0, heap: HeapId @8, index: u32 @12, view: ViewDesc @16, sampler: SamplerDesc @104 | in: heap, index, view (or sampler when view.kind = SAMPLER) |
 | 12 | `COPY_DESCRIPTORS` (`CopyDescriptorsArgs`) | 1 | 32 | Implemented | head: CallHead @0, dst_heap: HeapId @8, dst_index: u32 @12, src_heap: HeapId @16, src_index: u32 @20, count: u32 @24 | in: dst_heap, dst_index, src_heap, src_index, count (same heap kind) |
 | 13 | `CREATE_ROOT_SIGNATURE` (`CreateRootSignatureArgs`) | 1 | 32 | Implemented | head: CallHead @0, data_addr: u64 @8, data_len: u64 @16, root_sig: RootSigId @24 | in: data_addr, data_len (RootSigDesc::encode bytes); out: root_sig |
 | 14 | `DESTROY_ROOT_SIGNATURE` (`DestroyRootSignatureArgs`) | 1 | 16 | Implemented | head: CallHead @0, root_sig: RootSigId @8 | in: root_sig |
@@ -173,6 +176,12 @@ only in dumps.
 | 21 | `FENCE_SIGNAL` (`FenceSignalArgs`) | 1 | 24 | Implemented | head: CallHead @0, fence: FenceId @8, value: u64 @16 | in: fence, value (never lowers it) |
 | 22 | `DEVICE_STATUS` (`DeviceStatusArgs`) | 1 | 16 | Implemented | head: CallHead @0, state: u32 @8 | out: state (0 fine, 1 hung, 2 removed) |
 | 23 | `GET_SURFACE_LAYER` (`GetSurfaceLayerArgs`) | 1 | 32 | Placeholder | head: CallHead @0, window: u64 @8, surface: SurfaceId @16, layer_addr: u64 @24 | in: window (WindowRef); out: surface, layer_addr (M3; back may answer UNSUPPORTED) |
+| 64 | `CREATE_TEXTURE` (`CreateTextureArgs`) | 1 | 72 | Implemented | head: CallHead @0, dimension: TexDim @8, format: u32 @12, width: u32 @16, height: u32 @20, depth_or_array: u32 @24, mips: u32 @28, samples: u32 @32, usage: u32 @36, flags: u32 @40, heap: MemHeapId @44, heap_offset: u64 @48, res: ResId @56, alloc_size: u64 @64 | in: dimension (TexDim), format (DXGI), width, height, depth_or_array, mips, samples, usage (tex_usage bits), flags=0, heap (null = committed), heap_offset; out: res, alloc_size |
+| 65 | `DESTROY_TEXTURE` (`DestroyTextureArgs`) | 1 | 16 | Implemented | head: CallHead @0, res: ResId @8 | in: res (freed after the GPU is done) |
+| 66 | `CREATE_HEAP` (`CreateHeapArgs`) | 1 | 40 | Implemented | head: CallHead @0, kind: MemKind @8, flags: u32 @12, size: u64 @16, heap: MemHeapId @24, alloc_size: u64 @32 | in: kind (MemKind), flags=0, size; out: heap, alloc_size (placement memory for buffers and textures) |
+| 67 | `DESTROY_HEAP` (`DestroyHeapArgs`) | 1 | 16 | Implemented | head: CallHead @0, heap: MemHeapId @8 | in: heap |
+| 68 | `CREATE_PLACED_BUFFER` (`CreatePlacedBufferArgs`) | 1 | 56 | Implemented | head: CallHead @0, heap: MemHeapId @8, offset: u64 @16, size: u64 @24, res: ResId @32, gpu_va: u64 @40, cpu_addr: u64 @48 | in: heap, offset, size; out: res, gpu_va, cpu_addr (0 in a DEFAULT heap) |
+| 69 | `GET_RESOURCE_ALLOCATION_INFO` (`GetResourceAllocationInfoArgs`) | 1 | 72 | Implemented | head: CallHead @0, kind: ResKind @8, dimension: TexDim @12, format: u32 @16, width: u32 @20, height: u32 @24, depth_or_array: u32 @28, mips: u32 @32, samples: u32 @36, usage: u32 @40, heap_kind: MemKind @44, buffer_size: u64 @48, size: u64 @56, alignment: u64 @64 | in: kind (ResKind), the texture fields or buffer_size, heap_kind; out: size, alignment (what Metal's heap size-and-align says) |
 
 ### Stream commands (`Link::submit`)
 
@@ -195,14 +204,17 @@ only in dumps.
 | 0x0211 | `FILL_BUFFER` | 1 | 24 | Placeholder | dst: ResId @0, value: u32 @4, offset: u64 @8, size: u64 @16 | fill with a 32-bit value (M2) |
 | 0x0212 | `CLEAR_UAV` | 1 | 40 | Placeholder | res: ResId @0, format: u32 @4, values: [u32; 4] @8, offset: u64 @24, size: u64 @32 | clear a buffer UAV (M2) |
 | 0x0300 | `BARRIER` | 1 | 16 | Implemented | class: BarrierClass @0, visibility: u8 @1, before: u16 @2, after: u16 @4, res_before: ResId @8, res_after: ResId @12 | stage-to-stage / aliasing barrier |
+| 0x0400 | `COPY_TEXTURE_REGION` | 1 | 120 | Implemented | dst: TextureLocation @0, src: TextureLocation @40, dst_x: u32 @80, dst_y: u32 @84, dst_z: u32 @88, flags: u32 @92, box_left: u32 @96, box_top: u32 @100, box_front: u32 @104, box_right: u32 @108, box_bottom: u32 @112, box_back: u32 @116 | buffer footprint to texture, texture to buffer footprint, or texture to texture (optional source box) |
+| 0x0401 | `COPY_RESOURCE` | 1 | 8 | Implemented | dst: ResId @0, src: ResId @4 | whole resource to a resource of the same description (buffer or texture) |
+| 0x0402 | `CLEAR_UAV_TEXTURE` | 1 | 64 | Implemented | res: ResId @0, format: u32 @4, dimension: TexViewDim @8, float_values: u8 @9, flags: u16 @10, mip: u32 @12, first_slice: u32 @16, slice_count: u32 @20, values: [u32; 4] @24, rect_left: u32 @40, rect_top: u32 @44, rect_right: u32 @48, rect_bottom: u32 @52 | clear a texture UAV (mip, slices, optional rectangle) with float or uint values |
 | 0x0F00 | `SYNC_RECORD` | 1 | 16 + data | ReplayOnly | op: SyncOp @0, status: Status @4, args_len: u32 @8, blob_len: u32 @12 | recorded sync call (args, blob follow) |
 | 0x0F01 | `BUFFER_DATA` | 1 | 24 + data | ReplayOnly | res: ResId @0, offset: u64 @8, len: u64 @16 | recorded CPU write to a buffer (len bytes follow) |
 
 ### Reserved opcode ranges
 
-- 0x0400-0x04FF: graphics state and draws (M3)
+- 0x0403-0x04FF: textures: numbers not yet used
 - 0x0500-0x05FF: mesh shading (M3)
-- 0x0600-0x06FF: texture copy, clear, resolve (M3)
+- 0x0600-0x06FF: graphics state and draws (M3)
 - 0x0700-0x07FF: present (M3)
 - 0x0800-0x08FF: queries and timestamps (M2)
 - 0x0900-0x09FF: ExecuteIndirect (M2)
