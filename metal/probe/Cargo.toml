@@ -1,0 +1,30 @@
+[package]
+name = "victory-metal-probe"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "M0 probe: unixlib call cost, empty command buffers, no-copy memory, bandwidth"
+
+[dependencies]
+victory-metal-bridge = { path = "../bridge" }
+# Upstream crate by path, from a nested workspace: M0 check that this works.
+victory-formats = { path = "../../crates/victory-formats" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+libc = "0.2.191"
+victory-metal-back = { path = "../back" }
+
+[[bin]]
+name = "m0-probe"
+path = "src/main.rs"
