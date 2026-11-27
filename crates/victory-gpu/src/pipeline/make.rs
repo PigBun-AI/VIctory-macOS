@@ -177,6 +177,8 @@ impl Pending {
             let made = victory_shader::emit::live::scoped(&self.snapshot, || {
                 HostPipeline::new(&self.shaders, self.graphics.as_deref())
             });
+            // Mac drop statistics (patch G8): what the host made of it.
+            crate::mac::drop_stats::host_pipeline_made(&self.key, made.as_ref());
             super::library::note_time(&self.key, began.elapsed().as_millis() as u64);
             if self.live {
                 LIVE_MADE.fetch_add(1, Ordering::Relaxed);
@@ -186,6 +188,19 @@ impl Pending {
         let (lock, done) = &DONE;
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         done.notify_all();
+    }
+}
+
+/// The state of `p` for the Mac drop statistics (patch G8): unlike
+/// [`missing`], a pipeline that is left out is not "being made".
+pub(crate) fn mac_state(p: &Pending) -> super::MacState {
+    if let Some(reason) = p.left_out {
+        return super::MacState::LeftOut(reason);
+    }
+    match p.made.get() {
+        Some(Some(h)) => super::MacState::Ready { compute: h.compute, mesh: h.mesh },
+        Some(None) => super::MacState::Failed,
+        None => super::MacState::Compiling,
     }
 }
 

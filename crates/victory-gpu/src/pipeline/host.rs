@@ -410,6 +410,7 @@ impl Drop for HostPipeline {
 
 /// Logs a pipeline that gets no host pipeline, once per reason.
 fn refuse(reason: &'static str, shaders: &[Arc<Shader>]) -> Option<HostPipeline> {
+    crate::mac::drop_stats::refusal(reason.to_owned());
     static SEEN: std::sync::Mutex<Vec<&str>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     if !seen.contains(&reason) {
@@ -639,6 +640,7 @@ impl HostPipeline {
                 Ok(pso) => pso,
                 Err(e) => {
                     tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                    crate::mac::drop_stats::refusal(format!("host pipeline refused: {e}"));
                     host.log_messages();
                     return None;
                 }
@@ -692,6 +694,7 @@ impl HostPipeline {
                 Ok(pso) => pso,
                 Err(e) => {
                     tracing::warn!(error = %e, ?shaders, "host mesh pipeline refused");
+                    crate::mac::drop_stats::refusal(format!("host mesh pipeline refused: {e}"));
                     host.log_messages();
                     return None;
                 }
@@ -798,6 +801,7 @@ impl HostPipeline {
             Ok(pso) => pso,
             Err(e) => {
                 tracing::warn!(error = %e, ?shaders, "host pipeline refused");
+                crate::mac::drop_stats::refusal(format!("host pipeline refused: {e}"));
                 host.log_messages();
                 return None;
             }

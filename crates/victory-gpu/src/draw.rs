@@ -3136,6 +3136,11 @@ impl State {
         });
     }
 
+    /// The title pipeline bound now (Mac drop statistics).
+    pub(crate) fn bound_pipeline(&self) -> usize {
+        self.pipeline as usize
+    }
+
     /// Runs a dispatch on the host.
     pub(crate) fn dispatch(&mut self, list: &HostList, x: u32, y: u32, z: u32, flags: u32) {
         // It may write the arguments a window holds clamped.
@@ -3144,11 +3149,13 @@ impl State {
         if crate::pipeline::is_skipped(self.pipeline as This) {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             crate::pipeline::note_drop(self.pipeline as This);
+            crate::mac::drop_stats::dispatch_dropped(self.pipeline, None);
             return;
         }
         // The ray-tracing structure builder's stages run all or none.
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::dispatch_dropped(self.pipeline, Some("rt_builder_off"));
             #[cfg(feature = "diagnostics")]
             {
                 crate::pipeline::note_why("a stage of the ray-tracing structure builder, which is off".to_owned());
@@ -3162,6 +3169,7 @@ impl State {
                 "a dispatch without a host pipeline dropped"
             );
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::dispatch_dropped(self.pipeline, None);
             #[cfg(feature = "diagnostics")]
             {
                 crate::pipeline::note_drop(self.pipeline as This);
@@ -3171,10 +3179,13 @@ impl State {
         };
         if !p.compute {
             once!("a dispatch with a graphics pipeline");
+            // Not counted by DROPPED upstream.
+            crate::mac::drop_stats::dispatch_dropped(self.pipeline, Some("kind_mismatch"));
             return;
         }
         if !self.bind(list, p, true) {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::dispatch_dropped(self.pipeline, Some("bind_failed"));
             // A stage of the structure builder that cannot be bound is a
             // dropped stage: the others stop too.
             if crate::pipeline::is_builder(self.pipeline as This) {
@@ -3212,6 +3223,7 @@ impl State {
         });
         self.buffers_written();
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        crate::mac::drop_stats::ran_pipeline(p);
         if crate::host::programs::on() {
             crate::host::programs::work(list);
         }
@@ -3572,6 +3584,7 @@ impl State {
             };
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::draw_dropped(crate::mac::drop_stats::Op::Mesh, self.pipeline);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
         }
@@ -4046,6 +4059,7 @@ impl State {
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::draw_dropped(crate::mac::drop_stats::Op::Draw, self.pipeline);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
         }
@@ -4154,6 +4168,7 @@ impl State {
         }
         if !ran {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::draw_dropped(crate::mac::drop_stats::Op::Indexed, self.pipeline);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
         }
@@ -4173,6 +4188,9 @@ impl State {
     /// A draw with the pipeline `p` was recorded (as [`State::buffers_written`]
     /// if its shaders can store to buffers).
     fn drew(&mut self, p: Option<&HostPipeline>) {
+        if let Some(p) = p {
+            crate::mac::drop_stats::ran_pipeline(p);
+        }
         if p.is_none_or(|p| p.stages.iter().any(|stage| stage.translated().stores)) {
             self.batch = None;
         }
@@ -4253,9 +4271,12 @@ impl State {
         const DISPATCH: u32 = 2;
         const MESH: u32 = 10;
         #[cfg(feature = "diagnostics")]
-        let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+        let why = |what: &str| {
+            crate::mac::drop_stats::indirect_why(what);
+            crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+        };
         #[cfg(not(feature = "diagnostics"))]
-        let why = |_: &str| {};
+        let why = |what: &str| crate::mac::drop_stats::indirect_why(what);
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_drop(self.pipeline as This);
@@ -4455,6 +4476,7 @@ impl State {
         // back (`crate::indirect`).
         if kind == DISPATCH {
             DISPATCHED.fetch_add(1, Ordering::Relaxed);
+            crate::mac::drop_stats::ran_pipeline(p);
         } else {
             DRAWN.fetch_add(1, Ordering::Relaxed);
             if crate::host::programs::on() {

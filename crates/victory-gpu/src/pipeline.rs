@@ -506,6 +506,78 @@ pub(crate) fn host_pipeline<'a>(this: This) -> Option<&'a host::HostPipeline> {
     make::ready(p.host_now())
 }
 
+/// What a title pipeline's host pipeline is, without waiting for it or
+/// changing anything (Mac drop statistics, `mac::drop_stats`; the upstream
+/// `make::missing` calls a left-out pipeline "being made").
+#[cfg(windows)]
+pub(crate) enum MacState {
+    Ready { compute: bool, mesh: bool },
+    LeftOut(&'static str),
+    Compiling,
+    Failed,
+}
+
+/// A title pipeline as the drop statistics look at it.
+#[cfg(windows)]
+pub(crate) struct MacView {
+    /// Stage, hash and whether its translation failed, per shader.
+    pub(crate) shaders: Vec<(&'static str, String, bool)>,
+    pub(crate) key: String,
+    pub(crate) state: MacState,
+}
+
+#[cfg(windows)]
+impl MacView {
+    /// `compute`, `mesh` (with or without amplification), `vs+gs`, `tess`, `vs`.
+    pub(crate) fn kind(&self) -> &'static str {
+        let has = |stage| self.shaders.iter().any(|s| s.0 == stage);
+        if has("compute") {
+            "compute"
+        } else if has("mesh") || has("amplification") {
+            "mesh"
+        } else if has("geometry") {
+            "vs+gs"
+        } else if has("hull") || has("domain") {
+            "tess"
+        } else {
+            "vs"
+        }
+    }
+
+    pub(crate) fn hashes(&self) -> String {
+        let all: Vec<String> = self.shaders.iter().map(|s| format!("{} {}", s.0, s.1)).collect();
+        all.join(" + ")
+    }
+}
+
+/// The drop statistics' view of `this` (None for a null pipeline).
+#[cfg(windows)]
+pub(crate) fn mac_view(this: This) -> Option<MacView> {
+    if this.is_null() {
+        return None;
+    }
+    let p = pipeline(this);
+    let host = if victory_shader::emit::live::generation() == 0 {
+        &p.host
+    } else {
+        p.host_now()
+    };
+    let shaders = p
+        .shaders
+        .iter()
+        .map(|s| {
+            let failed = s
+                .translated
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .any(|c| matches!(c.get(), Some(None)));
+            (s.stage, s.hash.clone(), failed)
+        })
+        .collect();
+    Some(MacView { shaders, key: host.key().to_owned(), state: make::mac_state(host) })
+}
+
 #[cfg(windows)]
 impl Pipeline {
     /// The pending host pipeline for the current live generation: this pipeline's own host if
@@ -693,6 +765,7 @@ fn hand_out(
         shaders,
         bound: std::sync::atomic::AtomicBool::new(false),
     });
+    crate::mac::drop_stats::created((&raw const *pipeline).cast::<()>() as usize);
     object::hand_out(PIPELINE, pipeline, iid, &PIPELINE_IIDS, out)
 }
 
@@ -703,6 +776,7 @@ pub(crate) extern "system" fn create_graphics(
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
+    crate::mac::drop_stats::creating("graphics@0x50");
     // SAFETY: the title passes a description (null is tolerated).
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
@@ -725,6 +799,11 @@ pub(crate) extern "system" fn create_compute(
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
+    crate::mac::drop_stats::creating("compute@0x58");
+    compute_pipeline(desc, iid, out)
+}
+
+fn compute_pipeline(desc: *const ComputeHead, iid: *const Iid, out: *mut This) -> HRESULT {
     // SAFETY: the title passes a description (null is tolerated).
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
@@ -743,14 +822,15 @@ pub(crate) extern "system" fn create_compute(
 /// shortcut: the extensions (console shader settings) are ignored, as is
 /// the rest of the description.
 pub(crate) extern "system" fn create_compute_x(
-    this: This,
+    _: This,
     desc: *const ComputeHead,
     _extensions: u32,
     _extended: *const u8,
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
-    create_compute(this, desc, iid, out)
+    crate::mac::drop_stats::creating("compute@0x1f0");
+    compute_pipeline(desc, iid, out)
 }
 
 /// A pipeline described as a stream: its size and the subobjects, each a
@@ -797,6 +877,7 @@ pub(crate) extern "system" fn create_stream(
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
+    crate::mac::drop_stats::creating("stream@0x2b0");
     // SAFETY: the title passes a description (null is tolerated).
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
