@@ -911,6 +911,10 @@ last word, so the shader cache and the live translator library (`victory-shader-
   read channels of its vertex into group memory, every exit of the program leaves through one epilogue block that
   meets (barrier) and lane n writes primitive n's vertices 1 and 2 as primitive outputs; the added outputs count against
   the 32 KiB mesh limit, group memory over 32 KiB refuses the translation;
+  the epilogue reads every exchanged value before it writes any output, and a 16-bit output is exchanged as its raw half
+  (converted after the read): Apple's GPU compiler crashes (MTLCompilerService SIGSEGV in AGX) on the interleaved form;
+  **known issue**: real (mesh, pixel) pairs: of 4834, 2050 build, 1008 are over 32 KiB, 1774 crash Apple's compiler
+  (315 of those also crash without S1: a plain mesh plus a pixel shader that reads some outputs), see research/attr-vertex/agx-crash/;
 * a vertex pipeline: victory-gpu puts a geometry shader (`emit::vertex_pipeline_gs`: triangles in, the same triangle out
   with vertices 1 and 2 as constant elements) in the slot of the rectangle list's stage; a rectangle list with such a pixel
   shader, or a host that refuses the stage, gets no pipeline.
