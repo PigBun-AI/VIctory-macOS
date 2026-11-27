@@ -396,8 +396,9 @@ impl CommandList {
     }
 
     /// `CopyTextureRegion` from a texture to a texture of the same texel
-    /// layout. Partial copies of depth-stencil textures are refused (Metal
-    /// copies both planes or none; use [`copy_texture_resource`](Self::copy_texture_resource)).
+    /// layout. Where Metal's blit cannot do it (other Metal formats, a
+    /// compressed side against an uncompressed one, one plane of a
+    /// depth-stencil texture) the region goes through a private buffer.
     pub fn copy_texture(
         &mut self,
         dst: &TexLoc<'_>,
@@ -412,23 +413,6 @@ impl CommandList {
         let (df, dl, _) = check_texture(self, dst, size, "texture copy destination")?;
         if size.contains(&0) {
             return Ok(());
-        }
-        if sf.planes() > 1 || df.planes() > 1 {
-            // A whole subresource of a depth-stencil texture copies as one:
-            // Metal's blit moves every plane of equal formats. One plane, or
-            // a region, has no such copy.
-            let whole = src.origin == [0; 3]
-                && dst.origin == [0; 3]
-                && size == src.texture.desc().mip_size(src.mip)
-                && size == dst.texture.desc().mip_size(dst.mip);
-            if !whole
-                || sf.dxgi != df.dxgi
-                || src.texture.pixel_format() != dst.texture.pixel_format()
-            {
-                return Err(Error::Unsupported(
-                    "copying one plane or a region of a depth-stencil texture".into(),
-                ));
-            }
         }
         if sl.bytes != dl.bytes || sl.block != dl.block {
             return Err(Error::BadArgument(format!(
@@ -496,31 +480,31 @@ impl CommandList {
             format::require(src.texture.desc().format)?,
             format::require(dst.texture.desc().format)?,
         );
-        let bytes = u32::from(sf.bytes);
+        let (sx, dx) = (footprint(sf, src.plane)?, footprint(df, dst.plane)?);
         let row_pitch = blocks[0]
-            .checked_mul(bytes)
+            .checked_mul(u32::from(sx.1.bytes))
             .ok_or_else(|| Error::BadArgument("texture copy: region overflows".into()))?;
         let total = u64::from(row_pitch) * u64::from(blocks[1]) * u64::from(blocks[2]);
         let staging = self
             .queue()
             .device()
             .create_buffer(crate::memory::BufferKind::Default, total.max(16))?;
-        // The region in the destination's texels: a compressed side counts
-        // four texels to a block.
-        let texels = |f: &Format| {
-            let (bw, bh) = (u32::from(f.block.0), u32::from(f.block.1));
+        // The region in each side's texels: a compressed side counts four
+        // texels to a block.
+        let texels = |l: &PlaneLayout| {
+            let (bw, bh) = (u32::from(l.block.0), u32::from(l.block.1));
             [blocks[0] * bw, blocks[1] * bh, blocks[2]]
         };
-        let (src_texels, dst_texels) = (texels(sf), texels(df));
-        let loc_in = |f: &Format, t: [u32; 3]| BufLoc {
+        let (src_texels, dst_texels) = (texels(&sx.1), texels(&dx.1));
+        let loc_in = |dxgi: u32, t: [u32; 3]| BufLoc {
             buffer: &staging,
             offset: 0,
-            format: f.dxgi,
+            format: dxgi,
             row_pitch,
             rows: t[1],
         };
-        self.copy_texture_to_buffer(&loc_in(sf, src_texels), src, src_texels)?;
-        self.copy_buffer_to_texture(dst, &loc_in(df, dst_texels), dst_texels)?;
+        self.copy_texture_to_buffer(&loc_in(sx.0, src_texels), src, src_texels)?;
+        self.copy_buffer_to_texture(dst, &loc_in(dx.0, dst_texels), dst_texels)?;
         self.keep_buffers.push(staging);
         Ok(())
     }
@@ -582,9 +566,25 @@ impl CommandList {
     }
 }
 
-/// The region of a copy in blocks (`[x, y, z]`) when it is between a
+/// A plane of a texture as a buffer footprint sees it: the DXGI format to
+/// name it by (a depth-stencil texture's depth plane is 32-bit, its stencil
+/// plane 8-bit) and its layout.
+fn footprint(f: &Format, plane: u32) -> Result<(u32, PlaneLayout)> {
+    let layout = plane_layout(f, plane)?;
+    let dxgi = match (f.planes(), plane) {
+        (1, _) => f.dxgi,
+        (_, 0) => format::dxgi::R32_TYPELESS,
+        _ => format::dxgi::R8_TYPELESS,
+    };
+    Ok((dxgi, layout))
+}
+
+/// The region of a copy in blocks (`[x, y, z]`) when Metal's texture to
+/// texture blit cannot do it and a private buffer can: between a
 /// block-compressed texture and an uncompressed one of equal texel and block
-/// size, `None` for any other pair (the ordinary copy then applies).
+/// size, between formats of one layout that Metal names differently, and
+/// of one plane of a depth-stencil texture (the blit moves both or none).
+/// `None` for any other pair (the ordinary copy then applies).
 fn block_copy_shape(
     src: &TexLoc<'_>,
     dst: &TexLoc<'_>,
@@ -594,26 +594,26 @@ fn block_copy_shape(
         format::require(src.texture.desc().format)?,
         format::require(dst.texture.desc().format)?,
     );
+    let planar = sf.planes() > 1 || df.planes() > 1;
+    let (sl, dl) = (plane_layout(sf, src.plane)?, plane_layout(df, dst.plane)?);
     let one = (1, 1);
-    let single = sf.planes() == 1 && df.planes() == 1 && sf.bytes == df.bytes;
+    let single = sl.bytes == dl.bytes;
     // A compressed side and an uncompressed one whose texel is its block.
     let mixed = single
-        && ((sf.block == one && df.block == (4, 4)) || (sf.block == (4, 4) && df.block == one));
+        && ((sl.block == one && dl.block == (4, 4)) || (sl.block == (4, 4) && dl.block == one));
     // The same layout in another Metal format (`R8G8B8A8_TYPELESS` to its
     // sRGB view format): the original API copies the bytes, Metal's blit
     // wants equal formats.
-    let recast =
-        single && sf.block == df.block && src.texture.pixel_format() != dst.texture.pixel_format();
-    Ok((mixed || recast).then(|| blocks_of(sf, size)))
-}
-
-/// `size` texels of format `f` as blocks (rounded up).
-fn blocks_of(f: &Format, size: [u32; 3]) -> [u32; 3] {
-    [
-        size[0].div_ceil(u32::from(f.block.0)),
-        size[1].div_ceil(u32::from(f.block.1)),
-        size[2],
-    ]
+    let recast = single
+        && sl.block == dl.block
+        && (planar || src.texture.pixel_format() != dst.texture.pixel_format());
+    Ok((mixed || recast).then(|| {
+        [
+            size[0].div_ceil(u32::from(sl.block.0)),
+            size[1].div_ceil(u32::from(sl.block.1)),
+            size[2],
+        ]
+    }))
 }
 
 /// `(slice, level)` of a location as Metal wants them: a 3D texture has

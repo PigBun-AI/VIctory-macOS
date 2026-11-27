@@ -423,29 +423,34 @@ fn copy_resource_between_formats_of_one_family_moves_the_bytes() {
     }
 }
 
-/// A whole subresource of a depth-stencil texture copies to another of the
-/// same format, both planes; one plane or a region is still refused.
+/// One plane of a depth-stencil texture copies to the same plane of another,
+/// or its depth plane to a depth-only texture (the game's copy of plane 0 of an
+/// `R32G8X24_TYPELESS` texture into an `R32_TYPELESS` one); the other plane
+/// stays as it was.
 #[test]
-fn a_whole_depth_stencil_subresource_copies_with_both_planes() {
+fn one_depth_stencil_plane_copies_to_a_plane_or_a_depth_only_texture() {
     let (_g, d, q) = setup();
-    let mk = || {
-        d.create_texture(&TextureDesc::tex2d(
-            dxgi::D32_FLOAT_S8X24_UINT,
-            8,
-            8,
-            DS | SRV,
-        ))
-        .unwrap()
+    let mk = |format| {
+        d.create_texture(&TextureDesc::tex2d(format, 8, 8, DS | SRV))
+            .unwrap()
     };
-    let (src, dst) = (mk(), mk());
+    let (src, dst, only) = (
+        mk(dxgi::D32_FLOAT_S8X24_UINT),
+        mk(dxgi::D32_FLOAT_S8X24_UINT),
+        mk(dxgi::D32_FLOAT),
+    );
     let depth: Vec<u8> = (0..64u32)
         .flat_map(|i| (i as f32 / 64.0).to_le_bytes())
         .collect();
-    let stencil = pattern(64, 11);
-    let up_d = d.create_buffer(BufferKind::Upload, 256).unwrap();
-    let up_s = d.create_buffer(BufferKind::Upload, 64).unwrap();
-    up_d.write(0, &depth).unwrap();
-    up_s.write(0, &stencil).unwrap();
+    let (stencil, old_stencil) = (pattern(64, 11), pattern(64, 12));
+    let up = |bytes: &[u8]| {
+        let b = d
+            .create_buffer(BufferKind::Upload, bytes.len().max(256) as u64)
+            .unwrap();
+        b.write(0, bytes).unwrap();
+        b
+    };
+    let (up_d, up_s, up_o) = (up(&depth), up(&stencil), up(&old_stencil));
     let plane = |t, plane| TexLoc {
         plane,
         ..loc(t, 0, 0)
@@ -463,13 +468,32 @@ fn a_whole_depth_stencil_subresource_copies_with_both_planes() {
         [8, 8, 1],
     )
     .unwrap();
-    l.copy_texture(&loc(&dst, 0, 0), &loc(&src, 0, 0), [8, 8, 1])
-        .unwrap_or_else(|e| panic!("whole copy: {e}"));
-    let rd = d.create_buffer(BufferKind::Readback, 256).unwrap();
-    let rs = d.create_buffer(BufferKind::Readback, 64).unwrap();
+    l.copy_buffer_to_texture(
+        &plane(&dst, 1),
+        &buf_loc(&up_o, dxgi::R8_TYPELESS, 8, 8),
+        [8, 8, 1],
+    )
+    .unwrap();
+    // The depth plane only: the destination's stencil is not touched.
+    l.copy_texture(&plane(&dst, 0), &plane(&src, 0), [8, 8, 1])
+        .unwrap_or_else(|e| panic!("depth plane: {e}"));
+    // The depth plane into a depth-only texture.
+    l.copy_texture(&loc(&only, 0, 0), &plane(&src, 0), [8, 8, 1])
+        .unwrap_or_else(|e| panic!("depth plane to D32: {e}"));
+    let (rd, ro, rs) = (
+        d.create_buffer(BufferKind::Readback, 256).unwrap(),
+        d.create_buffer(BufferKind::Readback, 256).unwrap(),
+        d.create_buffer(BufferKind::Readback, 64).unwrap(),
+    );
     l.copy_texture_to_buffer(
         &buf_loc(&rd, dxgi::R32_TYPELESS, 32, 8),
         &plane(&dst, 0),
+        [8, 8, 1],
+    )
+    .unwrap();
+    l.copy_texture_to_buffer(
+        &buf_loc(&ro, dxgi::R32_TYPELESS, 32, 8),
+        &loc(&only, 0, 0),
         [8, 8, 1],
     )
     .unwrap();
@@ -479,19 +503,20 @@ fn a_whole_depth_stencil_subresource_copies_with_both_planes() {
         [8, 8, 1],
     )
     .unwrap();
-    // A region is refused, in the same list.
-    assert!(matches!(
-        l.copy_texture(&loc(&dst, 0, 0), &loc(&src, 0, 0), [4, 4, 1]),
-        Err(Error::Unsupported(_))
-    ));
     l.end().unwrap();
     run(&q, l);
-    let mut got = vec![0u8; 256];
-    rd.read(0, &mut got).unwrap();
-    assert_eq!(got, depth, "depth plane");
-    let mut got = vec![0u8; 64];
-    rs.read(0, &mut got).unwrap();
-    assert_eq!(got, stencil, "stencil plane");
+    let read = |b: &Buffer, n| {
+        let mut got = vec![0u8; n];
+        b.read(0, &mut got).unwrap();
+        got
+    };
+    assert_eq!(read(&rd, 256), depth, "depth plane");
+    assert_eq!(read(&ro, 256), depth, "depth-only texture");
+    assert_eq!(
+        read(&rs, 64),
+        old_stencil,
+        "the stencil plane was not touched"
+    );
 }
 
 #[test]
