@@ -220,13 +220,13 @@ impl Buffer {
             resource_id,
             len,
             src_len,
-            fourth: format.three_channel.then(|| {
+            fourth: format.three_channel.then_some(
                 if format.dxgi == typed::dxgi::R32G32B32_FLOAT {
                     0x3f80_0000
                 } else {
                     1
-                }
-            }),
+                },
+            ),
         });
         Ok(view)
     }

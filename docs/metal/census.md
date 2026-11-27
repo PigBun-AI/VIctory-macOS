@@ -17,6 +17,7 @@ victory-census translate                 # every container -> translate.jsonl, v
 victory-census convert --kind all        # cs vs ps ms gs -> convert-<kind>.jsonl
 victory-census convert --kind cs,vs,ps,ms --archive      # same, and an archive of every pipeline built
 victory-census report                    # census.json, mac-side.md/.tsv, shared-translator.md
+victory-census opcodes                   # GFX10 instruction counts -> opcodes.jsonl, research/census/opcodes.{json,md}
 ```
 
 `translate` is native arm64 (`victory translate` itself is a Windows-only stub on the Mac). Host settings it
@@ -24,12 +25,23 @@ tells the translator: wave 32, view limit 2^21 - 1, raw views 2^21 (`victory-gpu
 `convert` options: `--limit N`, `--every N` (sample), `--jobs N` (1 for timings that do not compete),
 `--tag T` (row file suffix), `--blended` (16-bit float targets, blending, depth, 4x MSAA), `--compat bounds`
 (a different converter output: pipelines no earlier run built), `--lookup FILE` (compile through an archive),
-`--archive`, `--archive-dir`, `--archive-name`.
+`--archive`, `--archive-dir`, `--archive-name`, `--only LIST|FILE` (only these container hashes: a comma list, or a
+file with the hash first on each line; a failure sample or a program family can be rebuilt alone. With `--isolate`
+the row file is overwritten: always give a new `--tag`).
+
+`opcodes` does not translate: it decodes the native programs of every container (`native_programs`, `gfx10::decode`,
+read only) and counts instructions by AMD mnemonic and by class (GDS, BVH, mode registers, 64-bit atomics, lane
+operations, DPP, barriers, LDS, interpolation, f64, scalar hints; the class tests are in `census/src/opcodes.rs`),
+in programs, distinct code and instructions, plus the `s_setreg` targets and the LDS sizes. About 10 s for the
+package. `opcodes.jsonl` (per container, game-derived) goes to `--out`; `opcodes.json` and `opcodes.md` (hashes and
+counts only) to `--research` (default `research/census`, outside the repository).
 
 What each kind builds: `cs` the compute pipeline; `vs` and `ms` a render pipeline with a one-constant pixel
 shader; `ps` a render pipeline with a full-screen-triangle vertex shader DXC makes from the pixel shader's
 input signature (DXC front end of `tools/macos`, x86_64 under Rosetta); `gs` the translator's rectangle-list
-geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. The title's own geometry
+geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. A pipeline the back refuses
+(`Unsupported`, for example the 29 vertex shaders with `SV_ClipDistance`, which Metal cannot make a geometry-emulation
+mesh function for) is a failed row, not an abort. The title's own geometry
 programs have no host shader (the translator refuses them), so there is nothing to convert.
 
 ## The pipeline archive
