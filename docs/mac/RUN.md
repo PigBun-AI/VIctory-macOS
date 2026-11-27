@@ -112,6 +112,16 @@ run is a cold one). The fidelity profile then sets `video/resolutionFullscreen` 
 `settings.xml.before-fidelity`). `--data`, `--cache` or `VICTORY_DATA_DIR` use that directory as it is (no cloning, no `--fresh-data`).
 Do not use a seed another game is writing at that moment if you need an exact state: the clone is taken from the files as they are.
 
+**New game versus world save.** The default seed `data/livetr` is a NEW-GAME seed: a profile (`Player`, `SettingsProfileSettings`) and no world
+save, so the title starts at the opening and the prologue (the path that runs to world frame 1000 and beyond on our back). `run.sh` refuses a
+seed that holds a world save (any `saves/*/*/SARC*` container) and says where world saves live. World saves are kept ONLY in
+`data/worldsave-seed` (a Windows save, read-only; never run the title on it) and are used only on request: **`--worldsave`** is
+`--seed data/worldsave-seed` plus its own directory `data/livetr-<profile>-<backend>-worldsave` (cloned from the seed on first use, made
+writable). The save world is very slow on our back (a GPU frame of ~100 s every few frames) and turns white: for watching progress only.
+Note that the title writes its OWN autosave (a `SARC0015` container) into the run's data directory while it plays the prologue; the next run on
+that directory then starts in the saved world (run.sh prints a `note:` line). **`--new-game`** replaces only the run's `data/` with a clone of
+the seed's (new game again) and keeps the warm `cache/` and `dxc/`; `--fresh-data` replaces everything (cold compile).
+
 ## Options
 
 | Option | Effect | Default |
@@ -121,6 +131,8 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--timeout SEC` | stop the run after SEC seconds (0: no limit); with `--until-*` only the cap (not met by then: exit status 6) | 900 |
 | `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `data/livetr-<profile>-<backend>/{data,cache}` under the GTA6 root (below) |
 | `--seed DIR` | the read-only seed the data directories are cloned from | `data/livetr` under the GTA6 root |
+| `--worldsave` | start from the world save: `--seed data/worldsave-seed` and the own directory `data/livetr-<profile>-<backend>-worldsave`. Never implied. Very slow, turns white (known) | off (new game) |
+| `--new-game` | replace only the run's `data/` with a clone of the seed's (no world save, no autosave from an earlier run), keep `cache/` and `dxc/` | off |
 | `--fresh-data` | delete the run's own data directory and clone it from the seed again, so the run starts from the seed state (only with the default directory) | off |
 | `--prefix DIR` | the Wine prefix (`WINEPREFIX` also works) | by backend, see above |
 | `--keys SPEC`, `--no-keys` | `VICTORY_KEYS` | `8-3600/3:Enter` (Enter every 3 s from 8 s; patch I1) |
@@ -256,9 +268,12 @@ Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.
 
 ## Playing by hand: `tools/mac/play.sh`
 
-`tools/mac/play.sh [run.sh options]` is `run.sh --fidelity --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
+`tools/mac/play.sh [run.sh options]` is `run.sh --perf --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
 game lock, data directories and checks are run.sh's). `--input none` matters: from world frame 1 the default neutral replay is exclusive
-and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on.
+and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on. The default is `--perf` (1280x720 output patch,
+non-fidelity; the UI comes out 3x too big because the title lays it out in 4K pixels) since fidelity GPU frames are 6-17 s each on our back;
+`play.sh --fidelity` brings the Series X profile back (a later option wins). `play.sh --worldsave` plays the Windows world save (see "Data
+directories"); `play.sh --new-game` starts a new game again.
 
 Keyboard (needs the title's window in focus; works together with any host pad, `VICTORY_ONE_PAD=0` separates them), from
 `crates/victory-hle/src/modules/gameinput.rs`: A Enter, B Backspace, X X, Y Y, left stick W/A/S/D, right stick I/J/K/L, LT Z, RT C,

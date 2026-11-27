@@ -30,6 +30,12 @@
 #   --exe PATH --out DIR --timeout SEC (0 = none) --cache DIR --data DIR --prefix DIR
 #   --seed DIR                   the read-only seed the data directories are cloned from (default data/livetr under the GTA6 root)
 #   --fresh-data                 clone the run's data directory from the seed again, whatever is there (reproducible start)
+#   --new-game                   replace only the run's data/ (profile and saves) with a clone of the seed's, keeping the warm cache/
+#                                and dxc/ of the run's directory: the title starts a NEW game, with no world save, but no cold compile
+#   --worldsave                  start from a WORLD SAVE: seed = data/worldsave-seed (Windows save, read-only) and an own data
+#                                directory data/livetr-<profile>-<backend>-worldsave. Never implied: the default seed data/livetr
+#                                holds no world save (run.sh refuses a seed that does). The save world is very slow on our back
+#                                and turns white (known, being fixed): for watching progress only
 #   --keys SPEC | --no-keys      VICTORY_KEYS, default 8-3600/3:Enter (Enter every 3 s from 8 s)
 #   --input FILE|none            VICTORY_INPUT_REPLAY, default tools/mac/input/world-neutral.txt (I1)
 #   --record FILE                VICTORY_INPUT_RECORD (relative: under --out); turns the default replay off
@@ -122,7 +128,7 @@ winpath() { printf 'Z:%s' "$(printf '%s' "$1" | tr / '\\')"; }
 # ---- options ---------------------------------------------------------------
 backend="${VICTORY_MAC_BACKEND:-metal}"; profile="${VICTORY_MAC_PROFILE:-perf}"
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
-out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
+out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""; newgame=0; worldsave=0
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
 until_logs=(); until_world=""; until_present=""; until_capture=0; linger=0; linger_set=0
@@ -135,6 +141,7 @@ while [ $# -gt 0 ]; do
         --exe) exe=${2:?}; shift ;; --out) out=${2:?}; shift ;; --timeout) tmo=${2:?}; shift ;;
         --cache) cache=${2:?}; shift ;; --data) data=${2:?}; shift ;; --prefix) prefix=${2:?}; shift ;;
         --seed) seed=${2:?}; shift ;; --fresh-data) fresh=1 ;;
+        --new-game) newgame=1 ;; --worldsave) worldsave=1 ;;
         --keys) keys=${2:?}; shift ;; --no-keys) keys=none ;;
         --input) input=${2:?}; shift ;; --record) record=${2:?}; shift ;;
         --capture-frames) capture=${2:?}; shift ;;
@@ -230,9 +237,20 @@ time_name="$(date +%Y%m%d-%H%M%S)"
 [ -n "$out" ] || out="$ROOT/target/mac-runs/$time_name"
 # One data directory per profile AND backend, each cloned (APFS clone) from the same read-only seed on first use, so two
 # runs of different backends start from the same state and can run side by side. The seed is never written.
-[ -n "$seed" ] || seed="$G/data/livetr"
-base="$G/data/livetr-$profile-$backend"
+if [ "$worldsave" = 1 ]; then
+    [ -n "$seed" ] || seed="$G/data/worldsave-seed"
+    base="$G/data/livetr-$profile-$backend-worldsave"
+else
+    [ -n "$seed" ] || seed="$G/data/livetr"
+    base="$G/data/livetr-$profile-$backend"
+fi
+[ "$fresh" = 0 ] || [ "$newgame" = 0 ] || die "--fresh-data and --new-game together: use one"
+# the default seed must stay a NEW-GAME seed: a world save (a SARC container) in it would put every derived directory in the save world
+if [ "$worldsave" = 0 ] && ls -d "$seed"/data/*/saves/*/*/SARC* >/dev/null 2>&1; then
+    die "the seed $seed holds a world save (SARC container): the default seed is new-game only; world saves live in $G/data/worldsave-seed (use --worldsave)"
+fi
 derived=1; { [ -n "${VICTORY_DATA_DIR:-}" ] || [ -n "$data" ] || [ -n "$cache" ]; } && derived=0
+[ "$newgame" = 0 ] || [ "$derived" = 1 ] || die "--new-game works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
 [ "$fresh" = 0 ] || [ "$derived" = 1 ] || die "--fresh-data works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
 [ "$base" != "$seed" ] || die "the run's data directory is the seed"
 if [ -n "${VICTORY_DATA_DIR:-}" ] && [ -z "$data" ]; then data="$VICTORY_DATA_DIR"; fi
@@ -434,6 +452,14 @@ if [ "$derived" = 1 ]; then
         echo "making $base from the seed $seed (clone)"
         mkdir -p "$base"
         for d in data cache dxc; do [ -d "$seed/$d" ] && { cp -c -R "$seed/$d" "$base/$d" || cp -R "$seed/$d" "$base/$d"; }; done
+        chmod -R u+w "$base"   # the world-save seed is read-only; the run's clone must be writable
+    elif [ "$newgame" = 1 ]; then
+        echo "--new-game: replacing only $base/data with a clone of $seed/data (cache and dxc stay)"
+        case "$base" in "$G"/data/livetr-*-*) rm -rf "$base/data" ;; *) die "will not delete $base/data" ;; esac
+        { cp -c -R "$seed/data" "$base/data" || cp -R "$seed/data" "$base/data"; } && chmod -R u+w "$base/data" || die "could not clone $seed/data"
+    fi
+    if [ "$worldsave" = 0 ] && ls -d "$base"/data/*/saves/*/*/SARC* >/dev/null 2>&1; then
+        echo "note: $base/data holds a world save (the title's own autosave from an earlier run): it starts in the saved world. --new-game starts over" >&2
     fi
 fi
 mkdir -p "$data" "$cache"
