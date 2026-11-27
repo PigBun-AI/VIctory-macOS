@@ -189,3 +189,13 @@ hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` 
 Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env)`.
 
 Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.
+
+## Playing by hand: `tools/mac/play.sh`
+
+`tools/mac/play.sh [run.sh options]` is `run.sh --fidelity --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
+game lock, data directories and checks are run.sh's). `--input none` matters: from world frame 1 the default neutral replay is exclusive
+and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on.
+
+Keyboard (needs the title's window in focus; works together with any host pad, `VICTORY_ONE_PAD=0` separates them), from
+`crates/victory-hle/src/modules/gameinput.rs`: A Enter, B Backspace, X X, Y Y, left stick W/A/S/D, right stick I/J/K/L, LT Z, RT C,
+LB Q, RB E, L3 F, R3 H, D-pad arrows, Menu Esc, View Tab. XInput pads reach the title through Wine's SDL (`docs/mac/macos.md`, "Game controllers").
