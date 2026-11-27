@@ -139,10 +139,8 @@ pub fn retry(
     // Packed tighter first (nothing changes but the order); when that is not
     // enough, without the outputs the pixel shader has no input for.
     let mut last = None;
-    for consumer in [None, desc.ps] {
-        if consumer.is_none() && last.is_some() {
-            break;
-        }
+    let pixel = desc.ps.map_or(Consumer::NoPixelShader, Consumer::Pixel);
+    for consumer in [Consumer::Unknown, pixel] {
         let Some(fit) = repack_outputs(ms, consumer).ok().flatten() else {
             continue;
         };
@@ -592,16 +590,27 @@ fn call_shape(ops: &[u64]) -> Result<(u64, usize), FitError> {
     Ok((fnty, at + 1))
 }
 
+/// Who reads a mesh shader's vertex outputs.
+#[derive(Clone, Copy, Debug)]
+pub enum Consumer<'a> {
+    /// Not known: every output stays.
+    Unknown,
+    /// The pipeline has no pixel shader: only the position and the clip and
+    /// cull distances are read.
+    NoPixelShader,
+    /// This pixel shader's container: what it has no input for is not read.
+    Pixel(&'a [u8]),
+}
+
 /// Repacks the vertex outputs of a mesh shader's DXIL container: the
 /// elements renumbered so that Metal's struct has the least padding.
 ///
-/// With `consumer`, the pixel shader's container, the outputs it has no
-/// input for are dropped too (their stores removed): nothing reads them, and
-/// Metal does not drop them (docs/metal/mesh32k.md).
+/// With a known `consumer` the outputs nothing reads are dropped too (their
+/// stores removed): Metal does not drop them (docs/metal/mesh32k.md).
 ///
 /// `Ok(None)`: nothing to gain (no mesh outputs, or the order is already
 /// the best this finds). `Err`: left alone, see [`FitError`].
-pub fn repack_outputs(container: &[u8], consumer: Option<&[u8]>) -> Result<Option<Fit>, FitError> {
+pub fn repack_outputs(container: &[u8], consumer: Consumer<'_>) -> Result<Option<Fit>, FitError> {
     let parts = split(container)?;
     let part = parts
         .parts
@@ -618,7 +627,11 @@ pub fn repack_outputs(container: &[u8], consumer: Option<&[u8]>) -> Result<Optio
     let old_places = before_layout.1;
     let m = module_of(&bc)?;
     let mi = m.index;
-    let read_input = consumer.and_then(inputs_of);
+    let read_input = match consumer {
+        Consumer::Unknown => None,
+        Consumer::NoPixelShader => Some(std::collections::HashSet::new()),
+        Consumer::Pixel(ps) => inputs_of(ps),
+    };
 
     let Some(plan) = plan(&bc, &m, read_input.as_ref())? else {
         return Ok(None);

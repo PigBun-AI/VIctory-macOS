@@ -168,6 +168,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Panics are rows, not noise.
     std::panic::set_hook(Box::new(|_| {}));
 
+    // `--only-file NAME` reads that file of the game directory only, and
+    // `--hashes FILE` translates only the containers listed (one hash per
+    // line, or the first column of a TSV): a rerun of some containers (e.g.
+    // after a change of the translator) into another `--out`.
+    let only_file = arg(args, "--only-file");
+    let only: Option<HashSet<String>> = arg(args, "--hashes").map(|p| {
+        std::fs::read_to_string(p)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split('\t').next())
+            .filter(|h| h.len() == 16)
+            .map(str::to_owned)
+            .collect()
+    });
     let rows_path = out.join("translate.jsonl");
     let done = jsonl::seen(&rows_path, "hash");
     let rows = jsonl::Appender::open(&rows_path)?;
@@ -188,6 +202,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .map(|e| e.into_path())
         .collect();
     files.sort();
+    if let Some(name) = &only_file {
+        files.retain(|f| f.file_name().is_some_and(|n| n == name.as_str()));
+    }
     for file in &files {
         let Ok(data) = std::fs::read(file) else {
             continue;
@@ -212,6 +229,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
                             continue;
                         };
                         let hash = blake3::hash(&bytes).to_hex()[..16].to_owned();
+                        if only.as_ref().is_some_and(|o| !o.contains(&hash)) {
+                            continue;
+                        }
                         if !seen
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())

@@ -14,7 +14,7 @@ mod exec_support;
 
 use common_msc::dxil_or_skip;
 use exec_support::*;
-use victory_metal_back::mesh_fit;
+use victory_metal_back::mesh_fit::{self, Consumer};
 use victory_metal_back::mesh_size;
 use victory_metal_back::msc::RootSignatureDesc;
 use victory_metal_back::pipeline_defaults::{Component, Stages, Variant, default_graphics};
@@ -357,7 +357,7 @@ fn the_repacked_container_is_the_same_shader_in_another_order() {
     let Some((alt, packed, _)) = shaders() else {
         return;
     };
-    let fit = mesh_fit::repack_outputs(&alt, None)
+    let fit = mesh_fit::repack_outputs(&alt, Consumer::Unknown)
         .unwrap()
         .expect("repacked");
     assert_eq!((fit.stride_before, fit.stride_after), (276, 192));
@@ -369,9 +369,13 @@ fn the_repacked_container_is_the_same_shader_in_another_order() {
     assert_eq!(&fit.dxil[..4], b"DXBC");
     assert_eq!(fit.dxil.len() % 4, 0);
     // Again: nothing more to gain; and the packed one is as it should be.
-    assert!(mesh_fit::repack_outputs(&fit.dxil, None).unwrap().is_none());
+    assert!(
+        mesh_fit::repack_outputs(&fit.dxil, Consumer::Unknown)
+            .unwrap()
+            .is_none()
+    );
     // The `float3`s first still leaves 8 bytes in front of the first.
-    let other = mesh_fit::repack_outputs(&packed, None)
+    let other = mesh_fit::repack_outputs(&packed, Consumer::Unknown)
         .unwrap()
         .expect("8 bytes to gain");
     assert_eq!((other.stride_before, other.stride_after), (200, 192));
@@ -386,13 +390,17 @@ fn what_is_not_a_repackable_mesh_shader_is_left_alone() {
         return;
     };
     // A pixel shader has no mesh outputs.
-    assert!(mesh_fit::repack_outputs(&ps, None).unwrap().is_none());
+    assert!(
+        mesh_fit::repack_outputs(&ps, Consumer::Unknown)
+            .unwrap()
+            .is_none()
+    );
     // Not a container, and one cut short.
     assert!(matches!(
-        mesh_fit::repack_outputs(b"DXBX0000", None),
+        mesh_fit::repack_outputs(b"DXBX0000", Consumer::Unknown),
         Err(mesh_fit::FitError::Malformed(_))
     ));
-    assert!(mesh_fit::repack_outputs(&alt[..alt.len() / 2], None).is_err());
+    assert!(mesh_fit::repack_outputs(&alt[..alt.len() / 2], Consumer::Unknown).is_err());
     // Bitcode damaged inside a container that is whole.
     let mut broken = alt.clone();
     // (the container has a second copy in its reflection part, the DXIL part's is the last)
@@ -401,7 +409,7 @@ fn what_is_not_a_repackable_mesh_shader_is_left_alone() {
         .rposition(|w| w == [b'B', b'C', 0xC0, 0xDE])
         .unwrap();
     broken[at + 1] = b'X';
-    assert!(mesh_fit::repack_outputs(&broken, None).is_err());
+    assert!(mesh_fit::repack_outputs(&broken, Consumer::Unknown).is_err());
 }
 
 /// The picture, through the executor (which retries what Metal refuses): the
@@ -461,8 +469,12 @@ fn outputs_the_pixel_shader_does_not_read_are_dropped_when_packing_is_not_enough
         return;
     };
     // Packing alone: nothing to gain (all members are alike).
-    assert!(mesh_fit::repack_outputs(&ms, None).unwrap().is_none());
-    let fit = mesh_fit::repack_outputs(&ms, Some(&ps))
+    assert!(
+        mesh_fit::repack_outputs(&ms, Consumer::Unknown)
+            .unwrap()
+            .is_none()
+    );
+    let fit = mesh_fit::repack_outputs(&ms, Consumer::Pixel(&ps))
         .unwrap()
         .expect("repacked");
     assert_eq!(fit.dropped, 17);
@@ -473,7 +485,7 @@ fn outputs_the_pixel_shader_does_not_read_are_dropped_when_packing_is_not_enough
     );
     // What is left is what the pixel shader reads, and nothing else changed.
     assert!(
-        mesh_fit::repack_outputs(&fit.dxil, Some(&ps))
+        mesh_fit::repack_outputs(&fit.dxil, Consumer::Pixel(&ps))
             .unwrap()
             .is_none()
     );

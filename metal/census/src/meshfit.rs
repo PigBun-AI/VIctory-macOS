@@ -54,7 +54,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Some(Ok(false)) => different += 1,
             _ => parsed_not += 1,
         }
-        match mesh_fit::repack_outputs(&s.dxil, None) {
+        match mesh_fit::repack_outputs(&s.dxil, mesh_fit::Consumer::Unknown) {
             Ok(Some(f)) => {
                 repacked += 1;
                 *saved.entry(f.stride_before - f.stride_after).or_default() += 1;

@@ -54,7 +54,7 @@ has the refusals of 34816 and 35840 bytes.
 | option | verdict |
 |---|---|
 | a. **Renumber the output element ids** so the struct has the least padding (the DXIL's declared maxima and every value written stay) | **Done. Rescues 377 of 520, lossless.** 8-64 bytes per vertex of padding go. |
-| a'. Also drop outputs the pixel shader has no input for (needs the real PS) | Done in code (`mesh_fit::retry` second try, with `desc.ps`), proven on a synthetic shader; the census has no MS/PS pairing, so its effect on the remaining 143 is not counted (see below). Lossless: nothing reads them. |
+| a'. Also drop outputs the pixel shader has no input for (needs the real PS) | Done in code (`mesh_fit::retry` second try, with `desc.ps`), proven on a synthetic shader; with the real pairs of the title's pipeline book it saves nothing for the 143 (below). Lossless: nothing reads them. |
 | a''. MSC compression options / f32 to f16 | MSC 4.0.3 has none. f32 to f16 would change values: not lossless, not done. |
 | b. Split over several threadgroups or an object shader | Impossible as such: the indices are arbitrary inside the 128 vertices, so no vertex subset closes over its triangles; the translator uses the declared maxima as counts, so the real counts are dynamic. |
 | c. Compute emulation (MS as a compute writing vertex and primitive buffers, then an indexed draw, like MSC's GS emulation) | The last resort for what a and a' do not take (fidelity ok; cost: a compute pass, a buffer of up to 128 x 336 bytes per group and a second pass; hooks into `render.rs`, which other hands edit). Not built. |
@@ -64,7 +64,7 @@ The root cause is in the emitter: the translator numbers the output elements
 in signature order, and Metal lays the struct out in that order. A pass in
 `victory-shader` (Windows line, annotate-only here) that numbers them by
 descending alignment would give the same result without editing bitcode at
-run time: **proposed to the emitter owner**; until then the back repacks.
+run time: **done as mac S2** (branch `mac/mesh-order`); the back's repack stays as the fallback.
 
 ## The implementation (back only, new files)
 
@@ -121,24 +121,89 @@ run time: **proposed to the emitter owner**; until then the back repacks.
    shader (it is the intro card), so it proves the hook does not disturb a
    frame; the mesh-over-32 KB proof is the synthetic picture test.
 
-## The 143 left, next
+## The 143 left (second round, 2026-11-28)
 
-* Pairing each refused MS with the PS the game uses (the game's pipeline
-  archive; not in the census) lets `retry` drop unread outputs: 4-36 bytes per
-  vertex are needed, i.e. 1-9 `float4` outputs of the shaders. This is already
-  in the hook; the count is only known with the real pairing (a game run or the
-  pipeline archive). Needs the first live run, no extra code.
-* Then option c for what remains (record the cost: one compute pass plus
-  128 x stride bytes of buffer per mesh group, a second draw).
+**The real pairs.** The title's pipeline book (`VICTORY_PIPELINE_BOOK=1`,
+`known-pipelines.bin` / `known-shaders.bin`, format in
+`crates/victory-gpu/src/pipeline/known.rs`, read only; the drops hand's record run,
+`victory-data-drops-warm/cache/pipelines`: 83,563 pipelines, 9,887 distinct
+(mesh, pixel) pairs, no amplification stage among them) gives the pixel shader each
+mesh shader is used with. `victory-census mspair` builds each pair in Metal with the
+real pixel shader: as translated, packed, and packed with the unread outputs dropped.
+
+* Of the 520, **441 are in the book** (652 pairs), **79 are not** (the title does not
+  create them in that run: not used where it went, as far as the book says).
+* Of the 143 left after packing: **116 are in the book, 27 are not**.
+* **Dropping what the pixel shader does not read saves 0 bytes for all 116**: the real
+  pixel shaders read every output these meshes write (and every component: trimming
+  unread trailing components saves 0 too). The stride after pruning equals the stride
+  after packing (260 to 292 bytes). So the pixel-shader-aware pruning is correct and
+  stays in the hook (it matters for shaders whose pixel shader reads less), but it
+  **rescues none of the 143**.
+* 71 of the 116 are also refused by MSC (`dx.op.attributeAtVertex`, the other node):
+  fixing the size alone would not draw them.
+* The 143 are over by 512 to 4,608 bytes in total, 4 to 36 bytes a vertex: real
+  content.
+
+**S2 (translator numbers the outputs by alignment)**, branch `mac/mesh-order`
+(`docs/mac/PATCHES.md` S2): `victory-shader/src/emit/mesh_order.rs`, 6 lines in `emit/mod.rs`.
+The census on the translator with S2: **520 -> 143, the same 377 as the runtime repack,
+no regression among the other 8,245 (0 of them stop building)**, `convert ms` 8,622 of
+8,765 build. The runtime repack stays as the fallback (a translation made before S2, a
+cache of translations).
+
+**What is left needs the compute emulation** (option c). Plan, not built:
+
+1. *The kernel.* A mesh shader is a compute-like kernel: the same MSL function body can
+   run as a compute function over `groups x threads` that writes `vertices[g * NV + v]`
+   and `primitives[g * NP + p]` and the counts to buffers. MSC cannot make this from a
+   mesh DXIL (it emits `[[mesh]]`), so the conversion must be our own: translate the
+   mesh DXIL to a compute DXIL in `victory-shader` (the output stores become stores to
+   a UAV: `storeVertexOutput` / `storePrimitiveOutput` / `setMeshOutputCounts` /
+   `emitIndices` are the only mesh-specific ops, all in `lower.rs`) and give it to MSC as
+   a compute shader. This is the larger part: a new lowering mode of the translator
+   (Windows line shared layer, now ours to change after the 23:42 decision).
+2. *The draw.* After the compute dispatch (a barrier from compute to render in the same
+   command buffer), a vertex-only render pipeline (vertex fetch from the buffers by
+   `vertex_id`, the real pixel shader unchanged) draws indexed with the written
+   indices. The vertex shader is a tiny generated one: it reads the vertex struct from
+   the buffer and writes the pixel shader's inputs, so the pixel shader and its
+   interpolation need no change. Counts are dynamic (the mesh sets them), so the draw is
+   `drawIndexedPrimitives` with an indirect buffer written by the compute pass (the
+   count of primitives x 3), per group: `MTLIndirectCommandBuffer`-free, one indirect
+   draw per group (`m5-gs.md` already does this for geometry draws: the expansion
+   kernel writes the record).
+3. *Changes in `render.rs` / `draw.rs`* (the other hands' files, so to be agreed):
+   `PreparedGraphics` gets a third kind, `MeshAsCompute`, holding the compute pipeline
+   and the vertex pipeline; `create_graphics_pipeline` falls to it when `mesh_fit::retry`
+   fails; `dispatch_mesh` for that kind encodes compute + barrier + indirect draws
+   instead of `drawMeshThreadgroups`; the vertex/primitive buffers come from a
+   per-queue scratch ring (`NV x stride x groups`, at most 128 x 336 B = 43 KB a group;
+   a dispatch of 10,000 groups is 430 MB, so the groups are chunked, as the indirect
+   path does in 256s). Amplification-stage pipelines would need the object shader run
+   first (not among the 143: the book has none).
+4. *Cost (recorded, not weighed)*: one compute pass and one render pass per `DispatchMesh`
+   instead of one mesh draw (the render encoder is ended and resumed with `Load`, as for
+   the indirect draws), a write and a read of 33 to 43 KB per group through memory, no
+   mesh-shader culling of unused vertices. Ballpark: 2 to 3 times the cost of a native
+   mesh draw for these meshes; the 143 are 1.6 percent of the mesh shaders (the 116 in
+   the book: 1.3 percent), and 71 of those 116 need `attributeAtVertex` first.
+5. *Tests*: the synthetic 20-`float3` shader of `mesh_fit.rs` with all outputs read (so
+   nothing can be pruned): the emulated draw equals the CPU picture and the native draw
+   of a mesh with 120 vertices declared.
+
+**Recommendation**: do `attributeAtVertex` (the node behind 71 of the 116 and the bigger
+loss: 22 to 26 percent of the title's draws) before building the emulation; the size
+problem is then 45 pipelines in the book (0.5 percent of the mesh shaders).
 
 ## Matrix row (C-B-012 / S-M)
 
 > Mesh pipeline over Metal's 32 KB total mesh size: **limit measured and pinned**
 > (`round_up(NV,4) x vertex_stride + NP x prim_stride <= 32768`, the driver
 > refuses at pipeline creation; no document states it). **520 -> 143** of the
-> census (377 rescued losslessly by packing the output struct,
-> `back/src/mesh_fit.rs`, hook on refusal only). Remaining 143: pixel-shader
-> aware pruning (in place, needs the real MS/PS pair), then compute
-> emulation. Proofs: `back/tests/{mesh_limit,mesh_fit}.rs`, census `meshfit` +
-> `convert --dxil-dir`, replay byte-identical to the baseline. Emitter-side fix
-> proposed (number output elements by alignment). Status: partly done.
+> census (377 rescued losslessly by packing the output struct: `mac S2`
+> in the translator, and `back/src/mesh_fit.rs` as the fallback hook on
+> refusal). Remaining 143 (116 used by the title, 27 not): pruning for the
+> real pixel shaders saves nothing; they need the compute emulation (plan
+> above, not built). Proofs: `back/tests/{mesh_limit,mesh_fit}.rs`, census `meshfit` +
+> `convert --dxil-dir`, replay byte-identical to the baseline. Status: partly done.
