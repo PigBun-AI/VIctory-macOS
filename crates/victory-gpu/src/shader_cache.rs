@@ -77,10 +77,6 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
-            // The sun-speed branch's legacy multiply (no effect on a build without that code).
-            "VICTORY_LEGACY_MUL_FAST",
-            // Ray-tracing programs keep their last page-directory entries in group-shared memory.
-            "VICTORY_RT_PAGECACHE",
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
             "VICTORY_TM_CLAMP_HDR",
         ] {
@@ -96,6 +92,21 @@ fn build() -> [u8; 32] {
         bytes.extend_from_slice(b"VICTORY_EXPORT_F16_SAT=");
         bytes.push(victory_shader::emit::export_sat() as u8);
         bytes.push(0);
+        // Switches keyed by their effective value (RT_PAGECACHE is on unless "0"; the others
+        // are off unless "1"), so an unset variable and its default share entries.
+        for (name, on) in [
+            // Ray-tracing programs keep their last page-directory entries in group-shared memory.
+            ("VICTORY_RT_PAGECACHE", victory_shader::emit::rt_pagecache()),
+            // The same for the other compute programs.
+            ("VICTORY_PAGECACHE_ALL", victory_shader::emit::pagecache_all()),
+            // The legacy multiply written shorter where provably the same.
+            ("VICTORY_BVH_BOUNDS", victory_shader::emit::legacy_mul_fast()),
+        ] {
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(b'=');
+            bytes.push(on as u8);
+            bytes.push(0);
+        }
         // And which clean-up passes ran over the translated code.
         bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
         *blake3::hash(&bytes).as_bytes()
@@ -285,10 +296,10 @@ mod tests {
     #[test]
     fn live_switches_key_the_cache_and_put_back_hits() {
         use victory_shader::emit::live::snapshot_of;
-        let on = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), "1".into())]).unwrap();
-        let off = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), "0".into())]).unwrap();
+        let on = snapshot_of(&[("VICTORY_BVH_BOUNDS".into(), "1".into())]).unwrap();
+        let off = snapshot_of(&[("VICTORY_BVH_BOUNDS".into(), "0".into())]).unwrap();
         let none = snapshot_of(&[]).unwrap();
-        let none_again = snapshot_of(&[("VICTORY_LEGACY_MUL_FAST".into(), String::new())]).unwrap();
+        let none_again = snapshot_of(&[("VICTORY_BVH_BOUNDS".into(), String::new())]).unwrap();
         let (k_on, k_off, k_none) = (translation_of(&on), translation_of(&off), translation_of(&none));
         assert!(k_on != k_off && k_on != k_none && k_off != k_none);
         assert_eq!(k_none, translation_of(&none_again), "empty is unset");

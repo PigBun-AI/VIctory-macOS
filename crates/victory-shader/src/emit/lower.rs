@@ -3258,7 +3258,7 @@ impl<'a> Lower<'a> {
     /// The keys are cleared in the entry block; a thread reads and writes only its own.
     fn page_cache(&mut self) -> Option<(V, V, u32)> {
         if !super::rt_pagecache()
-            || self.x.res.bvh.is_empty()
+            || (self.x.res.bvh.is_empty() && !super::pagecache_all())
             || self.x.native.stage != HwStage::Cs
             || self.s.mesh.is_some()
         {
@@ -4080,6 +4080,25 @@ impl<'a> Lower<'a> {
         }
         let m = self.s.m.bin(c, Bin::Mul, a, b);
         let zero = self.s.m.f32(0);
+        if super::legacy_mul_fast() {
+            // `VICTORY_LEGACY_MUL_FAST`: the long form below is `(a == 0 || b == 0) ? +0 : a * b`.
+            // Where one factor is a constant that is not 0 (and no subnormal, so no flush can
+            // make it one) its half of the test is false, and where both are, or the factors
+            // are one value, the product is what it is anyway (`a * a` is +0 for +-0; a
+            // constant's product with the other is left to the select, whose zero is +0 where
+            // `a * b` would give -0). Never a bound: those leave the sign of a zero product
+            // and the product of a zero with an infinity or NaN to the select.
+            let nonzero = |l: &Self, x: V| l.s.m.float_k(x).is_some_and(|k| k != 0.0 && !k.is_subnormal());
+            let (na, nb) = (nonzero(self, a), nonzero(self, b));
+            if a == b || na && nb {
+                return m;
+            }
+            if na || nb {
+                let other = if na { b } else { a };
+                let z = self.s.m.cmp(c, pred::OEQ, other, zero);
+                return self.s.m.select(c, z, zero, m);
+            }
+        }
         let az = self.s.m.cmp(c, pred::OEQ, a, zero);
         let bz = self.s.m.cmp(c, pred::OEQ, b, zero);
         let z = self.s.m.bin(c, Bin::Or, az, bz);

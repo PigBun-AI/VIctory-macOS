@@ -170,27 +170,27 @@ mod tests {
         let first = live::current();
         let k0 = key(&first);
 
-        std::fs::write(&file, "VICTORY_LEGACY_MUL_FAST=1\n").unwrap();
+        std::fs::write(&file, "VICTORY_BVH_BOUNDS=1\n").unwrap();
         let (g1, shown) = load(&file).unwrap().expect("a new generation");
-        assert!(shown.contains("VICTORY_LEGACY_MUL_FAST=1"));
+        assert!(shown.contains("VICTORY_BVH_BOUNDS=1"));
         let s1 = live::current();
         assert_eq!(s1.generation, g1);
         let k1 = key(&s1);
         assert_ne!(k0, k1, "the key follows the switch");
         // A read under a snapshot gets that snapshot's value, not the newest.
-        assert_eq!(live::scoped(&s1, || live::var_os("VICTORY_LEGACY_MUL_FAST")).unwrap(), "1");
-        assert_eq!(live::scoped(&first, || live::var_os("VICTORY_LEGACY_MUL_FAST")), first.get("VICTORY_LEGACY_MUL_FAST").cloned());
+        assert_eq!(live::scoped(&s1, || live::var_os("VICTORY_BVH_BOUNDS")).unwrap(), "1");
+        assert_eq!(live::scoped(&first, || live::var_os("VICTORY_BVH_BOUNDS")), first.get("VICTORY_BVH_BOUNDS").cloned());
 
         // The same file again: nothing changes.
         assert!(load(&file).unwrap().is_none());
         assert_eq!(key(&live::current()), k1);
 
         // Another value: another key; the first value again: the first key.
-        std::fs::write(&file, "VICTORY_LEGACY_MUL_FAST=0\n").unwrap();
+        std::fs::write(&file, "VICTORY_BVH_BOUNDS=0\n").unwrap();
         load(&file).unwrap().unwrap();
         let k2 = key(&live::current());
         assert!(k2 != k0 && k2 != k1);
-        std::fs::write(&file, "VICTORY_LEGACY_MUL_FAST=1\n").unwrap();
+        std::fs::write(&file, "VICTORY_BVH_BOUNDS=1\n").unwrap();
         load(&file).unwrap().unwrap();
         assert_eq!(key(&live::current()), k1, "back to a state seen: its key, so its entries hit");
         // A pipeline: its own pending host pipeline for the first state, another for a changed one,
@@ -200,12 +200,12 @@ mod tests {
             let p = crate::pipeline::test_pipeline();
             // (the file now holds =1, k1)
             let at_k1 = crate::pipeline::test_host_address(p);
-            std::fs::write(&file, "VICTORY_LEGACY_MUL_FAST=0\n").unwrap();
+            std::fs::write(&file, "VICTORY_BVH_BOUNDS=0\n").unwrap();
             load(&file).unwrap().unwrap();
             let at_k2 = crate::pipeline::test_host_address(p);
             assert_ne!(at_k1, at_k2, "a changed switch asks for another host pipeline");
             assert_eq!(crate::pipeline::test_host_address(p), at_k2, "asked twice: the same one");
-            std::fs::write(&file, "VICTORY_LEGACY_MUL_FAST=1\n").unwrap();
+            std::fs::write(&file, "VICTORY_BVH_BOUNDS=1\n").unwrap();
             load(&file).unwrap().unwrap();
             assert_eq!(crate::pipeline::test_host_address(p), at_k1, "put back: the first one again");
             let (created, made) = crate::pipeline::live_progress();

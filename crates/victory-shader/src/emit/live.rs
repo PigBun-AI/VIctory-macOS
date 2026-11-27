@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// Anything else is refused by [`parse`].
 pub const WHITELIST: &[&str] = &[
     "VICTORY_RT_PAGECACHE",
+    "VICTORY_PAGECACHE_ALL",
     "VICTORY_LEGACY_MUL_FAST",
     "VICTORY_EXPORT_F16_SAT",
     "VICTORY_TM_CLAMP_HDR",
@@ -264,6 +265,25 @@ pub fn parse(text: &str) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sun-speed switches are read through the snapshot: a scope with them set sees them on, one
+    /// without sees the defaults (RT_PAGECACHE on, the others off).
+    #[test]
+    fn page_cache_and_legacy_mul_switches_follow_the_snapshot() {
+        let on = snapshot_of(&[
+            ("VICTORY_PAGECACHE_ALL".into(), "1".into()),
+            ("VICTORY_LEGACY_MUL_FAST".into(), "1".into()),
+            ("VICTORY_RT_PAGECACHE".into(), "0".into()),
+        ])
+        .unwrap();
+        let off = snapshot_of(&[("VICTORY_PAGECACHE_ALL".into(), "0".into()), ("VICTORY_LEGACY_MUL_FAST".into(), "0".into())]).unwrap();
+        scoped(&on, || {
+            assert!(crate::emit::pagecache_all() && crate::emit::legacy_mul_fast() && !crate::emit::rt_pagecache());
+        });
+        scoped(&off, || {
+            assert!(!crate::emit::pagecache_all() && !crate::emit::legacy_mul_fast());
+        });
+    }
 
     #[test]
     fn parse_takes_whitelisted_lines_only() {
