@@ -136,18 +136,31 @@ impl State {
             batches: Vec::new(),
             open: None,
         };
+        let mut failed: Option<(Status, String)> = None;
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
             };
             if let Err(s) = run.command(&c) {
                 // Dropping `run` drops the open list and the unflushed ones.
-                return s;
+                failed = Some((s, format!("{c:?}")));
+                break;
             }
         }
-        match run.flush_all() {
+        let result = match failed {
+            Some((s, what)) => Err((s, what)),
+            None => run.flush_all().map_err(|s| (s, "commit".to_string())),
+        };
+        drop(run);
+        match result {
             Ok(()) => Status::OK,
-            Err(s) => s,
+            Err((s, what)) => {
+                // The wire carries a status only; `ExecuteCommandLists` has no
+                // result at all, so the command that stopped the block is
+                // kept for `VICTORY_METAL_LOG` and `Executor::last_error`.
+                self.note = Some(format!("block stopped with {s:?} at {what}"));
+                s
+            }
         }
     }
 }

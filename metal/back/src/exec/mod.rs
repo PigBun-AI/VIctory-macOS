@@ -49,6 +49,7 @@ mod handles;
 mod stream;
 mod sync;
 pub mod tlab;
+mod trace;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -283,6 +284,7 @@ impl Executor {
 
     /// One block of commands (`Link::submit`): one `ExecuteCommandLists`.
     pub fn submit(&self, block: &[u8]) -> Status {
+        trace::block(block);
         // The whole block is checked before anything runs.
         let header = match stream::validate(block) {
             Ok(caps) => caps,
@@ -300,6 +302,11 @@ impl Executor {
             st.run_block(block)
         };
         st.device.maintain();
+        let note = st.note.take();
+        drop(g);
+        if let Some(n) = note {
+            self.note_error(n);
+        }
         status
     }
 
