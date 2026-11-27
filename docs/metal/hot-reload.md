@@ -52,6 +52,28 @@ pair under D3DMetal gives the reference frames. A scene that needs movement
 gets its own input file (declarative ranges by world frame) next to the
 neutral one.
 
+### Frame workbench (extends layer 1; same milestone)
+
+Order: after indirect GS draws and a stable menu, together with layers 1-2.
+
+- Capture: one frame's proto stream + referenced memory + the title's own
+  shaders and textures, outside the repository (format = proto dump).
+- Workbench (native arm64, no game, no Wine): step by draw / pass; view any
+  intermediate target (RT, depth, G-buffer, shadow map, UAV); disable a pass
+  or draw; hot-swap a shader and replay at once; GPU time per pass
+  (Metal 4 counter heaps). First UI: a Metal window with keys, plus an HTML
+  report per frame (thumbnails of every pass, timings, diffs) for batch runs.
+- Reference: the Windows line (feat/live-translator) has its own frame replay
+  (`victory replay`) and per-pass GPU timing on real D3D12. To investigate
+  first: whether its capture sits above seam A (console D3D12.X level). If so
+  the same capture replays on the Mac through victory-gpu + our back, and the
+  two runs can be compared pass by pass with no format bridge; if not, a
+  converter from its intermediate images to ours. D3DMetal (same capture
+  under Wine) is the secondary reference. The comparison names the first draw
+  whose output departs beyond a tolerance.
+- Resource viewer: textures (Xbox tiling, BC formats) and vertex streams as
+  decoded, to check resource decoding apart from rendering.
+
 ## Layer 2: shader hot swap
 
 - The back keys every pipeline by the hash of its inputs (DXIL bytes + root
