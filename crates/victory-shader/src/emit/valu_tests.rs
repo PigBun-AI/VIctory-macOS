@@ -2058,6 +2058,124 @@ fn rdna_forms_give_what_the_spelled_out_ones_give() {
     }
 }
 
+/// `VICTORY_LEGACY_MUL_FAST`: the shorter forms of the legacy multiply give, on the card, the
+/// very bits the long form gives (zeros of either sign, infinities, NaN, subnormals, the
+/// greatest number), for products of two registers, of one by itself, by constants, and the
+/// multiply-adds that use it.
+#[test]
+fn legacy_mul_fast_is_bit_for_bit_the_long_form() {
+    if Host::new(false).is_err() {
+        eprintln!("no SM 6.6 device; skipped");
+        return;
+    }
+    const HALF: u16 = 240;
+    const ONE: u16 = 242;
+    const MINUS_ONE: u16 = 243;
+    const ZERO: u16 = 128;
+    let (a, b, c) = (vgpr(1), vgpr(2), vgpr(3));
+    let bodies: [(&str, Vec<u32>); 10] = [
+        ("mul_legacy", vop3(0x107, 0, a, b, 0).to_vec()),
+        ("mul_legacy by itself", vop3(0x107, 0, a, a, 0).to_vec()),
+        ("mul_legacy by -1", vop3(0x107, 0, a, MINUS_ONE, 0).to_vec()),
+        ("mul_legacy by 1 first", vop3(0x107, 0, ONE, b, 0).to_vec()),
+        ("mul_legacy by 0.5", vop3(0x107, 0, a, HALF, 0).to_vec()),
+        ("mul_legacy by 0", vop3(0x107, 0, a, ZERO, 0).to_vec()),
+        ("mul_legacy of constants", vop3(0x107, 0, HALF, MINUS_ONE, 0).to_vec()),
+        ("mad_legacy", vop3(0x140, 0, a, b, c).to_vec()),
+        ("mad_legacy by -1", vop3(0x140, 0, a, MINUS_ONE, c).to_vec()),
+        ("mul_legacy of a mul_legacy", [vop3(0x107, 5, a, b, 0), vop3(0x107, 0, vgpr(5), MINUS_ONE, 0)].concat()),
+    ];
+    let numbers = [
+        0.0f32,
+        -0.0,
+        1.0,
+        -1.0,
+        0.3,
+        -2.5e-7,
+        1.0e-40,
+        -1.0e-40,
+        f32::MAX,
+        -f32::MAX,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+        f32::from_bits(0xFFC0_0001),
+    ];
+    let mut cases = Vec::new();
+    for (i, x) in numbers.iter().enumerate() {
+        for (j, y) in numbers.iter().enumerate() {
+            let z = numbers[(3 * i + j) % numbers.len()];
+            cases.push([x.to_bits(), y.to_bits(), z.to_bits(), 0]);
+        }
+    }
+    for (name, body) in bodies {
+        let mut got: Vec<Vec<u32>> = Vec::new();
+        let mut written = Vec::new();
+        for fast in [false, true] {
+            eprintln!("{name} fast={fast}");
+            super::LEGACY_MUL_FAST_TEST.set(Some(fast));
+            let shader = build_valu_cs(&body);
+            super::LEGACY_MUL_FAST_TEST.set(None);
+            written.push(shader.dxil.clone());
+            let mut all = Vec::new();
+            run_cases_on(&shader, &cases, &[("hardware", false)], |_, _, _, r| all.push(r));
+            got.push(all);
+        }
+        eprintln!("{name}: written {}", if written[0] == written[1] { "alike" } else { "shorter" });
+        for (case, (was, is)) in cases.iter().zip(got[0].iter().zip(&got[1])) {
+            assert_eq!(was, is, "{name} of {:?}: long {was:x?}, fast {is:x?}", case.map(f32::from_bits));
+        }
+    }
+}
+
+/// The rule of `legacy_mul`'s short forms over every pair of the awkward numbers, on the
+/// CPU: `(a == 0 || b == 0) ? +0 : a * b` against the form each case drops to.
+#[test]
+fn legacy_mul_short_forms_equal_the_long_form_on_the_cpu() {
+    let numbers = [
+        0.0f32, -0.0, 1.0, -1.0, 0.5, 3.0e-7, 1.0e-40, -1.0e-40, f32::MAX, -f32::MAX, f32::INFINITY,
+        f32::NEG_INFINITY, f32::NAN, f32::from_bits(0xFFC0_0001), f32::MIN_POSITIVE,
+    ];
+    let long = |a: f32, b: f32| if a == 0.0 || b == 0.0 { 0.0f32 } else { a * b };
+    let nonzero = |k: f32| k != 0.0 && !k.is_subnormal();
+    for &a in &numbers {
+        for &b in &numbers {
+            // one value twice
+            if a.to_bits() == b.to_bits() {
+                let (l, s) = (long(a, a), a * a);
+                assert!(l.to_bits() == s.to_bits() || l.is_nan() && s.is_nan(), "{a} * itself");
+            }
+            // both constants that are not 0: the plain product
+            if nonzero(a) && nonzero(b) {
+                let (l, s) = (long(a, b), a * b);
+                assert!(l.to_bits() == s.to_bits() || l.is_nan() && s.is_nan(), "{a} * {b}");
+            }
+            // one such constant: only the other one is looked at
+            for (k, x) in [(a, b), (b, a)] {
+                if nonzero(k) {
+                    let s = if x == 0.0 { 0.0f32 } else { k * x };
+                    let l = long(k, x);
+                    assert!(l.to_bits() == s.to_bits() || l.is_nan() && s.is_nan(), "{k} * {x}");
+                }
+            }
+        }
+    }
+}
+
+/// The switches' states from their variables: the ray-tracing page cache is on unless "0",
+/// the others are off unless "1".
+#[test]
+fn page_cache_switches_default_as_documented() {
+    use std::ffi::OsStr;
+    let s = |v: Option<&str>, d| super::switch(v.map(OsStr::new), d);
+    assert!(s(None, true), "RT_PAGECACHE unset is on");
+    assert!(s(Some("1"), true));
+    assert!(!s(Some("0"), true), "RT_PAGECACHE=0 is off");
+    assert!(!s(None, false), "the others unset are off");
+    assert!(s(Some("1"), false));
+    assert!(!s(Some("0"), false));
+}
+
 /// MUBUF `op vdata, vaddr, s[srsrc:srsrc+3], 0 idxen`.
 const fn mubuf_idxen(op: u8, vdata: u8, vaddr: u8, srsrc: u8) -> [u32; 2] {
     [

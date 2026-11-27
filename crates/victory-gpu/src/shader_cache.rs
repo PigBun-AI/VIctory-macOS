@@ -75,8 +75,6 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
-            // Ray-tracing programs keep their last page-directory entries in group-shared memory.
-            "VICTORY_RT_PAGECACHE",
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
             "VICTORY_TM_CLAMP_HDR",
         ] {
@@ -92,6 +90,21 @@ fn build() -> [u8; 32] {
         bytes.extend_from_slice(b"VICTORY_EXPORT_F16_SAT=");
         bytes.push(victory_shader::emit::export_sat() as u8);
         bytes.push(0);
+        // Switches keyed by their effective value (RT_PAGECACHE is on unless "0"; the others
+        // are off unless "1"), so an unset variable and its default share entries.
+        for (name, on) in [
+            // Ray-tracing programs keep their last page-directory entries in group-shared memory.
+            ("VICTORY_RT_PAGECACHE", victory_shader::emit::rt_pagecache()),
+            // The same for the other compute programs.
+            ("VICTORY_PAGECACHE_ALL", victory_shader::emit::pagecache_all()),
+            // The legacy multiply written shorter where provably the same.
+            ("VICTORY_LEGACY_MUL_FAST", victory_shader::emit::legacy_mul_fast()),
+        ] {
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(b'=');
+            bytes.push(on as u8);
+            bytes.push(0);
+        }
         // And which clean-up passes ran over the translated code.
         bytes.extend_from_slice(&victory_shader::emit::shader_opt().to_le_bytes());
         bytes

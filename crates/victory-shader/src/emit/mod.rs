@@ -210,19 +210,64 @@ thread_local! {
 
 /// Whether the programs that walk the title's ray-tracing structures
 /// (`image_bvh*_intersect_ray`) keep the last page-directory entries they
-/// read in group-shared memory, one set per thread (`VICTORY_RT_PAGECACHE=1`,
-/// default off): a node, the next node of the same 64 KiB page and the
-/// instance record beside them then do not each wait for the directory in
-/// video memory (`Lower::memory`). Exact: the cache holds what the directory
-/// held, for pages that have a copy. Part of the translation: the shader
-/// cache keys on it.
+/// read in group-shared memory, one set per thread (default on;
+/// `VICTORY_RT_PAGECACHE=0` turns it off): a node, the next node of the same
+/// 64 KiB page and the instance record beside them then do not each wait for
+/// the directory in video memory (`Lower::memory`). Exact: the cache holds
+/// what the directory held, for pages that have a copy. Part of the
+/// translation: the shader cache keys on the effective value.
 pub fn rt_pagecache() -> bool {
     #[cfg(test)]
     if let Some(on) = RT_PAGECACHE_TEST.get() {
         return on;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_RT_PAGECACHE").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| switch(std::env::var_os("VICTORY_RT_PAGECACHE").as_deref(), true))
+}
+
+/// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
+/// anything else keeps the default for a default-on switch and is off for a default-off one.
+pub(crate) fn switch(value: Option<&std::ffi::OsStr>, default: bool) -> bool {
+    match value {
+        None => default,
+        Some(v) if v == "0" => false,
+        Some(v) if v == "1" => true,
+        Some(_) => default,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The tests' own `VICTORY_PAGECACHE_ALL`, per thread.
+    pub(crate) static PAGECACHE_ALL_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// The tests' own `VICTORY_LEGACY_MUL_FAST`, per thread.
+    pub(crate) static LEGACY_MUL_FAST_TEST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `VICTORY_PAGECACHE_ALL=1` (default off): the page cache of [`rt_pagecache`] also in
+/// compute programs that do not test rays (any title memory access in a loop or not,
+/// groups of up to 64 threads). Has no effect with `VICTORY_RT_PAGECACHE=0`. Part of the
+/// translation: the shader cache keys on it.
+pub fn pagecache_all() -> bool {
+    #[cfg(test)]
+    if let Some(on) = PAGECACHE_ALL_TEST.get() {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| switch(std::env::var_os("VICTORY_PAGECACHE_ALL").as_deref(), false))
+}
+
+/// `VICTORY_LEGACY_MUL_FAST=1` (default off): the legacy multiply (`0 * anything = 0`) is
+/// written with fewer operations where the program's own values prove the rest of the
+/// test redundant (`Lower::legacy_mul`). Bit for bit what the long form gives. Part of the
+/// translation: the shader cache keys on it.
+pub fn legacy_mul_fast() -> bool {
+    #[cfg(test)]
+    if let Some(on) = LEGACY_MUL_FAST_TEST.get() {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| switch(std::env::var_os("VICTORY_LEGACY_MUL_FAST").as_deref(), false))
 }
 
 /// The clean-up passes that run over a translated program before it is
