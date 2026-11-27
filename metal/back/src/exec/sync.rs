@@ -433,15 +433,14 @@ impl State {
     }
 }
 
-/// Whether every page of `[addr, addr + len)` is mapped in this process
-/// (`mincore` says `ENOMEM` for a hole).
+/// Whether every page of `[addr, addr + len)` is mapped in this process.
+/// `msync` with `MS_ASYNC` answers `ENOMEM` for a range with a hole in it
+/// and does nothing to a mapped one (`mincore` does not notice holes on
+/// macOS, tested).
 fn range_is_mapped(addr: usize, len: usize) -> bool {
-    let page = crate::device::process_page_size();
-    let pages = len.div_ceil(page);
-    let mut vec = vec![0 as libc::c_char; pages];
-    // SAFETY: `vec` has one byte per page of the range; `mincore` only reads
-    // the page tables and writes that vector.
-    let rc = unsafe { libc::mincore(addr as *mut libc::c_void, len, vec.as_mut_ptr()) };
+    // SAFETY: `msync` only inspects the mappings of the range; it reads or
+    // writes none of the memory.
+    let rc = unsafe { libc::msync(addr as *mut libc::c_void, len, libc::MS_ASYNC) };
     rc == 0
 }
 

@@ -339,3 +339,29 @@ pub fn cpu_read_u64s(addr: u64, count: usize) -> Vec<u64> {
     unsafe { std::ptr::copy_nonoverlapping(addr as *const u64, v.as_mut_ptr(), count) };
     v
 }
+
+/// A block header for `count` commands over `body` bytes, honest otherwise.
+pub fn block_with(count: u32, body: &[u8]) -> Vec<u8> {
+    use victory_metal_proto::stream::{STREAM_HEADER_SIZE, STREAM_MAGIC};
+    let mut v = Vec::new();
+    v.extend_from_slice(&STREAM_MAGIC);
+    v.extend_from_slice(&PROTO_VERSION.to_le_bytes());
+    v.extend_from_slice(&(STREAM_HEADER_SIZE as u16).to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes());
+    v.extend_from_slice(&0u64.to_le_bytes());
+    v.extend_from_slice(&((STREAM_HEADER_SIZE + body.len()) as u32).to_le_bytes());
+    v.extend_from_slice(&count.to_le_bytes());
+    v.extend_from_slice(body);
+    v
+}
+
+/// One raw command: header fields given explicitly, payload as is.
+pub fn raw_cmd(opcode: u16, version: u8, flags: u8, len: u32, payload: &[u8]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&opcode.to_le_bytes());
+    v.push(version);
+    v.push(flags);
+    v.extend_from_slice(&len.to_le_bytes());
+    v.extend_from_slice(payload);
+    v
+}

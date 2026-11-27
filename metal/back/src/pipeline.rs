@@ -119,8 +119,20 @@ fn pipeline_state(
     library: &ProtocolObject<dyn MTLLibrary>,
     entry: &str,
 ) -> Result<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
+    // The compiler aborts the process (an Objective-C assertion) when the
+    // function is not in the library, so ask first.
+    let wanted = NSString::from_str(entry);
+    if !library
+        .functionNames()
+        .iter()
+        .any(|n| n.isEqualToString(&wanted))
+    {
+        return Err(Error::BadArgument(format!(
+            "the library has no function named `{entry}`"
+        )));
+    }
     let function = MTL4LibraryFunctionDescriptor::new();
-    function.setName(Some(&NSString::from_str(entry)));
+    function.setName(Some(&wanted));
     function.setLibrary(Some(library));
     let descriptor = MTL4ComputePipelineDescriptor::new();
     descriptor.setComputeFunctionDescriptor(Some(&function));

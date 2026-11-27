@@ -857,3 +857,18 @@ fn unordered_lists_observation() {
         eprintln!("no inter-list barrier, {name}: {stale}/10 runs read a stale value");
     }
 }
+
+#[test]
+fn a_missing_entry_point_is_an_error_not_an_abort() {
+    // The Metal 4 compiler aborts the process on a function that is not in
+    // the library; the back asks the library first.
+    let (_g, d) = setup();
+    assert!(matches!(
+        d.compute_pipeline_from_msl(SLOW_A, "nope"),
+        Err(Error::BadArgument(_))
+    ));
+    let lib = d.library_from_msl(SLOW_A).unwrap();
+    assert!(d.compute_pipeline(&lib, "").is_err());
+    assert!(d.compute_pipeline(&lib, "slow_a").is_ok());
+    assert!(d.compute_pipeline_from_msl("kernel void {", "k").is_err());
+}
