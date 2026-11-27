@@ -2582,9 +2582,18 @@ pub(crate) fn install() {
             unsafe { (*context).Rip = exit as u64 };
             EXCEPTION_CONTINUE_EXECUTION
         };
+        // mac G10: under Rosetta a locked RMW into a guarded (read-only) block can be
+        // reported as a read; a real read of a read-only page never faults.
+        let rmw_read = r.ExceptionCode == EXCEPTION_ACCESS_VIOLATION as NTSTATUS
+            && r.NumberParameters >= 2
+            && crate::mac::rosetta::read_fault_is_write(
+                crate::mac::rosetta::rosetta(),
+                r.ExceptionInformation[0],
+                PROTECTED.any(r.ExceptionInformation[1] / BLOCK, r.ExceptionInformation[1] / BLOCK + 1),
+            );
         if r.ExceptionCode != EXCEPTION_ACCESS_VIOLATION as NTSTATUS
             || r.NumberParameters < 2
-            || r.ExceptionInformation[0] != WRITE
+            || (r.ExceptionInformation[0] != WRITE && !rmw_read)
         {
             return match ours {
                 Some(exit) => fail(exit),
@@ -2800,6 +2809,90 @@ mod tests {
                     Value: view as *mut _,
                 },
             )
+        };
+    }
+
+    /// mac G10: locked and exchanging instructions that fault on a guarded
+    /// (read-only) block are opened by the handler and complete, also when they
+    /// straddle the boundary from an open block into it (Rosetta reports those
+    /// as reads, which the handler used to pass on). Run on a PC it checks the
+    /// ordinary path; under Wine on a Mac the straddling ones are the case.
+    /// (Measured 2026-11-28: on these mapped views Rosetta reports all eight
+    /// as writes, with or without the G10 hook; the probe's `lock_or32 crossro`
+    /// on private memory is the one it reports as a read. The test pins the
+    /// result either way.)
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn locked_read_modify_writes_into_a_guarded_block_complete() {
+        use std::arch::asm;
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, FILE_MAP_WRITE, MapViewOfFile, UnmapViewOfFile,
+        };
+        // SAFETY: a pagefile section of two blocks, mapped read-write.
+        let view = unsafe {
+            let section = CreateFileMappingW(
+                -1isize as _,
+                std::ptr::null(),
+                PAGE_READWRITE,
+                0,
+                (2 * BLOCK) as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 2 * BLOCK).Value as usize
+        };
+        assert_ne!(view, 0);
+        let second = view + BLOCK;
+        let forms: [(&str, usize); 8] = [
+            ("lock or", 0),
+            ("lock or", 2),
+            ("xchg", 0),
+            ("xchg", 2),
+            ("lock xadd", 0),
+            ("lock xadd", 3),
+            ("lock cmpxchg", 0),
+            ("lock cmpxchg", 1),
+        ];
+        for (what, back) in forms {
+            // Only the second block is guarded; the access starts `back` bytes
+            // before it (0: inside it).
+            assert!(guard(second, second + BLOCK).is_some(), "{what} {back}");
+            assert!(PROTECTED.any(second / BLOCK, second / BLOCK + 1));
+            let p = second - back;
+            // SAFETY: our view; the instructions write four bytes at `p`.
+            unsafe {
+                std::ptr::write_bytes(p as *mut u8, 0, 4);
+                match what {
+                    "lock or" => asm!("lock or dword ptr [{p}], 0x40", p = in(reg) p, options(nostack)),
+                    "xchg" => {
+                        let mut v = 0x40u32;
+                        asm!("xchg dword ptr [{p}], {v:e}", p = in(reg) p, v = inout(reg) v, options(nostack));
+                        assert_eq!(v, 0, "{what} {back}: the old value comes back");
+                    }
+                    "lock xadd" => {
+                        let mut v = 0x40u32;
+                        asm!("lock xadd dword ptr [{p}], {v:e}", p = in(reg) p, v = inout(reg) v, options(nostack));
+                        assert_eq!(v, 0, "{what} {back}: the old value comes back");
+                    }
+                    _ => {
+                        let old: u32;
+                        asm!("lock cmpxchg dword ptr [{p}], {n:e}", p = in(reg) p, n = in(reg) 0x40u32,
+                            inout("eax") 0u32 => old, options(nostack));
+                        assert_eq!(old, 0, "{what} {back}: it hit");
+                    }
+                }
+                assert_eq!((p as *const u32).read_unaligned(), 0x40, "{what} {back}");
+            }
+            // The handler opened the block, which the guards still hold as theirs
+            // until the next copy takes it again.
+            assert!(writable(second), "{what} {back}: the block is open");
+            title_memory_unmapping(view, 2 * BLOCK);
+        }
+        // SAFETY: our view.
+        unsafe {
+            UnmapViewOfFile(windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: view as *mut _,
+            })
         };
     }
 

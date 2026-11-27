@@ -379,6 +379,37 @@ memory behind the pointers, so the same pipeline in another run or place is the 
 `pipeline.rs` (`compute_from_container`, `PIPELINE_IIDS` made `pub(crate)`). *Remove when* the Windows line implements the
 slots (the records' format is then theirs), or when a batch run shows the title's own fallback is as good and the patch is of no use.
 
+### G10 — a "read" fault in a guarded block is a write (`victory-gpu/src/mac/rosetta.rs`, 1 hook in `watch.rs`' handler)
+
+*Question (translation map `mac.isa.rmw_fault_access_type`).* Under Wine on Rosetta a locked or exchanging read-modify-write
+(`lock or/bts/cmpxchg/xadd`, `xchg`, 8/16/32/64-bit, 56,796 sites in the title) that faults on `PAGE_NOACCESS` memory, or that
+straddles a page boundary into a `PAGE_READONLY` page, reports access type *read* to the VEH; x86 reports a write
+(probe: `lock_or32`, `xchg32`, `lock_xadd*`, `cmpxchg*`, `lock_cmpxchg*`: `fault`, `cross`, `crossro`, `crossfirst` modes FAIL
+`access_type`; the same instructions in the `ro` mode, wholly inside a `PAGE_READONLY` page, report a write and pass).
+`watch::on_write` opens a guarded block only for a write, so a misreported one would reach the crash reporter.
+
+*What the guards use.* `PAGE_READONLY`, never `PAGE_NOACCESS`: `protect_alias` and `protect_here` in `watch.rs` (and `inplace.rs`'
+own guards) call `VirtualProtect(.., PAGE_READONLY)`, and `unguard`/`open` put `PAGE_READWRITE` back. `PAGE_NOACCESS` appears
+only for the title's own reservations/placeholders (`xmem.rs`), which the handler is not meant to open. So the plain case
+(an RMW wholly inside a guarded block) is the `ro` mode: a write, already handled. Left are RMWs that straddle from open
+memory into a guarded block. Guard blocks are 64 KiB aligned.
+
+*Measured.* On the mapped views the guards protect, `lock or`, `xchg`, `lock xadd`, `lock cmpxchg` (dword) starting 0-3 bytes before a
+guarded block's start report a **write** at the block's first byte, with or without this patch (test below with a recording
+handler, 2026-11-28); the probe's misreport is on private `VirtualAlloc` memory at 4 KiB and 16 KiB-aligned boundaries
+alike (`b=0x3000/0x4000/0x8000`), which the guards never cover. So no run is known to have hit it.
+
+*Patch (small, defensive).* `read_fault_is_write(rosetta, access, guarded)`: under Rosetta a fault of access type read in a
+block that `PROTECTED` holds is taken as the write it is (the handler then opens the block and the instruction runs again).
+Why this one and not the alternatives: `PAGE_READONLY` is already what is used, so "switch to READONLY" is a no-op; switching
+guards to anything else would change what every title store sees. A read fault on a `PAGE_READONLY` page cannot be a real read
+(reads are allowed), so inside our own guarded blocks the rule has no false positive; a block that was unmapped meanwhile fails
+`open` as before and falls through to the old paths. Nothing changes off Rosetta. Tests:
+`mac::rosetta::tests::a_read_fault_in_a_guarded_block_is_a_write_only_under_rosetta` (the rule, native),
+`watch::tests::locked_read_modify_writes_into_a_guarded_block_complete` (Windows; run under Wine/Rosetta: eight locked/exchanging
+forms into and across a guarded block all complete). Not needed on Windows (the CPU reports a write). *Remove with G2*, or
+when Rosetta reports these as writes; keep until a probe on a macOS update shows `crossro` passing.
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
