@@ -169,6 +169,14 @@ pub fn one_of_each() -> Vec<Command<'static>> {
             dst: ResId(9),
             src: ResId(8),
         }),
+        Command::WriteImmediate(WriteImmediate {
+            dst: ResId(9),
+            size: 8,
+            offset: 24,
+            value: 0x0123_4567_89ab_cdef,
+            mode: WriteImmediate::MARKER_OUT,
+            _pad: 0,
+        }),
         Command::ClearUavTexture(ClearUavTexture {
             res: ResId(9),
             format: format::R32_FLOAT,

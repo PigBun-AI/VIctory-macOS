@@ -1075,3 +1075,56 @@ fn commits_made_off_the_calling_thread_keep_the_order_of_the_calls() {
     assert_eq!(fx.fence_value(f), N as u64);
     assert_eq!(cpu_read(bufs[N].cpu_addr, 64), pattern);
 }
+
+fn write_imm(res: ResId, offset: u64, size: u32, value: u64, mode: u32) -> Command<'static> {
+    Command::WriteImmediate(WriteImmediate {
+        dst: res,
+        size,
+        offset,
+        value,
+        mode,
+        _pad: 0,
+    })
+}
+
+#[test]
+fn immediate_writes_land_in_command_order_with_both_sizes() {
+    let w = world();
+    let q = w.q;
+    let cmds = [
+        begin(1, q),
+        fill(w.a.res, 0xFFFF_FFFF, 0, 64),
+        Command::Barrier(Barrier::memory(stage::BLIT, stage::BLIT)),
+        write_imm(w.a.res, 0, 4, 0x1111_2222, WriteImmediate::DEFAULT),
+        write_imm(w.a.res, 8, 8, 0x0123_4567_89AB_CDEF, WriteImmediate::MARKER_IN),
+        // Overwrites the first write: later commands win.
+        write_imm(w.a.res, 0, 4, 0x3333_4444, WriteImmediate::MARKER_OUT),
+        end(1),
+    ];
+    assert_eq!(w.fx.submit(&cmds), Status::OK);
+    w.settle();
+    let words = w.words(&w.a);
+    assert_eq!(words[0], 0x3333_4444);
+    assert_eq!(words[1], 0xFFFF_FFFF, "four bytes only");
+    assert_eq!(words[2], 0x89AB_CDEF);
+    assert_eq!(words[3], 0x0123_4567);
+    assert_eq!(words[4], 0xFFFF_FFFF);
+}
+
+#[test]
+fn an_immediate_write_outside_the_buffer_is_refused_and_touches_nothing() {
+    let w = world();
+    let q = w.q;
+    let cmds = [
+        begin(1, q),
+        write_imm(w.a.res, 252, 8, 1, WriteImmediate::DEFAULT),
+        end(1),
+    ];
+    assert_eq!(w.fx.submit(&cmds), Status::INVALID_ARG);
+    w.settle();
+    assert!(w.a_untouched());
+    // The executor goes on.
+    assert_eq!(w.fx.submit(&w.fill_a(2, 0x12)), Status::OK);
+    w.settle();
+    assert!(w.a_is(0x12));
+}

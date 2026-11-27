@@ -231,13 +231,15 @@ only in dumps.
 | 0x0400 | `COPY_TEXTURE_REGION` | 1 | 120 | Implemented | dst: TextureLocation @0, src: TextureLocation @40, dst_x: u32 @80, dst_y: u32 @84, dst_z: u32 @88, flags: u32 @92, box_left: u32 @96, box_top: u32 @100, box_front: u32 @104, box_right: u32 @108, box_bottom: u32 @112, box_back: u32 @116 | buffer footprint to texture, texture to buffer footprint, or texture to texture (optional source box) |
 | 0x0401 | `COPY_RESOURCE` | 1 | 8 | Implemented | dst: ResId @0, src: ResId @4 | whole resource to a resource of the same description (buffer or texture) |
 | 0x0402 | `CLEAR_UAV_TEXTURE` | 1 | 64 | Implemented | res: ResId @0, format: u32 @4, dimension: TexViewDim @8, float_values: u8 @9, flags: u16 @10, mip: u32 @12, first_slice: u32 @16, slice_count: u32 @20, values: [u32; 4] @24, rect_left: u32 @40, rect_top: u32 @44, rect_right: u32 @48, rect_bottom: u32 @52 | clear a texture UAV (mip, slices, optional rectangle) with float or uint values |
+| 0x0480 | `WRITE_IMMEDIATE` | 1 | 32 | Implemented | dst: ResId @0, size: u32 @4, offset: u64 @8, value: u64 @16, mode: u32 @24 | write a 32/64-bit value into a buffer, in command order (WriteBufferImmediate, timestamp resolve) |
 | 0x0800 | `EXECUTE_INDIRECT` | 1 | 40 + data | Implemented | args: ResId @0, count: ResId @4, args_offset: u64 @8, count_offset: u64 @16, max_count: u32 @24, stride: u32 @28, root_sig: RootSigId @32, num_args: u32 @36 | ExecuteIndirect: a signature (num_args IndirectArg of 16 bytes follow) and the buffers it reads |
 | 0x0F00 | `SYNC_RECORD` | 1 | 16 + data | ReplayOnly | op: SyncOp @0, status: Status @4, args_len: u32 @8, blob_len: u32 @12 | recorded sync call (args, blob follow) |
 | 0x0F01 | `BUFFER_DATA` | 1 | 24 + data | ReplayOnly | res: ResId @0, offset: u64 @8, len: u64 @16 | recorded CPU write to a buffer (len bytes follow) |
 
 ### Reserved opcode ranges
 
-- 0x0403-0x04FF: textures: numbers not yet used
+- 0x0403-0x047F: textures: numbers not yet used
+- 0x0481-0x04FF: immediate writes and timestamps: numbers not yet used
 - 0x0500-0x05FF: render state, draws, mesh dispatch (M3, m3-gfx)
 - 0x0600-0x06FF: render passes and render-encoder bindings (M3, m3-gfx)
 - 0x0700-0x07FF: present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)

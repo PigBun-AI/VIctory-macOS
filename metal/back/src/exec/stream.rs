@@ -199,6 +199,7 @@ impl Run<'_> {
             Command::CopyTextureRegion(c) => self.copy_texture_region(c),
             Command::CopyResource(c) => self.copy_resource(c),
             Command::ClearUavTexture(c) => self.clear_uav_texture(c),
+            Command::WriteImmediate(c) => self.write_immediate(c),
             Command::SyncRecord(_) | Command::BufferData(_) | Command::DispatchIndirect(_) => {
                 Err(Status::UNSUPPORTED)
             }
@@ -576,6 +577,43 @@ impl Run<'_> {
         let (list, _) = self.list()?;
         list.fill_buffer(&dst, c.offset, c.size, byte)
             .map_err(|e| status_of(&e))
+    }
+
+    /// `WRITE_IMMEDIATE`: the value goes to a small shared buffer (written by
+    /// the CPU now) and a blit copies it to the destination, so it is ordered
+    /// with the list's other blits and copies. The staging buffer lives as
+    /// long as the list. `MARKER_IN` / `MARKER_OUT` add a full barrier before /
+    /// after the write (everything before is done / the write is done before
+    /// anything after starts).
+    fn write_immediate(&mut self, c: &victory_metal_proto::cmd::WriteImmediate) -> R {
+        use crate::memory::BufferKind;
+        use victory_metal_proto::cmd::WriteImmediate;
+        use victory_metal_proto::types::stage;
+        let size = u64::from(c.size);
+        let dst = self.st.buffer(c.dst)?.clone();
+        if c.offset.checked_add(size).is_none_or(|end| end > dst.len()) {
+            return Err(Status::INVALID_ARG);
+        }
+        let staging = self
+            .st
+            .device
+            .create_buffer(BufferKind::Upload, 8)
+            .map_err(|e| status_of(&e))?;
+        staging
+            .write(0, &c.value.to_le_bytes()[..c.size as usize])
+            .map_err(|e| status_of(&e))?;
+        let (list, _) = self.list()?;
+        if c.mode == WriteImmediate::MARKER_IN {
+            list.barrier(stage::ALL, stage::ALL, 1)
+                .map_err(|e| status_of(&e))?;
+        }
+        list.copy_buffer(&dst, c.offset, &staging, 0, size)
+            .map_err(|e| status_of(&e))?;
+        if c.mode == WriteImmediate::MARKER_OUT {
+            list.barrier(stage::ALL, stage::ALL, 1)
+                .map_err(|e| status_of(&e))?;
+        }
+        Ok(())
     }
 
     fn clear_uav(&mut self, c: &victory_metal_proto::cmd::ClearUav) -> R {

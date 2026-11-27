@@ -274,6 +274,12 @@ pub static COMMANDS: &[CommandInfo] = &[
         I,
         "clear a texture UAV (mip, slices, optional rectangle) with float or uint values",
     ),
+    command::<cmd::WriteImmediate>(
+        Opcode::WRITE_IMMEDIATE,
+        false,
+        I,
+        "write a 32/64-bit value into a buffer, in command order (WriteBufferImmediate, timestamp resolve)",
+    ),
     command::<crate::indirect::ExecuteIndirectHead>(
         Opcode::EXECUTE_INDIRECT,
         true,

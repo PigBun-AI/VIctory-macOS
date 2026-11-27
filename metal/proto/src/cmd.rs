@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 
 open_enum! {
     /// Opcode of a command. Ranges: 0x0001 framing and queue ops, 0x0100 state,
-    /// 0x0200 compute/copy work, 0x0300 barriers, 0x0400-0x04FF texture work;
+    /// 0x0200 compute/copy work, 0x0300 barriers, 0x0400-0x047F texture work, 0x0480-0x04FF immediate writes;
     /// 0x0500-0x09FF reserved for M2/M3 (see [`reserved_range`]); 0x0F00
     /// replay-only records; 0x8000 and up are never assigned.
     pub struct Opcode(u16) {
@@ -45,6 +45,9 @@ open_enum! {
         COPY_RESOURCE = 0x0401,
         CLEAR_UAV_TEXTURE = 0x0402,
 
+        /// Immediate 32/64-bit write into a buffer ([`WriteImmediate`]); 0x0480-0x04FF is this family's.
+        WRITE_IMMEDIATE = 0x0480,
+
         /// `ExecuteIndirect` ([`crate::indirect`]).
         EXECUTE_INDIRECT = 0x0800,
 
@@ -56,7 +59,8 @@ open_enum! {
 /// Opcode ranges reserved for later milestones: `(first, last, what)`.
 /// Opcodes in them are refused with `Error::ReservedOpcode`.
 pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
-    (0x0403, 0x04FF, "textures: numbers not yet used"),
+    (0x0403, 0x047F, "textures: numbers not yet used"),
+    (0x0481, 0x04FF, "immediate writes and timestamps: numbers not yet used"),
     (
         0x0500,
         0x05FF,
@@ -101,7 +105,7 @@ pub const MAX_LABEL: usize = 1024;
 pub const fn opcode_version(op: Opcode) -> u8 {
     match op.0 {
         0x0001..=0x0005 | 0x0100..=0x0105 | 0x0200 | 0x0201 | 0x0210..=0x0212 | 0x0300 => 1,
-        0x0400..=0x0402 | 0x0800 => 1,
+        0x0400..=0x0402 | 0x0480 | 0x0800 => 1,
         0x0F00 | 0x0F01 => 1,
         _ => 0,
     }
@@ -348,6 +352,30 @@ impl ClearUavTexture {
 }
 
 wire_struct! {
+    /// Writes the low `size` bytes (4 or 8) of `value` at `offset` of buffer
+    /// `dst`, in command order. `mode` is [`WriteImmediate::DEFAULT`] (ordered
+    /// like a copy) or `MARKER_IN` / `MARKER_OUT`: everything before the
+    /// command is complete before the write, resp. the write is complete
+    /// before anything after it starts (the back does both with a full
+    /// barrier). The front's `WriteBufferImmediate` and the timestamps of
+    /// `ResolveQueryData` land here.
+    pub struct WriteImmediate {
+        dst: ResId,
+        size: u32,
+        offset: u64,
+        value: u64,
+        mode: u32,
+        _pad: u32,
+    }
+}
+
+impl WriteImmediate {
+    pub const DEFAULT: u32 = 0;
+    pub const MARKER_IN: u32 = 1;
+    pub const MARKER_OUT: u32 = 2;
+}
+
+wire_struct! {
     /// A barrier: `before` stages finish what they were doing to memory before
     /// `after` stages start. Resources are informational for `MEMORY`
     /// barriers (the Metal barrier is stage to stage) and name the pair for `ALIASING`.
@@ -480,6 +508,7 @@ pub enum Command<'a> {
     CopyTextureRegion(CopyTextureRegion),
     CopyResource(CopyResource),
     ClearUavTexture(ClearUavTexture),
+    WriteImmediate(WriteImmediate),
     ExecuteIndirect(crate::indirect::ExecuteIndirect<'a>),
     SyncRecord(SyncRecord<'a>),
     BufferData(BufferData<'a>),
@@ -523,6 +552,7 @@ impl Command<'_> {
             Command::CopyTextureRegion(_) => Opcode::COPY_TEXTURE_REGION,
             Command::CopyResource(_) => Opcode::COPY_RESOURCE,
             Command::ClearUavTexture(_) => Opcode::CLEAR_UAV_TEXTURE,
+            Command::WriteImmediate(_) => Opcode::WRITE_IMMEDIATE,
             Command::ExecuteIndirect(_) => Opcode::EXECUTE_INDIRECT,
             Command::SyncRecord(_) => Opcode::SYNC_RECORD,
             Command::BufferData(_) => Opcode::BUFFER_DATA,
@@ -568,6 +598,15 @@ impl Command<'_> {
                 }
                 if c.float_values > 1 || c.flags & !ClearUavTexture::HAS_RECT != 0 {
                     return Err(bad(op, "flags"));
+                }
+                Ok(())
+            }
+            Command::WriteImmediate(c) => {
+                if !matches!(c.size, 4 | 8) {
+                    return Err(bad(op, "size"));
+                }
+                if c.mode > WriteImmediate::MARKER_OUT {
+                    return Err(bad(op, "mode"));
                 }
                 Ok(())
             }
@@ -643,6 +682,7 @@ impl Command<'_> {
             Command::CopyTextureRegion(c) => c.put(out),
             Command::CopyResource(c) => c.put(out),
             Command::ClearUavTexture(c) => c.put(out),
+            Command::WriteImmediate(c) => c.put(out),
             Command::ExecuteIndirect(c) => {
                 c.head().put(out);
                 out.extend_from_slice(c.signature);
@@ -768,6 +808,7 @@ pub fn decode_one<'a>(buf: &'a [u8]) -> Result<(Command<'a>, usize), Error> {
         Opcode::COPY_TEXTURE_REGION => fixed!(CopyTextureRegion, CopyTextureRegion),
         Opcode::COPY_RESOURCE => fixed!(CopyResource, CopyResource),
         Opcode::CLEAR_UAV_TEXTURE => fixed!(ClearUavTexture, ClearUavTexture),
+        Opcode::WRITE_IMMEDIATE => fixed!(WriteImmediate, WriteImmediate),
         Opcode::EXECUTE_INDIRECT => {
             use crate::indirect::{
                 ExecuteIndirect, ExecuteIndirectHead, IndirectArg, MAX_INDIRECT_ARGS,
