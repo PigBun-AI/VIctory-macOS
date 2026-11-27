@@ -21,6 +21,8 @@
 #   --log-render-size            VICTORY_LOG_RENDER_SIZE=1: the title's internal size in the log (P2); costs a lock
 #                                per draw, so leave it off for timing runs
 #   --exe PATH --out DIR --timeout SEC (0 = none) --cache DIR --data DIR --prefix DIR
+#   --seed DIR                   the read-only seed the data directories are cloned from (default ../victory-data-livetr)
+#   --fresh-data                 clone the run's data directory from the seed again, whatever is there (reproducible start)
 #   --keys SPEC | --no-keys      VICTORY_KEYS, default 8-3600/3:Enter (Enter every 3 s from 8 s)
 #   --input FILE|none            VICTORY_INPUT_REPLAY, default tools/mac/input/world-neutral.txt (I1)
 #   --record FILE                VICTORY_INPUT_RECORD (relative: under --out); turns the default replay off
@@ -52,7 +54,7 @@ winpath() { printf 'Z:%s' "$(printf '%s' "$1" | tr / '\\')"; }
 # ---- options ---------------------------------------------------------------
 backend="${VICTORY_MAC_BACKEND:-d3dmetal}"; profile="${VICTORY_MAC_PROFILE:-perf}"
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
-out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0
+out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
@@ -62,6 +64,7 @@ while [ $# -gt 0 ]; do
         --fidelity) profile=fidelity ;; --perf) profile=perf ;;
         --exe) exe=${2:?}; shift ;; --out) out=${2:?}; shift ;; --timeout) tmo=${2:?}; shift ;;
         --cache) cache=${2:?}; shift ;; --data) data=${2:?}; shift ;; --prefix) prefix=${2:?}; shift ;;
+        --seed) seed=${2:?}; shift ;; --fresh-data) fresh=1 ;;
         --keys) keys=${2:?}; shift ;; --no-keys) keys=none ;;
         --input) input=${2:?}; shift ;; --record) record=${2:?}; shift ;;
         --capture-frames) capture=${2:?}; shift ;;
@@ -92,7 +95,13 @@ case "$sample" in ''|*[!0-9]*) die "--sample takes whole seconds" ;; esac
 time_name="$(date +%Y%m%d-%H%M%S)"
 [ "$print_env" = 1 ] && time_name="<time>"
 [ -n "$out" ] || out="$ROOT/target/mac-runs/$time_name"
-case "$profile" in fidelity) base="$G/victory-data-livetr-fidelity" ;; *) base="$G/victory-data-livetr" ;; esac
+# One data directory per profile AND backend, each cloned (APFS clone) from the same read-only seed on first use, so two
+# runs of different backends start from the same state and can run side by side. The seed is never written.
+[ -n "$seed" ] || seed="$G/victory-data-livetr"
+base="$G/victory-data-livetr-$profile-$backend"
+derived=1; { [ -n "${VICTORY_DATA_DIR:-}" ] || [ -n "$data" ] || [ -n "$cache" ]; } && derived=0
+[ "$fresh" = 0 ] || [ "$derived" = 1 ] || die "--fresh-data works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
+[ "$base" != "$seed" ] || die "the run's data directory is the seed"
 if [ -n "${VICTORY_DATA_DIR:-}" ] && [ -z "$data" ]; then data="$VICTORY_DATA_DIR"; fi
 if [ -z "$data" ] && [ -n "$cache" ]; then data="$(dirname "$cache")/data"; fi
 [ -n "$data" ] || data="$base/data"
@@ -203,11 +212,17 @@ if [ "$concurrent" = 0 ]; then
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
 fi
 
-# the title's data: the fidelity profile has its own copy, cloned once from the perf one
-if [ "$profile" = fidelity ] && [ ! -d "$data" ] && [ "$data" = "$base/data" ] && [ -d "$G/victory-data-livetr/data" ]; then
-    echo "making $base from $G/victory-data-livetr (clone)"
-    mkdir -p "$base"
-    for d in data cache dxc; do [ -d "$G/victory-data-livetr/$d" ] && cp -c -R "$G/victory-data-livetr/$d" "$base/$d"; done
+# the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data
+if [ "$derived" = 1 ]; then
+    if [ "$fresh" = 1 ] && [ -d "$base" ]; then
+        echo "--fresh-data: replacing $base"
+        case "$base" in "$G"/victory-data-livetr-*-*) rm -rf "$base" ;; *) die "will not delete $base" ;; esac
+    fi
+    if [ ! -d "$base" ]; then
+        echo "making $base from the seed $seed (clone)"
+        mkdir -p "$base"
+        for d in data cache dxc; do [ -d "$seed/$d" ] && { cp -c -R "$seed/$d" "$base/$d" || cp -R "$seed/$d" "$base/$d"; }; done
+    fi
 fi
 mkdir -p "$out" "$data" "$cache"
 if [ "$profile" = fidelity ]; then

@@ -19,7 +19,9 @@ Nothing is written outside this checkout's `target/` and the data directories na
 
 **The backend decides nothing but:** the prefix, the dlls in its `system32`, `WINEDLLPATH`, `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG` and
 `VICTORY_METAL_NOTIMPL_LOG`. Everything else below is set the same way for both. `--print-env --backend d3dmetal` and `--backend metal`
-diff to those lines (and the `#` comment lines that name the backend and prefix).
+diff to those lines, and the `#` comment lines that name the backend and prefix. **Allowed differences between the backends** (the
+only ones): the backend choice, `WINEDLLPATH` / `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG` / `VICTORY_METAL_NOTIMPL_LOG`, the prefix path
+(`WINEPREFIX`), and the data and cache directories (`VICTORY_DATA_DIR`, `VICTORY_CACHE_DIR`, `VICTORY_DXC_DIR`; per backend, same seed).
 
 ### Profiles
 
@@ -27,9 +29,11 @@ diff to those lines (and the `#` comment lines that name the backend and prefix)
   patched (`VICTORY_OUTPUT=0`); internal resolution, dynamic resolution and TAA upscaling are the title's own logic. Before the run
   `video/resolutionFullscreen` in the *data directory's* `settings.xml` is set to `--settings-output` (default `2560x1440`, one of the
   title's modes); the original is kept once as `settings.xml.before-fidelity`. The profile has its own data directory
-  (`victory-data-livetr-fidelity`, an APFS clone of `victory-data-livetr` made on first use), so the perf runs' saves and settings are
-  not touched. Refused in this profile: `--console series-s`, `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`, a `VICTORY_OUTPUT` that is not
-  `0`/`none`. The pool check is kept; `--pool-check skip` is for when the first run stops at it (`PATCHES.md`, L3).
+  (see "Data directories" below), so the other runs' saves and settings are not touched. Refused in this profile: `--console series-s`, `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`, a `VICTORY_OUTPUT` that is not
+  `0`/`none`. **Pool check rule:** the profile does *not* skip the back buffer pool check by default. If a real F0 run stops at it
+  (title+0x247af25, `int3`), `--pool-check skip` becomes a fixed part of the fidelity profile; the log then carries a
+  `non-fidelity: pool check skipped` line (to be added to the loader then), and the node is registered in the matrix as a **stubbed**
+  node (a title patch, not the title's own behaviour). Until then it is only an option. Details: `PATCHES.md`, L3.
 - **perf**: `VICTORY_OUTPUT=1280x720` (an own `VICTORY_OUTPUT` in the environment wins), the patch L3; the run log carries
   `non-fidelity: output patched to 1280x720`. For speed and debugging; no fidelity result may cite it. `--console series-s` is allowed.
 
@@ -46,6 +50,17 @@ diff to those lines (and the `#` comment lines that name the backend and prefix)
   `_SKIP_GS_INDIRECT`, `_DROPSTATS`, `_CALLSTATS`, `_ARCHIVE`, `_LENIENT`) are only passed through from the environment, never set;
   skipping geometry-shader indirect draws is not a default.
 
+## Data directories
+
+Each profile and backend has its own: `<parent>/victory-data-livetr-<profile>-<backend>/{data,cache,dxc}` (for example
+`victory-data-livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
+directory, `victory-data-livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
+state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU).
+`--fresh-data` replaces the run's directory with a new clone first (reproducible start; it also drops the translated-shader cache, so the
+run is a cold one). The fidelity profile then sets `video/resolutionFullscreen` in its clone's `settings.xml` (original kept once as
+`settings.xml.before-fidelity`). `--data`, `--cache` or `VICTORY_DATA_DIR` use that directory as it is (no cloning, no `--fresh-data`).
+Do not use a seed another game is writing at that moment if you need an exact state: the clone is taken from the files as they are.
+
 ## Options
 
 | Option | Effect | Default |
@@ -53,7 +68,9 @@ diff to those lines (and the `#` comment lines that name the backend and prefix)
 | `--exe PATH` | the `victory.exe` to run | `target/x86_64-pc-windows-gnullvm/release/victory.exe` |
 | `--out DIR` | logs go here | `target/mac-runs/<time>` |
 | `--timeout SEC` | stop the run after SEC seconds (0: no limit) | 900 |
-| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | profile's `victory-data-livetr[-fidelity]/{data,cache}` next to the checkout |
+| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `victory-data-livetr-<profile>-<backend>/{data,cache}` next to the checkout (below) |
+| `--seed DIR` | the read-only seed the data directories are cloned from | `victory-data-livetr` next to the checkout |
+| `--fresh-data` | delete the run's own data directory and clone it from the seed again, so the run starts from the seed state (only with the default directory) | off |
 | `--prefix DIR` | the Wine prefix (`WINEPREFIX` also works) | by backend, see above |
 | `--keys SPEC`, `--no-keys` | `VICTORY_KEYS` | `8-3600/3:Enter` (Enter every 3 s from 8 s; patch I1) |
 | `--input FILE\|none` | `VICTORY_INPUT_REPLAY` | `tools/mac/input/world-neutral.txt` (neutral input from world frame 1; I1) |

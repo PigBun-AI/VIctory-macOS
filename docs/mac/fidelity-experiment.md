@@ -23,7 +23,7 @@ compared with perf (output patched to 1280x720, internal 853x480, 4x fewer pixel
   setup, same time-limit, same keys and neutral input (the defaults), no `--present-max` unless the step says so.
 - Save everything open first: a GPU reset can take down WindowServer (reports in #131), and a kernel panic was seen once on an M3 Max.
 - Run order alternates (P F P F P F) so that thermal state and caches do not favour one side. The first run of each profile only
-  warms the caches (`victory-data-livetr*/cache`, translated shaders); only runs 2 and 3 count for timing.
+  warms the caches (`victory-data-livetr-<profile>-<backend>/cache`, translated shaders; `--fresh-data` makes a run cold again); only runs 2 and 3 count for timing.
 - Each run: `tools/mac/run.sh --profile <p> --out target/mac-runs/<name> --timeout 900 --sample 5 --frametime-log` (and the
   step's extra flags). 15 minutes is the limit; stop earlier by hand if swap passes 20 GB or `gpu_recovery_count` rises (see below).
 

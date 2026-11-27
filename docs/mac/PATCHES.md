@@ -155,7 +155,7 @@ off while `indirect::amd()` is true. Nothing is selected wrongly: there is no ot
 One script for both backends (D3DMetal and our Metal backend) and both output profiles; usage, every option and
 variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches:
 
-- **Backend** (`--backend d3dmetal|metal`) is the only difference between two runs: the prefix (`target/wineprefix-livetr-d3dmetal`
+- **Backend** (`--backend d3dmetal|metal`) is the only difference between two runs, besides the data directories (below): the prefix (`target/wineprefix-livetr-d3dmetal`
   or `-metal`, never shared), the dlls in its `system32` (the Metal ones are installed with the originals kept as `.metal-orig`,
   and put back when the D3DMetal backend is chosen), `WINEDLLPATH`, `WINEDLLOVERRIDES`, `VICTORY_METAL_LOG`,
   `VICTORY_METAL_NOTIMPL_LOG`. `run.sh --print-env --backend d3dmetal` against `--backend metal` shows exactly that.
@@ -165,6 +165,9 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
   patch (follows tracking, not set), `VICTORY_PRESENT_MAX` (P1), `VICTORY_POOL_CHECK` (L3), `VICTORY_LOG_RENDER_SIZE` (P2),
   `WINEPREFIX` (explicit; only that prefix's wineserver is ever stopped), the data, cache and log directories, recording and
   frame capture options, `--sample` (memory/GPU lines in `mem.csv`).
+- **Data directories**: `victory-data-livetr-<profile>-<backend>`, cloned from the read-only seed `victory-data-livetr`; `--fresh-data` clones
+  again. Both backends start from the same state and can run in parallel. These directories and the prefix are the allowed differences
+  of `--print-env` between backends, besides `WINEDLLPATH`/`WINEDLLOVERRIDES`/`VICTORY_METAL_LOG`/`VICTORY_METAL_NOTIMPL_LOG`.
 - `--print-env` prints what would be passed (sorted, `~` for the home directory) and the command, and does nothing else.
 - Each run keeps `run-env.txt`, `start.txt`, `summary.txt` next to its logs.
 - Refuses: the Metal backend on a D3DMetal prefix (`wineprefix-play`, `wineprefix-livetr`, `wineprefix-livetr-d3dmetal`); a start while
@@ -313,6 +316,10 @@ title). The patch changes the title's *output*; the internal size follows (outpu
 - `VICTORY_POOL_CHECK=skip` (new) jumps over that check alone, with the output left to the title. It exists for the fidelity profile:
   with `VICTORY_OUTPUT=0` and a settings size of 2560x1440 the check is expected to stop the title at its `int3` the same way
   (roughly 34 MB of the pool left if only the two 1440p back buffers use it, the same arithmetic; **not run**). It changes no size and no scale. Off unless set.
+- **Rule for the fidelity profile (decided):** the pool check is *not* skipped by default. If a real fidelity run (F0) stops at
+  +0x247af25, `--pool-check skip` is fixed into the fidelity profile in `run.sh`, the log gets a `non-fidelity: pool check skipped`
+  line (a loader change then), and the node is registered in the matrix as a **stubbed** node: its numbers say the title ran with that
+  one check jumped over, not that it ran on its own. Until a run stops there, nothing changes.
 - When the output is patched the log says `non-fidelity: output patched to WxH` (stdout, once), besides `resolution: ... Done` per site.
 - Which settings decide the output: see "Which `settings.xml` keys decide the output" below.
 
@@ -481,8 +488,8 @@ mode list (the fidelity profile only writes modes from the list). The first fide
 | output | patched to 1280x720 (`VICTORY_OUTPUT=1280x720`, L3), log `non-fidelity: output patched to 1280x720` | the title's own, from `settings.xml` set to 2560x1440 in the profile's own data directory copy; `VICTORY_OUTPUT=0`, no resolution patch |
 | internal size / dynamic resolution / TAA upscale | the title's, at 2/3 of 1280x720 = 853x480 | the title's own logic; expected 2/3 of 1440p = 1707x960 (`VICTORY_LOG_RENDER_SIZE`) |
 | render scale, upscaler overrides | allowed (`VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`) | refused |
-| pool check (+0x247af25) | skipped with the output patch | kept; `--pool-check skip` only if the first run stops there |
-| data / cache directory | `victory-data-livetr` | `victory-data-livetr-fidelity` (cloned once from the first; the game directory is never written) |
+| pool check (+0x247af25) | skipped with the output patch | kept. If F0 stops there, `--pool-check skip` becomes a fixed part of the profile (rule below) |
+| data / cache directory | `victory-data-livetr-perf-<backend>` | `victory-data-livetr-fidelity-<backend>`; each cloned from the read-only seed `victory-data-livetr` on first use (`--fresh-data` clones again); the game directory is never written |
 
 The default stays **perf** until the 3D-missing question is settled and the owner says so; then the switch is one line,
 `profile="${VICTORY_MAC_PROFILE:-perf}"` -> `fidelity` in `run.sh`, plus (separately, as a loader change) making `VICTORY_OUTPUT=0` the
