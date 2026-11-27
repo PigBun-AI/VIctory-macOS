@@ -140,10 +140,22 @@ element, the texture's `gpuResourceID`, the length in bytes and the typed flag (
   `max(minimumLinearTextureAlignment, minimumTextureBufferAlignment)` (16 bytes for every format of
   the table on the Apple M5 Max). A smaller offset is not refused by the runtime without the
   validation layer, but the GPU reads from the aligned address below it, and MSC 4.0.3 does not apply
-  the descriptor's texture-view offset to typed accesses (measured). So a view whose
-  `FirstElement * element size` is not a multiple of the alignment is refused: `UNSUPPORTED`, with
-  the reason in `Executor::last_error`, nothing written. No copy fallback (it would not be the same
-  memory). If a game hits this, the fix is a copy of the range made by the front; decide then.
+  the descriptor's texture-view offset to typed accesses (measured twice, 2026-11-27, on 4.0.3: the
+  offset field, the typed flag and the bounds-check flag change nothing for `src[i]`, `Load` and
+  RWBuffer reads; reads start at texture element 0, out-of-range reads return 0 and
+  `GetDimensions` is the texture's width). So an offset alone cannot fix a misaligned view.
+  * **SRV off the alignment: a mirror** (`back/src/mirror.rs`). The descriptor points at an aligned
+    private buffer of its own that holds a copy of the viewed range, with the texture buffer over
+    that buffer (rule 6 is kept: the source's pages are still reached through one buffer only).
+    `Queue::begin_list` refreshes every live mirror with a blit from its source and a barrier from
+    the copies to everything. So the view shows the source **as of the start of the list**: CPU
+    writes and the GPU writes of earlier lists show; what the same list writes into the source
+    before reading the view does not. One mirror per (format, byte offset, count), shared by the
+    same views; at most 256 mirrors and 1 GiB of them per device (past that the view is refused as
+    before, with the reason); a mirror lives and dies with its source buffer. The game's three
+    `R16_UINT` views (first byte 167517650) are read-only meshlet/index data of this kind.
+  * **UAV off the alignment is refused**: `UNSUPPORTED`, the reason in `Executor::last_error`,
+    nothing written (a mirror would write the copy, not the memory).
 * **Lifetime.** Textures are cached per buffer (same format/offset/count/access, same texture), are in
   the buffer's residency set from creation, and retire with the buffer after the same GPU work
   (rule 11); a descriptor in a heap owns nothing.

@@ -50,7 +50,15 @@ Semantic differences, all written in the module docs:
   footprints with D3D12's rules (pitch aligned to 256, subresources at 512);
   the back refuses a row pitch smaller than a row, not a multiple of the
   texel (block) size, an offset not a multiple of it, a region off the mip or
-  past the buffer, with `INVALID_ARG`: never copied wrong.
+  past the buffer, with `INVALID_ARG`: never copied wrong. A compressed mip is stored in whole
+  blocks, so the edge of a region is the mip size **rounded up to the block**: D3D12's footprint of a
+  2×2 or 1×1 BC mip is one 4×4 block and `CopyTextureRegion` takes it (the game's BC streaming does
+  this; the back used to refuse it with `INVALID_ARG`).
+* A copy between a BC texture and an uncompressed texture whose texel is the BC block
+  (`R32G32B32A32_UINT` ↔ BC2/3/5/6H/7, `R32G32_UINT` ↔ BC1/4) is allowed by D3D12 and refused by
+  Metal's texture-to-texture blit (formats differ). The back does it through a private staging
+  buffer (texture → buffer in the source's format, buffer → texture in the destination's); the region is
+  counted in the source's texels. Any other mix of formats is still refused.
 * Samplers: Metal has no min/max reduction filter, so a sampler with one is
   refused (`WRITE_DESCRIPTOR` → `UNSUPPORTED`; tested). Metal has three border colours
   (transparent black, opaque black, opaque white): any other D3D12 border colour
