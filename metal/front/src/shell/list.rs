@@ -148,6 +148,36 @@ impl ListObj_Impl {
         self.list.lock().unwrap().dispatch(x, y, z);
     }
 
+    pub(super) fn x_ExecuteIndirect(
+        &self,
+        pcommandsignature: Ref<ID3D12CommandSignature>,
+        maxcommandcount: u32,
+        pargumentbuffer: Ref<ID3D12Resource>,
+        argumentbufferoffset: u64,
+        pcountbuffer: Ref<ID3D12Resource>,
+        countbufferoffset: u64,
+    ) {
+        let mut l = self.list.lock().unwrap();
+        let sig = pcommandsignature
+            .as_ref()
+            .map(|s| s.cast_object_ref::<CmdSigObj>());
+        let (Some(Ok(sig)), Some(args)) = (sig, resource(&pargumentbuffer)) else {
+            return l.unsupported();
+        };
+        let count = match resource(&pcountbuffer) {
+            Some(c) => Some((&c.resource, countbufferoffset)),
+            None if pcountbuffer.is_none() => None,
+            None => return l.unsupported(),
+        };
+        l.execute_indirect(
+            &sig.signature,
+            maxcommandcount,
+            &args.resource,
+            argumentbufferoffset,
+            count,
+        );
+    }
+
     pub(super) fn x_CopyBufferRegion(
         &self,
         dst: Ref<ID3D12Resource>,

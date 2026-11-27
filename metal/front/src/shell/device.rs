@@ -57,6 +57,24 @@ pub(crate) fn core_desc(d: &D3D12_RESOURCE_DESC) -> ResourceDesc {
     }
 }
 
+/// `D3D12_RESOURCE_DESC1` (the same description and the sampler-feedback
+/// mip region, which is not used).
+pub(crate) fn core_desc1(d: &D3D12_RESOURCE_DESC1) -> ResourceDesc {
+    ResourceDesc {
+        dimension: d.Dimension.0 as u32,
+        alignment: d.Alignment,
+        width: d.Width,
+        height: d.Height,
+        depth_or_array: d.DepthOrArraySize,
+        mips: d.MipLevels,
+        format: d.Format.0 as u32,
+        sample_count: d.SampleDesc.Count,
+        sample_quality: d.SampleDesc.Quality,
+        layout: d.Layout.0 as u32,
+        flags: d.Flags.0 as u32,
+    }
+}
+
 pub(crate) fn d3d_desc(d: &ResourceDesc) -> D3D12_RESOURCE_DESC {
     D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION(d.dimension as i32),
@@ -204,6 +222,7 @@ impl DeviceObj_Impl {
             private: PrivateData::default(),
             device_obj: self.to_object(),
             pipeline,
+            fingerprint: super::library::compute_fingerprint(&rs.root_sig, dxil),
         });
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
@@ -263,6 +282,7 @@ impl DeviceObj_Impl {
             private: PrivateData::default(),
             device_obj: self.to_object(),
             pipeline,
+            fingerprint: super::library::graphics_fingerprint(&rs.root_sig, &desc),
         });
         return_object(&p.to_interface::<IUnknown>(), riid, pppipelinestate)
     }
@@ -368,6 +388,75 @@ impl DeviceObj_Impl {
             root_sig,
         });
         return_object(&r.to_interface::<IUnknown>(), riid, ppvrootsignature)
+    }
+
+    pub(super) fn x_CreateCommandSignature(
+        &self,
+        pdesc: *const D3D12_COMMAND_SIGNATURE_DESC,
+        prootsignature: Ref<ID3D12RootSignature>,
+        riid: *const GUID,
+        ppvcommandsignature: *mut *mut c_void,
+    ) -> WResult<()> {
+        let d = require(pdesc)?;
+        if d.NumArgumentDescs == 0 || d.pArgumentDescs.is_null() {
+            return Err(werr(Hr::E_INVALIDARG));
+        }
+        // SAFETY: `NumArgumentDescs` descriptions at `pArgumentDescs`.
+        let raw =
+            unsafe { std::slice::from_raw_parts(d.pArgumentDescs, d.NumArgumentDescs as usize) };
+        let descs: Vec<crate::indirect::ArgDesc> = raw
+            .iter()
+            .map(|a| {
+                // SAFETY: `Type` says which member of the union is live.
+                let (index, dest_offset, count) = unsafe {
+                    match a.Type {
+                        D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW => {
+                            (a.Anonymous.VertexBuffer.Slot, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT => {
+                            let c = a.Anonymous.Constant;
+                            (
+                                c.RootParameterIndex,
+                                c.DestOffsetIn32BitValues,
+                                c.Num32BitValuesToSet,
+                            )
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW => {
+                            (a.Anonymous.ConstantBufferView.RootParameterIndex, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW => {
+                            (a.Anonymous.ShaderResourceView.RootParameterIndex, 0, 0)
+                        }
+                        D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW => {
+                            (a.Anonymous.UnorderedAccessView.RootParameterIndex, 0, 0)
+                        }
+                        _ => (0, 0, 0),
+                    }
+                };
+                crate::indirect::ArgDesc {
+                    ty: a.Type.0 as u32,
+                    index,
+                    dest_offset,
+                    count,
+                }
+            })
+            .collect();
+        let root = prootsignature
+            .as_ref()
+            .map(|r| r.cast_object::<RootSigObj>())
+            .transpose()?;
+        let signature = wres(crate::indirect::CommandSignature::new(
+            d.ByteStride,
+            &descs,
+            root.as_ref().map(|r| &r.root_sig),
+        ))?;
+        let s = ComObject::new(CmdSigObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            signature,
+            _root_sig: root,
+        });
+        return_object(&s.to_interface::<IUnknown>(), riid, ppvcommandsignature)
     }
 
     pub(super) fn x_CreateConstantBufferView(
@@ -784,6 +873,103 @@ impl DeviceObj_Impl {
         return_object(&r.to_interface::<IUnknown>(), riidresource, ppvresource)
     }
 
+    /// The state a resource of `desc` is created in when the call names a
+    /// layout: buffers have none (their heap type implies the state), a
+    /// texture's layout stands for its state.
+    fn state_of_initial_layout(
+        &self,
+        what: &str,
+        heap_type: u32,
+        is_buffer: bool,
+        layout: D3D12_BARRIER_LAYOUT,
+    ) -> WResult<u32> {
+        if is_buffer {
+            return Ok(match heap_type {
+                resource::HEAP_UPLOAD => resource::STATE_GENERIC_READ,
+                resource::HEAP_READBACK => resource::STATE_COPY_DEST,
+                _ => resource::STATE_COMMON,
+            });
+        }
+        crate::state::state_of_layout(layout.0 as u32)
+            .ok_or_else(|| creation_error(what, layout.0, Hr::E_INVALIDARG))
+    }
+
+    pub(super) fn x_CreateCommittedResource3(
+        &self,
+        pheapproperties: *const D3D12_HEAP_PROPERTIES,
+        heapflags: D3D12_HEAP_FLAGS,
+        pdesc: *const D3D12_RESOURCE_DESC1,
+        initiallayout: D3D12_BARRIER_LAYOUT,
+        _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
+        _pprotectedsession: Ref<ID3D12ProtectedResourceSession>,
+        numcastableformats: u32,
+        _pcastableformats: *const DXGI_FORMAT,
+        riidresource: *const GUID,
+        ppvresource: *mut *mut c_void,
+    ) -> WResult<()> {
+        const WHAT: &str = "ID3D12Device10::CreateCommittedResource3";
+        let hp = require(pheapproperties)?;
+        let d1 = require(pdesc)?;
+        let d = core_desc1(d1);
+        let state =
+            self.state_of_initial_layout(WHAT, core_props(hp).ty, d.is_buffer(), initiallayout)?;
+        let resource =
+            match self
+                .dev
+                .create_committed_cast(core_props(hp), &d, state, numcastableformats != 0)
+            {
+                Ok(b) => b,
+                Err(h) => return Err(creation_error(WHAT, d1.Dimension.0, h)),
+            };
+        let r = ComObject::new(ResourceObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            heap_props: *hp,
+            heap_flags: heapflags,
+            resource,
+        });
+        return_object(&r.to_interface::<IUnknown>(), riidresource, ppvresource)
+    }
+
+    pub(super) fn x_CreatePlacedResource2(
+        &self,
+        pheap: Ref<ID3D12Heap>,
+        heapoffset: u64,
+        pdesc: *const D3D12_RESOURCE_DESC1,
+        initiallayout: D3D12_BARRIER_LAYOUT,
+        _poptimizedclearvalue: *const D3D12_CLEAR_VALUE,
+        numcastableformats: u32,
+        _pcastableformats: *const DXGI_FORMAT,
+        riid: *const GUID,
+        ppvresource: *mut *mut c_void,
+    ) -> WResult<()> {
+        const WHAT: &str = "ID3D12Device10::CreatePlacedResource2";
+        let d1 = require(pdesc)?;
+        let heap = pheap.as_ref().ok_or_else(|| werr(Hr::E_INVALIDARG))?;
+        let heap = heap.cast_object_ref::<MemHeapObj>()?;
+        let d = core_desc1(d1);
+        let state =
+            self.state_of_initial_layout(WHAT, heap.heap.props.ty, d.is_buffer(), initiallayout)?;
+        let resource = match self.dev.create_placed_cast(
+            &heap.heap,
+            heapoffset,
+            &d,
+            state,
+            numcastableformats != 0,
+        ) {
+            Ok(r) => r,
+            Err(h) => return Err(creation_error(WHAT, d1.Dimension.0, h)),
+        };
+        let r = ComObject::new(ResourceObj {
+            private: PrivateData::default(),
+            device_obj: self.to_object(),
+            heap_props: heap.props,
+            heap_flags: heap.flags,
+            resource,
+        });
+        return_object(&r.to_interface::<IUnknown>(), riid, ppvresource)
+    }
+
     pub(super) fn x_CreateFence(
         &self,
         initialvalue: u64,
@@ -795,6 +981,7 @@ impl DeviceObj_Impl {
         let f = ComObject::new(FenceObj {
             private: PrivateData::default(),
             device_obj: self.to_object(),
+            waiter: crate::fence_wait::Waiter::new(fence.clone()),
             fence,
         });
         return_object(&f.to_interface::<IUnknown>(), riid, ppfence)
@@ -1090,7 +1277,7 @@ fn dsv_params(d: &D3D12_DEPTH_STENCIL_VIEW_DESC) -> crate::hresult::Result<ViewP
 
 /// A refused pipeline description: noted (when `VICTORY_METAL_NOTIMPL_LOG`
 /// is set, for what the back lacks) and returned as its HRESULT.
-fn refuse(e: pso::PsoError) -> windows::core::Error {
+pub(super) fn refuse(e: pso::PsoError) -> windows::core::Error {
     if e.hr == Hr::E_NOTIMPL {
         super::note_notimpl(&format!("pipeline state: {}", e.why));
     }
@@ -1119,7 +1306,7 @@ fn stencil_ops_of(f: &D3D12_DEPTH_STENCILOP_DESC) -> pso::StencilOps {
 /// The fields of `D3D12_GRAPHICS_PIPELINE_STATE_DESC`, copied into the
 /// core's description (nothing is read through a pointer yet).
 #[allow(clippy::field_reassign_with_default)]
-fn state_of_desc(d: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> pso::PipelineState {
+pub(super) fn state_of_desc(d: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> pso::PipelineState {
     let mut s = pso::PipelineState::default();
     s.vs = bytecode_of(&d.VS);
     s.ps = bytecode_of(&d.PS);

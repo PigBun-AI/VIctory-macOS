@@ -135,7 +135,11 @@ pub mod tex_usage {
     pub const RENDER_TARGET: u32 = 1 << 2;
     /// A depth-stencil target.
     pub const DEPTH_STENCIL: u32 = 1 << 3;
-    pub const ALL_BITS: u32 = 0xF;
+    /// Views in other formats of the same texel size are made of it (the
+    /// castable formats of `CreateCommittedResource3`); without it only the
+    /// formats of its own family (and sRGB pairs) are.
+    pub const CAST: u32 = 1 << 4;
+    pub const ALL_BITS: u32 = 0x1F;
 }
 
 /// Component sources of a texture view swizzle (`ViewDesc::swizzle`).

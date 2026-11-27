@@ -42,6 +42,7 @@ impl State {
     pub(super) fn new(device: Device, options: ExecOptions) -> State {
         State {
             clear_kernels: device.clear_kernels(),
+            indirect_kernels: device.indirect_kernels(),
             device,
             options,
             resources: Default::default(),
@@ -307,8 +308,16 @@ impl State {
                     Res::Texture(t) => t,
                     Res::Buffer(_) => return Err(Status::INVALID_ARG),
                 };
-                let spec = view_spec(&v)?;
+                let mut spec = view_spec(&v)?;
                 let usage = texture.desc().usage;
+                // `B8G8R8X8` is BGRA in Metal: its alpha reads 1 in a shader view.
+                if !uav && spec.plane == 0 {
+                    let own = texture.desc().format;
+                    let shown = if spec.format == 0 { own } else { spec.format };
+                    if crate::format::alpha_is_unused(shown) {
+                        spec.swizzle = crate::texture::unused_alpha_swizzle(spec.swizzle);
+                    }
+                }
                 if usage & if uav { 2 } else { 1 } == 0 {
                     return Err(Status::INVALID_ARG);
                 }
@@ -883,9 +892,10 @@ fn view_spec(v: &victory_metal_proto::ViewDesc) -> Result<ViewSpec, Status> {
         slice_first: v.slice_first,
         slice_count: v.slice_count,
         plane: u32::from(v.plane),
-        swizzle: if v.swizzle == [0; 4] {
-            // A zero field is [R, R, R, R] by the proto's rule.
-            [0; 4]
+        // A zero field is [R, R, R, R] by the proto's rule: `v.swizzle` is
+        // taken as it stands.
+        swizzle: if v.plane == 1 && v.kind == ViewKind::TEXTURE_SRV {
+            crate::texture::stencil_plane_swizzle(v.swizzle)
         } else {
             v.swizzle
         },

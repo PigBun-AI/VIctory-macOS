@@ -337,6 +337,12 @@ pub static COMMANDS: &[CommandInfo] = &[
         I,
         "end the render pass: store action of every attachment",
     ),
+    command::<crate::indirect::ExecuteIndirectHead>(
+        Opcode::EXECUTE_INDIRECT,
+        true,
+        I,
+        "ExecuteIndirect: a signature (num_args IndirectArg of 16 bytes follow) and the buffers it reads",
+    ),
     command::<cmd::SyncRecordHead>(
         Opcode::SYNC_RECORD,
         true,

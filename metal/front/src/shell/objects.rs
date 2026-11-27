@@ -103,6 +103,8 @@ pub struct FenceObj {
     pub private: PrivateData,
     pub device_obj: ComObject<DeviceObj>,
     pub fence: Arc<dv::Fence>,
+    /// The thread behind `SetEventOnCompletion`.
+    pub waiter: crate::fence_wait::Waiter<dv::Fence>,
 }
 
 impl FenceObj_Impl {
@@ -128,13 +130,10 @@ impl FenceObj_Impl {
             wres(self.fence.wait(value, u64::MAX))?;
             return Ok(());
         }
-        let fence = self.fence.clone();
         let handle = hevent.0 as isize;
-        std::thread::spawn(move || {
-            if fence.wait(value, u64::MAX).unwrap_or(false) {
-                // SAFETY: the event handle stays the application's until it is signalled.
-                let _ = unsafe { SetEvent(HANDLE(handle as *mut c_void)) };
-            }
+        self.waiter.when_reached(value, move || {
+            // SAFETY: the event handle stays the application's until it is signalled.
+            let _ = unsafe { SetEvent(HANDLE(handle as *mut c_void)) };
         });
         Ok(())
     }
@@ -275,7 +274,21 @@ pub struct PsoObj {
     pub private: PrivateData,
     pub device_obj: ComObject<DeviceObj>,
     pub pipeline: dv::Pipeline,
+    /// What the pipeline was made from, for a pipeline library
+    /// ([`crate::library::Fingerprint`]).
+    pub fingerprint: u64,
 }
 
+/// `ID3D12CommandSignature`: the checked signature and the root signature it
+/// was made with (kept alive: the back knows it by id).
+#[implement(ID3D12CommandSignature)]
+pub struct CmdSigObj {
+    pub private: PrivateData,
+    pub device_obj: ComObject<DeviceObj>,
+    pub signature: crate::indirect::CommandSignature,
+    pub _root_sig: Option<ComObject<RootSigObj>>,
+}
+
+impl CmdSigObj_Impl {}
 impl PsoObj_Impl {}
 impl RootSigObj_Impl {}

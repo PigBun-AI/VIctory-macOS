@@ -6,6 +6,7 @@ use victory_metal_proto::cmd::*;
 use victory_metal_proto::file::FileWriter;
 use victory_metal_proto::ids::*;
 use victory_metal_proto::render::*;
+use victory_metal_proto::indirect::ExecuteIndirect;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::stream::{Encoder, STREAM_HEADER_SIZE, STREAM_MAGIC};
@@ -16,6 +17,23 @@ use victory_metal_proto::{Caps, PROTO_VERSION};
 
 pub const LABEL: &[u8] = b"frame 0: compute";
 pub const CONSTANTS: [u8; 12] = [1, 0, 0, 0, 2, 0, 0, 0, 0xFE, 0xFF, 0xFF, 0xFF];
+/// `[CONSTANT root 1 offset 0 x2, UAV root 3, DISPATCH]` encoded: 32 bytes of record.
+pub const INDIRECT_SIGNATURE: [u8; 48] = {
+    let mut v = [0u8; 48];
+    let words: [u32; 12] = [5, 1, 0, 2, 8, 3, 0, 0, 2, 0, 0, 0];
+    let mut i = 0;
+    while i < 12 {
+        let b = words[i].to_le_bytes();
+        v[4 * i] = b[0];
+        v[4 * i + 1] = b[1];
+        v[4 * i + 2] = b[2];
+        v[4 * i + 3] = b[3];
+        i += 1;
+    }
+    v
+};
+/// `[DISPATCH]`.
+pub const INDIRECT_PLAIN: [u8; 16] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 pub const BLOB: &[u8] = b"DXBC-not-really";
 pub const DATA: &[u8] = &[9, 8, 7, 6, 5];
 
@@ -232,6 +250,26 @@ pub fn one_of_each() -> Vec<Command<'static>> {
         Command::ClearAttachment(sample_clear_attachment()),
         Command::BeginRenderPass(sample_begin_pass()),
         Command::EndRenderPass(sample_end_pass()),
+        Command::ExecuteIndirect(ExecuteIndirect {
+            args: ResId(5),
+            args_offset: 64,
+            count: ResId(6),
+            count_offset: 4,
+            max_count: 128,
+            stride: 32,
+            root_sig: RootSigId(2),
+            signature: &INDIRECT_SIGNATURE,
+        }),
+        Command::ExecuteIndirect(ExecuteIndirect {
+            args: ResId(5),
+            args_offset: 0,
+            count: ResId::NULL,
+            count_offset: 0,
+            max_count: 1,
+            stride: 12,
+            root_sig: RootSigId::NULL,
+            signature: &INDIRECT_PLAIN,
+        }),
         Command::SyncRecord(SyncRecord {
             op: SyncOp::CREATE_COMPUTE_PIPELINE,
             status: Status::OK,

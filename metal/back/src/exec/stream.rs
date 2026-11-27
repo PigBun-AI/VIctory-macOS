@@ -89,6 +89,13 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
                     Command::SetRootTable(c) if !known_bind_point(c.bind_point) => {
                         return Err(Status::UNSUPPORTED);
                     }
+                    // Draws, mesh dispatch, vertex and index buffers: waiting for the render encoder.
+                    Command::ExecuteIndirect(c)
+                        if c.arguments()
+                            .any(|a| !super::indirect::is_compute_arg(a.kind)) =>
+                    {
+                        return Err(Status::UNSUPPORTED);
+                    }
                     Command::Barrier(b) if b.class == BarrierClass::LAYOUT => {
                         return Err(Status::UNSUPPORTED);
                     }
@@ -165,6 +172,7 @@ impl State {
             batches: Vec::new(),
             open: None,
         };
+        let mut failed: Option<(Status, String)> = None;
         for c in decoder {
             let Ok(c) = c else {
                 return Status::BAD_STREAM;
@@ -174,12 +182,24 @@ impl State {
                     eprintln!("victory-metal back: {:?} failed: {s:?}", c.opcode());
                 }
                 // Dropping `run` drops the open list and the unflushed ones.
-                return s;
+                failed = Some((s, format!("{c:?}")));
+                break;
             }
         }
-        match run.flush_all() {
+        let result = match failed {
+            Some((s, what)) => Err((s, what)),
+            None => run.flush_all().map_err(|s| (s, "commit".to_string())),
+        };
+        drop(run);
+        match result {
             Ok(()) => Status::OK,
-            Err(s) => s,
+            Err((s, what)) => {
+                // The wire carries a status only; `ExecuteCommandLists` has no
+                // result at all, so the command that stopped the block is
+                // kept for `VICTORY_METAL_LOG` and `Executor::last_error`.
+                self.note = Some(format!("block stopped with {s:?} at {what}"));
+                s
+            }
         }
     }
 }
@@ -202,6 +222,7 @@ impl Run<'_> {
             Command::SetRootDescriptor(c) => self.set_root_descriptor(c),
             Command::SetRootTable(c) => self.set_root_table(c),
             Command::Dispatch(c) => self.dispatch(c),
+            Command::ExecuteIndirect(c) => self.execute_indirect(c),
             Command::CopyBufferRegion(c) => self.copy_buffer_region(c),
             Command::FillBuffer(c) => self.fill_buffer(c),
             Command::ClearUav(c) => self.clear_uav(c),
@@ -500,14 +521,83 @@ impl Run<'_> {
             // A dispatch needs a compute pipeline.
             return Err(Status::INVALID_ARG);
         };
-        // The pipeline was made for one root signature; its argument buffer
-        // layout is what the shader reads.
-        if !Arc::ptr_eq(&pso.root_sig, &sig) {
+        // The pipeline was made for one root signature (or an identical
+        // one); its argument buffer layout is what the shader reads.
+        if !pso.root_sig.compatible_with(&sig) {
             return Err(Status::INVALID_ARG);
         }
         write_root_arguments(list, bound, false)?;
         list.dispatch(pipeline, [c.x, c.y, c.z], *threads)
             .map_err(|e| status_of(&e))
+    }
+
+    fn execute_indirect(&mut self, c: &victory_metal_proto::indirect::ExecuteIndirect<'_>) -> R {
+        let args = self.st.buffer(c.args)?.clone();
+        let count = if c.count.is_null() {
+            None
+        } else {
+            Some((self.st.buffer(c.count)?.clone(), c.count_offset))
+        };
+        let signature_root = if c.root_sig.is_null() {
+            None
+        } else {
+            Some(
+                self.st
+                    .root_sigs
+                    .get(c.root_sig.0)
+                    .ok_or(Status::NOT_FOUND)?
+                    .clone(),
+            )
+        };
+        let kernels = &self.st.indirect_kernels;
+        let (list, bound) = match self.open.as_mut() {
+            Some((l, _, b)) => (l, b),
+            None => return Err(Status::BAD_STREAM),
+        };
+        let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
+        let sig = bound.compute.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let PsoBody::Compute { pipeline, threads } = &pso.body else {
+            return Err(Status::INVALID_ARG);
+        };
+        if !pso.root_sig.compatible_with(&sig) {
+            return Err(Status::INVALID_ARG);
+        }
+        // The signature was made for a root signature; the list's must be
+        // the same one (or an identical one).
+        if let Some(made_for) = &signature_root
+            && !made_for.compatible_with(&sig)
+        {
+            return Err(Status::INVALID_ARG);
+        }
+        let plan = super::indirect::plan(c, Some(&sig))?;
+        if plan.roots.is_empty() {
+            write_root_arguments(list, bound, false)?;
+        }
+        let spec = crate::indirect::IndirectDispatch {
+            args: &args,
+            args_offset: c.args_offset,
+            count: count.as_ref().map(|(b, off)| (b, *off)),
+            max_count: c.max_count,
+            stride: c.stride,
+            dispatch_offset: plan.dispatch_offset,
+            record_bytes: plan.record_bytes,
+            roots: &plan.roots,
+            base: &bound.compute.shadow,
+        };
+        // The kernel makes its own copies of the argument buffer; otherwise
+        // the dispatches read the one the list has, written as for a dispatch.
+        let replaced = spec.replaces_root_arguments();
+        let r = list
+            .execute_indirect(kernels, pipeline, *threads, &spec)
+            .map_err(|e| {
+                self.st.note = Some(format!("EXECUTE_INDIRECT: {e}"));
+                status_of(&e)
+            });
+        // The argument table now points at a record's copy: the next dispatch writes its own.
+        if replaced {
+            bound.compute.dirty = true;
+        }
+        r
     }
 
     fn copy_buffer_region(&mut self, c: &CopyBufferRegion) -> R {

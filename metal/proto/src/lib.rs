@@ -44,6 +44,7 @@ extern crate alloc;
 pub mod cmd;
 pub mod file;
 pub mod ids;
+pub mod indirect;
 pub mod link;
 pub mod pso;
 pub mod registry;

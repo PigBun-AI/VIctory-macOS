@@ -31,7 +31,7 @@
 
 use victory_metal_proto::pso::{
     APPEND_ALIGNED, BlendFactor, BlendOp, CullMode, FillMode, GraphicsPsoDesc, InputClass,
-    InputElement, LogicOp, MAX_INPUT_ELEMENTS, PsoKind, SEMANTIC_NAME_BYTES, StageCode, StencilFace,
+    InputElement, LogicOp, MAX_INPUT_ELEMENTS, SEMANTIC_NAME_BYTES, StageCode, StencilFace,
     StencilOp, StripCut, TopologyType,
 };
 use victory_metal_proto::types::CompareFunc;
@@ -872,6 +872,7 @@ pub fn to_proto(state: &PipelineState, inputs: &[InputDesc]) -> Result<GraphicsP
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+    use victory_metal_proto::pso::PsoKind;
 
     #[test]
     fn enum_tables_cover_exactly_the_d3d12_values() {

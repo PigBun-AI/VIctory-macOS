@@ -38,6 +38,8 @@ pub mod format;
 #[cfg(target_vendor = "apple")]
 pub mod heap;
 #[cfg(target_vendor = "apple")]
+pub mod indirect;
+#[cfg(target_vendor = "apple")]
 pub mod m0;
 #[cfg(target_vendor = "apple")]
 pub mod memory;

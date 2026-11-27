@@ -964,3 +964,78 @@ fn several_threads_submit_at_once() {
         }
     }
 }
+
+/// Time of one `ExecuteCommandLists` block of a 4 KiB copy in the executor,
+/// 100 in a row, as the e2e "call only" case makes them. Timing: `#[ignore]`d.
+#[test]
+#[ignore = "timing"]
+fn block_call_time() {
+    let fx = Fx::with_options(victory_metal_back::exec::ExecOptions::default());
+    let q = fx.queue();
+    let a = fx.buffer(BufferKind::SHARED, 4096).res;
+    let b = fx.buffer(BufferKind::SHARED, 4096).res;
+    let blocks: Vec<Vec<u8>> = (0..100)
+        .map(|i| block(&[begin(i + 1, q), copy(a, b, 4096), end(i + 1)]))
+        .collect();
+    let mut us = Vec::new();
+    for round in 0..std::env::var("ROUNDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60)
+    {
+        let t = std::time::Instant::now();
+        for b in &blocks {
+            assert_eq!(fx.link.submit(b), Status::OK);
+        }
+        let dt = t.elapsed().as_secs_f64() * 1e6 / 100.0;
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        if round >= 10 {
+            us.push(dt);
+        }
+    }
+    us.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!(
+        "PERF block_call_time p50 = {:.2} us / p90 {:.2}",
+        us[us.len() / 2],
+        us[us.len() * 9 / 10]
+    );
+}
+
+/// The commit of a block is made by the queue's own thread, after the call
+/// has returned. What the calls say still holds: a long chain of copies,
+/// each on the other of two queues and ordered only by fence waits and
+/// signals, made in one burst without waiting, lands in order; and the fence
+/// is visible (a CPU wait on its last value returns) with nothing waited for
+/// in between.
+#[test]
+fn commits_made_off_the_calling_thread_keep_the_order_of_the_calls() {
+    let fx = Fx::with_options(victory_metal_back::exec::ExecOptions::default());
+    let (q0, q1) = (fx.queue(), fx.queue());
+    let f = fx.fence(0);
+    const N: usize = 200;
+    let bufs: Vec<CreateBufferArgs> = (0..=N)
+        .map(|_| fx.buffer(BufferKind::SHARED, 256))
+        .collect();
+    for b in &bufs {
+        cpu_write(b.cpu_addr, &[0; 64]);
+    }
+    let pattern: Vec<u32> = (0..64).map(|i| 0x1000 + i).collect();
+    cpu_write(bufs[0].cpu_addr, &pattern);
+    for i in 0..N {
+        let q = if i % 2 == 0 { q0 } else { q1 };
+        let mut cmds = Vec::new();
+        if i > 0 {
+            cmds.push(wait_cmd(q, f, i as u64));
+        }
+        cmds.extend([
+            begin(i as u32 + 1, q),
+            copy(bufs[i + 1].res, bufs[i].res, 256),
+            end(i as u32 + 1),
+            signal_cmd(q, f, i as u64 + 1),
+        ]);
+        assert_eq!(fx.submit(&cmds), Status::OK, "step {i}");
+    }
+    assert_eq!(fx.wait(f, N as u64), Status::OK);
+    assert_eq!(fx.fence_value(f), N as u64);
+    assert_eq!(cpu_read(bufs[N].cpu_addr, 64), pattern);
+}

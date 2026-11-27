@@ -240,6 +240,7 @@ only in dumps.
 | 0x0520 | `CLEAR_ATTACHMENT` | 1 | 168 | Implemented | target: u32 @0, flags: u32 @4, rect_count: u32 @8, clear_stencil: u32 @12, color: [f32; 4] @16, clear_depth: f32 @32, rect: [Rect; 8] @40 | clear an attachment, or rectangles of it, inside the open pass |
 | 0x0600 | `BEGIN_RENDER_PASS` | 1 | 328 | Implemented | rt_count: u32 @0, flags: u32 @4, rt: [RenderAttachment; 8] @8, ds: DepthAttachment @296 | start a render pass: colour and depth attachments with their load actions and clear values |
 | 0x0601 | `END_RENDER_PASS` | 1 | 16 | Implemented | rt_store: [StoreAction; 8] @0, depth_store: StoreAction @8, stencil_store: StoreAction @9 | end the render pass: store action of every attachment |
+| 0x0800 | `EXECUTE_INDIRECT` | 1 | 40 + data | Implemented | args: ResId @0, count: ResId @4, args_offset: u64 @8, count_offset: u64 @16, max_count: u32 @24, stride: u32 @28, root_sig: RootSigId @32, num_args: u32 @36 | ExecuteIndirect: a signature (num_args IndirectArg of 16 bytes follow) and the buffers it reads |
 | 0x0F00 | `SYNC_RECORD` | 1 | 16 + data | ReplayOnly | op: SyncOp @0, status: Status @4, args_len: u32 @8, blob_len: u32 @12 | recorded sync call (args, blob follow) |
 | 0x0F01 | `BUFFER_DATA` | 1 | 24 + data | ReplayOnly | res: ResId @0, offset: u64 @8, len: u64 @16 | recorded CPU write to a buffer (len bytes follow) |
 
@@ -249,6 +250,6 @@ only in dumps.
 - 0x0500-0x05FF: render state, draws, mesh dispatch, clears in a pass (m4-render; numbers not yet used)
 - 0x0602-0x06FF: render passes and render-encoder bindings (m4-render; numbers not yet used)
 - 0x0700-0x07FF: present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)
-- 0x0800-0x08FF: queries and timestamps (M2)
+- 0x0801-0x08FF: queries, timestamps, other compute-side commands (m4-compute)
 - 0x0900-0x09FF: ExecuteIndirect (M2)
 <!-- END GENERATED: api_table -->

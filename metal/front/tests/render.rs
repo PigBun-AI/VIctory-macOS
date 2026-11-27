@@ -80,6 +80,7 @@ fn names(items: &[Item]) -> Vec<&'static str> {
                 _ => "other",
             },
             Item::RootConstants { .. } => "root_constants",
+            Item::Indirect(_) => "indirect",
         })
         .collect()
 }

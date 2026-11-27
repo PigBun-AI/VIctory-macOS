@@ -471,6 +471,11 @@ impl ConstantRing {
         self.buffer.gpu_va()
     }
 
+    /// Bytes of one segment.
+    pub fn segment_bytes(&self) -> u64 {
+        self.segment
+    }
+
     /// `size` bytes aligned to `align` (a power of two up to 256), or the
     /// reason there is no room. `completed` is the timeline's completed
     /// value.

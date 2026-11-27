@@ -288,13 +288,15 @@ impl Swapchain {
         list.dispatch(&kernel, [dw.div_ceil(8), dh.div_ceil(8), 1], [8, 8, 1])?;
         list.end()?;
         let as_drawable: &ProtocolObject<dyn MTLDrawable> = ProtocolObject::from_ref(&*drawable);
-        let value = queue.submit_drawable(vec![list], as_drawable)?;
+        // The queue's submit thread presents it after the commit; with the
+        // probe on, the texel is read first, so the present is ours.
+        let value = queue.submit_drawable(vec![list], as_drawable, !self.probe)?;
         if self.probe {
             // Read before the present hands the drawable to the display.
             queue.wait_for(value, 5_000)?;
             self.last_probe = Some(read_texel(&target, dw / 2, dh / 2));
+            as_drawable.present();
         }
-        as_drawable.present();
         self.presents += 1;
         self.in_flight
             .push_back((key, queue.timeline().clone(), value));

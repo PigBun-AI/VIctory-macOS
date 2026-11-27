@@ -59,6 +59,8 @@ open_enum! {
         CLEAR_ATTACHMENT = 0x0520,
         BEGIN_RENDER_PASS = 0x0600,
         END_RENDER_PASS = 0x0601,
+        /// `ExecuteIndirect` ([`crate::indirect`]).
+        EXECUTE_INDIRECT = 0x0800,
 
         SYNC_RECORD = 0x0F00,
         BUFFER_DATA = 0x0F01,
@@ -84,7 +86,11 @@ pub const RESERVED_RANGES: &[(u16, u16, &str)] = &[
         0x07FF,
         "present (m4-present; unused: PRESENT is a sync call, see sync::PresentArgs)",
     ),
-    (0x0800, 0x08FF, "queries and timestamps (M2)"),
+    (
+        0x0801,
+        0x08FF,
+        "queries, timestamps, other compute-side commands (m4-compute)",
+    ),
     (0x0900, 0x09FF, "ExecuteIndirect (M2)"),
 ];
 
@@ -109,7 +115,7 @@ pub const MAX_LABEL: usize = 1024;
 pub const fn opcode_version(op: Opcode) -> u8 {
     match op.0 {
         0x0001..=0x0005 | 0x0100..=0x0105 | 0x0200 | 0x0201 | 0x0210..=0x0212 | 0x0300 => 1,
-        0x0400..=0x0402 => 1,
+        0x0400..=0x0402 | 0x0800 => 1,
         0x0501..=0x0507 | 0x0510..=0x0512 | 0x0520 | 0x0600 | 0x0601 => 1,
         0x0F00 | 0x0F01 => 1,
         _ => 0,
@@ -502,6 +508,7 @@ pub enum Command<'a> {
     DrawIndexed(DrawIndexed),
     DispatchMesh(DispatchMesh),
     ClearAttachment(ClearAttachment),
+    ExecuteIndirect(crate::indirect::ExecuteIndirect<'a>),
     SyncRecord(SyncRecord<'a>),
     BufferData(BufferData<'a>),
 }
@@ -598,6 +605,7 @@ impl Command<'_> {
             Command::DrawIndexed(_) => Opcode::DRAW_INDEXED,
             Command::DispatchMesh(_) => Opcode::DISPATCH_MESH,
             Command::ClearAttachment(_) => Opcode::CLEAR_ATTACHMENT,
+            Command::ExecuteIndirect(_) => Opcode::EXECUTE_INDIRECT,
             Command::SyncRecord(_) => Opcode::SYNC_RECORD,
             Command::BufferData(_) => Opcode::BUFFER_DATA,
         }
@@ -709,6 +717,7 @@ impl Command<'_> {
                 }
                 Ok(())
             }
+            Command::ExecuteIndirect(c) => c.check(),
             Command::SyncRecord(r) if r.args.len() > MAX_PAYLOAD || r.blob.len() > MAX_PAYLOAD => {
                 Err(Error::TooLarge)
             }
@@ -778,6 +787,10 @@ impl Command<'_> {
             Command::DrawIndexed(c) => c.put(out),
             Command::DispatchMesh(c) => c.put(out),
             Command::ClearAttachment(c) => c.put(out),
+            Command::ExecuteIndirect(c) => {
+                c.head().put(out);
+                out.extend_from_slice(c.signature);
+            }
             Command::SyncRecord(c) => {
                 SyncRecordHead {
                     op: c.op,
@@ -912,6 +925,27 @@ pub fn decode_one<'a>(buf: &'a [u8]) -> Result<(Command<'a>, usize), Error> {
         Opcode::DRAW_INDEXED => fixed!(DrawIndexed, DrawIndexed),
         Opcode::DISPATCH_MESH => fixed!(DispatchMesh, DispatchMesh),
         Opcode::CLEAR_ATTACHMENT => fixed!(ClearAttachment, ClearAttachment),
+        Opcode::EXECUTE_INDIRECT => {
+            use crate::indirect::{
+                ExecuteIndirect, ExecuteIndirectHead, IndirectArg, MAX_INDIRECT_ARGS,
+            };
+            let head = ExecuteIndirectHead::get(&mut r)?;
+            let n = head.num_args as usize;
+            if n > MAX_INDIRECT_ARGS {
+                return Err(bad_len);
+            }
+            let bytes = n * IndirectArg::SIZE;
+            Command::ExecuteIndirect(ExecuteIndirect::from_head(
+                head,
+                tail(
+                    &mut r,
+                    ExecuteIndirectHead::SIZE,
+                    bytes,
+                    payload_len,
+                    bad_len,
+                )?,
+            ))
+        }
         Opcode::SYNC_RECORD => {
             let head = SyncRecordHead::get(&mut r)?;
             let (a, b) = (head.args_len as usize, head.blob_len as usize);

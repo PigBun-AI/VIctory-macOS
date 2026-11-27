@@ -12,7 +12,7 @@ use victory_metal_proto::registry::layout_fingerprint;
 const PINNED: &[(u32, u64)] = &[
     (1, 0xa028_6369_07f7_87a9),
     (2, 0x8de9_d9a2_a9f0_459a),
-    (3, 0x23e5_9175_c307_75db),
+    (3, 0xe307_f36d_584c_63ba),
 ];
 
 #[test]

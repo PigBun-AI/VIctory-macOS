@@ -53,9 +53,25 @@ impl Gpu {
     pub fn submit(&self, block: &[u8]) -> Result<()> {
         match self.link.submit(block) {
             Status::OK => Ok(()),
-            s => Err(status_to_hr(s)),
+            s => {
+                // `ExecuteCommandLists` returns nothing, so this is the only trace.
+                if log_on() {
+                    eprintln!(
+                        "victory-metal front: submit of {} bytes answered {s:?}",
+                        block.len()
+                    );
+                }
+                Err(status_to_hr(s))
+            }
         }
     }
+}
+
+/// `VICTORY_METAL_LOG` set: print what fails silently.
+fn log_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0"))
 }
 
 #[cfg(test)]

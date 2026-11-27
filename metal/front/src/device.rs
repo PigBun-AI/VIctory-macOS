@@ -187,6 +187,20 @@ impl Device {
         desc: &ResourceDesc,
         initial_state: u32,
     ) -> Result<Resource> {
+        self.create_committed_cast(props, desc, initial_state, false)
+    }
+
+    /// [`create_committed`](Self::create_committed) of a texture that may be
+    /// viewed in other formats of its texel size (`cast`: the castable
+    /// formats of `CreateCommittedResource3`; the back checks sizes at the
+    /// view, so the list itself is not sent).
+    pub fn create_committed_cast(
+        self: &Arc<Self>,
+        props: HeapProps,
+        desc: &ResourceDesc,
+        initial_state: u32,
+        cast: bool,
+    ) -> Result<Resource> {
         let mem = props.memory()?;
         let desc = resource::validate_committed(props.ty, desc, initial_state)?;
         if desc.is_buffer() {
@@ -207,7 +221,7 @@ impl Device {
             // A texture in CPU-visible custom memory is made like any other
             // (private storage): there is no `Map` for it (the original
             // API's row-major textures are not built).
-            let res = self.make_texture(&desc, None)?;
+            let res = self.make_texture(&desc, None, cast)?;
             Ok(self.track(res, 0, 0, props, desc, initial_state, None))
         }
     }
@@ -270,6 +284,19 @@ impl Device {
         desc: &ResourceDesc,
         initial_state: u32,
     ) -> Result<Resource> {
+        self.create_placed_cast(heap, offset, desc, initial_state, false)
+    }
+
+    /// [`create_placed`](Self::create_placed) with castable formats (see
+    /// [`create_committed_cast`](Self::create_committed_cast)).
+    pub fn create_placed_cast(
+        self: &Arc<Self>,
+        heap: &Arc<Heap>,
+        offset: u64,
+        desc: &ResourceDesc,
+        initial_state: u32,
+        cast: bool,
+    ) -> Result<Resource> {
         let desc = resource::validate_committed(heap.props.ty, desc, initial_state)?;
         if !offset.is_multiple_of(heap.alignment) || offset >= heap.size {
             return Err(Hr::E_INVALIDARG);
@@ -290,7 +317,7 @@ impl Device {
                 Some(heap.clone()),
             ))
         } else {
-            let res = self.make_texture(&desc, Some((heap, offset)))?;
+            let res = self.make_texture(&desc, Some((heap, offset)), cast)?;
             Ok(self.track(
                 res,
                 0,
@@ -303,7 +330,12 @@ impl Device {
         }
     }
 
-    fn make_texture(&self, d: &ResourceDesc, at: Option<(&Heap, u64)>) -> Result<ResId> {
+    fn make_texture(
+        &self,
+        d: &ResourceDesc,
+        at: Option<(&Heap, u64)>,
+        cast: bool,
+    ) -> Result<ResId> {
         use victory_metal_proto::types::TexDim;
         if d.layout == resource::LAYOUT_ROW_MAJOR {
             return Err(Hr::E_NOTIMPL);
@@ -320,7 +352,7 @@ impl Device {
         a.depth_or_array = d.depth_or_array as u32;
         a.mips = d.mips as u32;
         a.samples = d.sample_count;
-        a.usage = d.texture_usage();
+        a.usage = d.texture_usage() | if cast { pt::tex_usage::CAST } else { 0 };
         if let Some((h, off)) = at {
             a.heap = h.id;
             a.heap_offset = off;
@@ -1019,6 +1051,8 @@ pub enum Item {
         dest_offset: u32,
         values: Vec<u32>,
     },
+    /// `ExecuteIndirect` (the signature's bytes are owned: [`crate::indirect`]).
+    Indirect(crate::indirect::IndirectItem),
 }
 
 /// Lists → one block. `new_list_id` hands out ids unique within the block.
@@ -1055,6 +1089,7 @@ pub fn encode_block(
                 } => e
                     .set_root_constants(*bind_point, *root_index, *dest_offset, values)
                     .map_err(bad)?,
+                Item::Indirect(i) => e.push(&i.command()).map_err(bad)?,
             }
         }
         e.push(&Command::EndList(EndList { list, _pad: 0 }))
@@ -1128,6 +1163,16 @@ impl CommandList {
 
     pub(crate) fn fail(&mut self, e: Hr) {
         self.error.get_or_insert(e);
+    }
+
+    pub(crate) fn push_item(&mut self, item: Item) {
+        if self.state == ListState::Recording {
+            // An indirect dispatch is compute work: it ends the render pass.
+            if matches!(item, Item::Indirect(_)) {
+                self.leave_render();
+            }
+            self.items.push(item);
+        }
     }
 
     /// `Close`. A second `Close` returns S_OK, as D3DMetal does.
