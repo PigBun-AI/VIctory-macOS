@@ -128,6 +128,58 @@ pub fn transition_barrier(before: u32, after: u32) -> Option<StageBarrier> {
     })
 }
 
+/// The barrier a transition of one subresource needs, given what the tracker
+/// knows of its writers; updates `writers` / `covered`. `transition_barrier`
+/// is the part that needs no history.
+fn track_transition(t: &mut Track, before: u32, after: u32) -> Option<StageBarrier> {
+    if before == after {
+        return None;
+    }
+    let (b, a) = (stages_of(before), stages_of(after));
+    // Leaving a write state: its stages hold writes nobody has seen yet.
+    if is_write_state(before) {
+        t.writers |= b;
+        t.covered = 0;
+    }
+    // Into COMMON / PRESENT (decay: any use may follow) or a state with no
+    // stages: pending writes become visible to everything.
+    let to_common = after == COMMON;
+    let a = if to_common { stage::ALL } else { a };
+    if a == 0 {
+        return None;
+    }
+    let entering_write = is_write_state(after);
+    let need = if entering_write { a } else { a & !t.covered };
+    if t.writers == 0 && (b == 0 || (!entering_write && !is_write_state(before))) {
+        // Nothing pending and two reads (or an unknown side): no barrier.
+        return None;
+    }
+    if !entering_write && need == 0 {
+        return None;
+    }
+    let from = t.writers | if entering_write { b } else { 0 };
+    if from == 0 {
+        return None;
+    }
+    let barrier = StageBarrier {
+        before: from,
+        after: need,
+        visibility: visibility::DEVICE,
+    };
+    if entering_write {
+        // The new writes start a fresh history.
+        t.writers = 0;
+        t.covered = 0;
+    } else {
+        t.covered |= need;
+        if t.covered & stage::ALL == stage::ALL {
+            t.writers = 0;
+            t.covered = 0;
+        }
+    }
+    Some(barrier)
+}
+
 /// A UAV barrier: shader writes before, shader accesses after.
 pub fn uav_barrier() -> StageBarrier {
     StageBarrier {
@@ -151,14 +203,34 @@ pub const BARRIER_FLAG_BEGIN_ONLY: u32 = 1;
 pub const BARRIER_FLAG_END_ONLY: u32 = 2;
 pub const ALL_SUBRESOURCES: u32 = 0xffff_ffff;
 
+/// What the tracker keeps for one subresource.
+#[derive(Clone, Copy, Debug)]
+struct Track {
+    state: u32,
+    /// Stages that wrote the subresource (the stages of the write states it
+    /// has been in) and whose writes are not yet visible everywhere.
+    writers: u16,
+    /// Stages the pending `writers`' writes were already made visible to by a
+    /// barrier sent earlier.
+    covered: u16,
+}
+
 /// Tracks the state of every resource's subresources as the front has seen
 /// it, command list after command list. `ResourceBarrier` calls go through
 /// [`StateTracker::transition`]; a split barrier is sent at its END only
 /// (proto.md section 4: "send the barrier at the end point only"; the state
 /// changes there, as in D3D12).
+///
+/// Besides the state it remembers which stages wrote the subresource and to
+/// which stages that has been made visible. D3D12 lets an application go
+/// `UNORDERED_ACCESS -> INDIRECT_ARGUMENT -> COPY_SOURCE`: the second step
+/// is read to read and carries no barrier of its own, but the copy still has
+/// to see the shader's writes, which the first barrier made visible to the
+/// indirect-argument stages only. A read-state transition therefore sends
+/// the stages it newly reads in, after the pending writers.
 #[derive(Default)]
 pub struct StateTracker {
-    resources: HashMap<u32, Vec<u32>>,
+    resources: HashMap<u32, Vec<Track>>,
     /// Transitions whose StateBefore differed from the tracked state.
     pub mismatches: u32,
 }
@@ -171,8 +243,13 @@ pub enum TransitionError {
 
 impl StateTracker {
     pub fn add(&mut self, resource: u32, subresources: u32, initial: u32) {
+        let track = Track {
+            state: initial,
+            writers: 0,
+            covered: 0,
+        };
         self.resources
-            .insert(resource, vec![initial; subresources.max(1) as usize]);
+            .insert(resource, vec![track; subresources.max(1) as usize]);
     }
 
     pub fn remove(&mut self, resource: u32) {
@@ -183,7 +260,7 @@ impl StateTracker {
         self.resources
             .get(&resource)?
             .get(subresource as usize)
-            .copied()
+            .map(|t| t.state)
     }
 
     /// Apply a transition and return the barrier to record, if any. `flags`
@@ -215,12 +292,12 @@ impl StateTracker {
         // subresource moves from.
         let mut merged: Option<StageBarrier> = None;
         for s in &mut subs[range] {
-            if *s != before {
+            if s.state != before {
                 self.mismatches += 1;
             }
             // The application's StateBefore is the rule (D3D12 requires it
             // to equal the tracked state).
-            if let Some(b) = transition_barrier(before, after) {
+            if let Some(b) = track_transition(s, before, after) {
                 merged = Some(match merged {
                     Some(m) => StageBarrier {
                         before: m.before | b.before,
@@ -230,7 +307,7 @@ impl StateTracker {
                     None => b,
                 });
             }
-            *s = after;
+            s.state = after;
         }
         Ok(merged)
     }
@@ -326,5 +403,64 @@ mod tests {
         t.transition(7, 2, UNORDERED_ACCESS, COPY_SOURCE, 0)
             .unwrap();
         assert_eq!(t.mismatches, 1);
+    }
+
+    #[test]
+    fn writes_stay_pending_across_read_to_read_transitions() {
+        // The shape of victory-gpu's indirect clamp: a shader writes the
+        // buffer, it becomes an indirect argument, then a copy source. The
+        // second step must wait for the shader's writes too.
+        let mut t = StateTracker::default();
+        t.add(1, 1, UNORDERED_ACCESS);
+        let first = t
+            .transition(1, 0, UNORDERED_ACCESS, INDIRECT_ARGUMENT, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.before, SHADERS);
+        assert_eq!(first.after, DISPATCH | VERTEX | OBJECT | MESH);
+        let second = t
+            .transition(1, 0, INDIRECT_ARGUMENT, COPY_SOURCE, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!((second.before, second.after), (SHADERS, BLIT));
+        // Back and forth between read states that are already covered: nothing.
+        assert_eq!(
+            t.transition(1, 0, COPY_SOURCE, INDIRECT_ARGUMENT, 0)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            t.transition(1, 0, INDIRECT_ARGUMENT, COPY_SOURCE, 0)
+                .unwrap(),
+            None
+        );
+        // A new write starts a new history.
+        let again = t
+            .transition(1, 0, COPY_SOURCE, UNORDERED_ACCESS, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!((again.before, again.after), (BLIT | SHADERS, SHADERS));
+        let read = t
+            .transition(1, 0, UNORDERED_ACCESS, NON_PIXEL_SHADER_RESOURCE, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.before, SHADERS);
+    }
+
+    #[test]
+    fn a_write_state_left_for_common_is_made_visible_to_everything() {
+        let mut t = StateTracker::default();
+        t.add(2, 1, RENDER_TARGET);
+        let b = t
+            .transition(2, 0, RENDER_TARGET, PRESENT, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!((b.before, b.after), (FRAGMENT, ALL));
+        // Nothing pending any more: common to a write state needs nothing.
+        assert_eq!(t.transition(2, 0, COMMON, COPY_DEST, 0).unwrap(), None);
+        // A buffer never written: decay and promotion stay free.
+        t.add(3, 1, COMMON);
+        assert_eq!(t.transition(3, 0, COMMON, COPY_SOURCE, 0).unwrap(), None);
+        assert_eq!(t.transition(3, 0, COPY_SOURCE, COMMON, 0).unwrap(), None);
     }
 }
