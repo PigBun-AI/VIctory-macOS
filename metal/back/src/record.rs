@@ -324,6 +324,16 @@ impl CommandList {
         Ok(())
     }
 
+    /// Binds only the sampler heap (bind point 1), leaving the descriptor
+    /// heap as it is.
+    pub fn set_sampler_heap(&mut self, samplers: &DescriptorHeap) -> Result<()> {
+        self.live()?;
+        self.table
+            .set_address(bind_point::SAMPLER_HEAP as u32, samplers.gpu_va())?;
+        self.keep_buffers.push(samplers.buffer().clone());
+        Ok(())
+    }
+
     /// Binds the top-level argument buffer (bind point 2) to a ring
     /// allocation holding root constants, root descriptors and table
     /// pointers.
