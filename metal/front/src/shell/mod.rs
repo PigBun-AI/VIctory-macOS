@@ -31,6 +31,7 @@ mod list;
 mod objects;
 mod private;
 mod serialize;
+#[rustfmt::skip]
 mod stubs;
 
 pub use private::PrivateData;
