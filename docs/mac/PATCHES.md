@@ -283,6 +283,43 @@ marker never came (`exec` in the command line: fixed by `465a121a`, "each helper
 helper cache with the `exec` build: crash 37 s after the start, every time; the fixed build with a cold cache goes
 on to the world. No allocation failed (xmem logs no refusal).
 
+### G8 — where the title's draws go: `VICTORY_MAC_DROP_STATS` (`victory-gpu/src/mac/drop_stats.rs`, `tools/mac/drop-ab.sh`)
+
+*What.* A runtime switch (not the `diagnostics` feature: that one is Windows-only code that needs a diag build, and
+`note_drop` / `note_why` print nothing in a release exe), so a plain `check.sh` release exe has it. `VICTORY_MAC_DROP_STATS=1` logs, per
+present, `drop-stats present=P world_frame=W recorded=D+X ran=R dropped=N notimpl[0x1c8=a 0x218=b] why[class=n ...] kind[kind=n ...]`
+and every 5 s `drop-stats summary` and 20 `drop-stats top` lines (n, op, pipeline kind, creation method, reason, example
+shader hashes), once for the whole run and once from world frame 1. `=2` adds `psoran[gseq:n ...]` (host pipelines that
+ran this present) and one `drop-stats pso` line per host pipeline made (`seq`, `gseq` = order among graphics and
+mesh ones, kind, shaders). `VICTORY_MAC_DROP_STATS_PSO=<path>` rewrites a table of them every 5 s. Off: one relaxed
+load per hook, nothing logged.
+
+*Reasons* (the upstream `make::missing()` and the counters lump these; only the Mac layer tells them apart,
+`pipeline::mac_state` / `mac_view` read the `Pending` without waiting): `compiling` (requested, not finished),
+`failed:shader_translation(stage hash)` or `failed:<host reason>` (`host pipeline refused: <HRESULT>`, `no vertex or mesh shader`,
+`the host GPU has no mesh shaders...`), `never_requested:left_out` (the ray-tracing resolve/activate programs; upstream calls it "being made"),
+`rt_builder_off`, `skip_list`, `kind_mismatch`, `bind_failed`, `bind_or_index_failed`, `null_pipeline`; ExecuteIndirect:
+`ind:` + the first reason `execute_indirect` gave up for (`arguments outside title buffers`, `count outside title buffers`,
+`no host signature`, `mesh draws are switched off...`, `not bounded (no clamp, or arguments not 4-byte aligned)`, `prepare failed`),
+`ind:signature_unsupported(...)`, `ind:no_signature_layout`, or the pipeline's state. Pipeline kinds: `mesh`, `vs`, `vs+gs`, `tess`, `compute`; host side
+`vs+rect_gs`. Creation method of a title pipeline: `graphics@0x50`, `compute@0x58`, `compute@0x1f0`, `stream@0x2b0`
+(slots 0x1c8 and 0x218 never make one: `device::unknown_pipeline` counts their calls per present).
+
+*Hooks in upstream files* (one line each, `crate::mac::drop_stats::...`): `draw.rs` (the drop and run sites,
+`bound_pipeline()`), `list.rs` (`count_draw`/`count_dispatch`, `execute_indirect` result), `pipeline.rs`
+(`creating`/`created` in the four create methods, `MacState`/`mac_view`), `pipeline/make.rs` (`mac_state`, the host result),
+`pipeline/host.rs` (the refusal reason), `device.rs`, `queue.rs` (present). Upstream semantics are unchanged.
+
+*D3DMetal no-op pipelines.* D3DMetal prints `marking PSO(n) as no-op` on stdout for a pipeline it could not compile
+after our create call succeeded; the shared layer counts such a draw as drawn. `tools/mac/drop-ab.sh` stamps
+stdout with the time of each line and `tools/mac/drop-stats-report.sh` ties `PSO(n)` to our `seq` or `gseq` only if the
+pipeline it names was created 0..10 s before the line for at least 90% of them (the numbering is not documented);
+if so it gives the draws that ran on no-op pipelines (`psoran`), else only the lines per world frame.
+
+*Run.* `tools/mac/drop-ab.sh` (warm = `--make-book` run if needed + `victory warm` + run, cold = empty cache, same
+`VICTORY_INPUT_REPLAY=tools/mac/input/world-neutral.txt` and Enter script; `run.sh` is called without arguments)
+and prints the share of each class over the first N world frames. *Remove when* the Metal backend replaces the D3DMetal path.
+
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores

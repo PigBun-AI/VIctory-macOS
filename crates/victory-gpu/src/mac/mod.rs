@@ -4,6 +4,7 @@
 //! line's files in as few places as possible.
 
 pub mod adapter;
+pub mod drop_stats;
 pub mod hlsl;
 pub mod present_cap;
 pub mod render_size;

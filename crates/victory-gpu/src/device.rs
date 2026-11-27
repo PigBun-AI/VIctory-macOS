@@ -365,6 +365,7 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
     use std::sync::atomic::{AtomicU32, Ordering};
     static CALLS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
     let calls = CALLS[usize::from(SLOT == 0x218)].fetch_add(1, Ordering::Relaxed) + 1;
+    crate::mac::drop_stats::notimpl(SLOT);
     if !out.is_null() {
         // SAFETY: the title's out pointer (a local of its own).
         unsafe { *out = std::ptr::null() };

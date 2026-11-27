@@ -1866,6 +1866,7 @@ mod state {
 
 fn count_draw() {
     crate::mac::world::draw();
+    crate::mac::drop_stats::recorded(false);
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -1896,12 +1897,18 @@ extern "system" fn execute_indirect(
     count_offset: u64,
 ) {
     count_draw();
+    crate::mac::drop_stats::indirect_begin();
     let Some((stride, args)) = crate::signature::layout(signature) else {
+        #[cfg(windows)]
+        crate::mac::drop_stats::indirect_dropped(0, u32::MAX, Some("no_signature_layout".to_owned()));
         return;
     };
     let address = crate::resource::buffer_bytes(arguments).map(|(p, _)| p as u64 + offset);
     let counter = crate::resource::buffer_bytes(count).map(|(p, _)| p as u64 + count_offset);
     let mut ran = false;
+    // The list state's pipeline and the argument kind, for the drop statistics.
+    #[cfg(windows)]
+    let (mut pipeline, mut argument_kind) = (0usize, u32::MAX);
     #[cfg(windows)]
     if let ([[kind, ..]], Some(address)) = (args, address)
         && (count.is_null() || counter.is_some())
@@ -1909,7 +1916,9 @@ extern "system" fn execute_indirect(
         const DISPATCH: u32 = 2;
         const DISPATCH_SINGLE: u32 = 105;
         let kind = if *kind == DISPATCH_SINGLE { DISPATCH } else { *kind };
+        argument_kind = kind;
         with_state(this, |list, s| {
+            pipeline = s.bound_pipeline();
             ran = s.execute_indirect(list, (kind, stride, max), address, counter);
         });
     } else {
@@ -1923,6 +1932,18 @@ extern "system" fn execute_indirect(
     if ran {
         return;
     }
+    #[cfg(windows)]
+    crate::mac::drop_stats::indirect_dropped(
+        pipeline,
+        argument_kind,
+        (argument_kind == u32::MAX).then(|| {
+            format!(
+                "signature_unsupported(args={args:?} arguments_in_buffer={} count_in_buffer={})",
+                address.is_some(),
+                count.is_null() || counter.is_some()
+            )
+        }),
+    );
     INDIRECT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     static SEEN: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -1945,6 +1966,7 @@ pub(crate) fn take_indirect() -> u64 {
 }
 static INDIRECT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn count_dispatch() {
+    crate::mac::drop_stats::recorded(true);
     DISPATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 #[cfg(not(windows))]
