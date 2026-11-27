@@ -702,4 +702,10 @@ fn texture_and_sampler_descriptors_are_written_with_the_view_ids() {
     assert_eq!(s0, s1);
     assert_ne!(s0[0], s2[0]);
     assert_ne!(s0[0], 0);
+    // Min/max reduction filters have no Metal equivalent: refused, not approximated.
+    let mut reduce = base;
+    reduce.reduction = victory_metal_proto::types::Reduction::MIN;
+    assert_eq!(write_sampler(3, reduce), Status::UNSUPPORTED);
+    reduce.reduction = victory_metal_proto::types::Reduction::MAX;
+    assert_eq!(write_sampler(3, reduce), Status::UNSUPPORTED);
 }

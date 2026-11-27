@@ -691,6 +691,15 @@ impl State {
         &mut self,
         desc: &victory_metal_proto::types::SamplerDesc,
     ) -> Result<crate::sampler::Sampler, Status> {
+        // Metal has no min/max reduction filter: sampling as a plain filter
+        // would give other values, so it is refused.
+        if matches!(
+            desc.reduction,
+            victory_metal_proto::types::Reduction::MIN | victory_metal_proto::types::Reduction::MAX
+        ) {
+            self.note = Some("sampler: min/max reduction filters have no Metal equivalent".into());
+            return Err(Status::UNSUPPORTED);
+        }
         let spec = super::dxil::sampler_spec(desc);
         let key = format!("{spec:?}");
         if let Some(s) = self.samplers.get(&key) {

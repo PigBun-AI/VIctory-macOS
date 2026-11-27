@@ -44,13 +44,16 @@ Semantic differences, all written in the module docs:
   `R24_UNORM_X8_TYPELESS` footprint is refused, not converted.
 * The front counts D24S8, D32S8X24 and the R24G8/R32G8X24 typeless/view
   families as two planes (depth, stencil), as D3D12 and D3DMetal do.
-* Block-compressed formats are counted in blocks (4×4); a footprint whose
-  `RowPitch` is not a multiple of 256 bytes or whose offset is not a multiple
-  of 512 is `INVALID_ARG` from the front, as D3D12; a pitch/offset Metal cannot use is
-  refused by the back, never copied wrong.
-* Samplers: Metal has no min/max reduction filter (refused with `UNSUPPORTED`)
-  and only three border colours (transparent black, opaque black, opaque
-  white); other D3D12 border colours are `UNSUPPORTED`, anisotropy up to 16.
+* Block-compressed formats are counted in blocks (4×4). The front computes
+  footprints with D3D12's rules (pitch aligned to 256, subresources at 512);
+  the back refuses a row pitch smaller than a row, not a multiple of the
+  texel (block) size, an offset not a multiple of it, a region off the mip or
+  past the buffer, with `INVALID_ARG`: never copied wrong.
+* Samplers: Metal has no min/max reduction filter, so a sampler with one is
+  refused (`WRITE_DESCRIPTOR` → `UNSUPPORTED`; tested). Metal has three border colours
+  (transparent black, opaque black, opaque white): any other D3D12 border colour
+  is **approximated** as transparent black, not refused (a known difference).
+  The LOD bias travels in the descriptor entry; anisotropy is passed on.
 * Row-major textures (`D3D12_TEXTURE_LAYOUT_ROW_MAJOR`) → `E_NOTIMPL`.
 
 ## Heaps and placement
