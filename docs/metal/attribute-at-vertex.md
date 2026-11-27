@@ -313,3 +313,37 @@ through the back (`graphics_pipeline_from_dxil`, no game, no Wine) in both forms
 * S2 alone (no S1 elements): every pair that reaches the pixel stage fails "Fragment input(s) texcoord64.. not written by
   mesh shader", as expected; that is the state of the game today (before S1 these pixel programs were refused by MSC anyway).
 * S1+S2: see the table below.
+
+| S1+S2 build of the pair | pairs | share |
+|---|---|---|
+| builds | 2170 | 44.9 % |
+| over 32 KiB ("Total mesh size ... exceeds 32768") | 1261 | 26.1 % |
+| Apple's GPU compiler crashes (see below) | 1400 | 29.0 % |
+| other: over the varying-component limit | 3 | 0.1 % |
+| total | 4834 | |
+
+The number of crashes depends on how the builds are run: with **4 builds at once** (`--jobs 4`) 1774 pairs crashed, 315 of
+them also in the S2-only form; rerun one at a time, 1400 crash and the S2-only form crashes on 3 pairs. The rest of the
+difference ended as an over-32-KiB refusal or a good build, so the compiler service also dies on pressure of parallel
+builds. **Use `--jobs 1` for a crash census.** (The first table of this section's rows and the 4-job run are in
+`victory-data/census-s1pair-n2`, the one-at-a-time rerun in `census-s1pair-re`.)
+
+### Compiler crash
+
+Apple's pipeline compiler (MTLCompilerService, AGX back end) segfaults on mesh programs of the translator in two shapes found and
+fixed in S1 (alternating group-memory loads and `storePrimitiveOutput`; one `legacyF16ToF32` result shared by an output store and the
+exchange store), and in a third that is not S1's: a translated mesh program (its body converts 16-bit values) plus a pixel shader that reads
+some of its outputs (reduced file `plain-mesh-plus-ps-crash`, three f32 stores). The crash rate grows with the size of the mesh program
+(none at 17-23 total varying scalars, 20-50 % at 40-50, nearly all above 56). Reduced files, steps and
+environment: `research/attr-vertex/agx-crash/README.md` (Apple report not made).
+
+Cost and safety (measured one build at a time on this machine, back `graphics_pipeline_from_dxil`): the build returns
+`Metal(... interrupted connection: XPC_ERROR_CONNECTION_INTERRUPTED ...)`, not a hang. A crashing build takes **0.53 s median
+(p10 0.34 s, p90 0.95 s, max 2.5 s; 110 of 1400 take over 1 s)**, a good build of the same kind 0.27 s median (max 0.58 s). The back
+therefore keeps an in-process failure cache by (mesh stage hash, pixel stage hash): the build that crashed returns `Unsupported`
+("Apple's GPU compiler crashed on this mesh and pixel shader") and the same pair is refused at once afterwards (`render.rs`
+`CRASHED_PAIRS`). A census can also write the pairs it found as `kind=pair` lines of the `VICTORY_METAL_MSC_DENYLIST` file
+(`<mesh fnv>:<pixel fnv> <TAB> <census hashes> <TAB> kind=pair <TAB> AppleGpuCompilerCrash`, hashes of the translated DXIL as
+`stage_hash` gives them, `msc/guard.rs` `parse_pair_denylist`, `denied_pair`): such a pair is refused before its first build.
+The file made from the 1400 pairs: `data/shared/census/mesh-pair-denylist.txt`. A change of the translator changes the hashes
+(the file must be made again).
