@@ -56,6 +56,11 @@ enum Ty {
     U64,
     /// four independent integers
     Quad,
+    /// `v_div_fixup_f32` operands [quotient, denominator, numerator]: the patch's twelve bit
+    /// patterns, then combinations of specials (zero, infinity, NaN, denormal, normal)
+    Div,
+    /// the same for halves (low 16 bits; garbage above)
+    DivH,
     /// multiply-add inputs a fused and a double-rounded result tell apart: `c` is minus the
     /// rounded product `a * b` (the fused sum is then the rounding error of the product, the
     /// other one 0), and one step off it
@@ -759,6 +764,14 @@ fn families() -> Vec<(&'static str, Vec<Row>)> {
 
 /// Differences that are known and not translator bugs, or bugs handed over: (mnemonic, reason).
 const KNOWN: &[(&str, &str)] = &[
+    (
+        "v_div_fixup_f32",
+        "bug, fixed upstream by 07f56f5a (VICTORY_DIV_FIXUP; a NaN quotient made 0/x give Inf): 45 of 1292 cases differ before it. DELETE THIS ENTRY when the Mac merges that patch: the row must then pass",
+    ),
+    (
+        "v_div_fixup_f16",
+        "untranslated: the title never uses v_div_fixup_f16 (0 instructions); the row keeps the ISA order ready for when it does",
+    ),
     (
         "v_add_f64",
         "refused by design: the Metal device has no 64-bit floats (5 programs, all compute); v_cvt_f32_f64 translates by integer arithmetic",

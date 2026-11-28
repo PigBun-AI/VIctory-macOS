@@ -333,6 +333,44 @@ pub(super) fn cases(ty: Ty, args: usize) -> Vec<[u32; 4]> {
                 out.push([a.to_bits(), b.to_bits(), c.to_bits(), 0]);
             }
         }
+        Ty::Div => {
+            // upstream 11-28 07f56f5a's twelve cases (quotient, denominator, numerator)
+            for (q, d, n) in [
+                (0x7fc00000u32, 0x3f800000u32, 0x00000000u32),
+                (0x7fc00000, 0xbf800000, 0x00000000),
+                (0x7fc00000, 0xbf800000, 0x80000000),
+                (0x7fc00000, 0x7f800000, 0x3f800000),
+                (0x7fc00000, 0xff800000, 0x40400000),
+                (0x7fc00000, 0x00000000, 0x3f800000),
+                (0x7fc00000, 0x3f800000, 0x7f800000),
+                (0x7fc00000, 0x3f800000, 0x3f800000),
+                (0x7fc00000, 0x00000000, 0x00000000),
+                (0x7fc00000, 0x7f800000, 0x7f800000),
+                (0x40000000, 0x3f800000, 0x7fa00000),
+                (0x40000000, 0xffa00000, 0x3f800000),
+            ] {
+                out.push([q, d, n, 0]);
+            }
+            let sp: Vec<u32> = [0u32, 0x8000_0000, 0x7f80_0000, 0xff80_0000, 0x7fc0_0000, 0xffc0_0000, 0x7fa0_0000, 0x0000_0001, 0x8000_0001, 0x007f_ffff, 0x3f80_0000, 0xbf80_0000, 0x4040_0000, 0x7f7f_ffff, 0x0080_0000, 0x4000_0000].to_vec();
+            for &q in &[0x7fc0_0000u32, 0x3f80_0000, 0xbf80_0000, 0x7f80_0000, 0] {
+                for &d in &sp {
+                    for &n in &sp {
+                        out.push([q, d, n, 0]);
+                    }
+                }
+            }
+        }
+        Ty::DivH => {
+            let sp = [0x0000u32, 0x8000, 0x7c00, 0xfc00, 0x7e00, 0xfe00, 0x7c01, 0x0001, 0x8001, 0x03ff, 0x3c00, 0xbc00, 0x4200, 0x7bff, 0x0400, 0x4000];
+            for &q in &[0x7e00u32, 0x3c00, 0xbc00, 0x7c00, 0] {
+                for &d in &sp {
+                    for &n in &sp {
+                        let g = |h: u32, r: &mut Rng| (r.next() & 0xffff_0000) | h;
+                        out.push([g(q, &mut r), g(d, &mut r), g(n, &mut r), 0]);
+                    }
+                }
+            }
+        }
         Ty::Sq(abits) => {
             let a = f32::from_bits(abits);
             for da in [0i32, 0, 1, -1] {
@@ -511,6 +549,47 @@ fn f32_misc() -> Vec<Spec> {
         ));
     }
     v.extend(cube_rows());
+    // v_div_fixup_f32 (S0 the quotient, S1 the denominator, S2 the numerator): RDNA2 ISA pseudocode
+    // order: a NaN numerator, a NaN denominator (quieted), 0/0 and inf/inf (-QNaN), denominator 0 or
+    // numerator inf (signed infinity), denominator inf or numerator 0 (signed zero), then a NaN
+    // quotient (an overflow: signed infinity; upstream 07f56f5a's cases), else the quotient's
+    // magnitude with the sign of the signs' xor. A denormal operand counts as itself or as zero.
+    v.push(sp(
+        Row {
+            name: "v_div_fixup_f32",
+            ty: Ty::Div,
+            args: 3,
+            want: Box::new(|i| {
+                let one = |q: u32, d: u32, n: u32| -> u32 {
+                    let nan = |x: u32| x & 0x7fff_ffff > 0x7f80_0000;
+                    let inf = |x: u32| x & 0x7fff_ffff == 0x7f80_0000;
+                    let zero = |x: u32| x & 0x7fff_ffff == 0;
+                    let sign = (d ^ n) & 0x8000_0000;
+                    if nan(n) {
+                        n | 0x0040_0000
+                    } else if nan(d) {
+                        d | 0x0040_0000
+                    } else if (zero(d) && zero(n)) || (inf(d) && inf(n)) {
+                        0xffc0_0000
+                    } else if zero(d) || inf(n) {
+                        sign | 0x7f80_0000
+                    } else if inf(d) || zero(n) {
+                        sign
+                    } else if nan(q) {
+                        sign | 0x7f80_0000
+                    } else {
+                        sign | (q & 0x7fff_ffff)
+                    }
+                };
+                let flush = |x: u32| if x & 0x7f80_0000 == 0 { x & 0x8000_0000 } else { x };
+                let mut c = vec![one(i[0], i[1], i[2]), one(i[0], flush(i[1]), flush(i[2]))];
+                c.dedup();
+                Want::Bits(c)
+            }),
+        },
+        "",
+        prog(vop3(o("v_div_fixup_f32"), 10, vgpr(1), vgpr(2), vgpr(3)).to_vec(), 10),
+    ));
     // D = {rtz(S1), rtz(S0)}: S0 low, toward zero (the ISA's name)
     v.push(sp(
         Row {
@@ -691,6 +770,42 @@ fn f16_rows() -> Vec<Spec> {
     let mut v = Vec::new();
     let w2 = |name: &str| prog(vec![vop2(o(name), 10, vgpr(1), 2)], 10);
     let w3 = |name: &str| prog(vop3(o(name), 10, vgpr(1), vgpr(2), vgpr(3)).to_vec(), 10);
+    // v_div_fixup_f16: the same order on halves
+    v.push(sp(
+        Row {
+            name: "v_div_fixup_f16",
+            ty: Ty::DivH,
+            args: 3,
+            want: Box::new(|i| {
+                let one = |q: u32, d: u32, n: u32| -> u32 {
+                    let (q, d, n) = (q & 0xffff, d & 0xffff, n & 0xffff);
+                    let nan = |x: u32| x & 0x7fff > 0x7c00;
+                    let inf = |x: u32| x & 0x7fff == 0x7c00;
+                    let zero = |x: u32| x & 0x7fff == 0;
+                    let sign = (d ^ n) & 0x8000;
+                    if nan(n) {
+                        n | 0x0200
+                    } else if nan(d) {
+                        d | 0x0200
+                    } else if (zero(d) && zero(n)) || (inf(d) && inf(n)) {
+                        0xfe00
+                    } else if zero(d) || inf(n) {
+                        sign | 0x7c00
+                    } else if inf(d) || zero(n) {
+                        sign
+                    } else if nan(q) {
+                        sign | 0x7c00
+                    } else {
+                        sign | (q & 0x7fff)
+                    }
+                };
+                let flush = |x: u32| if x & 0x7c00 == 0 { x & 0x8000 } else { x & 0xffff };
+                Want::Half(vec![one(i[0], i[1], i[2]), one(i[0], flush(i[1]), flush(i[2]))])
+            }),
+        },
+        "",
+        w3("v_div_fixup_f16"),
+    ));
     v.push(sp(hrow("v_mul_f16", 2, |x| x[0] * x[1]), "", w2("v_mul_f16")));
     v.push(sp(hrow("v_sub_f16", 2, |x| x[0] - x[1]), "", w2("v_sub_f16")));
     v.push(sp(hrow("v_fma_f16", 3, |x| x[0].mul_add(x[1], x[2])), "", w3("v_fma_f16")));
@@ -1792,7 +1907,7 @@ fn every_a_row_is_a_gfx10_mnemonic() {
     let a = f32::from_bits(0x3f80_1000);
     assert!(tells(Ty::Sq(0x3f80_1000), 2, Some(-(a * a))) >= 4);
     // cases exist for every input family and are not empty
-    for ty in [Ty::F16, Ty::Mix, Ty::U64, Ty::Quad, Ty::Fin, Ty::Class, Ty::Turn, Ty::F64, Ty::Mad, Ty::Sq(0x3f80_1000)] {
+    for ty in [Ty::F16, Ty::Mix, Ty::U64, Ty::Quad, Ty::Fin, Ty::Class, Ty::Turn, Ty::F64, Ty::Mad, Ty::Sq(0x3f80_1000), Ty::Div, Ty::DivH] {
         for args in 1..=3 {
             assert!(!cases(ty, args).is_empty());
         }
