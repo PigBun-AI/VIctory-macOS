@@ -3882,7 +3882,7 @@ impl<'a> Lower<'a> {
             _ => Err(name),
         };
         if let Some(rest) = name.strip_prefix("global_load_") {
-            // mac (number pending, oracle-b: global sub-dword loads): a byte or a half of title memory: the dword that holds it, shifted out.
+            // mac S13 (global sub-dword loads): a byte or a half of title memory: the dword that holds it, shifted out.
             let sub = match rest {
                 "ubyte" => Some((8, false)),
                 "sbyte" => Some((8, true)),
@@ -6951,7 +6951,7 @@ impl<'a> Lower<'a> {
         })
     }
 
-    /// mac (number pending, oracle-b: vector loads past the view): the dwords of a vector load of the raw view `h` from byte `byte` on, with those
+    /// mac S13 (vector loads past the view): the dwords of a vector load of the raw view `h` from byte `byte` on, with those
     /// the view does not reach read as 0. D3D12 returns 0 for each 32-bit component that is out of
     /// bounds; the Metal Shader Converter's `BOUNDS_CHECK` tests the first only (a load that
     /// starts inside the view and ends past it returns the memory behind it). `xs[0]` is as read;
@@ -7726,7 +7726,7 @@ impl<'a> Lower<'a> {
                     l.as_int(x)
                 })
                 .collect();
-            // mac (number pending, oracle-b: vector loads past the view): the dwords past the view's end read 0
+            // mac S13 (vector loads past the view): the dwords past the view's end read 0
             l.zero_past_end(h, at, xs)
         };
         let words = if total < 32 {
@@ -11914,7 +11914,7 @@ impl<'a> Lower<'a> {
                     67,
                     &args,
                 );
-                // mac (number pending, oracle-b: counter-texture fence): Metal does not order one thread's texture write against its later
+                // mac S14 (counter-texture fence): Metal does not order one thread's texture write against its later
                 // texture atomics on the texel; the fence makes the store land first.
                 self.memory_fence();
                 self.end_guarded(at, &[]);
@@ -12968,7 +12968,7 @@ impl<'a> Lower<'a> {
             }
             return Ok(());
         }
-        // The raw view and byte address of a plain vector load (mac, number pending: vector loads past the view).
+        // The raw view and byte address of a plain vector load (mac S13: vector loads past the view).
         let mut span: Option<(V, V)> = None;
         let r = if typed {
             if *offen || matches!(off, V::Inst(_)) || *offset != 0 {
@@ -13073,7 +13073,7 @@ impl<'a> Lower<'a> {
             let x = self.s.m.extract(c, r, k);
             xs.push(self.as_int(x));
         }
-        // mac (number pending, oracle-b: vector loads past the view): the dwords of a vector load past the view's end read 0
+        // mac S13 (vector loads past the view): the dwords of a vector load past the view's end read 0
         if let Some((h, byte)) = span {
             xs = self.zero_past_end(h, byte, xs);
         }

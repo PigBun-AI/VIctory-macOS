@@ -1425,19 +1425,6 @@ total (median +6 %, 90th percentile +14 %, largest 2.9x). MSC/Metal on a 20 % sa
 ps 104/1,028, ms 917/934 on **and** off, the same programs; with the 12-operation sequence the pipeline build time of the sample (a loaded machine, noisy) is cs +57 %, vs +17 %,
 ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
 
-### (number pending, oracle-b 1) — vector buffer loads past a view's end read 0 per dword; `global_load_ubyte/sbyte/ushort/sshort` of title memory (`victory-shader/src/emit/lower.rs`: `zero_past_end`, `raw_dwords`, `format_load`, `buffer()`, `memory_flat`)
-
-*What.* A vector `rawBufferLoad` (`buffer_load_dwordx2/x3/x4`, `tbuffer_load_format_*` of 64-bit and wider formats, `s_buffer_load_dwordx*` through `raw_dwords`) that starts inside a view and ends past it returned the memory behind the view: MSC's `BOUNDS_CHECK` tests only the first dword. The size is now read (`getDimensions`) and component k >= 1 is selected to 0 unless `byte + 4k + 4 <= size` (and the address does not wrap). This also fixes `scalar_buffer_loads_read_the_same_dwords_one_call_or_four` at `VICTORY_SHADER_OPT=127` (removed from `shader-hw-known.txt`). Not covered: structured-stride loads, title memory by address (`global_load_dwordx*`, `s_load_*` of memory read through pages, not views). Also (part 2 of the same entry) the four sub-dword `global_load_*` of title memory translate (the dword read, shifted out as the root-view path already did).
-*Why not needed on Windows.* D3D12 zeroes out-of-range per component.
-*Remove when.* MSC bounds-checks each component of a vector raw load. Proof: `oracle_mem_*`, `probe_straddle_past_the_view_end`, `oracle_flat_loads`.
-
-### (number pending, oracle-b 2) — a fence after a counter-texture `image_store` (`victory-shader/src/emit/lower.rs`, `image()`)
-
-*What.* The upscaler's counter texture (`image_store` of 9, then `image_atomic_add 1` on the same texel by the same thread) gave 9, not 10: Metal does not order a thread's texture write against its later texture atomic. A mode-2 `barrier` (the existing `memory_fence`) after the `textureStore` of such a counter store makes the store land first; 6/6 runs give 10 (`size_tests::a_counter_texture_is_set_by_a_store_of_one_channel`, removed from `shader-hw-known.txt`).
-*Why not needed on Windows.* D3D12 orders a thread's UAV accesses to one texel.
-*Scope.* Only the one-channel store into a view the same program also counts in with an integer atomic (`is_counter`); ordinary `image_store` gets no barrier. Census of the game package (25,985 containers, 2,447 with `image_store`, 7,635 `image_store` instructions): 1 container is affected, 3 fences emitted (2 store instructions; the lowering runs the store path more than once); 20 containers hold both a store and an atomic, 19 of them do not take the counter path.
-*Remove when.* MSC/Metal order same-thread read_write texture accesses.
-
 ### S9 — a `v_cndmask_b32` whose mask is a plain number counts for the console-lane analysis (`victory-shader` `emit/lower.rs`, `selects_by_number_mask`)
 
 *What.* A `v_cndmask_b32` whose scalar mask is a plain number (`s_mov_b32 vcc_lo, sN`, a root constant, a loaded dword; not a lane mask the structuring tracks) now counts for the `console_lanes` pre-analysis. Before, a compute program with a thread count tripped `debug_assert!(threads.is_none() || console_lanes)` in `cross_lane` (in a release build it used the host lane number unrelabelled: a silently wrong select). Test `a_scalar_move_into_vcc_translates_in_a_thread_limited_program`; oracle rows in `emit/oracle_a_tests.rs` (`docs/mac/opcode-oracle.md`). Found by the opcode oracle's A batch.
@@ -1458,6 +1445,19 @@ ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added 
 
 *What.* They were "Unsupported" when the operand is a number rather than a lane mask (4,088 + 19,646 + 390 instructions in the title; the wqm ones are mostly lane masks, which keep their own path in `structure.rs`). `s_wqm` is the quad-wise OR of a number; `s_bfm_b64` is `((1 << S0[5:0]) - 1) << S1[5:0]`. Oracle rows in `emit/oracle_a_tests.rs`.
 *Why not needed on Windows.* Not known to be met by a Windows run (not measured); the same code serves both. *Remove when.* Never needed.
+
+### S13 — vector buffer loads past a view's end read 0 per dword; `global_load_ubyte/sbyte/ushort/sshort` of title memory (`victory-shader/src/emit/lower.rs`: `zero_past_end`, `raw_dwords`, `format_load`, `buffer()`, `memory_flat`)
+
+*What.* A vector `rawBufferLoad` (`buffer_load_dwordx2/x3/x4`, `tbuffer_load_format_*` of 64-bit and wider formats, `s_buffer_load_dwordx*` through `raw_dwords`) that starts inside a view and ends past it returned the memory behind the view: MSC's `BOUNDS_CHECK` tests only the first dword. The size is now read (`getDimensions`) and component k >= 1 is selected to 0 unless `byte + 4k + 4 <= size` (and the address does not wrap). This also fixes `scalar_buffer_loads_read_the_same_dwords_one_call_or_four` at `VICTORY_SHADER_OPT=127` (removed from `shader-hw-known.txt`). Not covered: structured-stride loads, title memory by address (`global_load_dwordx*`, `s_load_*` of memory read through pages, not views). Also (part 2 of the same entry) the four sub-dword `global_load_*` of title memory translate (the dword read, shifted out as the root-view path already did).
+*Why not needed on Windows.* D3D12 zeroes out-of-range per component.
+*Remove when.* MSC bounds-checks each component of a vector raw load. Proof: `oracle_mem_*`, `probe_straddle_past_the_view_end`, `oracle_flat_loads`.
+
+### S14 — a fence after a counter-texture `image_store` (`victory-shader/src/emit/lower.rs`, `image()`)
+
+*What.* The upscaler's counter texture (`image_store` of 9, then `image_atomic_add 1` on the same texel by the same thread) gave 9, not 10: Metal does not order a thread's texture write against its later texture atomic. A mode-2 `barrier` (the existing `memory_fence`) after the `textureStore` of such a counter store makes the store land first; 6/6 runs give 10 (`size_tests::a_counter_texture_is_set_by_a_store_of_one_channel`, removed from `shader-hw-known.txt`).
+*Why not needed on Windows.* D3D12 orders a thread's UAV accesses to one texel.
+*Scope.* Only the one-channel store into a view the same program also counts in with an integer atomic (`is_counter`); ordinary `image_store` gets no barrier. Census of the game package (25,985 containers, 2,447 with `image_store`, 7,635 `image_store` instructions): 1 container is affected, 3 fences emitted (2 store instructions; the lowering runs the store path more than once); 20 containers hold both a store and an atomic, 19 of them do not take the counter path.
+*Remove when.* MSC/Metal order same-thread read_write texture accesses.
 
 ## Not ported this round (decided with the Windows line as the reference)
 
