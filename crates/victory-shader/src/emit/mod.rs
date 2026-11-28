@@ -2743,6 +2743,177 @@ mod tests {
         }
     }
 
+    // Exercise the fixup with independent q/den/num, not only a complete
+    // division sequence: the important q=NaN corner cannot be assumed away.
+    fn div_fixup_corner_fixture(div_fixup: &str) -> super::lower::Lowered {
+        let words: &[u32] = &[
+            0xBE85_0380,
+            0xF408_0202, 0xFA00_0000,
+            0xF408_0302, 0xFA00_0020,
+            0x340E_0084, // v7 = 16 * lane
+            0xE038_1000, 0x8002_0107, // load v1..v4 (q, denominator, numerator, pad)
+            0xD55F_0001, 0x040E_0501, // fixup v1, v1, v2, v3
+            0x340E_0082,
+            0xE070_1000, 0x8003_0107,
+            0xBF81_0000,
+        ];
+        let native = super::NativeProgram {
+            stage: super::HwStage::Cs,
+            wave64: false,
+            vgprs: 9,
+            layout: vec![
+                crate::RootParam {
+                    root: crate::RootType::Constants,
+                    table_offset_dwords: 0,
+                    sgprs: 4,
+                    base_register: 0,
+                    user_data: 0,
+                    slot: 0,
+                },
+                crate::RootParam {
+                    root: crate::RootType::Table,
+                    table_offset_dwords: 0,
+                    sgprs: 1,
+                    base_register: 0,
+                    user_data: 4,
+                    slot: 1,
+                },
+            ],
+            used: vec![
+                crate::UsedResource {
+                    kind: crate::ResourceType::Srv,
+                    root: crate::RootType::Table,
+                    table_offset_dwords: 0,
+                    lower_bound: 0,
+                    stride: 4,
+                    dwords: 4,
+                    user_data: 4,
+                    slot: 1,
+                },
+                crate::UsedResource {
+                    kind: crate::ResourceType::Uav,
+                    root: crate::RootType::Table,
+                    table_offset_dwords: 8,
+                    lower_bound: 0,
+                    stride: 4,
+                    dwords: 4,
+                    user_data: 4,
+                    slot: 1,
+                },
+            ],
+            io: crate::native::StageIo::Cs(crate::native::ComputeIo {
+                rsrc2: 5 << 1,
+                threads: [12, 1, 1],
+            }),
+            code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+        };
+        let p = crate::ir::build(&native.code, native.wave64, native.vgprs).unwrap();
+        let res = crate::resource::track(&p, &native.layout, native.stage, None).unwrap();
+        let io = crate::io::raise(&p, &native).unwrap();
+        let st = crate::structure::structure(&p).unwrap();
+        // mac: translated under `VICTORY_DIV_FIXUP=<div_fixup>` whatever the process environment says.
+        let snap = super::live::snapshot_of(&[("VICTORY_DIV_FIXUP".to_string(), div_fixup.to_string())]).unwrap();
+        let l = super::live::scoped(&snap, || super::lower::lower(&super::lower::Parts {
+            native: &native,
+            p: &p,
+            st: &st,
+            io: &io,
+            res: &res,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            prims: Vec::new(),
+            mesh_stride: 0,
+            cs: None, // mac S5
+        })
+        .unwrap());
+        l
+    }
+
+    const DIV_FIXUP_CASES: [(u32, u32, u32, u32); 12] = [
+        (0x7fc00000, 0x3f800000, 0x00000000, 0x00000000),
+        (0x7fc00000, 0xbf800000, 0x00000000, 0x80000000),
+        (0x7fc00000, 0xbf800000, 0x80000000, 0x00000000),
+        (0x7fc00000, 0x7f800000, 0x3f800000, 0x00000000),
+        (0x7fc00000, 0xff800000, 0x40400000, 0x80000000),
+        (0x7fc00000, 0x00000000, 0x3f800000, 0x7f800000),
+        (0x7fc00000, 0x3f800000, 0x7f800000, 0x7f800000),
+        (0x7fc00000, 0x3f800000, 0x3f800000, 0x7f800000),
+        (0x7fc00000, 0x00000000, 0x00000000, 0xffc00000),
+        (0x7fc00000, 0x7f800000, 0x7f800000, 0xffc00000),
+        (0x40000000, 0x3f800000, 0x7fa00000, 0x7fe00000),
+        (0x40000000, 0xffa00000, 0x3f800000, 0xffe00000),
+    ];
+
+    /// The corner program's 12 results on the hardware host (windows: D3D12; macOS: the executor),
+    /// translated under `VICTORY_DIV_FIXUP=<div_fixup>`; `None` without a host.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn div_fixup_corner_results(div_fixup: &str) -> Option<Vec<u32>> {
+        let l = div_fixup_corner_fixture(div_fixup);
+        let dxil = l.dxil;
+        let Ok(host) = super::host::Host::new(false) else {
+            eprintln!("div_fixup corner program: no hardware host; not run");
+            return None;
+        };
+        let cs = super::HostShader {
+            stage: super::HwStage::Cs,
+            dxil,
+            user_data: l.user_data,
+            samplers: Vec::new(),
+            static_samplers: Vec::new(),
+            root_cbvs: l.root_cbvs,
+            root_srvs: l.root_srvs,
+            root_uavs: l.root_uavs,
+            root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
+        };
+        let (root, pso) = host.compute_pipeline(&cs).unwrap();
+        let inputs: Vec<u32> = DIV_FIXUP_CASES.iter().flat_map(|&(q, d, n, _)| [q, d, n, 0]).collect();
+        let out = host.dispatch(&root, &pso, &super::host::Dispatch {
+            roots: vec![(0, super::host::Root::Constants(vec![0, 0, 0, 0, 0]))],
+            views: &[
+                super::host::View::Buffer { data: &inputs, stride: super::host::Stride::Raw },
+                super::host::View::RawUav(64),
+            ],
+            samplers: &[], groups: [1, 1, 1],
+        }).unwrap();
+        Some(out[0][..12].to_vec())
+    }
+
+    #[test]
+    fn div_fixup_corner_program_lowers_without_gpu() {
+        let l = div_fixup_corner_fixture("1");
+        assert!(!l.dxil.is_empty());
+    }
+
+    /// mac: no hardware needed: `VICTORY_DIV_FIXUP` (default on) changes the translation, and
+    /// =1 is the default (before the fix there was no such switch and no such order).
+    #[test]
+    fn div_fixup_switch_changes_the_translation() {
+        let on = div_fixup_corner_fixture("1").dxil;
+        let off = div_fixup_corner_fixture("0").dxil;
+        let unset = div_fixup_corner_fixture("").dxil;
+        assert_ne!(on, off, "=0 must keep the old order");
+        assert_eq!(on, unset, "default is on");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn div_fixup_corner_program_executes_on_gpu() {
+        let Some(got) = div_fixup_corner_results("1") else { return };
+        for (i, case) in DIV_FIXUP_CASES.iter().enumerate() {
+            assert_eq!(got[i], case.3, "q={:#010x} den={:#010x} num={:#010x}", case.0, case.1, case.2);
+        }
+    }
+
+    /// The adversarial run: `VICTORY_DIV_FIXUP=0` is the old order, where 0/x with a NaN quotient
+    /// gave Inf (case 0: expected 0, the old translation gives +Inf).
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn div_fixup_off_gives_inf_for_zero_over_x_with_a_nan_quotient() {
+        let Some(got) = div_fixup_corner_results("0") else { return };
+        assert_eq!(got[0], 0x7f80_0000, "old order: 0/1 with a NaN quotient gave +Inf");
+    }
+
     #[test]
     fn valu_div_f32_sequence_executes_on_gpu() {
         let words: &[u32] = &[

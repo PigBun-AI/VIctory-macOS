@@ -447,6 +447,12 @@ struct Lower<'a> {
 // shortcut: a genuine loop of more iterations than this is cut short too.
 pub(super) const LOOP_LIMIT: u32 = 1 << 20;
 
+/// `VICTORY_DIV_FIXUP` (default on, =0 off; live; upstream 11-28 feb90ad): `v_div_fixup` takes
+/// zero and infinite operands before a NaN quotient, as the console does.
+fn div_fixup_on() -> bool {
+    crate::emit::live::var_os("VICTORY_DIV_FIXUP").is_none_or(|v| v != "0")
+}
+
 /// Lane masks read as numbers (`s_bcnt1`, `s_ff1`, `v_mbcnt`, scalar
 /// compares, bit tests) are ballots of the lanes' booleans, taken where the
 /// mask is written: structurisation's `active` masks hold only lanes that
@@ -9067,7 +9073,11 @@ impl<'a> Lower<'a> {
                 let both_inf = self.s.m.bin(c, Bin::And, n_inf, d_inf);
                 let both_zero = self.s.m.bin(c, Bin::And, n_zero, d_zero);
                 let invalid = self.s.m.bin(c, Bin::Or, both_inf, both_zero);
-                let make_inf = {
+                // Resolve zero and infinity operands before a NaN quotient (`VICTORY_DIV_FIXUP`,
+                // default on, =0: the old order, where 0/x with a NaN quotient gave Inf).
+                let make_inf = if div_fixup_on() {
+                    self.s.m.bin(c, Bin::Or, n_inf, d_zero)
+                } else {
                     let t = self.s.m.bin(c, Bin::Or, n_inf, d_zero);
                     self.s.m.bin(c, Bin::Or, t, q_nan)
                 };
@@ -9076,7 +9086,8 @@ impl<'a> Lower<'a> {
                 let signed_inf = self.s.m.bin(c, Bin::Or, sign, kinf);
                 let n_qnan = self.s.m.bin(c, Bin::Or, ni, kqnan_bit);
                 let d_qnan = self.s.m.bin(c, Bin::Or, di, kqnan_bit);
-                let r = self.s.m.select(c, make_zero, sign, signed_q);
+                let r = self.s.m.select(c, q_nan, signed_inf, signed_q);
+                let r = self.s.m.select(c, make_zero, sign, r);
                 let r = self.s.m.select(c, make_inf, signed_inf, r);
                 let r = self.s.m.select(c, invalid, kneg_qnan, r);
                 let r = self.s.m.select(c, d_nan, d_qnan, r);
