@@ -13,6 +13,9 @@ pub mod op {
     pub const HELLO: u8 = 1;
     pub const COMPILE: u8 = 2;
     pub const DISPATCH: u8 = 3;
+    pub const DRAW: u8 = 4;
+    /// Make a graphics pipeline (and so find out whether MSC and Metal take it).
+    pub const PIPELINE: u8 = 5;
 }
 
 pub mod status {

@@ -239,3 +239,61 @@ fn pixel_shader_64_bit_atomic_max_skips_helper_lanes() {
         }
     }
 }
+
+/// The plan for the one program that uses the original value
+/// (`PS_Weather_Particle_Prepass_74a7a22c`: `image_atomic_umax` with glc, the high word of
+/// the original compared with the pixel's depth, discard if the pixel is behind): read the texel,
+/// then the 64-bit `InterlockedMax` without the original. A max only grows, so the value read before
+/// is never above the one the atomic would have returned, and "my depth < the old depth" can only be
+/// missed (the pixel is drawn that would have been discarded), never wrongly taken. Checked here
+/// without a race: one thread per texel; the read gives the initial value and the texel ends as the max.
+#[test]
+fn a_64_bit_texel_read_then_max_gives_the_value_before_and_the_max() {
+    let rig = rig();
+    let Some(dxil) = dxil_checked(
+        "a64_read_then_max",
+        "cs_6_6",
+        &format!(
+            "{PRELUDE}[numthreads(4,4,1)] void main(uint3 id : SV_DispatchThreadID) {{\n\
+               RWTexture2D<uint64_t> t = ResourceDescriptorHeap[0];\n\
+               uint64_t v = ((uint64_t)(id.x * 7 + id.y * 5 + 1) << 32) | (uint64_t)(id.y * 3 + id.x);\n\
+               uint64_t old = t[id.xy];\n\
+               InterlockedMax(t[id.xy], v);\n\
+               O.Store2((id.y * 4 + id.x) * 8, uint2((uint)old, (uint)(old >> 32))); }}\n"
+        ),
+        &["dx.op.atomicBinOp.i64"],
+    ) else {
+        return;
+    };
+    if let Err(e) = rig.try_build(&dxil, HEAPS) {
+        eprintln!("MSC/Metal refuse the 64-bit texel read: {e}");
+        panic!("a 64-bit typed read is refused: {e}");
+    }
+    let p = rig.prog_with(&dxil, HEAPS);
+    let t = rig
+        .d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32G32_UINT, 4, 4, SRV | UAV))
+        .unwrap();
+    // texel i starts at (i % 5) << 32 | 0x10: the pixel's value is above it in some texels, below in others
+    let init = |i: u64| ((i % 5) << 32) | 0x10;
+    let bytes: Vec<u8> = (0..16u64).flat_map(|i| init(i).to_le_bytes()).collect();
+    upload(&rig.d, &rig.q, &t, 0, &bytes, 32);
+    let view = t.view(&ViewSpec::whole(ViewDim::D2)).unwrap();
+    let hs = heaps(&rig.d, &[view], &[]);
+    let got = rig.run_heaps(&p, [1, 1, 1], [4, 4, 1], &[], &[], 32, Some((&hs.0, &hs.1)));
+    let out = download(&rig.d, &rig.q, &t, 32);
+    for y in 0..4u64 {
+        for x in 0..4u64 {
+            let i = y * 4 + x;
+            let v = ((x * 7 + y * 5 + 1) << 32) | (y * 3 + x);
+            let old = u64::from(got[(i * 2) as usize]) | u64::from(got[(i * 2 + 1) as usize]) << 32;
+            assert_eq!(old, init(i), "the value read at ({x},{y})");
+            let now = u64::from_le_bytes(
+                out[(i * 8) as usize..(i * 8 + 8) as usize]
+                    .try_into()
+                    .unwrap(),
+            );
+            assert_eq!(now, init(i).max(v), "the texel at ({x},{y}) after the max");
+        }
+    }
+}

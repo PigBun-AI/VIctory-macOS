@@ -86,7 +86,8 @@ fn main() {
                 w.str(&c.name);
                 w.u32(c.wave_min);
                 w.u32(c.wave_max);
-                w.u32(u32::from(c.mesh) << 1 | 1);
+                // bit 0 a device, 1 mesh shaders, 2 barycentrics (every Metal 4 device has them)
+                w.u32(u32::from(c.mesh) << 1 | 1 << 2 | 1);
                 w.0
             }
             op::COMPILE | op::DISPATCH => {
@@ -125,6 +126,48 @@ fn main() {
                         }
                         Err(f) => failure(f),
                     },
+                }
+            }
+            op::PIPELINE => {
+                let res = (|| -> Result<_, String> {
+                    let root = req::root(&mut r)?;
+                    let pipeline = req::pipeline(&mut r)?;
+                    let key = run::key_of(r.consumed());
+                    r.end()?;
+                    Ok((key, root, pipeline))
+                })();
+                let (key, root, pipeline) = match res {
+                    Ok(x) => x,
+                    Err(e) => return fail(status::FAILED, &format!("bad request: {e}")),
+                };
+                match run.graphics_pipeline(key, &root, &pipeline) {
+                    Ok(_) => {
+                        w.u8(status::OK);
+                        w.0
+                    }
+                    Err(f) => failure(f),
+                }
+            }
+            op::DRAW => {
+                let res = (|| -> Result<_, String> {
+                    let root = req::root(&mut r)?;
+                    let pipeline = req::pipeline(&mut r)?;
+                    let key = run::key_of(r.consumed());
+                    let draw = req::draw(&mut r)?;
+                    r.end()?;
+                    Ok((key, root, pipeline, draw))
+                })();
+                let (key, root, pipeline, draw) = match res {
+                    Ok(x) => x,
+                    Err(e) => return fail(status::FAILED, &format!("bad request: {e}")),
+                };
+                match run.draw(key, &root, &pipeline, &draw) {
+                    Ok(texels) => {
+                        w.u8(status::OK);
+                        w.u32s(&texels);
+                        w.0
+                    }
+                    Err(f) => failure(f),
                 }
             }
             other => fail(status::FAILED, &format!("unknown op {other}")),

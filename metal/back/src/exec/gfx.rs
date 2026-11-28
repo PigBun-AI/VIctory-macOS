@@ -410,6 +410,29 @@ pub(crate) fn describe<'a>(
     })
 }
 
+/// A graphics or mesh pipeline from the protocol's description, for a host that has no
+/// executor (`metal/shader-exec`, the Mac host of victory-shader's tests): the same
+/// description-to-Metal tables as `CREATE_GRAPHICS_PIPELINE`, then the same conversion.
+/// `code` holds the stages' containers in the order vs, ps, amp, ms, gs; the stage fields of
+/// `d` are not read.
+pub fn graphics_pipeline_for_host(
+    device: &crate::device::Device,
+    d: &GraphicsPsoDesc,
+    root: &RootSignatureDesc,
+    code: [Option<&[u8]>; 5],
+    compat: crate::msc::Compat,
+) -> Result<crate::render::GraphicsPipeline, crate::msc::MscError> {
+    use crate::msc::MscError;
+    let desc = describe(d, root, code, compat).map_err(|r| match r {
+        Refusal::Invalid(s) => MscError::BadInput(s),
+        Refusal::Unsupported(s) => MscError::Unsupported(s),
+    })?;
+    match device.graphics_pipeline_from_dxil(&desc) {
+        Err(e) => crate::mesh_fit::retry(device, &desc, &e).unwrap_or(Err(e)),
+        made => made,
+    }
+}
+
 /// The bytes of a stage: checked for size and mapping.
 fn stage_bytes(s: &StageCode) -> Result<Option<&'static [u8]>, Status> {
     if !s.is_present() {

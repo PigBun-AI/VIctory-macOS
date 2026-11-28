@@ -11,6 +11,8 @@ description = "Out-of-process executor for victory-shader's hardware proofs on m
 # it drives `victory-metal-back`'s plain-Rust API only.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 victory-metal-back = { path = "../back" }
+# plain Rust (no Metal): the graphics pipeline description the back turns into Metal's terms
+victory-metal-proto = { path = "../proto" }
 
 [[bin]]
 name = "victory-shader-exec"

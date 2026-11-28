@@ -3,9 +3,9 @@
 Task: close the DXIL -> MSC nodes of the translation map that the game uses and no GPU test covers: run a minimal HLSL
 (DXC -> DXIL -> MSC 4.0.3 -> Metal 4 compute/render) on the GPU, read the result back, compare with a CPU reference taken from
 the D3D11.3 Functional Spec / DXIL spec. Hardware: **Apple M5 Max** (`supportsFamily` Apple7, 8, 9 and 10 all true), macOS 27.2.1,
-MSC 4.0.3, 2026-11-28. Matrix rows: `S-D-002` .. `S-D-015` (docs/metal/translation-matrix.csv.txt); `S-I-020` corrected.
+MSC 4.0.3, 2026-11-28. Matrix rows: `S-D-002` .. `S-D-017` (docs/metal/translation-matrix.csv.txt); `S-I-020` corrected.
 
-Tests: `metal/back/tests/dxop_{alu,wave,tex,pixel,mesh,atomic,atomic64,int64,typed_uav,rov}.rs`, rig `common_dxop/mod.rs`
+Tests: `metal/back/tests/dxop_{alu,wave,tex,pixel,mesh,atomic,atomic64,int64,typed_uav,rov,dot4_store}.rs`, rig `common_dxop/mod.rs`
 (root constants `K`, SRV `I`, UAV `O`; a pixel rig and a mesh rig; every program is checked to declare the dx.op it is meant
 to prove). Without `VICTORY_HELPER_DXC` / `DXC_LIB` they print SKIPPED and pass. 44 tests.
 
@@ -26,6 +26,8 @@ to prove). Without `VICTORY_HELPER_DXC` / `DXC_LIB` they print SKIPPED and pass.
 | Int64 ALU (SFI0 bit 15: 6641) | | 4096 pairs per op |
 | Typed UAV load additional formats (SFI0 bit 11: 640) | | 26 formats |
 | ROV (SFI0 bit 12: 10) | | order-dependent RMW |
+| dot4AddPacked.i32 (opcodes 163/164) | 13 cs | signed + unsigned, edge + 2000 random, accumulator wrap |
+| textureStore.i32 | 1 cs | 15 integer typed-UAV formats exact; out of range clamps |
 
 Stage split of each node (ps/vs/cs/ms) is in `research/dxop/stage-by-op.tsv` (script `research/dxop/stage_by_op.py`, outside the repo).
 
@@ -41,8 +43,8 @@ confirm the lane math that the translator's `wave_base` idiom relies on (it numb
 1. **f32tof16 is round-toward-zero in MSC** (spec-conformant, D3D11.3 3.2.2), with overflow saturating (65520 -> 0x7bff, not Inf) and a
    double rounding for half-denormal results (mantissa cut to 10 bits, then nearest-even: 0x33002000 -> 1 where RTZ gives 0). 100 of 5504
    inputs differ from pure RTZ, all |x| < 2^-14, one step 2^-24. Metal's own `half(x)` is nearest-even, so MSC emulates RTZ. The console's
-   `v_cvt_f16_f32` rounds to nearest: translated code is 1 ULP low unless the translator's `VICTORY_F16_NEAREST=1` (off by default,
-   untried on Mac) is set. Not a back defect. f16tof32 is exact; NaN payloads are canonicalised (allowed).
+   `v_cvt_f16_f32` rounds to nearest: translated code is 1 ULP low unless the translator's `VICTORY_F16_NEAREST` rounding is on. Not a back defect.
+   f16tof32 is exact; NaN payloads are canonicalised (allowed). Followed up in "f32tof16 rounding" below.
 2. **64-bit find-first-bit** (`unaryBits.i64`, codes 32-34): MSC converts it to a module Metal cannot materialise ("Failed to materializeAll");
    countbits and reversebits at 64 bits are right. No census program uses `unaryBits.i64` (pinned by a test).
 3. **Compute stage derivatives**: MSC drops the SampleBias bias and returns 0 for CalculateLOD ("not supported in stages that support
@@ -76,11 +78,45 @@ Support, dated 2026-11-28:
   (`msc.md` says heap-buffer 64-bit atomics are refused: with the 4.0.3 here a byte-address heap buffer `InterlockedMax64` builds; the earlier probe `atomic64_heap` used `InterlockedAdd64`, an operation MSC refuses on any resource, so the refusal is about the operation, not the heap.)
 * Of the 679, MSC CLI: 616 stop first on attributeAtVertex (owned by the S1 lane; lowered in docs/metal/attribute-at-vertex.md, after which that doc
   measured exactly 1 program still failing on i64), 62 convert, **1 refused**: `PS_Weather_Particle_Prepass_74a7a22c_Wrapped`
-  (shaders.rpf@0xbd6ee06, a single `umax`). Probable cause: the returned original (GLC); not confirmed.
+  (shaders.rpf@0xbd6ee06, a single `umax`).
+* **That program uses the returned original** (disassembled 2026-11-28 with `research/attr-vertex/agx-crash/dxcdis.cpp`, DXC of
+  D3DMetal, on the DXIL the translator makes, hash 64974027a11daa59): `%old = atomicBinOp.i64(umax, RWTexture2D<U64>, x, y, (lo | depth << 32))`,
+  then `lshr 32`, `trunc`, bitcast to float, `fcmp ult depth, old_high`; the result feeds the branch that ends in `discard` (a weather particle
+  depth test: the pixel is discarded when it is behind the stored depth). So the original cannot be dropped, and no `mac:` patch removes it.
+  Delivered as mac patch F2 (branch `mac/f16-nearest`; the census converts the program with it). Plan, with a test: read the 64-bit texel, then `InterlockedMax` without the original. A max only grows, so the value read before is never
+  above what the atomic would return; "depth < old" can then only be missed under a race (a pixel drawn that would have been discarded),
+  never wrongly taken. MSC and Metal take the 64-bit texel read; test `a_64_bit_texel_read_then_max_gives_the_value_before_and_the_max`
+  (read = initial value, texel = max; without a race). Not yet in the translator (one program of 26177); left as the S-D-012 plan.
 
-Conclusion: reachable and **native** for 678 programs (min/max); the emulation need is **one** program. Plan for it (matrix S-D-012):
-drop the original when dead, else a per-texel lock texture with 32-bit atomics (forward-progress risk as in msc.md), else leave that
-draw undrawn. Not built: one program of 679.
+Conclusion: reachable and **native** for 678 programs (min/max); the emulation need is **one** program (the read-then-max above).
+The 62 converting programs were converted, not run: running them belongs to the mac-host-harness line (`metal/shader-exec`, branch
+`harness-back`; docs/metal/shader-exec.md there), not to this note.
+
+## f32tof16 rounding: the translator's nearest switch (F1)
+
+Programs (opcode census, 26177 programs, 2026-11-28): `legacyF32ToF16` in the DXIL of 11651; by ISA site, programs: `v_cvt_f16_f32` 5976 (42797
+instructions), `v_fma_mixlo/hi_f16` 5816 (34109), `v_interp_p2_f16` 4752 ps (118404 `v_interp_*_f16`), VOP f16 arithmetic 171 (3344), `v_pk_*_f16` 83;
+`v_cvt_pkrtz_f16_f32` 10467 is round-toward-zero by definition (unchanged); 65 cs d16 stores are format conversions (unchanged). Union of the programs with a
+nearest-sensitive result: 11642. Before this work `VICTORY_F16_NEAREST=1` covered the VOP f16 and `v_cvt_f16_f32` results only; fma_mix and interp_p2 used the host
+conversion. F1 routes all of them through one helper and turns it on by default.
+
+Checks (Apple M5 Max, MSC 4.0.3, 2026-11-28):
+* GPU, the translator's own DXIL (victory-shader `emit/f16_hw_tests.rs` on the mac executor host, branch `mac/f16-hw-proof`): `v_cvt_f16_f32`, `v_fma_mixlo_f16` (f32
+  operands) and `v_add_f16` (pair of halves) against the exact CPU nearest-even rounding, 111 of the 256 chunks of 2^24 inputs (1.87e9, every exponent range of both signs, denormals,
+  65520 overflow, Inf, NaN, -0): 0 differences. The same programs with the switch off differ for 50,329,600 of 134,217,728 sampled inputs (37 %). The untested chunks are
+  the other ranges of the same exponents (`VICTORY_F16_CHUNKS=0-255` runs them all, in segments).
+* Census translate with the switch off and on (25985 containers): 25760 translated, 225 failed, the same programs; 11621 translations change (cs 989, vs 749, ms 4745,
+  ps 5138); their DXIL grows 574.4 MB -> 599.7 MB (+4.4 %; median +6 %, p90 +14 %, max 2.9x).
+* MSC and pipeline on a 20 % sample of the changed programs (2325): cs 198/198, vs 165/165, ps 104/1028, ms 917/934, the same programs on and off. Pipeline build
+  time of the sample, on a loaded machine: cs +57 %, vs +17 %, ps +59 %, ms +43 %. GPU run time of the extra ~12 operations per result: not measured.
+
+The 12-operation sequence is correct but costs DXIL size and pipeline build time. The cheaper form: DXIL `fptrunc float to half` is LLVM's, round to nearest even
+(native 16-bit types, SM 6.2, `-enable-16bit-types`; the module needs `f16:16` in its data layout and the Native16 flag, `SFI0` bit 42). Through MSC and Metal
+(`metal/back/tests/dxop_fptrunc.rs`, 1,239,104 inputs: 1 M spread over the f32 space and the tie of every half pair +-1 ulp, plus the edge values; skipped without a DXC helper built with
+`-enable-16bit-types`, `VICTORY_HELPER_DXC16`): 0 differences from nearest-even, the call is not `legacyF32ToF16`. In the translator (mac F1): the same hardware proof as above with
+this form: 0 differences; census: DXIL -0.04 % over the 11,621 changed programs (median -0.05 %, p90 +0.1 %, max +2.4 %), pass counts unchanged, pipeline build time of the sample
+cs 166 s / vs 5.8 s / ps 33 s / ms 56 s against 174 / 4.9 / 27 / 62 with the switch off. So F1 uses `fptrunc` on the Metal chain and keeps the sequence for other hosts.
+Delivered as `mac: F1` on branch `mac/f16-nearest` (default on, `=0` off).
 
 ## Typed UAV additional formats, ROV
 
@@ -92,6 +128,6 @@ raster order groups.
 
 ## Not done / remaining
 
-* `dot4AddPacked` (13 cs), `textureStore.i32`: not tested (not in the node list).
-* The 62 programs that convert for i64 were converted, not run (a harness run belongs to the mac-host-harness work).
+* `dot4AddPacked` (13 cs) and `textureStore.i32` (1 cs): closed in the second batch (`dxop_dot4_store.rs`; S-D-016, S-D-017).
+* The 62 programs that convert for i64 were converted, not run: their runs belong to the mac-host-harness line (shader-exec), noted in S-D-012.
 * S-D rows for dx.op groups not in this node list (sample.f32 in cs, rawBufferLoad etc.) are not added.
