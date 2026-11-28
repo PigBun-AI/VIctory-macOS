@@ -1342,6 +1342,26 @@ Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only
 *On the Mac chain it changes nothing by itself:* a one-dword load is a single-component `rawBufferLoad` and MSC's `BOUNDS_CHECK` already tests the first dword (the vector case that it does not cover is S13). Evidence: the oracle rows `oracle_mem_smem_one_dword_bounds` (wide on and off: `shader-hw.sh` runs `VICTORY_SHADER_OPT=127` as a second pass) pass; census: default translation of the 300 first corpus programs is byte-identical with the switch on and off, with wide loads on 61 of 300 differ and every program that translates with the switch off translates with it on (299/299).
 *Tests (mac).* `s6_corpus_tests::one_dword_scalar_loads_keep_their_bounds` (corpus named by `VICTORY_LIVE_CORPUS`; without it it prints "skipped: corpus not found"; `s6_corpus_tests` is now built on macOS too, its tests skip without the corpus), `div_fixup_keeps_the_translation_pass_count` (the same census check for X4). *Matrix:* `mac.shader.scalar_load_one_dword_bounds`. *Retire when:* mac/livetr merges the Windows line that has it.
 
+### X6 — warm records only pipelines actually made
+
+Windows `feat/live-translator` `ea9f62b6` (`apps/victory/src/warm.rs`). A refused or skipped pipeline remains eligible for a later warm with different settings. `VICTORY_WARM_ONLY_MADE=0` restores unconditional recording. `a_pipeline_left_out_or_refused_is_not_written_down_as_done` counts done entries for 330 successes in 1,000 attempts: 330 rather than 1,000. This is a synthetic fixture, not a frame-time measurement.
+
+### X7 — keep the first parallel scan cut inside the span
+
+Windows `feat/live-translator` `30df9eb4` (`victory-gpu/src/shadow.rs`). Rounding down the start of an unaligned span could wrap past its end; the first cut is now the span start. `VICTORY_SCAN_CUT=0` selects the old arithmetic. Wine test `unaligned_parallel_scan_covers_the_first_piece` checks the first cut, interior alignment and strictly increasing cuts over 20 start/offset pairs.
+
+### X8 — share placed views despite padding; bound ownerless entries
+
+Windows `feat/live-translator` `da60684e` (`victory-gpu/src/descriptor.rs`, `resource.rs`). Fields the title does not initialize must not distinguish otherwise identical views. Bound entries with no resource to release them. Native and Wine tests: `placed_views_ignore_unused_view_words`, `placed_views_share_resources_across_description_padding`, `ownerless_entries_are_capped`, `views_at_new_addresses_add_no_entries`. Controls: `VICTORY_PLACED_PADDING`, `VICTORY_OWNERLESS_VIEWS`.
+
+### X9 — honor the dynamic-slot request on capped heaps
+
+Windows `feat/live-translator` `7d74efb1` (`victory-gpu/src/descriptor/host.rs`). Apply `VICTORY_DYNAMIC_SLOTS` within heap limits and count refused tables in all builds. Wine test `capped_heaps_take_the_asked_dynamic_slots_within_bounds` checks the allocation decision; fewer dropped draws have not been demonstrated.
+
+### X10 — scripted keys also move the first physical pad's sticks
+
+Windows `feat/live-translator` `8e3de411` (`victory-hle/src/modules/gameinput.rs`). Host pad input no longer hides scripted camera/movement keys. Native test `scripted_camera_keys_push_the_right_stick_over_a_real_pad` supplies pad data and checks the scripted right stick. No game or physical input device is required. X6–X10 can be retired when their upstream equivalents are integrated and the offline tests still pass.
+
 ### X11 — indirect dispatches up to 2^20 groups in x on the Metal chain (`victory-gpu` `indirect.rs`, `mac/indirect_wide.rs`; our implementation of the upstream pair 8777a39c → f1573eae for NVIDIA/AMD, not cherry-picked)
 
 *What.* `indirect::widest` kept 65,535 groups for a card it does not know, and the Metal chain's adapter (Apple, 0x106B) is one. The title's tile lists are 67,440 and 47,760 groups at 2560x1440, so the first lost its last 1,905 tiles (the lowest band of the picture). On the Metal chain (`VICTORY_METAL_OUT` set; `mac::on_metal_chain`) the bound is 2^20, the clamp's own bound on the total; `VICTORY_INDIRECT_WIDE=0` keeps 65,535. *Why safe.* The back passes the record to `dispatchThreadgroupsWithIndirectBuffer` as it is and Metal takes 32-bit counts: `metal/back/tests/exec_indirect_wide.rs` runs 65,535, 67,440, 2^20 and 3,000,000 groups on an M5 Max and counts every group. Nothing between victory-gpu and the back clamps (front, bridge, back checked, 2026-11-28). *Test.* `mac::indirect_wide::tests`. The D3DMetal path is not touched (no `VICTORY_METAL_OUT`).
