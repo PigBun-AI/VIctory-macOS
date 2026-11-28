@@ -1203,10 +1203,17 @@ mod host {
             // connected the stand-in is not there, and a title that listens
             // to the pad (the title's start screen) saw nothing.
             if slot == 0 {
-                for vk in scripted() {
+                let keys = scripted();
+                for &vk in &keys {
                     if let Some(&(_, button)) = super::FALLBACK_BUTTONS.iter().find(|(key, _)| *key == vk) {
                         pad.buttons |= button;
                     }
+                }
+                // ... and its sticks too (J/L, I/K: the right stick, the camera; W/A/S/D the
+                // left), so a scripted camera turn works with a real pad connected.
+                if !keys.is_empty() {
+                    let ks: Vec<KeyState> = keys.iter().map(|&vk| KeyState { virtual_key: vk, ..Default::default() }).collect();
+                    pad = super::merged(pad, super::fallback(&ks));
                 }
             }
             Some(pad)
@@ -1317,6 +1324,21 @@ mod tests {
         fn rumble(&mut self, slot: usize, low: u16, high: u16) {
             self.0.lock().unwrap().rumble.push((slot, low, high));
         }
+    }
+
+    /// A scripted camera turn (`VICTORY_KEYS=...:L`) pushes the right stick, also merged over a
+    /// real pad at rest (what `Host::pad` does for slot 0); the real pad's own push wins where
+    /// it is further.
+    #[test]
+    fn scripted_camera_keys_push_the_right_stick_over_a_real_pad() {
+        let k = |vk: u8| KeyState { virtual_key: vk, ..Default::default() };
+        let real = PadState { left_x: 0.5, ..Default::default() };
+        let turned = merged(real, fallback(&[k(b'L')]));
+        assert_eq!((turned.right_x, turned.right_y, turned.left_x), (1.0, 0.0, 0.5));
+        let up = merged(real, fallback(&[k(b'J'), k(b'I')]));
+        assert_eq!((up.right_x, up.right_y), (-1.0, 1.0));
+        // adversarial: without the merge the real pad shows no turn
+        assert_eq!(real.right_x, 0.0);
     }
 
     fn fake() -> (&'static Hub, Arc<Mutex<FakeHost>>) {
