@@ -4739,10 +4739,25 @@ impl<'a> Lower<'a> {
                 self.pending_masks.push((v, b, i));
                 Ok(v)
             }
-            // shortcut: "some lane of the quad is set" is taken as true: the
-            // lanes it adds only feed derivatives, and exports keep their own
-            // masks. Wrong if such a section had a side effect.
-            Atom::Quad(_) => Ok(self.s.m.bool(true)),
+            // mac 待分配: `s_wqm`: some lane of this lane's quad is in the source mask, by the
+            // host's quad operations (it was taken as true: every lane of a wave ran on
+            // after a `s_wqm exec, exec`, even with no live lane in its quad).
+            Atom::Quad(v) => {
+                let src = self.x.st.bools.quad_source(v).ok_or("missing WQM source mask")?;
+                let b = self.boolean(src, at)?;
+                self.s.flags |= flags::WAVE_OPS;
+                let i32t = self.s.t.i32;
+                let one = self.s.m.i32(1);
+                let zero = self.s.m.i32(0);
+                let x = self.s.m.select(at, b, one, zero);
+                let mut r = x;
+                for kind in 0..3u8 {
+                    let k = self.s.m.i8(kind);
+                    let read = self.s.op(at, "quadOp.i32", Attr::NoUnwind, i32t, 123, &[x, k]);
+                    r = self.s.m.bin(at, Bin::Or, r, read);
+                }
+                Ok(self.s.m.cmp(at, pred::NE, r, zero))
+            }
             // With console lanes, a mask held as a number is the console's:
             // the lane tests its own bit.
             Atom::Opaque(v) if self.console_lanes => {

@@ -63,6 +63,8 @@ pub struct Bools {
     /// Reverse-postorder index of the block that defines each atom.
     born: Vec<usize>,
     ids: Map<Atom, u32>,
+    /// mac 待分配: the source mask of each `s_wqm` ([`Atom::Quad`] is some lane of this one's quad)
+    quad_src: Map<Value, Bool>,
     overflow: bool,
 }
 
@@ -124,12 +126,18 @@ impl Bools {
             atoms: Vec::new(),
             born: Vec::new(),
             ids: Map::default(),
+            quad_src: Map::default(),
             overflow: false,
         }
     }
 
     /// The atom tested at the top of `b` and the results when it is false
     /// and true; `None` for the constants.
+    /// The mask a [`Atom::Quad`] of `v` takes the quads of.
+    pub fn quad_source(&self, v: Value) -> Option<Bool> {
+        self.quad_src.get(&v).copied()
+    }
+
     pub fn node(&self, b: Bool) -> Option<(Atom, Bool, Bool)> {
         let (v, lo, hi) = self.nodes[b.0 as usize];
         (v != TERMINAL).then(|| (self.atoms[v as usize], lo, hi))
@@ -1098,6 +1106,7 @@ impl<'a> Lanes<'a> {
                 let a = arg(0, self)?;
                 let lo = dst.or(exec_out)?.0;
                 let born = self.born(lo);
+                self.b.quad_src.insert(lo, a);
                 let q = self.b.atom(Atom::Quad(lo), born);
                 let r = self.b.or(a, q);
                 (r, Some(r))

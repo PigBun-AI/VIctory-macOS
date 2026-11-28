@@ -1627,6 +1627,34 @@ fn exec_rows() -> Vec<LaneRow> {
             lane_out(|l| (new >> l & 1 == 1).then_some(0))
         }),
     });
+    // ISA: s_wqm: every group of four bits is all ones where any of them is set. On EXEC the
+    // quads with a live lane all run (the helper lanes of a pixel quad).
+    let wqm = |m: u32| (0..8).fold(0u32, |a, q| if m >> (4 * q) & 15 != 0 { a | 15 << (4 * q) } else { a });
+    rows.push(LaneRow {
+        name: "s_wqm_b32",
+        tag: "[exec]".into(),
+        body: vec![sop1(o("s_wqm_b32"), EXEC_LO, EXEC_LO)],
+        gk: Gen::I32,
+        full: false,
+        wave64: false,
+        model: Box::new(move |c| {
+            let new = wqm(c[0]);
+            lane_out(|l| (new >> l & 1 == 1).then_some(0))
+        }),
+    });
+    // the quad mask of EXEC as the select's mask: the lanes of a live quad get 1
+    rows.push(LaneRow {
+        name: "s_wqm_b32",
+        tag: "[vcc select]".into(),
+        body: vec![sop1(o("s_wqm_b32"), VCC_LO, EXEC_LO), vop2(o("v_cndmask_b32"), 22, 128, 21)],
+        gk: Gen::I32,
+        full: false,
+        wave64: false,
+        model: Box::new(move |c| {
+            let q = wqm(c[0]);
+            lane_out(|l| (c[0] >> l & 1 == 1).then_some(q >> l & 1))
+        }),
+    });
     // ISA: popcount(S0 & lanes below this one) + S1; the high form of a wave of 32 adds nothing
     rows.push(LaneRow {
         name: "v_mbcnt_lo_u32_b32",
@@ -1728,6 +1756,31 @@ fn exec64_rows() -> Vec<LaneRow> {
         model: Box::new(move |c| {
             let new = p64(c) & !m64(c);
             lane_out64(|l| (new >> l & 1 == 1).then_some(0))
+        }),
+    });
+    let wqm64 = |m: u64| (0..16).fold(0u64, |a, q| if m >> (4 * q) & 15 != 0 { a | 15 << (4 * q) } else { a });
+    rows.push(LaneRow {
+        name: "s_wqm_b64",
+        tag: "[exec]".into(),
+        body: vec![sop1(o("s_wqm_b64"), EXEC_LO, EXEC_LO)],
+        gk: Gen::I32,
+        full: false,
+        wave64: true,
+        model: Box::new(move |c| {
+            let new = wqm64(m64(c));
+            lane_out64(|l| (new >> l & 1 == 1).then_some(0))
+        }),
+    });
+    rows.push(LaneRow {
+        name: "s_wqm_b64",
+        tag: "[vcc select]".into(),
+        body: vec![sop1(o("s_wqm_b64"), VCC_LO, EXEC_LO), vop2(o("v_cndmask_b32"), 22, 128, 21)],
+        gk: Gen::I32,
+        full: false,
+        wave64: true,
+        model: Box::new(move |c| {
+            let q = wqm64(m64(c));
+            lane_out64(|l| (m64(c) >> l & 1 == 1).then_some((q >> l & 1) as u32))
         }),
     });
     type F = fn(u64, u64) -> u64;
