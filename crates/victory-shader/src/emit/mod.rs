@@ -1950,7 +1950,7 @@ mod tests {
     }
 
     /// A pixel shader writing a constant colour.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn constant_color() -> Vec<u8> {
         let mut s = Shader::new(true);
         s.outputs.push(SigElement {
@@ -2076,12 +2076,10 @@ mod tests {
     /// exports the differences in x and y: 1 and -1 in every pixel of a
     /// triangle, those at its edges too, whose neighbours are helpers.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn quad_neighbours_at_a_triangles_edge_are_read() {
+        use super::host::api::{D3D12_SHADER_VISIBILITY_MESH, D3D12_SHADER_VISIBILITY_PIXEL};
         use super::host::{Draw, Host, Root};
-        use windows::Win32::Graphics::Direct3D12::{
-            D3D12_SHADER_VISIBILITY_MESH, D3D12_SHADER_VISIBILITY_PIXEL,
-        };
         let _one = super::valu_tests::ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2307,13 +2305,10 @@ mod tests {
     /// mesh shaders): triangle (0, 1, 2) covers the target with its corners'
     /// edge flags set as without them; with the culling bit, nothing is lit.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn edge_flagged_triangles_draw_as_unflagged_ones() {
+        use super::host::api::D3D12_SHADER_VISIBILITY_MESH;
         use super::host::{Draw, Host, Root};
-        use windows::Win32::Graphics::Direct3D12::{
-            D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_D3D12_OPTIONS7,
-            D3D12_MESH_SHADER_TIER_NOT_SUPPORTED, D3D12_SHADER_VISIBILITY_MESH,
-        };
         let _one = super::valu_tests::ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2324,16 +2319,7 @@ mod tests {
                 eprintln!("no SM 6.6 {label} device; skipped");
                 continue;
             };
-            let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
-            // SAFETY: the query writes the structure of the given size.
-            let queried = unsafe {
-                host.device.CheckFeatureSupport(
-                    D3D12_FEATURE_D3D12_OPTIONS7,
-                    (&raw mut options).cast(),
-                    size_of_val(&options) as u32,
-                )
-            };
-            if queried.is_err() || options.MeshShaderTier == D3D12_MESH_SHADER_TIER_NOT_SUPPORTED {
+            if !host.caps().mesh_shaders {
                 eprintln!("no mesh shaders on the {label} device; skipped");
                 continue;
             }
@@ -2860,7 +2846,7 @@ mod tests {
         ) {
             v.validate(&mut dxil).unwrap();
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
         if let Ok(host) = super::host::Host::new(false) {
             let cs = super::HostShader {
                 stage: super::HwStage::Cs,
@@ -3246,7 +3232,7 @@ mod barycentric_tests {
     }
 
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn first_half_values_render_on_hardware_and_warp() {
         use super::bitcode::{Attr, Term};
         use super::host::{Draw, Host};
@@ -3301,28 +3287,24 @@ mod barycentric_tests {
             1.0, 0.5, 1.0, 10.0, 0.0, 0.0, 0.0,
         ];
         let mut ran = 0;
-        for (backend, warp) in [("hardware", false), ("WARP", true)] {
+        'devices: for (backend, warp) in [("hardware", false), ("WARP", true)] {
             let Ok(host) = Host::new(warp) else { continue };
-            let mut options =
-                windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
-            // SAFETY: a correctly sized output for the feature query.
-            unsafe {
-                host.device
-                    .CheckFeatureSupport(
-                        windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_D3D12_OPTIONS3,
-                        (&raw mut options).cast(),
-                        size_of_val(&options) as u32,
-                    )
-                    .unwrap();
-            }
-            if !options.BarycentricsSupported.as_bool() {
+            if !host.caps().barycentrics {
                 eprintln!("no barycentrics on {backend}; skipped");
                 continue;
             }
             for paired in [false, true] {
                 let ps = first_half_pixel(paired);
                 validate(&ps);
-                let (root, pso) = host.pipeline(&vs, &ps).expect("interpolation pipeline");
+                let (root, pso) = match host.pipeline(&vs, &ps) {
+                    // mac S6: MSC 4.0.3 has no `attributeAtVertex` (the pull-model
+                    // barycentrics): the device converter refuses, the case skips.
+                    Err(e) if e.starts_with("unsupported") => {
+                        eprintln!("{backend}: {e}; skipped");
+                        continue 'devices;
+                    }
+                    made => made.expect("interpolation pipeline"),
+                };
                 let out = host
                     .draw(
                         &root,

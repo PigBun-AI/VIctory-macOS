@@ -27,6 +27,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use super::HostShader;
+use crate::dxbc::{Container, FourCC};
 
 /// The D3D12 and DXGI names the tests use, as plain values (the Windows
 /// host re-exports the `windows` crate's own under the same names).
@@ -77,6 +78,7 @@ pub mod api {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct D3D12_SHADER_VISIBILITY(pub u32);
     pub const D3D12_SHADER_VISIBILITY_ALL: D3D12_SHADER_VISIBILITY = D3D12_SHADER_VISIBILITY(0);
+    pub const D3D12_SHADER_VISIBILITY_VERTEX: D3D12_SHADER_VISIBILITY = D3D12_SHADER_VISIBILITY(1);
     pub const D3D12_SHADER_VISIBILITY_PIXEL: D3D12_SHADER_VISIBILITY = D3D12_SHADER_VISIBILITY(5);
     pub const D3D12_SHADER_VISIBILITY_MESH: D3D12_SHADER_VISIBILITY = D3D12_SHADER_VISIBILITY(7);
 
@@ -103,6 +105,8 @@ mod wire {
     pub const OP_HELLO: u8 = 1;
     pub const OP_COMPILE: u8 = 2;
     pub const OP_DISPATCH: u8 = 3;
+    pub const OP_DRAW: u8 = 4;
+    pub const OP_PIPELINE: u8 = 5;
     pub const OK: u8 = 0;
     pub const UNSUPPORTED: u8 = 1;
 
@@ -333,6 +337,22 @@ pub struct RootSig {
 #[derive(Clone)]
 pub struct Pso {
     dxil: Vec<u8>,
+    /// The rest of a graphics pipeline (none for a compute one).
+    gfx: Option<Gfx>,
+}
+
+/// What a graphics pipeline holds besides its first stage (`Pso::dxil`: the vertex or mesh
+/// shader): the optional geometry shader and the pixel shader, the render targets' DXGI formats,
+/// the depth target (0 none, 1 D32_FLOAT, 2 with stencil) and the vertex inputs (name, index,
+/// DXGI format, byte offset).
+#[derive(Clone)]
+struct Gfx {
+    mesh: bool,
+    gs: Vec<u8>,
+    ps: Vec<u8>,
+    targets: Vec<u32>,
+    depth: u8,
+    inputs: Vec<(String, u32, u32, u32)>,
 }
 
 impl Host {
@@ -425,7 +445,7 @@ impl Host {
         w.0.extend_from_slice(&root.wire);
         w.bytes(cs);
         call("compile", &w.0)?;
-        Ok(Pso { dxil: cs.to_vec() })
+        Ok(Pso { dxil: cs.to_vec(), gfx: None })
     }
 
     /// Runs a compute pipeline and returns each UAV's contents in heap
@@ -435,8 +455,134 @@ impl Host {
         w.u8(wire::OP_DISPATCH);
         w.0.extend_from_slice(&root.wire);
         w.bytes(&pso.dxil);
-        w.u32(d.roots.len() as u32);
-        for (param, arg) in &d.roots {
+        put_bindings(&mut w, &d.roots, d.views, d.samplers, d.groups)?;
+        let reply = call("dispatch", &w.0)?;
+        let mut r = R(&reply, 0);
+        let n = r.u32()?;
+        (0..n).map(|_| r.u32s()).collect()
+    }
+
+    /// The root signature of a vertex and a pixel shader: user data of the vertex stage is root
+    /// parameter 0, the pixel stage's 1.
+    pub fn root_signature(&self, vs: &HostShader, ps: &HostShader) -> Result<RootSig, String> {
+        self.root_signature_for(&[
+            (vs, api::D3D12_SHADER_VISIBILITY_VERTEX),
+            (ps, api::D3D12_SHADER_VISIBILITY_PIXEL),
+        ])
+    }
+
+    /// A graphics pipeline from a vertex and a pixel shader.
+    pub fn pipeline(&self, vs: &HostShader, ps: &HostShader) -> Result<(RootSig, Pso), String> {
+        let root = self.root_signature(vs, ps)?;
+        let pso = self.pipeline_with(&root, &vs.dxil, &ps.dxil)?;
+        Ok((root, pso))
+    }
+
+    pub fn pipeline_with(&self, root: &RootSig, vs: &[u8], ps: &[u8]) -> Result<Pso, String> {
+        self.pipeline_with_gs(root, vs, None, ps)
+    }
+
+    /// As [`Host::pipeline_with`], with a geometry shader between the two.
+    pub fn pipeline_with_gs(&self, root: &RootSig, vs: &[u8], gs: Option<&[u8]>, ps: &[u8]) -> Result<Pso, String> {
+        let inputs = sig(vs, FourCC::ISG1)?;
+        let mut offset = 0;
+        let layout = inputs
+            .iter()
+            .filter(|e| e.kind == 0)
+            .map(|e| {
+                let at = offset;
+                offset += 4 * u32::from(e.cols.clamp(1, 4));
+                (e.name.clone(), e.index, input_format(e), at)
+            })
+            .collect();
+        self.make_pipeline(root, vs, gs.unwrap_or(&[]), ps, false, layout)
+    }
+
+    /// A mesh pipeline from a mesh and a pixel shader (user data of the mesh stage is root
+    /// parameter 0, the pixel stage's 1).
+    pub fn mesh_pipeline(&self, ms: &HostShader, ps: &HostShader) -> Result<(RootSig, Pso), String> {
+        let root = self.root_signature_for(&[
+            (ms, api::D3D12_SHADER_VISIBILITY_MESH),
+            (ps, api::D3D12_SHADER_VISIBILITY_PIXEL),
+        ])?;
+        let pso = self.mesh_pipeline_with(&root, &ms.dxil, &ps.dxil)?;
+        Ok((root, pso))
+    }
+
+    pub fn mesh_pipeline_with(&self, root: &RootSig, ms: &[u8], ps: &[u8]) -> Result<Pso, String> {
+        self.make_pipeline(root, ms, &[], ps, true, Vec::new())
+    }
+
+    /// Sends the pipeline to the executor now, so a pair MSC or Metal refuses is an error here as
+    /// it is from D3D12's `CreateGraphicsPipelineState`.
+    fn make_pipeline(
+        &self,
+        root: &RootSig,
+        first: &[u8],
+        gs: &[u8],
+        ps: &[u8],
+        mesh: bool,
+        inputs: Vec<(String, u32, u32, u32)>,
+    ) -> Result<Pso, String> {
+        let outputs = sig(ps, FourCC::OSG1)?;
+        let mut targets: Vec<u32> = Vec::new();
+        for o in outputs.iter().filter(|o| o.kind == 16) {
+            let n = o.row.unwrap_or(0) as usize;
+            if targets.len() <= n {
+                targets.resize(n + 1, 2);
+            }
+            targets[n] = match o.comp {
+                9 => 2,
+                4 => 4,
+                _ => 3,
+            };
+        }
+        let depth = if outputs.iter().any(|o| o.kind == 20) {
+            2
+        } else {
+            u8::from(outputs.iter().any(|o| matches!(o.kind, 17..=19)))
+        };
+        let gfx = Gfx { mesh, gs: gs.to_vec(), ps: ps.to_vec(), targets, depth, inputs };
+        let mut w = W::default();
+        w.u8(wire::OP_PIPELINE);
+        put_pipeline(&mut w, root, first, &gfx);
+        call("pipeline", &w.0)?;
+        Ok(Pso { dxil: first.to_vec(), gfx: Some(gfx) })
+    }
+
+    /// Draws one triangle into an RGBA32F target, or dispatches `mesh_groups` mesh groups, and
+    /// returns the target's texels (an integer target's come back as their bits).
+    pub fn draw(&self, root: &RootSig, pso: &Pso, d: &Draw) -> Result<Vec<[f32; 4]>, String> {
+        let gfx = pso.gfx.as_ref().ok_or("a compute pipeline in a draw")?;
+        let mut w = W::default();
+        w.u8(wire::OP_DRAW);
+        put_pipeline(&mut w, root, &pso.dxil, gfx);
+        w.f32s(d.vertices);
+        w.u32(d.stride);
+        w.u32(d.size.0);
+        w.u32(d.size.1);
+        let views: Vec<View> = d.textures.iter().map(|&(wd, h, t)| View::Texture(wd, h, t)).collect();
+        put_bindings(&mut w, &d.roots, &views, d.samplers, [d.mesh_groups, 1, 1])?;
+        let reply = call("draw", &w.0)?;
+        let mut r = R(&reply, 0);
+        let texels = r.u32s()?;
+        Ok(texels
+            .chunks_exact(4)
+            .map(|c| [f32::from_bits(c[0]), f32::from_bits(c[1]), f32::from_bits(c[2]), f32::from_bits(c[3])])
+            .collect())
+    }
+}
+
+/// The root arguments, the view heap, the sampler heap and the group counts of a dispatch or a draw.
+fn put_bindings(
+    w: &mut W,
+    roots: &[(u32, Root)],
+    views: &[View],
+    samplers: &[api::D3D12_SAMPLER_DESC],
+    groups: [u32; 3],
+) -> Result<(), String> {
+        w.u32(roots.len() as u32);
+        for (param, arg) in roots {
             w.u32(*param);
             match arg {
                 Root::Constants(c) => {
@@ -455,8 +601,8 @@ impl Host {
                 Root::Table { .. } => return Err("unsupported: root descriptor tables".into()),
             }
         }
-        w.u32(d.views.len() as u32);
-        for v in d.views {
+        w.u32(views.len() as u32);
+        for v in views {
             match v {
                 View::Texture(wd, h, t) => {
                     w.u8(0);
@@ -517,8 +663,8 @@ impl Host {
                 }
             }
         }
-        w.u32(d.samplers.len() as u32);
-        for s in d.samplers {
+        w.u32(samplers.len() as u32);
+        for s in samplers {
             w.u32(s.Filter.0);
             w.u32(s.AddressU.0);
             w.u32(s.AddressV.0);
@@ -532,15 +678,66 @@ impl Host {
             w.f32(s.MinLOD);
             w.f32(s.MaxLOD);
         }
-        for g in d.groups {
+        for g in groups {
             w.u32(g);
         }
-        let reply = call("dispatch", &w.0)?;
-        let mut r = R(&reply, 0);
-        let n = r.u32()?;
-        (0..n).map(|_| r.u32s()).collect()
+    Ok(())
+}
+
+fn sig(dxil: &[u8], fourcc: FourCC) -> Result<Vec<super::container::SigElement>, String> {
+    let c = Container::parse(dxil).map_err(|e| e.to_string())?;
+    match c.part(fourcc) {
+        Some(p) => super::signature(p.data).map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
     }
 }
+
+/// The DXGI format number of a vertex input (a vector of 32-bit floats, signed or unsigned).
+fn input_format(e: &super::container::SigElement) -> u32 {
+    let i = usize::from(e.cols.clamp(1, 4)) - 1;
+    match e.comp {
+        9 => [41, 16, 6, 2][i],
+        4 => [43, 18, 8, 4][i],
+        _ => [42, 17, 7, 3][i],
+    }
+}
+
+fn put_pipeline(w: &mut W, root: &RootSig, first: &[u8], g: &Gfx) {
+    w.0.extend_from_slice(&root.wire);
+    w.u8(u8::from(g.mesh));
+    w.bytes(first);
+    w.bytes(&g.gs);
+    w.bytes(&g.ps);
+    w.u32(g.targets.len() as u32);
+    for t in &g.targets {
+        w.u32(*t);
+    }
+    w.u8(g.depth);
+    w.u32(g.inputs.len() as u32);
+    for (name, index, format, offset) in &g.inputs {
+        w.bytes(name.as_bytes());
+        w.u32(*index);
+        w.u32(*format);
+        w.u32(*offset);
+    }
+}
+
+/// Bindings for [`Host::draw`]: root arguments and the heap contents.
+pub struct Draw<'a> {
+    pub roots: Vec<(u32, Root)>,
+    /// RGBA32F textures (width, height, texels) at view-heap indices 0..
+    pub textures: &'a [(u32, u32, &'a [[f32; 4]])],
+    /// Samplers at sampler-heap indices 0..
+    pub samplers: &'a [api::D3D12_SAMPLER_DESC],
+    /// Three vertices of stride bytes (none for position-free layouts).
+    pub vertices: &'a [f32],
+    pub stride: u32,
+    pub size: (u32, u32),
+    /// Mesh thread groups to dispatch instead of drawing (0: draw).
+    pub mesh_groups: u32,
+}
+
+// (The Windows host's `stub_vs`/`stub_ps` serve the container-hash test and `diff_tests`, which stay on Windows.)
 
 /// A root argument for [`Host::dispatch`].
 pub enum Root {
@@ -618,6 +815,28 @@ mod tests {
                 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 4, 0, 0, 0, // kind 0 vis 0 reg 0 space 7 n32 4
                 3, 0, 2, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, // kind 3 vis 0 reg 2 space 9 n32 0
                 0, 0, 0, 0, // samplers
+            ]
+        );
+    }
+
+    /// The same bytes as `metal/shader-exec/src/req.rs` (`the_pipeline_wire_form_matches_the_hosts`).
+    #[test]
+    fn the_pipeline_wire_form_is_pinned() {
+        let mut w = W::default();
+        let g = Gfx {
+            mesh: true,
+            gs: Vec::new(),
+            ps: b"c".to_vec(),
+            targets: vec![2],
+            depth: 0,
+            inputs: vec![("P".into(), 0, 6, 0)],
+        };
+        put_pipeline(&mut w, &RootSig { wire: Vec::new() }, b"ab", &g);
+        assert_eq!(
+            w.0,
+            [
+                1, 2, 0, 0, 0, b'a', b'b', 0, 0, 0, 0, 1, 0, 0, 0, b'c', 1, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 1,
+                0, 0, 0, b'P', 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0
             ]
         );
     }

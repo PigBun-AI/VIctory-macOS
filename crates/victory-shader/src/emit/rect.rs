@@ -682,7 +682,7 @@ mod tests {
 
     /// A vertex shader that passes a position and a float4 through, and a
     /// pixel shader that writes the float4.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6
     fn pass_through() -> (super::super::HostShader, super::super::HostShader) {
         let position = SigElement {
             interp: 4,
@@ -755,7 +755,7 @@ mod tests {
     /// is drawn and the interpolant continues into the fourth corner's
     /// half; without it part of the target is not drawn.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn rectangles_are_drawn_whole() {
         use super::super::host::{Draw, Host};
         let Ok(host) = Host::new(false) else {

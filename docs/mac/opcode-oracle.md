@@ -37,32 +37,40 @@ Every row passes except `v_cvt_f16_f32` (a documented translator default, see be
 
 Subnormal inputs and results are compared as equivalent (the console's mode is not known). Every row ran with all lanes active, one thread. VCC/EXEC/SCC state outside the instruction, wave64 and clamp/omod/abs/neg modifiers are not exercised. 
 
-## Plan: the rest (276 mnemonics, 11,578,423 instructions), by weight
+## Plan: the rest (276 mnemonics, 11,578,423 instructions), by weight, and who takes which
 
-| family | untested | instructions | first by frequency |
-|---|---|---|---|
-| hint | 8 | 3,308,752 | s_waitcnt, s_nop, v_nop, s_inst_prefetch, s_clause, s_waitcnt_vscnt, s_waitcnt_depctr, s_sleep |
-| smem | 10 | 2,646,524 | s_load_dwordx4, s_buffer_load_dword, s_buffer_load_dwordx4, s_load_dwordx8, s_buffer_load_dwordx2, s_buffer_load_dwordx8, s_buffer_load_dwordx16, s_load_dword ... |
-| salu | 42 | 1,669,132 | s_mov_b64, s_and_b64, s_and_saveexec_b32, s_andn2_b64, s_movk_i32, s_cselect_b64, s_or_b64, s_andn2_wrexec_b32 ... |
-| valu | 43 | 1,012,090 | v_fma_mix_f32, v_fract_f32, v_lshl_add_u32, v_med3_f32, v_fmaak_f32, v_pack_b32_f16, v_fma_mixlo_f16, v_add3_u32 ... |
-| buffer | 21 | 696,397 | buffer_load_dword, buffer_load_dwordx4, buffer_load_format_x, buffer_load_dwordx2, buffer_load_dwordx3, tbuffer_load_format_xy, tbuffer_load_format_xyzw, buffer_load_format_xyz ... |
-| sctl | 5 | 449,220 | s_branch, s_cbranch_vccnz, s_cbranch_execnz, s_cbranch_vccz, s_swappc_b64 |
-| vcmp | 43 | 444,160 | v_cmpx_eq_u32, v_cmpx_lt_f32, v_cmpx_gt_f32, v_cmp_class_f32, v_cmpx_lg_f32, v_cmpx_gt_u32, v_cmpx_gt_i32, v_cmpx_lt_i32 ... |
-| image-sample | 12 | 364,549 | image_sample_lz, image_sample, image_sample_l, image_sample_d, image_sample_c_lz, image_gather4_lz, image_sample_b, image_sample_d_cl ... |
-| interp | 5 | 361,766 | v_interp_p1_f32, v_interp_p2_f32, v_interp_p1ll_f16, v_interp_p2_f16, v_interp_mov_f32 |
-| export | 1 | 132,688 | exp |
-| lds | 23 | 123,295 | ds_swizzle_b32, ds_write2_b32, ds_read2_b32, ds_wrxchg_rtn_b32, ds_read2st64_b32, ds_write2st64_b32, ds_write_b64, ds_add_u32 ... |
-| trans | 9 | 91,428 | v_rcp_iflag_f32, v_sin_f32, v_cos_f32, v_rsq_f16, v_rcp_f16, v_sqrt_f16, v_exp_f16, v_cos_f16 ... |
-| image | 10 | 72,383 | image_load, image_store, image_atomic_umax, image_get_resinfo, image_load_mip, image_atomic_or, image_get_lod, image_atomic_umin ... |
-| cvt | 3 | 57,827 | v_cvt_pkrtz_f16_f32, v_cvt_pk_u8_f32, v_cvt_f32_f64 |
-| lane | 2 | 39,272 | v_writelane_b32, v_permlanex16_b32 |
-| mode | 2 | 33,878 | s_setreg_imm32_b32, s_setreg_b32 |
-| packed | 12 | 28,950 | v_dot4c_i32_i8, v_dot4_i32_i8, v_pk_mul_f16, v_pk_fma_f16, v_pk_add_f16, v_pk_max_f16, v_pk_min_f16, v_pk_fmac_f16 ... |
-| barrier | 1 | 18,424 | s_barrier |
-| flat | 8 | 11,616 | global_load_dword, global_load_dwordx2, global_load_dwordx3, global_load_dwordx4, global_store_dwordx4, global_load_ushort, global_store_dwordx3, global_store_dword |
-| sendmsg | 1 | 9,750 | s_sendmsg |
-| vmem-atomic | 13 | 5,606 | buffer_atomic_add, buffer_atomic_or, buffer_atomic_umin, buffer_atomic_umax, global_atomic_fmax, global_atomic_fmin, buffer_atomic_cmpswap, buffer_atomic_smax ... |
-| bvh | 2 | 716 | image_bvh_intersect_ray, image_bvh64_intersect_ray |
+The first ten families are done (above). The rest is split so that two hands can work in parallel without touching the same rows. Each hand adds its own file next to `oracle_tests.rs` (`oracle_a_*.rs` / `oracle_b_*.rs`, mounted in `emit/mod.rs` under the same gate) and reuses `oracle_tests`' encoders, `Want`, `Row`, `run_family` and `KNOWN` (make what it needs `pub(super)`); it does not edit the first ten families' rows.
+
+| family | untested | instructions | hand | first by frequency |
+|---|---|---|---|---|
+| hint | 8 | 3,308,752 | 后续 | s_waitcnt, s_nop, v_nop, s_inst_prefetch, s_clause, s_waitcnt_vscnt ... |
+| smem | 10 | 2,646,524 | B | s_load_dwordx4, s_buffer_load_dword, s_buffer_load_dwordx4, s_load_dwordx8, s_buffer_load_dwordx2, s_buffer_load_dwordx8 ... |
+| salu | 42 | 1,669,132 | A | s_mov_b64, s_and_b64, s_and_saveexec_b32, s_andn2_b64, s_movk_i32, s_cselect_b64 ... |
+| valu | 43 | 1,012,090 | A | v_fma_mix_f32, v_fract_f32, v_lshl_add_u32, v_med3_f32, v_fmaak_f32, v_pack_b32_f16 ... |
+| buffer | 21 | 696,397 | B | buffer_load_dword, buffer_load_dwordx4, buffer_load_format_x, buffer_load_dwordx2, buffer_load_dwordx3, tbuffer_load_format_xy ... |
+| sctl | 5 | 449,220 | 后续（含图形相关控制流） | s_branch, s_cbranch_vccnz, s_cbranch_execnz, s_cbranch_vccz, s_swappc_b64 |
+| vcmp | 43 | 444,160 | A | v_cmpx_eq_u32, v_cmpx_lt_f32, v_cmpx_gt_f32, v_cmp_class_f32, v_cmpx_lg_f32, v_cmpx_gt_u32 ... |
+| image-sample | 12 | 364,549 | B | image_sample_lz, image_sample, image_sample_l, image_sample_d, image_sample_c_lz, image_gather4_lz ... |
+| interp | 5 | 361,766 | 后续（绘制路径已就绪） | v_interp_p1_f32, v_interp_p2_f32, v_interp_p1ll_f16, v_interp_p2_f16, v_interp_mov_f32 |
+| export | 1 | 132,688 | 后续（绘制路径已就绪） | exp |
+| lds | 23 | 123,295 | B | ds_swizzle_b32, ds_write2_b32, ds_read2_b32, ds_wrxchg_rtn_b32, ds_read2st64_b32, ds_write2st64_b32 ... |
+| trans | 9 | 91,428 | A | v_rcp_iflag_f32, v_sin_f32, v_cos_f32, v_rsq_f16, v_rcp_f16, v_sqrt_f16 ... |
+| image | 10 | 72,383 | B | image_load, image_store, image_atomic_umax, image_get_resinfo, image_load_mip, image_atomic_or ... |
+| cvt | 3 | 57,827 | A | v_cvt_pkrtz_f16_f32, v_cvt_pk_u8_f32, v_cvt_f32_f64 |
+| lane | 2 | 39,272 | A | v_writelane_b32, v_permlanex16_b32 |
+| mode | 2 | 33,878 | A | s_setreg_imm32_b32, s_setreg_b32 |
+| packed | 12 | 28,950 | A | v_dot4c_i32_i8, v_dot4_i32_i8, v_pk_mul_f16, v_pk_fma_f16, v_pk_add_f16, v_pk_max_f16 ... |
+| barrier | 1 | 18,424 | 后续 | s_barrier |
+| flat | 8 | 11,616 | B | global_load_dword, global_load_dwordx2, global_load_dwordx3, global_load_dwordx4, global_store_dwordx4, global_load_ushort ... |
+| sendmsg | 1 | 9,750 | 后续 | s_sendmsg |
+| vmem-atomic | 13 | 5,606 | B | buffer_atomic_add, buffer_atomic_or, buffer_atomic_umin, buffer_atomic_umax, global_atomic_fmax, global_atomic_fmin ... |
+| bvh | 2 | 716 | B | image_bvh_intersect_ray, image_bvh64_intersect_ray |
+
+**Hand A** (ALU): VALU remainder (`v_fma_mix*`, `v_fract`, `v_med3`, `v_lshl_add`, `v_add3`, `v_fmaak/fmamk`, `v_pack_b32_f16`, `v_mad_legacy`, `v_cube*`), `v_cmpx_*` and `v_cmp_class_f32`, 64-bit and exec-state scalar ops (`s_*_b64`, `s_and_saveexec_*`, `s_wqm_b64`, `s_movk/addk`, `s_brev`), `sin/cos` and the f16 transcendentals, `cvt` leftovers (`pkrtz`, `pk_u8`, f64), `packed` (`v_pk_*`, dot), `lane` (`v_writelane`, `permlanex16`), `mode` (`s_setreg*`). Needs a multi-lane builder (`build_cs` with a thread count, result per lane; EXEC/VCC as a per-lane model). Known issue to fix first: `s_mov_b32 vcc_lo, sN` in a thread-limited program asserts in the lowering (`self.s.threads.is_none() || self.console_lanes`), found by the `v_cndmask_b32` row, which now builds vcc with `v_cmp_ne_u32` instead.
+
+**Hand B** (memory): `s_load_*`, `s_buffer_load_*`, `buffer_*`/`tbuffer_*`, `global_*`/`flat_*`, `ds_*`, `*_atomic*`, and the images (`image_load/store/atomic/get_resinfo/get_lod`, `image_sample*`, `gather4`, `bvh`). The table is (address, offset, stride, bounds) against a CPU memory model over the host's `View`s (`Raw/Typed/Texture/Cube`), samplers in `Dispatch.samplers`. Known issues for B to judge: a texture store followed by a texture atomic of the same texel in one thread is applied after it on Metal (`a_counter_texture_is_set_by_a_store_of_one_channel`: should the translator put a fence between them?), and the vector scalar-load that straddles the end of its view (`scalar_buffer_loads…@VICTORY_SHADER_OPT=127`).
+
+**Later** (needs the graphics path, now in the executor: ops 4 and 5): `v_interp_*`, `exp`, the control flow that only shows in a draw, `s_barrier`, `s_sendmsg`, hints (rows that translate and do not change the result). Pull-model barycentrics are refused by MSC 4.0.3 (`attributeAtVertex`), so rows needing them skip.
 
 Next batches, in order:
 1. **VALU remainder** (43 mnemonics, 1.0 M): `v_fma_mix_f32`/`v_fma_mixlo_f16` (VOP3P, op_sel_hi), `v_fract_f32`, `v_lshl_add_u32`, `v_add3_u32`, `v_med3_f32`, `v_fmaak/fmamk` (literal), `v_pack_b32_f16`, `v_mad_legacy_f32`, `v_cube*`. The same builder; VOP3P and literal encoders to add; modifier variants (abs/neg/omod/clamp as extra columns of the same rows).
