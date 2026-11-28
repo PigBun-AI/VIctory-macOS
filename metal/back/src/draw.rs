@@ -1311,11 +1311,11 @@ impl crate::record::CommandList {
                 .set_address(bind_point::UNIFORMS as u32, r.action_va + UNIFORMS_AT)?;
             l.cap_gs_groups(r.action_va)?;
             l.snap_gs_record(r.action_va)?;
-            let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
-            let vis = crate::prof::GS_VIS.with(|c| c.get());
-            if vis {
+            if crate::prof::GS_VIS.with(|c| c.get()) {
                 l.dump_gs_inputs()?;
             }
+            let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
+            let vis = crate::prof::GS_VIS.with(|c| c.get());
             if vis {
                 // SAFETY: slot 0 of the visibility buffer the pass was made with.
                 unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Counting, 0) };
