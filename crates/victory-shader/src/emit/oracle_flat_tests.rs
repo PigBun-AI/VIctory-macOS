@@ -292,20 +292,24 @@ fn rows_test(family: &str, rows: impl FnOnce() -> Vec<(String, Outcome)>) {
 
 #[test]
 fn oracle_flat_loads() {
+    let _chain = super::oracle_tests::metal_chain();
     rows_test("flat_load", loads);
 }
 
 #[test]
 fn oracle_flat_stores() {
+    let _chain = super::oracle_tests::metal_chain();
     rows_test("flat_store", stores);
 }
 
 #[test]
 fn oracle_flat_atomics() {
+    let _chain = super::oracle_tests::metal_chain();
     rows_test("flat_atomic", atomics);
 }
 
 #[test]
 fn oracle_scalar_loads_of_memory() {
+    let _chain = super::oracle_tests::metal_chain();
     rows_test("smem_memory", scalar_loads);
 }
