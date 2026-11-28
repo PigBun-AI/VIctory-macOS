@@ -616,6 +616,24 @@ fn put_bindings(
                     w.u32(u32::from(*mips));
                     w.f32s(&t.iter().flatten().copied().collect::<Vec<_>>());
                 }
+                View::Texture1d(wd, t) => {
+                    w.u8(10);
+                    w.u32(*wd);
+                    w.f32s(&t.iter().flatten().copied().collect::<Vec<_>>());
+                }
+                View::TextureArray(wd, h, d, t) | View::Texture3d(wd, h, d, t) => {
+                    w.u8(if matches!(v, View::Texture3d(..)) { 12 } else { 11 });
+                    w.u32(*wd);
+                    w.u32(*h);
+                    w.u32(*d);
+                    w.f32s(&t.iter().flatten().copied().collect::<Vec<_>>());
+                }
+                View::TextureUav3d(wd, h, d) => {
+                    w.u8(13);
+                    w.u32(*wd);
+                    w.u32(*h);
+                    w.u32(*d);
+                }
                 View::Depth(wd, h, d) => {
                     w.u8(9);
                     w.u32(*wd);
@@ -771,6 +789,14 @@ pub enum View<'a> {
     /// A depth texture SRV (width, height, depth values; D32_FLOAT read as R32_FLOAT): what a
     /// comparison sampler reads.
     Depth(u32, u32, &'a [f32]),
+    /// An RGBA32F Texture1D SRV (width, texels).
+    Texture1d(u32, &'a [[f32; 4]]),
+    /// An RGBA32F Texture2DArray SRV (width, height, layers, texels layer after layer).
+    TextureArray(u32, u32, u32, &'a [[f32; 4]]),
+    /// An RGBA32F Texture3D SRV (width, height, depth, texels slice after slice).
+    Texture3d(u32, u32, u32, &'a [[f32; 4]]),
+    /// An RGBA32F RWTexture3D UAV (width, height, depth), zeroed.
+    TextureUav3d(u32, u32, u32),
     /// A raw buffer UAV of this many dwords, zeroed.
     RawUav(u32),
     /// An RGBA32F texture UAV (width, height), zeroed.
@@ -854,5 +880,33 @@ mod tests {
                 0, 0, 0, b'P', 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0
             ]
         );
+    }
+
+    /// The same bytes as `metal/shader-exec/src/req.rs` (`the_shaped_views_wire_form_matches_the_hosts`).
+    #[test]
+    fn the_shaped_view_wire_form_is_pinned() {
+        let mut w = W::default();
+        let texels = [[1.0f32, 2.0, 3.0, 4.0]; 2];
+        let views = [View::Texture1d(2, &texels), View::Texture3d(1, 1, 2, &texels), View::TextureUav3d(1, 2, 3)];
+        let mut roots = Vec::new();
+        put_bindings(&mut w, &roots, &views, &[], [1, 1, 1]).unwrap();
+        roots.clear();
+        let f = |x: f32| x.to_bits().to_le_bytes();
+        let mut want: Vec<u8> = vec![0, 0, 0, 0, 3, 0, 0, 0];
+        want.extend([10, 2, 0, 0, 0, 8, 0, 0, 0]);
+        for _ in 0..2 {
+            for x in [1.0, 2.0, 3.0, 4.0] {
+                want.extend(f(x));
+            }
+        }
+        want.extend([12, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 8, 0, 0, 0]);
+        for _ in 0..2 {
+            for x in [1.0, 2.0, 3.0, 4.0] {
+                want.extend(f(x));
+            }
+        }
+        want.extend([13, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
+        want.extend([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(w.0, want);
     }
 }

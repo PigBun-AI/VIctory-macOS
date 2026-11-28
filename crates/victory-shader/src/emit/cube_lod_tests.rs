@@ -249,3 +249,291 @@ fn comparison_sampler_reads_a_depth_texture() {
         .collect();
     assert_eq!(got, want);
 }
+
+// ---- mac S6: Texture1D / Texture2DArray / Texture3D SRVs and an RWTexture3D UAV on the executor ----
+
+#[cfg(target_os = "macos")]
+mod shaped {
+    use super::*;
+
+    const W: u32 = 4;
+    const H: u32 = 3;
+    const D: u32 = 2;
+
+    /// MIMG dim field (bits 3..5 of the first word).
+    #[derive(Clone, Copy)]
+    enum Shape {
+        D1 = 0,
+        D3 = 2,
+        Array = 5,
+    }
+
+    fn texel_value(x: u32, y: u32, z: u32) -> [f32; 4] {
+        [
+            (x + 10 * y + 100 * z) as f32,
+            (x + 1) as f32 * 0.5,
+            y as f32,
+            z as f32 + 0.25,
+        ]
+    }
+
+    fn native(words: Vec<u32>, uav: Option<u8>) -> NativeProgram {
+        let table = |slot, user_data| RootParam {
+            root: RootType::Table,
+            table_offset_dwords: 0,
+            sgprs: 1,
+            base_register: 0,
+            user_data,
+            slot,
+        };
+        let range = |kind, at, words, slot, user_data| UsedResource {
+            kind,
+            root: RootType::Table,
+            table_offset_dwords: at,
+            lower_bound: 0,
+            stride: 0,
+            dwords: words,
+            user_data,
+            slot,
+        };
+        let mut used = vec![range(ResourceType::Srv, 0, 8, 0, 0)];
+        used.push(match uav {
+            Some(dw) => range(ResourceType::Uav, 8, dw, 0, 0),
+            None => range(ResourceType::Uav, 8, 4, 0, 0),
+        });
+        used.push(range(ResourceType::Sampler, 0, 4, 1, 2));
+        NativeProgram {
+            stage: HwStage::Cs,
+            wave64: false,
+            vgprs: 16,
+            layout: vec![table(0, 0), table(1, 2)],
+            used,
+            io: StageIo::Cs(ComputeIo {
+                rsrc2: 3 << 1,
+                threads: [1, 1, 1],
+            }),
+            code: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+        }
+    }
+
+    const PROLOGUE: [u32; 9] = [
+        0xBE81_0380,
+        0xBE83_0380,
+        0xF40C_0400,
+        0xFA00_0000, // SRV image to s[16:23]
+        0xF408_0300,
+        0xFA00_0020, // raw output UAV to s[12:15]
+        0xF408_0601,
+        0xFA00_0000, // sampler to s[24:27]
+        0x7E1E_0280, // v15 = 0
+    ];
+
+    fn mov_imm(words: &mut Vec<u32>, reg: usize, bits: u32) {
+        words.extend([0x7E00_02FF | ((reg as u32) << 17), bits]);
+    }
+
+    /// Loads and point samples of every texel of a shape; the red channel of each goes to the output.
+    fn run(shape: Shape, size: [u32; 3], texels: &[[f32; 4]], view: View<'_>) {
+        let dim = (shape as u32) << 3;
+        let mut cases: Vec<(bool, [u32; 3])> = Vec::new();
+        for z in 0..size[2] {
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    cases.push((false, [x, y, z]));
+                    cases.push((true, [x, y, z]));
+                }
+            }
+        }
+        let mut words = PROLOGUE.to_vec();
+        for (i, &(sample, c)) in cases.iter().enumerate() {
+            let coords = match shape {
+                Shape::D1 => 1,
+                _ => 3,
+            };
+            for r in 0..coords {
+                let v = if sample {
+                    let extent = [size[0], size[1], size[2]][r] as f32;
+                    // An array's layer is an integer index even when sampling.
+                    if matches!(shape, Shape::Array) && r == 2 {
+                        c[r] as f32
+                    } else {
+                        (c[r] as f32 + 0.5) / extent
+                    }
+                    .to_bits()
+                } else {
+                    c[r]
+                };
+                mov_imm(&mut words, r, v);
+            }
+            if sample {
+                // image_sample_lz v10, v[0:2], s[16:23], s[24:27]
+                words.extend([0xF000_0100 | dim | (0x27 << 18), 0x00C4_0A00]);
+            } else {
+                // image_load v10, v[0:2], s[16:23]
+                words.extend([0xF000_0100 | dim, 0x0004_0A00]);
+            }
+            words.extend([0xBF8C_0F70]); // s_waitcnt vmcnt(0)
+            words.extend([0xE070_1000 | (i as u32 * 4), 0x8003_0A0F]);
+        }
+        words.push(0xBF81_0000);
+        let (shader, _) = build_compute_shader(&native(words, None)).unwrap();
+        let sampler = D3D12_SAMPLER_DESC {
+            Filter: D3D12_FILTER_MIN_MAG_MIP_POINT,
+            AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            MaxLOD: f32::MAX,
+            MaxAnisotropy: 1,
+            ..Default::default()
+        };
+        let Ok(host) = Host::new(false) else {
+            eprintln!("no SM 6.6 device; skipped");
+            return;
+        };
+        let (root, pso) = match host.compute_pipeline(&shader) {
+            Err(e) if e.starts_with("unsupported") => {
+                eprintln!("{e}; skipped");
+                return;
+            }
+            made => made.unwrap(),
+        };
+        let out = host
+            .dispatch(
+                &root,
+                &pso,
+                &Dispatch {
+                    roots: vec![(
+                        0,
+                        Root::Constants(vec![0; shader.user_data_dwords() as usize]),
+                    )],
+                    views: &[view, View::RawUav(cases.len() as u32)],
+                    samplers: &[sampler],
+                    groups: [1, 1, 1],
+                },
+            )
+            .unwrap();
+        for (i, &(sample, c)) in cases.iter().enumerate() {
+            let want = texels[(c[0] + size[0] * (c[1] + size[1] * c[2])) as usize][0];
+            let got = f32::from_bits(out[0][i]);
+            assert_eq!(got, want, "{} at {c:?}", if sample { "sample" } else { "load" });
+        }
+    }
+
+    fn all(size: [u32; 3]) -> Vec<[f32; 4]> {
+        let mut t = Vec::new();
+        for z in 0..size[2] {
+            for y in 0..size[1] {
+                for x in 0..size[0] {
+                    t.push(texel_value(x, y, z));
+                }
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn texture_1d_loads_and_samples() {
+        let t = all([W, 1, 1]);
+        run(Shape::D1, [W, 1, 1], &t, View::Texture1d(W, &t));
+    }
+
+    #[test]
+    fn texture_2d_array_loads_and_samples() {
+        let t = all([W, H, D]);
+        run(Shape::Array, [W, H, D], &t, View::TextureArray(W, H, D, &t));
+    }
+
+    #[test]
+    fn texture_3d_loads_and_samples() {
+        let t = all([W, H, D]);
+        run(Shape::D3, [W, H, D], &t, View::Texture3d(W, H, D, &t));
+    }
+
+    /// image_store into an RWTexture3D, read back by the executor: every texel gets its own value.
+    #[test]
+    fn rw_texture_3d_stores_come_back() {
+        let mut words = vec![
+            0xBE81_0380,
+            0xBE83_0380,
+            0xF40C_0400,
+            0xFA00_0000, // UAV image to s[16:23]
+        ];
+        for z in 0..D {
+            for y in 0..H {
+                for x in 0..W {
+                    for (r, v) in [x, y, z].into_iter().enumerate() {
+                        mov_imm(&mut words, r, v);
+                    }
+                    for (r, v) in texel_value(x, y, z).into_iter().enumerate() {
+                        mov_imm(&mut words, 10 + r, v.to_bits());
+                    }
+                    // image_store v[10:13], v[0:2], s[16:23] (dmask xyzw, 3D)
+                    words.extend([0xF000_0F00 | ((Shape::D3 as u32) << 3) | (0x08 << 18), 0x0004_0A00]);
+                }
+            }
+        }
+        words.extend([0xBF8C_0F70, 0xBF81_0000]);
+        let table = |slot, user_data| RootParam {
+            root: RootType::Table,
+            table_offset_dwords: 0,
+            sgprs: 1,
+            base_register: 0,
+            user_data,
+            slot,
+        };
+        let program = NativeProgram {
+            stage: HwStage::Cs,
+            wave64: false,
+            vgprs: 16,
+            layout: vec![table(0, 0)],
+            used: vec![UsedResource {
+                kind: ResourceType::Uav,
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                lower_bound: 0,
+                stride: 0,
+                dwords: 8,
+                user_data: 0,
+                slot: 0,
+            }],
+            io: StageIo::Cs(ComputeIo {
+                rsrc2: 3 << 1,
+                threads: [1, 1, 1],
+            }),
+            code: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+        };
+        let (shader, _) = build_compute_shader(&program).unwrap();
+        let Ok(host) = Host::new(false) else {
+            eprintln!("no SM 6.6 device; skipped");
+            return;
+        };
+        let (root, pso) = match host.compute_pipeline(&shader) {
+            Err(e) if e.starts_with("unsupported") => {
+                eprintln!("{e}; skipped");
+                return;
+            }
+            made => made.unwrap(),
+        };
+        let out = host
+            .dispatch(
+                &root,
+                &pso,
+                &Dispatch {
+                    roots: vec![(
+                        0,
+                        Root::Constants(vec![0; shader.user_data_dwords() as usize]),
+                    )],
+                    views: &[View::TextureUav3d(W, H, D)],
+                    samplers: &[],
+                    groups: [1, 1, 1],
+                },
+            )
+            .unwrap();
+        let want: Vec<u32> = all([W, H, D])
+            .into_iter()
+            .flatten()
+            .map(f32::to_bits)
+            .collect();
+        assert_eq!(out[0], want);
+    }
+}
