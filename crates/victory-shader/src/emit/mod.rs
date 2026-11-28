@@ -131,7 +131,7 @@ mod probe_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod size_tests;
 #[cfg(test)]
-mod f2_tests; // mac F2
+mod f2_tests; // mac S8
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod valu_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
@@ -153,7 +153,7 @@ pub use sampler::StaticSampler;
 pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
 pub use mesh_cs::MeshComputeMode; // mac S5
 pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
-pub use lower::{f16_native, f16_nearest}; // mac F1
+pub use lower::{f16_native, f16_nearest, host_metal_chain, set_host_metal_chain}; // mac S7
 pub use lower::sunclamp::export_sat;
 pub use rect::{clip_as_varying, rect_list_gs, writes_clip_distance, CLIP_VARYING}; // mac S4
 pub use shader::{

@@ -24,7 +24,7 @@ use victory_shader::emit::MeshComputeMode;
 pub fn host_mode() -> MeshComputeMode {
     decide(
         std::env::var("VICTORY_MESH_COMPUTE").ok().as_deref(),
-        std::env::var_os("VICTORY_METAL_OUT").is_some_and(|v| !v.is_empty()),
+        super::metal_chain::on_metal_chain(),
         std::env::var("VICTORY_METAL_MESH_COMPUTE_SUPPORTED").as_deref() == Ok("1"),
     )
 }

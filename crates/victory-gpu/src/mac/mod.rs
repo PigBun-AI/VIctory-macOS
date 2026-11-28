@@ -10,6 +10,7 @@ pub mod frames;
 pub mod hlsl;
 pub mod layout_stats; // mac G11
 pub mod mesh_compute; // mac S5
+pub mod metal_chain; // mac S5, S7
 pub mod present_cap;
 pub mod prove; // mac G12
 pub mod pso_x;

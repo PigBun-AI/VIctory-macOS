@@ -1374,7 +1374,9 @@ Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass pl
 *Why not needed on Windows.* Windows has D3D12 and the DXIL validator; the tests run there as they were.
 *Remove when.* A Windows-independent device for the proofs exists upstream (or the Windows host is rebuilt on the same pipe).
 
-### F1 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/{lower,bitcode,shader,live,mod}.rs`, `victory-gpu` `shader_cache.rs`)
+### S7 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/{lower,bitcode,shader,live,mod}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `shader_cache.rs`, `mac/metal_chain.rs`)
+
+*Formerly called F1.* The environment variable names are unchanged (`VICTORY_F16_NEAREST`, `VICTORY_F16_NATIVE`); the hook lines in the source are marked `mac S7` (they were `mac F1`).
 
 *What.* The translator's `VICTORY_F16_NEAREST` (round the result of a 16-bit float operation to nearest even, `Lower::f16_nearest`) is **on by
 default**; `VICTORY_F16_NEAREST=0` turns it off. It now covers every result rounding of the title's code: `v_cvt_f16_f32`, the VOP f16 arithmetic
@@ -1383,7 +1385,7 @@ plain `legacyF32ToF16`; one helper, `Lower::f16_result`, is now the only place t
 the console too, `f16_toward_zero`), the format conversions of d16 stores, and the wave sum of halves (already exact). The shader cache key holds the
 effective state (`emit::f16_nearest()`), as for `VICTORY_EXPORT_F16_SAT`, so a default flip or a `=0` run never reuses the other's translations.
 
-*One `fptrunc` on the Metal chain (`VICTORY_F16_NATIVE`, default on where the host has no `attributeAtVertex`, i.e. there).* The
+*One `fptrunc` on our own Metal chain (`VICTORY_F16_NATIVE`, default on only there).* "Our own Metal chain" is decided as S5 decides it: `VICTORY_METAL_OUT` set and not empty (`run.sh` exports it on `--backend metal` only; `victory-gpu` `mac/metal_chain.rs`, told to the translator at host creation by `set_host_metal_chain`, and to the live translator library in bit 28 of the last `host_settings()` word, so the shader cache keys on it; a tool that translates offline without a host falls back to reading `VICTORY_METAL_OUT` itself). It is not the test "the host has no `attributeAtVertex`" (the first form of this patch): D3DMetal has no `attributeAtVertex` either, and D3DMetal is the reference path, so its translation stays as it was (the sequence); `VICTORY_F16_NATIVE=1` forces the native form there by hand. Unit tests `lower::tests::f16_native_is_on_by_default_on_the_metal_chain_only`, `f16_native_follows_the_chain_the_host_says`, `mac::metal_chain::tests`. The
 nearest rounding is not the dozen-operation sequence there but one `fptrunc float to half` of a native 16-bit module: LLVM's `fptrunc` rounds to nearest
 even, and MSC compiles it to Metal's `half(x)`. The writer got a `half` type, the `fptrunc` cast (opcode 7), the data layout DXC writes for native
 16-bit modules (`f16:16`, `i16:16`, `i8:8`), and the Native16 feature (shader flag 1<<23, `SFI0` bit 42) which a module with a `half` sets. The
@@ -1400,7 +1402,7 @@ allows it) with a double rounding for half denormals: a result that is not exact
 about 37 % of f32 inputs (measured: 50,329,600 of 134,217,728 sampled inputs differ from nearest). 11,642 of 26,177 translated programs (44 %)
 have such a rounding (11,621 of the 25,756 translated census programs change by it).
 
-*Remove when.* The Windows line turns the same switch on (merge conflict at the `mac F1` lines) or MSC rounds to nearest.
+*Remove when.* The Windows line turns the same switch on (merge conflict at the `mac S7` lines) or MSC rounds to nearest.
 
 *Evidence (2026-11-28).* Hardware proof on the Mac GPU (Apple M5 Max, macOS 27.2.1, MSC 4.0.3, through the S6 executor; test
 `emit::f16_hw_tests`, branch `mac/f16-hw-proof` over `mac/shader-harness`): the real translator output of `v_cvt_f16_f32`, `v_fma_mixlo_f16`
@@ -1425,7 +1427,9 @@ the generic upstream PRs in the Mac history (not Mac specific). Each is a candid
 
 Taken later (no longer "not ported"): the low-address guards and 2 TiB views (#398, with the #1009 guards it builds on), see X3.
 
-### F2 — a 64-bit image atomic max that returns the original: read first, atomic without its result (`victory-shader` `emit/lower.rs`, `emit/live.rs`, `victory-gpu` `shader_cache.rs`)
+### S8 — a 64-bit image atomic max that returns the original: read first, atomic without its result (`victory-shader` `emit/lower.rs`, `emit/live.rs`, `victory-gpu` `shader_cache.rs`)
+
+*Formerly called F2.* The environment variable name is unchanged (`VICTORY_F2_READ_FIRST`); the hook lines in the source are marked `mac S8` (they were `mac F2`).
 
 *What.* `image_atomic_{s,u}{min,max}` of two channels (an R32G32 view as one 64-bit texel) with GLC lowers as a `textureLoad.i32` of the texel, joined
 to 64 bits, then the `atomicBinOp.i64` whose result is not used; the load's value is the register result. Other 64-bit atomics are as before.
