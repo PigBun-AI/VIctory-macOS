@@ -112,6 +112,10 @@ pub struct Layout {
     /// declares (and of the SRV the vertex shader declares).
     pub space: u32,
     pub register: u32,
+    /// The resource kinds the compute form may read through heap-indexed or
+    /// table views, as a bit set of `DXIL::ResourceKind` (all bits when the
+    /// text has no `reads` line): what the pass-split rule matches.
+    pub reads: u32,
     pub elements: Vec<Element>,
 }
 
@@ -134,6 +138,7 @@ impl Layout {
             group_stride: 0,
             space: 0,
             register: 0,
+            reads: u32::MAX,
             elements: Vec::new(),
         };
         for line in lines {
@@ -157,6 +162,12 @@ impl Layout {
                 "gstride" => l.group_stride = num(0)?,
                 "space" => l.space = num(0)?,
                 "register" => l.register = num(0)?,
+                "reads" => {
+                    l.reads = args
+                        .first()
+                        .and_then(|a| u32::from_str_radix(a.trim_start_matches("0x"), 16).ok())
+                        .ok_or_else(|| LayoutError(format!("`{line}`: no hexadecimal mask")))?
+                }
                 "v" | "p" => {
                     // v|p NAME INDEX KIND TYPE ROWS COLS OFFSET INTERP
                     if args.len() != 8 {

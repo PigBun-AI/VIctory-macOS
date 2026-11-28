@@ -258,6 +258,9 @@ impl Run<'_> {
     }
 
     pub(super) fn dispatch_mesh(&mut self, c: &victory_metal_proto::render::DispatchMesh) -> R {
+        if let Some(r) = self.emu_mesh_command(c) {
+            return r;
+        }
         let (list, p) = self.graphics_ready()?;
         let r = list.dispatch_mesh(&p, [c.x, c.y, c.z]);
         r.map_err(|e| self.st.refuse("DISPATCH_MESH", &e))

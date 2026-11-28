@@ -44,6 +44,7 @@
 //! conversion (and `VICTORY_METAL_LOG=1` prints it to stderr).
 
 mod dxil;
+mod emu;
 mod gfx;
 mod handles;
 mod indirect;
@@ -79,6 +80,9 @@ pub struct ExecOptions {
     /// What MSC adds to converted shaders to behave like the original API
     /// (the default checks buffer bounds: an out-of-range read gives 0).
     pub compat: crate::msc::Compat,
+    /// Whether mesh pipelines Metal cannot take are emulated by a compute
+    /// pass instead of refused (`VICTORY_METAL_MESH_COMPUTE`, default on).
+    pub mesh_compute: bool,
 }
 
 impl Default for ExecOptions {
@@ -90,6 +94,7 @@ impl Default for ExecOptions {
                 ..QueueOptions::default()
             },
             compat: crate::msc::Compat::BOUNDS_CHECK,
+            mesh_compute: crate::mesh_emu::enabled(),
         }
     }
 }
@@ -138,6 +143,9 @@ pub(crate) enum PsoBody {
     },
     /// A render pipeline; drawing with it is the next milestone's.
     Graphics(crate::render::GraphicsPipeline),
+    /// A mesh pipeline Metal cannot take, made as a compute pipeline and a
+    /// vertex-fetch pipeline ([`crate::mesh_emu`]).
+    Emulated(Arc<crate::mesh_emu::Emulated>),
 }
 
 /// What a `ResId` names.
@@ -165,6 +173,10 @@ pub(crate) struct State {
     pub(crate) samplers: std::collections::HashMap<String, crate::sampler::Sampler>,
     pub(crate) clear_kernels: crate::clear::ClearKernels,
     pub(crate) indirect_kernels: crate::indirect::Kernels,
+    pub(crate) emu_kernels: crate::mesh_emu::EmuKernels,
+    /// Emulated mesh pipelines made so far (0: the stream code skips the
+    /// pre-scan).
+    pub(crate) emulations: u32,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,

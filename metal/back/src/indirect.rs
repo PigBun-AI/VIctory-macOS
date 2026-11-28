@@ -170,6 +170,25 @@ pub struct IndirectDispatch<'a> {
     pub consumer: u16,
     /// The draw goes through a geometry shader (needs `draws`).
     pub gs: Option<GsExpand>,
+    /// Always run the expansion kernel, whatever the record holds (the mesh
+    /// emulation reads the expanded records, see [`crate::mesh_emu`]).
+    pub always_expand: bool,
+}
+
+/// One chunk of expanded records, as the hook of
+/// [`CommandList::execute_indirect_chunks`] sees it (after the expansion
+/// kernel ran and its writes were made visible to the dispatch stage).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChunkView {
+    /// Records in the chunk.
+    pub k: u64,
+    /// The expanded action of record `i`: at `disps_va + i * out_bytes`.
+    pub disps_va: u64,
+    pub out_bytes: u64,
+    /// The argument buffer copy of record `i`: at `tlabs_va + i * tlab_bytes`
+    /// (the signature changes root arguments), else `None`.
+    pub tlabs_va: Option<u64>,
+    pub tlab_bytes: u64,
 }
 
 /// A draw through a geometry shader (`CommandList::execute_indirect_draws`):
@@ -219,7 +238,7 @@ pub struct Record {
 impl IndirectDispatch<'_> {
     /// Whether the kernel is needed (otherwise the buffer is dispatched from as it is).
     pub fn needs_kernel(&self) -> bool {
-        self.count.is_some() || !self.roots.is_empty() || self.draws
+        self.count.is_some() || !self.roots.is_empty() || self.draws || self.always_expand
     }
 
     /// Whether the list's argument buffer is replaced by a copy per record.
@@ -262,6 +281,18 @@ impl CommandList {
         &mut self,
         kernels: &Kernels,
         spec: &IndirectDispatch<'_>,
+        encode: impl FnMut(&mut CommandList, Record) -> Result<()>,
+    ) -> Result<()> {
+        self.execute_indirect_chunks(kernels, spec, |_, _| Ok(()), encode)
+    }
+
+    /// [`execute_indirect_with`](Self::execute_indirect_with) with a hook that
+    /// sees each chunk of expanded records before its records are encoded.
+    pub(crate) fn execute_indirect_chunks(
+        &mut self,
+        kernels: &Kernels,
+        spec: &IndirectDispatch<'_>,
+        mut chunk_hook: impl FnMut(&mut CommandList, &ChunkView) -> Result<()>,
         mut encode: impl FnMut(&mut CommandList, Record) -> Result<()>,
     ) -> Result<()> {
         self.live()?;
@@ -409,6 +440,16 @@ impl CommandList {
             self.dispatch(&expand, [k.div_ceil(64) as u32, 1, 1], [64, 1, 1])?;
             // The records' dispatch arguments and argument buffers are read next.
             self.barrier(DISPATCH, spec.consumer, VIS_DEVICE)?;
+            chunk_hook(
+                self,
+                &ChunkView {
+                    k,
+                    disps_va: va(disps_at),
+                    out_bytes,
+                    tlabs_va: replaces.then(|| va(tlabs_at)),
+                    tlab_bytes,
+                },
+            )?;
             for i in 0..k {
                 encode(
                     self,

@@ -463,6 +463,17 @@ impl ConstantRing {
     /// A ring of `segments` segments of `segment_bytes` bytes (the latter a
     /// multiple of 256).
     pub fn new(device: &Device, segment_bytes: u64, segments: u32) -> Result<ConstantRing> {
+        Self::with_kind(device, BufferKind::Upload, segment_bytes, segments)
+    }
+
+    /// As [`new`](Self::new) over a buffer of another kind (the scratch ring
+    /// of the mesh emulation is one the GPU writes: `Shared`).
+    pub fn with_kind(
+        device: &Device,
+        kind: BufferKind,
+        segment_bytes: u64,
+        segments: u32,
+    ) -> Result<ConstantRing> {
         if segment_bytes == 0 || !segment_bytes.is_multiple_of(256) || segments == 0 {
             return Err(Error::BadArgument(
                 "ring segments must be a non-zero multiple of 256 bytes".into(),
@@ -470,7 +481,7 @@ impl ConstantRing {
         }
         let buffer = device.create_buffer_in(
             SetKind::Heap,
-            BufferKind::Upload,
+            kind,
             segment_bytes * u64::from(segments),
         )?;
         Ok(ConstantRing {

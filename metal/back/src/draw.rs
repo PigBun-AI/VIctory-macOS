@@ -891,6 +891,60 @@ impl crate::record::CommandList {
         Ok(())
     }
 
+    /// A non-indexed triangle-list draw of the mesh emulation's vertex-fetch
+    /// pipeline (`p` reads no vertex buffer; the topology the stream set, a
+    /// mesh pipeline has none, does not apply).
+    pub(crate) fn draw_fetch(
+        &mut self,
+        p: &GraphicsPipeline,
+        vertex_count: u32,
+        instance_count: u32,
+    ) -> Result<()> {
+        if p.kind() != Kind::Vertex {
+            return Err(Error::BadArgument(
+                "a fetch draw with a pipeline that is not a vertex pipeline".into(),
+            ));
+        }
+        if vertex_count == 0 || instance_count == 0 {
+            return Ok(());
+        }
+        self.write_draw_params([vertex_count, instance_count, 0, 0, 0], 0)?;
+        let enc = self.begin_draw(p, &[VERTEX, FRAGMENT])?;
+        // SAFETY: arguments are plain counts; Metal checks the state.
+        unsafe {
+            enc.drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+                MTLPrimitiveType::Triangle,
+                0,
+                vertex_count as usize,
+                instance_count as usize,
+                0,
+            );
+        }
+        self.stats.draws += 1;
+        Ok(())
+    }
+
+    /// [`draw_fetch`](Self::draw_fetch) with the counts a kernel wrote: a
+    /// 64-byte block at `args_va` (16-byte aligned) whose first four words
+    /// are Metal's indirect arguments (vertex count, instance count, start
+    /// vertex, start instance) and which the converter's runtime reads as its
+    /// draw parameters (the index type, at +32, is zero).
+    pub(crate) fn draw_fetch_indirect(&mut self, p: &GraphicsPipeline, args_va: u64) -> Result<()> {
+        if p.kind() != Kind::Vertex {
+            return Err(Error::BadArgument(
+                "a fetch draw with a pipeline that is not a vertex pipeline".into(),
+            ));
+        }
+        self.table
+            .set_address(bind_point::DRAW_ARGUMENTS as u32, args_va)?;
+        self.table
+            .set_address(bind_point::UNIFORMS as u32, args_va + UNIFORMS_AT)?;
+        let enc = self.begin_draw(p, &[VERTEX, FRAGMENT])?;
+        enc.drawPrimitives_indirectBuffer(MTLPrimitiveType::Triangle, args_va);
+        self.stats.draws += 1;
+        Ok(())
+    }
+
     /// `DrawIndexedInstanced`.
     pub fn draw_indexed(&mut self, p: &GraphicsPipeline, a: DrawIndexedArgs) -> Result<()> {
         let prim = self.vertex_pipeline_checks(p)?;

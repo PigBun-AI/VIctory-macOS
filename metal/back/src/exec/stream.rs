@@ -139,7 +139,7 @@ pub(super) fn validate(block: &[u8]) -> Result<victory_metal_proto::Caps, Status
 
 /// What a list has bound so far: the shadow of its argument buffer and the
 /// objects a dispatch needs.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct Side {
     pub(super) sig: Option<Arc<RootSig>>,
     /// The argument buffer as the stream has set it (root constants,
@@ -147,6 +147,73 @@ pub(super) struct Side {
     pub(super) shadow: Vec<u8>,
     /// Shadow changed since the last dispatch or draw wrote it to the ring.
     pub(super) dirty: bool,
+}
+
+impl Side {
+    /// `SetRootSignature`: a new signature starts a zeroed argument buffer.
+    pub(super) fn set_signature(&mut self, sig: Arc<RootSig>) {
+        // Setting the signature that is already bound changes nothing.
+        if self.sig.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sig)) {
+            return;
+        }
+        self.shadow = vec![0; sig.layout.size() as usize];
+        // The pointer to the static-sampler table MSC appends is the one
+        // entry no root parameter sets.
+        if let (Some(at), Some(table)) = (sig.layout.static_table_offset(), &sig.static_table) {
+            let at = at as usize;
+            self.shadow[at..at + 8].copy_from_slice(&table.gpu_va().to_le_bytes());
+        }
+        self.sig = Some(sig);
+        self.dirty = true;
+    }
+
+    pub(super) fn set_constants(&mut self, c: &SetRootConstants<'_>) -> R {
+        let sig = self.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
+        let SlotKind::Constants { count } = slot.kind else {
+            return Err(Status::INVALID_ARG);
+        };
+        let end = u64::from(c.dest_offset) + c.count() as u64;
+        if end > u64::from(count) {
+            return Err(Status::INVALID_ARG);
+        }
+        let at = (slot.offset + 4 * c.dest_offset) as usize;
+        self.shadow[at..at + c.data.len()].copy_from_slice(c.data);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// `SetRootDescriptor` (the address was checked by the caller).
+    pub(super) fn set_descriptor(&mut self, c: &SetRootDescriptor) -> R {
+        let sig = self.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
+        match (slot.kind, c.kind) {
+            (SlotKind::Descriptor(k), kind) if k == kind => {}
+            _ => return Err(Status::INVALID_ARG),
+        }
+        debug_assert!(matches!(
+            c.kind,
+            RootParamKind::CBV | RootParamKind::SRV | RootParamKind::UAV
+        ));
+        let at = slot.offset as usize;
+        self.shadow[at..at + 8].copy_from_slice(&c.gpu_va.to_le_bytes());
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// `SetRootTable` of the heap entry at `va`.
+    pub(super) fn set_table(&mut self, c: &SetRootTable, va: u64, heap_is_sampler: bool) -> R {
+        let sig = self.sig.clone().ok_or(Status::INVALID_ARG)?;
+        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
+        match slot.kind {
+            SlotKind::Table { sampler } if sampler == heap_is_sampler => {}
+            _ => return Err(Status::INVALID_ARG),
+        }
+        let at = slot.offset as usize;
+        self.shadow[at..at + 8].copy_from_slice(&va.to_le_bytes());
+        self.dirty = true;
+        Ok(())
+    }
 }
 
 /// Compute and graphics have a root signature, root arguments and a
@@ -161,14 +228,17 @@ pub(super) struct Bound {
     /// The protocol id of `gpso` (for the profiler's pipeline labels).
     gpso_id: u32,
     /// `Some(true)`: the argument table's slot 2 holds the graphics arguments.
-    owner: Option<bool>,
+    pub(super) owner: Option<bool>,
+    /// What the pre-scan of the open render pass prepared for the mesh
+    /// draws that are emulated, in order (`exec/emu.rs`).
+    pub(super) emu: std::collections::VecDeque<super::emu::Prepared>,
 }
 
 fn known_bind_point(b: BindPoint) -> bool {
     b == BindPoint::COMPUTE || b == BindPoint::GRAPHICS
 }
 
-fn side_of(bound: &mut Bound, b: BindPoint) -> Result<&mut Side, Status> {
+pub(super) fn side_of(bound: &mut Bound, b: BindPoint) -> Result<&mut Side, Status> {
     match b {
         BindPoint::COMPUTE => Ok(&mut bound.compute),
         BindPoint::GRAPHICS => Ok(&mut bound.graphics),
@@ -284,6 +354,15 @@ impl State {
                 if result.is_ok() {
                     run.prof_after(&c, prof_pso);
                 }
+            }
+            // A render pass with emulated mesh draws: their compute work is
+            // encoded now, before the pass's render encoder (`exec/emu.rs`).
+            if result.is_ok()
+                && matches!(c, Command::BeginRenderPass(_))
+                && run.st.emulations > 0
+                && run.st.options.mesh_compute
+            {
+                run.prescan(decoder.clone());
             }
             if let (Some(s), Some(before)) = (stats, before) {
                 counted.after(s, &c, before, &result, &run);
@@ -813,7 +892,7 @@ impl Run<'_> {
         let (_, bound) = self.list()?;
         match pso.body {
             PsoBody::Compute { .. } => bound.pso = Some(pso),
-            PsoBody::Graphics(_) => {
+            PsoBody::Graphics(_) | PsoBody::Emulated(_) => {
                 bound.gpso = Some(pso);
                 bound.gpso_id = c.pso.0;
             }
@@ -829,20 +908,7 @@ impl Run<'_> {
             .ok_or(Status::NOT_FOUND)?
             .clone();
         let (_, bound) = self.list()?;
-        let bound = side_of(bound, c.bind_point)?;
-        // Setting the signature that is already bound changes nothing.
-        if bound.sig.as_ref().is_some_and(|s| Arc::ptr_eq(s, &sig)) {
-            return Ok(());
-        }
-        bound.shadow = vec![0; sig.layout.size() as usize];
-        // The pointer to the static-sampler table MSC appends is the one
-        // entry no root parameter sets.
-        if let (Some(at), Some(table)) = (sig.layout.static_table_offset(), &sig.static_table) {
-            let at = at as usize;
-            bound.shadow[at..at + 8].copy_from_slice(&table.gpu_va().to_le_bytes());
-        }
-        bound.sig = Some(sig);
-        bound.dirty = true;
+        side_of(bound, c.bind_point)?.set_signature(sig);
         Ok(())
     }
 
@@ -874,20 +940,7 @@ impl Run<'_> {
 
     fn set_root_constants(&mut self, c: &SetRootConstants<'_>) -> R {
         let (_, bound) = self.list()?;
-        let bound = side_of(bound, c.bind_point)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
-        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
-        let SlotKind::Constants { count } = slot.kind else {
-            return Err(Status::INVALID_ARG);
-        };
-        let end = u64::from(c.dest_offset) + c.count() as u64;
-        if end > u64::from(count) {
-            return Err(Status::INVALID_ARG);
-        }
-        let at = (slot.offset + 4 * c.dest_offset) as usize;
-        bound.shadow[at..at + c.data.len()].copy_from_slice(c.data);
-        bound.dirty = true;
-        Ok(())
+        side_of(bound, c.bind_point)?.set_constants(c)
     }
 
     fn set_root_descriptor(&mut self, c: &SetRootDescriptor) -> R {
@@ -901,21 +954,7 @@ impl Run<'_> {
             }
         }
         let (_, bound) = self.list()?;
-        let bound = side_of(bound, c.bind_point)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
-        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
-        match (slot.kind, c.kind) {
-            (SlotKind::Descriptor(k), kind) if k == kind => {}
-            _ => return Err(Status::INVALID_ARG),
-        }
-        debug_assert!(matches!(
-            c.kind,
-            RootParamKind::CBV | RootParamKind::SRV | RootParamKind::UAV
-        ));
-        let at = slot.offset as usize;
-        bound.shadow[at..at + 8].copy_from_slice(&c.gpu_va.to_le_bytes());
-        bound.dirty = true;
-        Ok(())
+        side_of(bound, c.bind_point)?.set_descriptor(c)
     }
 
     fn set_root_table(&mut self, c: &SetRootTable) -> R {
@@ -926,17 +965,7 @@ impl Run<'_> {
         let va = heap.heap.entry_va(c.index);
         let heap_is_sampler = heap.sampler;
         let (_, bound) = self.list()?;
-        let bound = side_of(bound, c.bind_point)?;
-        let sig = bound.sig.clone().ok_or(Status::INVALID_ARG)?;
-        let slot = sig.layout.slot(c.root_index).ok_or(Status::INVALID_ARG)?;
-        match slot.kind {
-            SlotKind::Table { sampler } if sampler == heap_is_sampler => {}
-            _ => return Err(Status::INVALID_ARG),
-        }
-        let at = slot.offset as usize;
-        bound.shadow[at..at + 8].copy_from_slice(&va.to_le_bytes());
-        bound.dirty = true;
-        Ok(())
+        side_of(bound, c.bind_point)?.set_table(c, va, heap_is_sampler)
     }
 
     fn dispatch(&mut self, c: &Dispatch) -> R {
@@ -958,6 +987,9 @@ impl Run<'_> {
     }
 
     fn execute_indirect(&mut self, c: &victory_metal_proto::indirect::ExecuteIndirect<'_>) -> R {
+        if let Some(r) = self.emu_indirect_command(c) {
+            return r;
+        }
         let args = self.st.buffer(c.args)?.clone();
         let count = if c.count.is_null() {
             None
@@ -1058,6 +1090,7 @@ impl Run<'_> {
                 crate::stages::DISPATCH
             },
             gs: None,
+            always_expand: false,
         };
         // The kernel makes its own copies of the argument buffer; otherwise
         // the draws and dispatches read the one the list has, written as for
@@ -1083,6 +1116,9 @@ impl Run<'_> {
             }
             (PsoBody::Compute { pipeline, threads }, Action::Dispatch) => {
                 list.execute_indirect(kernels, pipeline, *threads, &spec)
+            }
+            (PsoBody::Emulated(_), Action::Mesh) => {
+                unreachable!("an emulated mesh dispatch is handled before the plan")
             }
             (PsoBody::Graphics(g), a) if a != Action::Dispatch => {
                 let kind = match a {

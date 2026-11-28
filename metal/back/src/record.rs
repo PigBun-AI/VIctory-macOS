@@ -184,6 +184,11 @@ impl CommandList {
         self.stats
     }
 
+    /// Space in the scratch ring of the mesh emulation (see [`Queue::alloc_scratch`]).
+    pub fn alloc_scratch(&self, size: u64, align: u64) -> Result<RingAlloc> {
+        self.queue.alloc_scratch(size, align)
+    }
+
     /// Space in the constant ring (see [`Queue::alloc_constants`]).
     pub fn alloc_constants(&self, size: u64, align: u64) -> Result<RingAlloc> {
         self.queue.alloc_constants(size, align)

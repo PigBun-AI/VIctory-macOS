@@ -529,6 +529,38 @@ impl Executor {
             Err(e) => crate::mesh_fit::retry(&device, &desc, &e).unwrap_or(Err(e)),
             made => made,
         };
+        let made = match made {
+            // A mesh pipeline Metal cannot take (too big after the repack,
+            // Apple's compiler crashes on it, or it is on the denylist) runs
+            // as a compute pass and a vertex pass instead of being refused
+            // (docs/metal/mesh-compute.md, section 8).
+            Err(e)
+                if kind == PsoKind::Mesh
+                    && self.options.mesh_compute
+                    && super::emu::is_problem_pair(&e) =>
+            {
+                match crate::mesh_emu::Emulated::build(&device, &desc, &super::emu::app_layout(&sig)) {
+                    Ok(em) => {
+                        let pso = Arc::new(Pso {
+                            body: PsoBody::Emulated(Arc::new(em)),
+                            root_sig: sig,
+                        });
+                        a.pso = victory_metal_proto::ids::PsoId(self.with_state(|st| {
+                            st.emulations += 1;
+                            st.psos.insert(pso).map_err(exhausted)
+                        })??);
+                        return Ok(());
+                    }
+                    Err(why) => {
+                        self.note_error(format!(
+                            "CREATE_GRAPHICS_PIPELINE: {e}; the emulation: {why}"
+                        ));
+                        return Err(status_of_msc(&e));
+                    }
+                }
+            }
+            made => made,
+        };
         let pipeline = made.map_err(|e| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {e}"));
             status_of_msc(&e)

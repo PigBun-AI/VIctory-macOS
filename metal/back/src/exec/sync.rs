@@ -43,6 +43,8 @@ impl State {
         State {
             clear_kernels: device.clear_kernels(),
             indirect_kernels: device.indirect_kernels(),
+            emu_kernels: device.emu_kernels(),
+            emulations: 0,
             device,
             options,
             resources: Default::default(),
