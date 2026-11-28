@@ -1095,6 +1095,86 @@ impl crate::record::CommandList {
     /// The vertex buffers of a geometry pipeline as one
     /// `IRRuntimeVertexBuffers` block (31 of { address, length, stride }), at
     /// the vertex buffer bind point.
+    /// `VICTORY_METAL_GS_VISIBILITY`: copies the first words of the bound vertex and index
+    /// buffers where the profiler prints them, and notes the state's viewports and scissors.
+    fn dump_gs_inputs(&mut self) -> Result<()> {
+        let dev = self.queue().device().clone();
+        let (Some(k), Some(buf)) = (
+            crate::prof::dump_kernel(&dev),
+            crate::prof::dump_buffer(&dev),
+        ) else {
+            return Ok(());
+        };
+        let mut meta = String::new();
+        for (i, v) in self.rstate.viewports.iter().enumerate() {
+            meta.push_str(&format!(
+                "\n  viewport {i}: x {} y {} w {} h {} z {}..{}",
+                v.originX, v.originY, v.width, v.height, v.znear, v.zfar
+            ));
+        }
+        for (i, s) in self.rstate.scissors.iter().enumerate() {
+            meta.push_str(&format!("\n  scissor {i}: {s:?}"));
+        }
+        let mut regions: Vec<(u64, u32)> = Vec::new();
+        for (slot, vb) in self.rstate.vertex.iter().enumerate().take(4) {
+            match vb {
+                Some(vb) => {
+                    meta.push_str(&format!(
+                        "\n  vertex slot {slot}: va {:#x} size {} stride {}",
+                        vb.va, vb.size, vb.stride
+                    ));
+                    regions.push((vb.va, vb.size.min(64) / 4));
+                }
+                None => regions.push((0, 0)),
+            }
+        }
+        while regions.len() < 4 {
+            regions.push((0, 0));
+        }
+        match self.rstate.index {
+            Some(ib) => {
+                meta.push_str(&format!(
+                    "\n  index buffer: va {:#x} size {} wide {}",
+                    ib.va, ib.size, ib.wide
+                ));
+                regions.push((ib.va, ib.size.min(64) / 4));
+            }
+            None => regions.push((0, 0)),
+        }
+        *crate::prof::DUMP_META
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = meta;
+        self.barrier(
+            crate::stages::DISPATCH,
+            crate::stages::DISPATCH,
+            crate::stages::VIS_DEVICE,
+        )?;
+        for (k_i, (va, words)) in regions.into_iter().enumerate() {
+            if words == 0 {
+                continue;
+            }
+            let params = self.alloc_constants(32, 16)?;
+            let dst = buf.gpu_va() + (k_i as u64) * 64;
+            params.write_u32s(
+                0,
+                &[
+                    va as u32,
+                    (va >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                    words,
+                    0,
+                    0,
+                    0,
+                ],
+            )?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
+        }
+        self.keep_buffers.push(buf.clone());
+        Ok(())
+    }
+
     fn bind_geometry_vertex_buffers(&mut self) -> Result<()> {
         let vb_block: RingAlloc = self.alloc_constants(31 * 16, 16)?;
         let mut vbs = [0u8; 31 * 16];
@@ -1233,6 +1313,9 @@ impl crate::record::CommandList {
             l.snap_gs_record(r.action_va)?;
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
             let vis = crate::prof::GS_VIS.with(|c| c.get());
+            if vis {
+                l.dump_gs_inputs()?;
+            }
             if vis {
                 // SAFETY: slot 0 of the visibility buffer the pass was made with.
                 unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Counting, 0) };

@@ -497,6 +497,7 @@ fn absorb(w: &mut Window, p: &Pending) {
     {
         if let Some(n) = vis_last() {
             eprintln!("victory-metal gpuprof: visibility samples of the last counted GS draw: {n}");
+            eprintln!("victory-metal gpuprof: that draw read:{}", dump_text());
         }
     }
     for (ns, label) in slow {
@@ -782,4 +783,58 @@ pub(crate) fn vis_buffer(device: &crate::device::Device) -> Option<&'static crat
 pub(crate) fn vis_last() -> Option<u64> {
     let w = VIS.get()?.as_ref()?.read_u32s(0, 2).ok()?;
     Some(u64::from(w[0]) | (u64::from(w[1]) << 32))
+}
+
+// `VICTORY_METAL_GS_VISIBILITY` also dumps what the counted draw reads: the first 64 bytes of each
+// bound vertex buffer and the first 32 of the index buffer (a kernel copies them in the list), with
+// the viewports and scissors of the state, printed with the count.
+const DUMP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void dumpk(constant ulong4& p [[buffer(30)]]) {\n\
+  device const uint* s = (device const uint*)p.x; device uint* d = (device uint*)p.y;\n\
+  uint n = (uint)p.z; for (uint i = 0; i < n; i++) d[i] = s[i];\n}\n";
+
+pub(crate) fn dump_kernel(
+    device: &crate::device::Device,
+) -> Option<&'static crate::pipeline::ComputePipeline> {
+    static K: OnceLock<Option<crate::pipeline::ComputePipeline>> = OnceLock::new();
+    K.get_or_init(|| device.compute_pipeline_from_msl(DUMP_SOURCE, "dumpk").ok())
+        .as_ref()
+}
+
+static DUMP: OnceLock<Option<crate::memory::Buffer>> = OnceLock::new();
+
+pub(crate) fn dump_buffer(
+    device: &crate::device::Device,
+) -> Option<&'static crate::memory::Buffer> {
+    DUMP.get_or_init(|| {
+        device
+            .create_buffer(crate::memory::BufferKind::Shared, 4096)
+            .ok()
+    })
+    .as_ref()
+}
+
+pub(crate) static DUMP_META: Mutex<String> = Mutex::new(String::new());
+
+/// The dump as text: the state's facts, then each region's words (floats when they look like
+/// floats).
+pub(crate) fn dump_text() -> String {
+    let Some(Some(b)) = DUMP.get() else {
+        return String::new();
+    };
+    let meta = lock(&DUMP_META).clone();
+    let mut out = meta;
+    for k in 0..5u64 {
+        let words = b.read_u32s(k * 64, 16).unwrap_or_default();
+        let f: Vec<String> = words
+            .iter()
+            .map(|w| format!("{:.3}", f32::from_bits(*w)))
+            .collect();
+        out.push_str(&format!(
+            "\n  region {k}: hex {:x?}\n            f32 {}",
+            words,
+            f.join(" ")
+        ));
+    }
+    out
 }
