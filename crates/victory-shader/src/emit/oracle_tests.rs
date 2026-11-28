@@ -765,10 +765,6 @@ fn families() -> Vec<(&'static str, Vec<Row>)> {
 /// Differences that are known and not translator bugs, or bugs handed over: (mnemonic, reason).
 const KNOWN: &[(&str, &str)] = &[
     (
-        "v_div_fixup_f32",
-        "bug, fixed upstream by 07f56f5a (VICTORY_DIV_FIXUP; a NaN quotient made 0/x give Inf): 45 of 1292 cases differ before it. DELETE THIS ENTRY when the Mac merges that patch: the row must then pass",
-    ),
-    (
         "v_div_fixup_f16",
         "untranslated: the title never uses v_div_fixup_f16 (0 instructions); the row keeps the ISA order ready for when it does",
     ),
