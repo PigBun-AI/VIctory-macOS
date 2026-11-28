@@ -1514,6 +1514,19 @@ fn the_scratch_ring_does_not_hand_out_a_segment_a_submission_in_flight_may_use()
     );
     assert!(c.gpu_va == a.gpu_va || c.gpu_va == b.gpu_va);
     t.join().unwrap();
+    let mut warm = q.begin_list().unwrap();
+    // The second, doubled page is large enough for an over-segment request.
+    warm.mesh_scratch_va(8192).unwrap();
+    assert_eq!(q.mesh_page_counts(), [2, 1, 0]);
+    drop(warm);
+    for _ in 0..32 {
+        q.begin_list().unwrap().mesh_scratch_va(8192).unwrap();
+    }
+    assert_eq!(
+        q.mesh_page_counts(),
+        [2, 33, 0],
+        "warm demand needs no fresh buffers"
+    );
 }
 
 #[test]

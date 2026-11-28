@@ -85,6 +85,8 @@ pub struct CommandList {
     pub(crate) table: ArgumentTable,
     ended: bool,
     pub(crate) keep_buffers: Vec<Buffer>,
+    pub(crate) mesh_pages: Vec<Buffer>,
+    pub(crate) mesh_page_offset: u64,
     /// Texture copies: what they keep alive and touch ([`crate::copy`]).
     pub(crate) copies: crate::copy::CopyState,
     keep_pipelines: Vec<ComputePipeline>,
@@ -130,6 +132,8 @@ impl Queue {
             keep_gfx: Vec::new(),
             ended: false,
             keep_buffers: Vec::new(),
+            mesh_pages: Vec::new(),
+            mesh_page_offset: 0,
             copies: Default::default(),
             keep_pipelines: Vec::new(),
             last_pipeline: None,
@@ -167,6 +171,8 @@ impl CommandList {
     /// The list was committed with timeline value `value`: its allocator
     /// is busy until then.
     pub(crate) fn into_submitted(mut self, value: u64) {
+        self.queue
+            .return_mesh_pages(std::mem::take(&mut self.mesh_pages), value);
         if let Some(slot) = self.slot.take() {
             self.queue.return_slot(slot, value);
         }
@@ -870,6 +876,8 @@ impl Drop for CommandList {
             if !self.ended {
                 slot.cb.endCommandBuffer();
             }
+            self.queue
+                .return_mesh_pages(std::mem::take(&mut self.mesh_pages), 0);
             self.queue.return_slot(slot, 0);
         }
     }

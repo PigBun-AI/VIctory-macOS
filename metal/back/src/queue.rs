@@ -414,12 +414,22 @@ struct Scratch {
     ring: Option<ConstantRing>,
     /// Bytes of a segment, number of segments.
     config: (u64, u32),
+    // Adaptive ring extension. A page is checked out exclusively to one list,
+    // then returned with that list's actual timeline value (not the next submit).
+    pages: Vec<(crate::memory::Buffer, u64)>,
+    reserved: u64,
+    peak_page: u64,
+    stats: [u64; 3], // growth, retired-page reuse, uncached spills
 }
 
 impl Default for Scratch {
     fn default() -> Self {
         Scratch {
             ring: None,
+            pages: Vec::new(),
+            reserved: 0,
+            peak_page: 0,
+            stats: [0; 3],
             config: crate::mesh_emu::default_scratch_config(),
         }
     }
@@ -848,6 +858,66 @@ impl Queue {
                 }
             }
         }
+    }
+
+    /// Ring extension: best-fit retired page, geometric growth, then a transient block.
+    /// The cap is on retained Metal memory, including checked-out pages.
+    pub(crate) fn mesh_page(&self, need: u64) -> Result<(crate::memory::Buffer, bool)> {
+        const CAP: u64 = 768 << 20;
+        let completed = self.inner.timeline.completed();
+        let mut s = lock(&self.inner.scratch);
+        let ready = s
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, (b, v))| *v <= completed && b.len() >= need)
+            .min_by_key(|(_, (b, _))| b.len())
+            .map(|(i, _)| i);
+        let (page, cached, i) = if let Some(i) = ready {
+            (s.pages.swap_remove(i).0, true, 1)
+        } else {
+            let preferred = need
+                .next_power_of_two()
+                .max(s.config.0.max(s.peak_page.saturating_mul(2)).min(64 << 20));
+            let room = CAP - s.reserved;
+            let n = if preferred <= room { preferred } else { need };
+            let page = self
+                .device()
+                .create_buffer(crate::memory::BufferKind::Shared, n)?;
+            if n <= room {
+                s.reserved += n;
+                s.peak_page = s.peak_page.max(n);
+                (page, true, 0)
+            } else {
+                (page, false, 2)
+            }
+        };
+        s.stats[i] += 1;
+        drop(s);
+        if let Some(c) = crate::dropstats::get() {
+            c.extra(
+                [
+                    "mesh scratch ring growth",
+                    "mesh scratch page reuse",
+                    "mesh scratch uncached spill",
+                ][i],
+                1,
+            );
+        }
+        Ok((page, cached))
+    }
+
+    pub(crate) fn return_mesh_pages(&self, pages: Vec<crate::memory::Buffer>, value: u64) {
+        if !pages.is_empty() {
+            lock(&self.inner.scratch)
+                .pages
+                .extend(pages.into_iter().map(|p| (p, value)));
+        }
+    }
+
+    /// Adaptive page allocations, reuses and uncached spills, respectively.
+    pub fn mesh_page_counts(&self) -> [u64; 3] {
+        lock(&self.inner.scratch).stats
     }
 
     /// Bytes of one constant-ring segment: the most one [`alloc_constants`](Self::alloc_constants) gives.

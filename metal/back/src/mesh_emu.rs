@@ -686,12 +686,21 @@ impl CommandList {
                 "{bytes} bytes of mesh scratch: over the {MAX_BLOCK_BYTES} one dispatch may take"
             )));
         }
-        let block = self
-            .queue()
-            .device()
-            .create_buffer(BufferKind::Shared, bytes)?;
+        let off = self.mesh_page_offset.next_multiple_of(256);
+        if let Some(page) = self.mesh_pages.last()
+            && off + bytes <= page.len()
+        {
+            self.mesh_page_offset = off + bytes;
+            return Ok(page.gpu_va() + off);
+        }
+        let (block, cached) = self.queue().mesh_page(bytes)?;
         let va = block.gpu_va();
-        self.keep_buffers.push(block);
+        if cached {
+            self.mesh_pages.push(block);
+            self.mesh_page_offset = bytes;
+        } else {
+            self.keep_buffers.push(block);
+        }
         event(Some(self), Event::BigBlock);
         Ok(va)
     }
