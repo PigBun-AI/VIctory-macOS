@@ -1197,7 +1197,11 @@ Not proven: no GFX10 interpreter exists here to give the console's own result. R
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
 
-*Risk.* An upstream comment records that the wide form lost an NVIDIA card, and on Apple GPUs it hangs single-thread groups (above): it is off by default here. With the root fix (above) `VICTORY_WAVE_WIDE=1` ran the prologue to w300 without a long frame; turning the default back on is the owner's call.
+*Current default (2026-11-28, `mac/wave-wide-default`).* After the S3 root fix, try wave-wide before the approximate local form. `VICTORY_WAVE_WIDE=0` remains available. No convergence checks or lowering rules changed. The HLSL/Metal oracle (`mac/xdxc-oracle` at `3ad303db`, `wave_tail_allocation_form_probe`) first checks native wave64 and distinct DXIL, then compares two streams of allocations: counts 256/97/33/5 all match the HLSL reference with wide, none without. This is not a console reference for every program.
+
+The old prologue stall was an empty-EXEC loop that repeatedly met at barriers, not one host half skipping the other's barrier. The root fix keeps the loop skip and takes the branch for both halves. On this baseline, the historical reduced GPU test `two_host_waves_with_different_conditions_take_the_loop_behind_the_skip_together` explicitly used `=1`, dispatched all eight masks on Metal and checked every lane (0.22 s total). This verifies the historical path, not arbitrary programs. A fresh **no-save prologue to w300** is the integration gate; not part of these offline tests.
+
+Whole package, 25,985 unique containers: old default at `a9482fb6` 25,955 translated, new default 25,975; +20 compute, none lost, **36 compute programs have different DXIL** among common successes (byte comparison). Explicit `=0` is not the old unset policy: 25,950 successes. Do not remove the backend f64 guard. Offline Metal replays w140/w300: each replaced 16 captured compute pipelines on both sides, no fallback. Changes in RGB pixels also occur on same-policy repeats; these captures do not establish a white-screen fix.
 
 ### S1 — `GetAttributeAtVertex` without `attributeAtVertex`: the other vertices as flat inputs (`victory-shader` `emit/{vertex_flat,lower,mod,wire}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`, `mac/attribute_at_vertex.rs`)
 

@@ -156,7 +156,7 @@ fn emitted_with_wide(native: &NativeProgram, p: &ir::Program, value: &str) -> Re
 }
 
 /// One console wave of 64 threads: the halves meet inside the lane branch only if the wave
-/// takes it together, which `emit` reaches with `VICTORY_WAVE_WIDE=1` (mac S3: off by default).
+/// takes it together, which `emit` reaches with `VICTORY_WAVE_WIDE=1` (also the mac S3 default).
 #[test]
 fn lds_written_and_read_in_a_lane_branch_of_one_console_wave_translates() {
     let native = lds_in_a_lane_branch(64);
@@ -164,17 +164,14 @@ fn lds_written_and_read_in_a_lane_branch_of_one_console_wave_translates() {
     emitted_with_wide(&native, &p, "1").expect("translates on a host of 32-lane waves"); // mac S3
 }
 
-/// mac S3: the wide branch (a group barrier inside a divergent path, which hangs a single-thread
-/// group on Apple GPUs) is tried only with `VICTORY_WAVE_WIDE=1` (and for the two scene kernels).
+/// mac S3: use wave-wide branches by default; an explicit zero is the fallback.
 #[test]
-fn the_wave_wide_branch_is_off_by_default() {
+fn the_wave_wide_branch_is_on_by_default() {
     use std::ffi::OsStr;
-    assert!(!super::wide_branches_on(None, false), "unset");
-    assert!(!super::wide_branches_on(Some(OsStr::new("0")), false), "=0");
-    assert!(!super::wide_branches_on(Some(OsStr::new("")), false), "empty");
-    assert!(super::wide_branches_on(Some(OsStr::new("1")), false), "=1");
-    assert!(super::wide_branches_on(None, true), "the two scene kernels keep upstream's default");
-    assert!(!super::wide_branches_on(Some(OsStr::new("0")), true), "=0 beats the scene kernels");
+    assert!(super::wide_branches_on(None));
+    assert!(super::wide_branches_on(Some(OsStr::new("1"))));
+    assert!(super::wide_branches_on(Some(OsStr::new(""))));
+    assert!(!super::wide_branches_on(Some(OsStr::new("0"))));
 }
 
 /// A group of two console waves: the waves can take the branch apart, and the group barriers
