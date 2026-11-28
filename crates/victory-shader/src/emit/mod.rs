@@ -154,6 +154,8 @@ mod wave64_tests;
 mod s3_tests; // mac S3
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac X5: its corpus tests skip without VICTORY_LIVE_CORPUS
 mod s6_corpus_tests;
+#[cfg(all(test, target_os = "macos"))]
+mod xdxc_oracle; // mac: HLSL dual-path whole-program oracle
 mod wave;
 
 use crate::dxbc::{Container, FourCC};
