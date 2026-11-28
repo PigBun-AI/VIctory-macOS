@@ -173,17 +173,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/pso.rs. 12 of 1340 PSOs have conservative=1.
 
-## 18. mac.fault.xmem_no_write_watch — MEM_WRITE_WATCH left off the pools under Rosetta
-
-- owner / chain / hop: mac / command / victory-hle xmem.rs (A6)
-- freq: 16 (log: 16 pool reservations in a run (see mac.hle.xmem_virtual_alloc), each made without MEM_WRITE_WATCH under Rosetta); used=yes; status=unproven
-- Xbox hardware / driver does: GPU reads memory directly.
-- deviation: No kernel write-watch: written pages unknown, so whole copies (same cost as tracking off). Wine emulates write watch with page protection, which hits Rosetta unresumable faults.
-- restore_plan (how to break through): With tracking restored, turn on again; test: pool alloc has/hasn't MEM_WRITE_WATCH per mode.
-- tests: none specific (xmem tests do not assert it)
-- notes: —
-
-## 19. C-B-012 — mesh pipeline whose output exceeds Metal's 32768-byte total mesh size: back refuses CREATE_GRAPHICS_PIPELINE
+## 18. C-B-012 — mesh pipeline whose output exceeds Metal's 32768-byte total mesh size: back refuses CREATE_GRAPHICS_PIPELINE
 
 - owner / chain / hop: metal / command / 5 back->Metal 4
 - freq: 14 (research/game-runs/20261127-metal-livetr-r6 (stderr.log: 10 x 35840, 4 x 34816)); used=yes; status=gap
@@ -193,27 +183,27 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/gfx_pipeline.rs::the_biggest_mesh_output_dxil_allows_compiles
 - notes: code: back/src/pipeline.rs mesh limit check
 
-## 20. mac.isa.clwb — clwb (cache-line write-back) executes
+## 19. mac.isa.clwb — clwb (cache-line write-back) executes
 
 - owner / chain / hop: mac / command / title x86-64 -> Rosetta
-- freq: 8 (static-census); used=yes; status=unproven
+- freq: 8 (static-census); used=yes; status=proven
 - Xbox hardware / driver does: Zen 2 CLWB writes a dirty cache line back to memory without evicting it; used so the GPU (not cache-coherent on the console for some memory types) sees CPU writes.
 - deviation: Instruction does not exist under Rosetta: SIGILL. Windows line emulates by exception (one per loop, ~300 us through Wine).
 - restore_plan (how to break through): See mac.loader.clwb_nop. No Arm equivalent is reachable from translated code; clflushopt/clflush do execute (probe) and could replace clwb loops if a flush were ever needed (evicts the line, so slower but correct).
-- tests: mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count, any_other_count_patches_nothing_and_says_what_it_found, the_patch_is_wanted_under_rosetta_and_the_variable_decides (decode + NOP in a buffer, native); crash.rs clwb_loop tests; probe-wine clwb inpage/fault/ro (VEH sees the illegal-instruction exception and steps over 4 bytes); clflush, clflushopt, prefetcht0, prefetchw inpage/fault/ro
-- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'，且 w300 无非法指令（不做零拷贝就无需真 clwb） | Census: 8 clwb in 4 functions (8 loops = what the loader finds). clflushopt 0, clflush 0 in the title. | Wine probe: clflush and clflushopt execute but do not fault on a PAGE_NOACCESS page (x86 faults), harmless: the title has 0 of them; prefetch never faults (as x86).
+- tests: mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count, any_other_count_patches_nothing_and_says_what_it_found, the_patch_is_wanted_under_rosetta_and_the_variable_decides (decode + NOP in a buffer, native); crash.rs clwb_loop tests; probe-wine clwb inpage/fault/ro (VEH sees the illegal-instruction exception and steps over 4 bytes); clflush, clflushopt, prefetcht0, prefetchw inpage/fault/ro; mac::clwb::tests::the_real_build_has_the_loops_and_no_other_clwb (8 loops, 8 clwb in all: none outside a loop; run with VICTORY_TITLE_IMAGE under Wine)
+- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'，且 w300 无非法指令（不做零拷贝就无需真 clwb） | Census: 8 clwb in 4 functions (8 loops = what the loader finds). clflushopt 0, clflush 0 in the title. | Wine probe: clflush and clflushopt execute but do not fault on a PAGE_NOACCESS page (x86 faults), harmless: the title has 0 of them; prefetch never faults (as x86). | 2026-11-28 close1: proven: close2's clwb tests (count 8 replaced and logged; 0/7/9 patch nothing) and the real-image test pass under Wine Wine run 2026-11-28 (close1, CrossOver Wine on Rosetta): victory-loader --lib: 93 pass (the one failure, write_sites::changed_moves_and_vector_stores_do_what_they_did, is another unit; code untouched by this branch, assertion left 0 right 1 on the bytes [c4 c1 7a 7f 41 40] under Wine); victory --bins 10 pass.
 
-## 21. mac.loader.clwb_nop — clwb write-back loops replaced by NOPs (only if exactly 8 loops are found)
+## 20. mac.loader.clwb_nop — clwb write-back loops replaced by NOPs (only if exactly 8 loops are found)
 
 - owner / chain / hop: mac / command / loader patch L4 (clwb.rs)
-- freq: 8 (log); used=yes; status=unproven
+- freq: 8 (log); used=yes; status=proven
 - Xbox hardware / driver does: CLWB pushes dirty lines to memory so non-coherent consumers (GPU, DMA) see CPU writes.
 - deviation: Write-back dropped. Safe on this path because all title memory is read by our own CPU code (copies for the GPU: unified memory, CPU-coherent). Would break if the GPU read title memory without a CPU copy (zero-copy) and CPU caches were not coherent.
 - restore_plan (how to break through): Today: keep NOP. If zero-copy is ever built (mach_vm_remap / MTLBuffer no-copy on the title pages), replace by a real flush: clflush is available under Rosetta (probe) or rely on Apple silicon CPU/GPU coherency for shared memory (Apple docs: unified memory; 待核实 for explicit cache maintenance on shared MTLBuffers).
-- tests: victory-loader mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count (log line + count 8), any_other_count_patches_nothing_and_says_what_it_found (0/7/9: nothing patched, count logged), the_patch_is_wanted_under_rosetta_and_the_variable_decides (native)
-- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'（计数 8） | A test would need a runtime check that no GPU read bypasses the CPU: add counter "title pages read by GPU without copy" (0 today).
+- tests: victory-loader mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count (log line + count 8), any_other_count_patches_nothing_and_says_what_it_found (0/7/9: nothing patched, count logged), the_patch_is_wanted_under_rosetta_and_the_variable_decides (native); mac::clwb::tests::the_real_build_has_the_loops_and_no_other_clwb (close1; reads the cached title image b99f876b74d4a77f under Wine: exactly CLWB_LOOPS = 8 loops and 8 clwb instructions in all, none outside a loop)
+- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'（计数 8） | A test would need a runtime check that no GPU read bypasses the CPU: add counter "title pages read by GPU without copy" (0 today). | 2026-11-28 close1: proven: close2's clwb tests (count 8 replaced and logged; 0/7/9 patch nothing) and the real-image test pass under Wine Wine run 2026-11-28 (close1, CrossOver Wine on Rosetta): victory-loader --lib: 93 pass (the one failure, write_sites::changed_moves_and_vector_stores_do_what_they_did, is another unit; code untouched by this branch, assertion left 0 right 1 on the bytes [c4 c1 7a 7f 41 40] under Wine); victory --bins 10 pass.
 
-## 22. S-I-025 — compute programs with a descriptor read only as data ("a descriptor read only as data is not supported")
+## 21. S-I-025 — compute programs with a descriptor read only as data ("a descriptor read only as data is not supported")
 
 - owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
 - freq: 5 (census:2026-11-27); used=yes; status=gap
@@ -223,7 +213,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: census.json translate.failures class "Cs: a descriptor read only as data is not supported" 5; example GFX10 code at 0x2070.
 
-## 23. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
+## 22. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs commit(), commit_refused(); Wine/macOS commit
 - freq: 5 (static-census: title import call sites that commit memory (VirtualAlloc 1, XMemVirtualAlloc 1, XMemAllocatePhysicalPages 1, XMemAllocDefault 1, XMemAlloc 1)); used=yes; status=unproven
@@ -233,7 +223,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: xmem::tests::commit_limit_report_includes_request_and_system_commit, transfers_shrink_the_title_budget, statistics_have_the_console_layout
 - notes: 16 reservations total 62 GB virtual; only committed part matters.
 
-## 24. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
+## 23. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
 
 - owner / chain / hop: mac / command / victory-hle display.rs, dsp.rs, speech.rs, xpackage.rs, gameinput.rs, apu.rs (all marked `shortcut:` in code)
 - freq: 4 (log); used=yes; status=unproven
@@ -243,7 +233,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none per stub
 - notes: Windows-line stubs, generic; listed because the user asked for every stub.
 
-## 25. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
+## 24. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -253,7 +243,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/pipeline.rs "shader does not translate"; translator: crates/victory-shader/src/emit/wave.rs. freq=3 logged programs in this run, 26 containers in census.
 
-## 26. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
+## 25. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -263,7 +253,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/indirect.rs, mac/hlsl.rs. FINDING for the Mac lead: tools/metal/run.sh did not set VICTORY_HELPER_DXC in this run. freq=3 dropped signatures in the log.
 
-## 27. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
+## 26. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 2 (log); used=yes; status=proven
@@ -273,7 +263,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: indirect::tests (26); mac::hlsl::tests::the_shader_model_is_raised_to_6
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 1 per process at start-up.
 
-## 28. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
+## 27. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75 (applied at every launch; no per-run counter)); used=yes; status=gap
@@ -283,7 +273,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. owner=mac: loader patch; Mac lead fills the history and the effects of turning it off. Observed in run 20261127-221938-map: swapchain 1280x720 R8G8B8A8_UNORM, 2 buffers.
 
-## 29. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
+## 28. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75); used=yes; status=unproven
@@ -293,7 +283,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. Switch default 0/off; docs/mac/macos.md table row VICTORY_UPSCALER.
 
-## 30. mac.loader.resolution — L3: sites +0x224352b (settings size to screen setter) and +0x247af25 (pool check int3); VICTORY_OUTPUT / VICTORY_POOL_CHECK; div-by-zero clamp at +0x28f03e8 (trampoline in .text padding +0x5f40966, with any patch asked, never on a fidelity run)
+## 29. mac.loader.resolution — L3: sites +0x224352b (settings size to screen setter) and +0x247af25 (pool check int3); VICTORY_OUTPUT / VICTORY_POOL_CHECK; div-by-zero clamp at +0x28f03e8 (trampoline in .text padding +0x5f40966, with any patch asked, never on a fidelity run)
 
 - owner / chain / hop: mac / loader / resolution chain
 - freq: 1 (log); used=yes; status=unproven
@@ -303,7 +293,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: victory-loader mac::resolution tests (incl. the_divide_clamp_calls_its_trampoline; a_fidelity_run_patches_no_site_and_says_so, a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp, the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch: plan_asked/path_line, native)
 - notes: 代码与单元测试已做，待今日下午运行。proven 条件：fidelity 档日志有 'resolution: fidelity, no site patched' 且无 '... Done' 行、无 'non-fidelity:' 行；perf 档（1280x720 或 VICTORY_UPSCALER=7，Series S）有 'resolution: perf, 4 sites ...' 加 'div-by-zero clamp ... Done'，无 0xc0000094；w300 无停在池检查 int3 | 1440p fidelity may stop at the pool int3: informative | Patch application itself is proven by victory-loader mac::resolution tests (10) and the 'resolution patched site=...' log lines in the perf runs (previous status of this row). | 2026-11-28: the known divide by zero in the upscaler at +0x28f03e8 (divisor +0x10c of the round-robin distributor is 0 when the output is shrunk, trap 0xc0000094) is now clamped to 1: mac: cherry-pick of origin 0cc44dc6 (#615, kostuch0), checks the 6 original bytes (build 1.0.2.1 only). Adaptation: applied only when some resolution patch is asked, so a fidelity run still patches nothing. Evidence: unit test of the trampoline/call bytes only, no run: status stays unproven, 待运行验证 (run at the default 1280x720 on Series S or VICTORY_UPSCALER=7: no 0xc0000094 and a "div-by-zero clamp ... Done" resolution line).
 
-## 31. mac.fault.ntquery_class7 — NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder()
+## 30. mac.fault.ntquery_class7 — NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder()
 
 - owner / chain / hop: mac / command / Wine NtQueryVirtualMemory
 - freq: 1 (static-code: callers of watch::placeholder() outside tests (watch.rs, per block, behind known_holes()); a runtime count is not logged and the call is only reached with tracking on); used=yes; status=gap
@@ -313,7 +303,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: watch::many_askers_tests::holes_are_known_until_the_runtime_tells, watch::many_askers_tests::no_mapping_is_lost_between_askers, watch::tests::what_is_left_alone_is_no_known_hole (3 FAIL under Wine)
 - notes: Only reached with tracking on; frequency unknown.
 
-## 32. mac.hle.working_set_statistics — XMemGetWorkingSetStatistics returns limit/used for the title
+## 31. mac.hle.working_set_statistics — XMemGetWorkingSetStatistics returns limit/used for the title
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs XMemGetWorkingSetStatistics
 - freq: 1 (static-census); used=yes; status=unproven
@@ -323,7 +313,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: xmem::tests::statistics_have_the_console_layout
 - notes: Code marks it `shortcut:`; unused so far in runs.
 
-## 33. shared.object.unknown_method — any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL)
+## 32. shared.object.unknown_method — any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -333,7 +323,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 1 occurrence in r5, 0 in ab/new-10 (one run).
 
-## 34. shared.draw.no_host_pipeline — draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated)
+## 33. shared.draw.no_host_pipeline — draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -343,7 +333,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: pipeline::make::tests (6: pending_pipeline_is_recorded_for_the_next_launch, ...)
 - notes: Counts for the Metal-owned part are in their matrix; the row marks the shared drop point (draw.rs).
 
-## 35. shared.residency.make_resident — MakeResident/Evict ("Unsupported: MakeResident" once per process on D3DMetal)
+## 34. shared.residency.make_resident — MakeResident/Evict ("Unsupported: MakeResident" once per process on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 1 (log); used=yes; status=gap
@@ -353,7 +343,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: residency::tests (3)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
 
-## 36. mac.res.display_mode — display mode the HLE reports (victory-gpu dxgi.rs display_size(), VICTORY_DISPLAY_MODE, one mode 60/1)
+## 35. mac.res.display_mode — display mode the HLE reports (victory-gpu dxgi.rs display_size(), VICTORY_DISPLAY_MODE, one mode 60/1)
 
 - owner / chain / hop: mac / hle / resolution chain
 - freq: 1 (log); used=yes; status=proven
@@ -363,7 +353,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: H1 disproved 2026-11-28; the profile-driven display mode of the earlier plan is dropped
 
-## 37. mac.hle.dbghelp_minidump — dbghelp.dll stubbed: MiniDumpWriteDump, SymInitialize(W), SymCleanup, SymSetOptions/GetOptions, SymFromAddr(W), SymGetLineFromAddr64 all fail with ERROR_NOT_SUPPORTED and read no caller pointer
+## 36. mac.hle.dbghelp_minidump — dbghelp.dll stubbed: MiniDumpWriteDump, SymInitialize(W), SymCleanup, SymSetOptions/GetOptions, SymFromAddr(W), SymGetLineFromAddr64 all fail with ERROR_NOT_SUPPORTED and read no caller pointer
 
 - owner / chain / hop: mac / command / victory-hle modules/dbghelp.rs (H2); host.rs no longer passes dbghelp.dll to Wine
 - freq: 1 (static-census); used=yes; status=unproven
@@ -373,7 +363,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none (dbghelp.rs has no tests; checked only by tools/mac/check.sh build + cross-compile)
 - notes: Why: after the title's first fatal exception its crash handler calls MiniDumpWriteDump; Wine dbghelp then runs SymInitializeW -> SymLoadModuleExW -> dwarf2_parse_subroutine_type (dbghelp+0x2201e / +0x1d549) over victory.exe's Rust DWARF and faults a second time. 62 stderr.log files of the 2026-11 runs (62 rounds) show an unhandled dbghelp.dll+0x... fault that hid the first exception and misled the crash classification. Stubbing removes the second crash; the first exception stays visible. Shared layer (no platform switch); crash.rs (RtlCaptureStackBackTrace) and the timeline report (own system dbghelp) are unaffected. Disposition stubbed; status stays unproven until a forced-crash run shows the first exception alone (2026-11-28, not run: no game runs in this integration).
 
-## 38. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
+## 37. C-V-015 — queries / occlusion / pipeline statistics / timestamps issued by the title
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 0 (callstats:20261127-221938-map); used=no; status=unproven
@@ -383,7 +373,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/query.rs. callstats: no query calls.
 
-## 39. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
+## 38. C-F-042 — enhanced barriers (ID3D12GraphicsCommandList7::Barrier) and CheckFeatureSupport answers
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -393,7 +383,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/caps.rs. CheckFeatureSupport 2069 calls.
 
-## 40. C-F-053 — ResolveSubresource (MSAA resolve)
+## 39. C-F-053 — ResolveSubresource (MSAA resolve)
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -403,7 +393,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/device.rs
 
-## 41. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
+## 40. C-F-061 — timestamps (EndQuery timestamp, ResolveQueryData) and GetTimestampFrequency
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -413,7 +403,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::timestamps_rise_in_recording_order_and_resolve_into_the_buffer
 - notes: code: front/src/timestamps.rs. proto has no timestamp op yet (docs/metal/proto.md).
 
-## 42. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
+## 41. C-F-062 — occlusion / binary occlusion / pipeline statistics / stream-out statistics queries
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: 0 (callstats:20261127-221938-map); used=no; status=gap
@@ -423,7 +413,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: front/src/timestamps.rs QueryHeap::new
 
-## 43. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
+## 42. C-R-008 — MetalFX upscaling (MTL4FXTemporalScaler / MTL4FXSpatialScaler / frame interpolator) as a performance-phase candidate
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 0 (none); used=no; status=gap
@@ -433,7 +423,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Marked FUTURE by the request of the lead (2026-11-27). Do not schedule before the fidelity-phase nodes are proven.
 
-## 44. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
+## 43. S-I-003 — scalar mode registers: s_denorm_mode, s_round_mode (per-wave float mode switched in the program)
 
 - owner / chain / hop: shared / shader / 2 IR build + structure (ir.rs, structure.rs, io.rs, spill.rs)
 - freq: 0 (census-opcodes); used=no; status=unproven
@@ -443,7 +433,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-shader/src/ir.rs:1410; emit/lower.rs float rules ~258, 3915-4036. Census (opcodes, 2026-11-27): s_denorm_mode 0 and s_round_mode 0 of 26177 programs. The package sets the float mode with s_setreg instead: s_setreg_imm32_b32 hwreg(MODE bits 3:2, the double/half round mode) in 7140 programs (=3 round toward zero: 4752 programs; =0 nearest-even: 2388), plus hwreg 20/21 writes in 12235 programs and 10 s_setreg_b32 of hwreg 25; whether the translator applies the MODE round bits to f16/f64 ops: 待核实 (emit/lower.rs:5691 accepts s_setreg as no-op). research/census/opcodes.md "s_setreg targets".
 
-## 45. shared.fence.wait — fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149)
+## 44. shared.fence.wait — fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -453,7 +443,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: fence::tests (2) ; test asserts E_NOTIMPL for the unsupported form
 - notes: Count: 0 lines in ab and r5.
 
-## 46. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
+## 45. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -463,7 +453,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: Hit would be silent for titles that ignore E_NOTIMPL.
 
-## 47. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
+## 46. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -473,7 +463,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: draw::tests (6)
 - notes: Zero occurrences: dormant risk.
 
-## 48. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
+## 47. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -483,7 +473,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/list.rs (unwritten methods log once). No evidence of calls in runlog:20261127-221938-map.
 
-## 49. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
+## 48. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -493,7 +483,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/device.rs f[76] create_committed. Whether the title reads DCC surfaces is untested.
 
-## 50. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
+## 49. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -503,7 +493,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: no code; absence verified by grep -i htile in crates/victory-gpu and crates/victory-shader (only hash constants match).
 
-## 51. C-F-014 — buffer UAV typed with misaligned first element
+## 50. C-F-014 — buffer UAV typed with misaligned first element
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=gap
@@ -513,7 +503,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/typed_gpu.rs::refused_views_write_nothing
 - notes: code: back/src/typed.rs
 
-## 52. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
+## 51. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=unproven
@@ -523,7 +513,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::pix_markers_become_debug_labels
 - notes: code: front/src/timestamps.rs pix_text
 
-## 53. shared.rt.activate_rays — CS_ScreenProbes_ActivateRays compute pipelines: left out without BVH (make.rs:77-87; VICTORY_ACTIVATE_RAYS=1 makes them, =0 leaves them out even with the builder)
+## 52. shared.rt.activate_rays — CS_ScreenProbes_ActivateRays compute pipelines: left out without BVH (make.rs:77-87; VICTORY_ACTIVATE_RAYS=1 makes them, =0 leaves them out even with the builder)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (none (counted inside the same 'being made' reason as shared.rt.resolve; no separate count)); used=yes; status=unproven
@@ -533,7 +523,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: program name read from the container bytes (make.rs:57-61).
 
-## 54. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
+## 53. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
 
 - owner / chain / hop: mac / command / victory-gpu mac/rosetta.rs fault_tracking()
 - freq: not measured (unknown); used=yes; status=proven
@@ -543,7 +533,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::rosetta::tests::the_variable_decides_and_tests_track (native + Wine: pass)
 - notes: Decision proven by test; its cost is measured in logs. 0x140456fe2 hang (tracking on) was in victory.exe safecopy (G6).
 
-## 55. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
+## 54. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
 
 - owner / chain / hop: mac / command / Mac fork #204 alias.rs NOT ported (PATCHES.md "Not ported")
 - freq: not measured (unknown); used=unknown; status=gap
@@ -553,7 +543,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none in this tree (alias.rs absent)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Fidelity: removes the copy latency/race window; correctness impact today unknown (copies hold). | used=unknown: alias.rs is not in this tree and no log line mentions mach_vm_remap, so a frequency cannot be estimated
 
-## 56. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
+## 55. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -563,7 +553,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Marked here because the shared layer relays the capability.
 
-## 57. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
+## 56. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=gap
@@ -573,7 +563,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
 
-## 58. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
+## 57. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
 
 - owner / chain / hop: mac / command / title code: hang watchdog thread (+0x2215c35 -> +0x23cf683)
 - freq: not measured (log); used=yes; status=unproven

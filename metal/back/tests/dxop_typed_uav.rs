@@ -2,8 +2,8 @@
 //! compute, 47 mesh): loads from a typed UAV (`RWTexture2D<T>::Load`,
 //! `dx.op.textureLoad`) whose view format has more than one channel or is
 //! not `R32_*`. D3D12 lists the formats a device must load when
-//! `TypedUAVLoadAdditionalFormats` is true (D3D12_FEATURE_DATA_D3D12_OPTIONS;
-//! "Typed unordered access view loads", D3D12 docs fetched 2026-11-28):
+//! `TypedUAVLoadAdditionalFormats` is true (the D3D12 options feature, OPTIONS;
+//! "Typed unordered access view loads", list from memory of the D3D12 docs, not re-fetched):
 //! R32G32B32A32_{FLOAT,UINT,SINT}, R16G16B16A16_{FLOAT,UNORM,UINT,SNORM,SINT},
 //! R8G8B8A8_{UNORM,UINT,SNORM,SINT}, R16_{FLOAT,UNORM,UINT,SNORM,SINT},
 //! R8_{UNORM,UINT,SNORM,SINT}. Each format is loaded through MSC and Metal
