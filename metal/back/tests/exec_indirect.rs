@@ -95,9 +95,13 @@ impl Rig {
     /// one group (tag 7 unless `after` says) to see what the list's own root
     /// arguments are afterwards. Returns the block's status.
     fn run(&mut self, call: &Call<'_>, tag: u32) -> Status {
+        self.run_with_trailer(call, tag, true)
+    }
+
+    fn run_with_trailer(&mut self, call: &Call<'_>, tag: u32, trailer: bool) -> Status {
         self.signal += 1;
         let tag_bytes = tag.to_le_bytes();
-        let c = vec![
+        let mut c = vec![
             begin(1, self.queue),
             set_sig(self.sig),
             Command::SetPipeline(SetPipeline {
@@ -125,15 +129,25 @@ impl Rig {
                 root_sig: call.root_sig,
                 signature: call.signature,
             }),
-            // After it the list's own arguments are the ones it set: one group, tag `tag`.
-            dispatch(1, 1, 1),
-            end(1),
-            signal_cmd(self.queue, self.fence, self.signal),
         ];
-        let s = self.fx.submit(&c);
-        if s == Status::OK {
-            assert_eq!(self.fx.wait(self.fence, self.signal), Status::OK);
+        // Tolerant execution continues after an isolated refusal. Negative tests
+        // must not append an unrelated write and then expect untouched output.
+        if trailer {
+            c.push(dispatch(1, 1, 1));
         }
+        c.extend([end(1), signal_cmd(self.queue, self.fence, self.signal)]);
+        let s = self.fx.submit(&c);
+        // A structural refusal may discard the original signal. Fence the
+        // queue independently before reading the shared buffer on the CPU.
+        if s != Status::OK {
+            self.signal += 1;
+            assert_eq!(
+                self.fx
+                    .submit(&[signal_cmd(self.queue, self.fence, self.signal)]),
+                Status::OK
+            );
+        }
+        assert_eq!(self.fx.wait(self.fence, self.signal), Status::OK);
         s
     }
 
@@ -376,7 +390,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&past, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&past, 1, false), Status::INVALID_ARG);
     // A draw or a mesh dispatch needs a graphics pipeline and root signature
     // bound: this list has a compute one.
     let draw = encode(&[arg(IndirectArgKind::DRAW, 0, 0, 0)]);
@@ -387,7 +401,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::INVALID_ARG);
     let mesh = encode(&[arg(IndirectArgKind::DISPATCH_MESH, 0, 0, 0)]);
     let c = Call {
         signature: &mesh,
@@ -396,7 +410,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::INVALID_ARG);
     // Vertex and index buffer views in a record: UNSUPPORTED before anything runs.
     let vb = encode(&[
         arg(IndirectArgKind::VERTEX_BUFFER_VIEW, 0, 0, 0),
@@ -410,7 +424,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::UNSUPPORTED);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::UNSUPPORTED);
     // A root parameter that is not what the argument says.
     let wrong = encode(&[
         arg(IndirectArgKind::CONSTANT_BUFFER_VIEW, 0, 0, 0),
@@ -425,7 +439,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::INVALID_ARG);
     let beyond = encode(&[
         arg(IndirectArgKind::CONSTANT, 1, 1, 1),
         arg(IndirectArgKind::DISPATCH, 0, 0, 0),
@@ -439,7 +453,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::INVALID_ARG);
     // A signature made for another root signature.
     let other_sig = r.fx.root_sig(&RootSigDesc {
         params: vec![constants_param(2)],
@@ -458,7 +472,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::INVALID_ARG);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::INVALID_ARG);
     // Unknown buffers and signatures.
     let c = Call {
         root_sig: RootSigId(999),
@@ -469,7 +483,7 @@ fn what_cannot_run_is_refused_with_a_status() {
             ..base
         }
     };
-    assert_eq!(r.run(&c, 1), Status::NOT_FOUND);
+    assert_eq!(r.run_with_trailer(&c, 1, false), Status::NOT_FOUND);
     // Nothing above ran anything.
     assert!(r.out().iter().all(|&w| w == 0));
     // And a good one still works afterwards.
