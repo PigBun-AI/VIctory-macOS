@@ -293,9 +293,7 @@ fn commit(
         match source {
             Source::Data(data) => write(path, data)?,
             // Files are never changed in place, so sharing one is safe.
-            Source::Kept(from) => {
-                std::fs::hard_link(from, &path).or_else(|_| write(path, &std::fs::read(from)?))?
-            }
+            Source::Kept(from) => link_or_copy(from, &path, |from, to| std::fs::hard_link(from, to))?,
         }
         step();
     }
@@ -305,6 +303,20 @@ fn commit(
     std::fs::rename(&staged, dir.join(format!("v{number}")))?;
     step();
     Ok(())
+}
+
+/// `to` as another name of the file `from` (`link`: a hard link), or, where the host will not
+/// link it (NTFS allows 1024 links to a file), a copy with the same bytes.
+fn link_or_copy(
+    from: &Path,
+    to: &Path,
+    link: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    link(from, to).or_else(|_| {
+        let mut file = std::fs::File::create(to)?;
+        file.write_all(&std::fs::read(from)?)?;
+        file.sync_all()
+    })
 }
 
 /// The containers under a provider's root, by exact name; containers in
@@ -1124,7 +1136,15 @@ mod tests {
         for i in 0..1023 {
             std::fs::hard_link(&old_b, links.path().join(i.to_string())).expect(NTFS);
         }
-        let full = std::fs::hard_link(&old_b, links.path().join("full")).expect_err(NTFS);
+        // Under Wine on macOS the temp folder is on APFS, which has no such limit: the 1025th link
+        // works, the premise cannot be made, and the copy is tested by `a_link_that_fails_is_copied`.
+        let full = match std::fs::hard_link(&old_b, links.path().join("full")) {
+            Err(error) => error,
+            Ok(()) => {
+                eprintln!("skipped: this host allows more than 1024 links to a file");
+                return;
+            }
+        };
         assert_eq!(full.kind(), std::io::ErrorKind::TooManyLinks, "{NTFS}");
 
         assert_eq!(update(root, "two", &[("a", Some("new a"))]), S_OK);
@@ -1136,6 +1156,30 @@ mod tests {
         assert_eq!(state(root), Some(new));
         assert!(!old_b.exists());
         assert_eq!(std::fs::read(links.path().join("0")).unwrap(), b"old b");
+    }
+
+    /// The copy that stands in for a link the host refuses, tested without the host's limit: the
+    /// link fails with what NTFS says past 1024 links, and the new file has the bytes of the old.
+    #[test]
+    fn a_link_that_fails_is_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("from"), dir.path().join("to"));
+        std::fs::write(&from, b"old b").unwrap();
+        let mut asked = 0;
+        link_or_copy(&from, &to, |_, _| {
+            asked += 1;
+            Err(std::io::ErrorKind::TooManyLinks.into())
+        })
+        .unwrap();
+        assert_eq!(asked, 1);
+        assert_eq!(std::fs::read(&to).unwrap(), b"old b");
+        // Not a link: a change of the copy leaves the old file as it was.
+        std::fs::write(&to, b"x").unwrap();
+        assert_eq!(std::fs::read(&from).unwrap(), b"old b");
+        // And where the link works, it is one.
+        let linked = dir.path().join("linked");
+        link_or_copy(&from, &linked, |from, to| std::fs::hard_link(from, to)).unwrap();
+        assert_eq!(std::fs::read(&linked).unwrap(), b"old b");
     }
 
     #[test]
