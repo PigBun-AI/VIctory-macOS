@@ -700,9 +700,20 @@ pub fn XAsyncGetStatus(block: *mut AsyncBlock, wait: bool) -> HRESULT {
     if block.is_null() {
         return E_INVALIDARG;
     }
-    if wait && let Some(call) = call(block) {
-        let done = lock(&call.done);
-        drop(call.finished.wait_while(done, |d| !*d));
+    if wait {
+        if let Some(call) = call(block) {
+            let done = lock(&call.done);
+            drop(call.finished.wait_while(done, |d| !*d));
+        } else {
+            // `complete_call` takes the call off its block, then publishes the status: a caller that
+            // comes between finds no call to wait for and a status still pending (seen as E_PENDING
+            // from a waiting XAsyncGetStatus, 1 suite run in 40 under Wine). The status follows at
+            // once: wait for it, for a moment at most (a block that was never begun is not pending).
+            let started = std::time::Instant::now();
+            while status(block) == E_PENDING && started.elapsed() < std::time::Duration::from_secs(2) {
+                std::thread::yield_now();
+            }
+        }
     }
     status(block)
 }
