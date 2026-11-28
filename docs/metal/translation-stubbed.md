@@ -83,27 +83,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: residency::tests (bake_and_lookahead_leave_room_for_live_game_allocations, either_constraint_enters_pressure_and_both_must_recover, prefetch_respects_existing_budgets_and_resumes_after_recovery); pool::tests::a_failed_block_is_not_retried_for_each_small_upload (Wine: pass)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Mac observation only; the budgets were written on Windows PCs.
 
-## 9. mac.loader.masked_default_off — masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_PATCH_MASKED set
-
-- owner / chain / hop: mac / command / loader patch L1 gating (apps/victory/src/mac.rs, masked::choice)
-- freq: 1,234 (static-census); used=yes; status=gap
-- Xbox hardware / driver does: n/a
-- deviation: CONFIRMS the reported suspicion for the product code: with Rosetta and fault tracking off (the default) choice(None, needed=false) is None, so 0 of 1234 masked stores are patched; the log line "patched" in the runs appears only because tools/mac/run.sh (line 48) and the integration runlt.sh export VICTORY_PATCH_MASKED=all (the first sets it even with tracking off; runs new-10..new-18 show tracking off and 1234 patched). A bare launch (tools/macos/victory.sh, a direct wine victory.exe) patches nothing; if anything then turns tracking on (VICTORY_FAULT_TRACKING=1), the extra BUILD_1_0_2_1_EXTRA RVAs (8 plain 256-bit sites of #144) are only added when VICTORY_PATCH_MASKED is unset, so under run.sh (=all) they are NOT patched.
-- restore_plan (how to break through): Make the decision explicit and logged: patch whenever Rosetta (cost: 1234 jumps, no runtime cost when no fault); apply the 8 extra RVAs together with "all"; add a unit test for plan() covering the 4 combinations. Wide patch L2 is likewise never on by default (VICTORY_PATCH_WIDE unset in every script).
-- tests: masked::patch_tests::stores_are_patched_by_default_only_when_needed (decision only); no test for mac.rs plan/apply
-- notes: Why it matters: the title writes through masked stores into memory that any later tracking would guard; unpatched = fatal only if a guard fault hits one (probe), so with tracking off the exposure is when the title itself touches unmapped/protected memory. | Wine probe 2026-11-27 confirms the exposure: unpatched masked stores abort the process when a lane >= 1 faults.
-
-## 10. shared.rt.bvh_build — dispatches of the title's ray-tracing structure builder (XboxBvhBuilder.dll, 52 compute pipelines on the new Metal base: unpack of shipped static BVHs, build/refit of dynamic ones, CopyForBVHUpdate): dropped unless VICTORY_BVH_BUILDER=1 and all builder pipelines have host pipelines (pipeline.rs:351 builder_runs; draw.rs:3150 dispatch)
+## 9. shared.rt.bvh_build — dispatches of the title's ray-tracing structure builder (XboxBvhBuilder.dll, 52 compute pipelines on the new Metal base: unpack of shipped static BVHs, build/refit of dynamic ones, CopyForBVHUpdate): dropped unless VICTORY_BVH_BUILDER=1 and all builder pipelines have host pipelines (pipeline.rs:351 builder_runs; draw.rs:3150 dispatch)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
-- freq: 1,168 (log:logs/run-2026-11-27b/b3-diag-stacks/stderr.log:20045-37719 (8 five-second windows 14:07:09-14:08:01Z, 667-1712 dispatches/frame, mean 1168; reason 'a stage of the ray-tracing structure builder, which is off'); research/world-drops/20261127-2301/cold/stderr.log:4127-9153 (129-1475)); used=yes; status=gap
+- freq: 1,168 (log:logs/run-2026-11-27b/b3-diag-stacks/stderr.log:20045-37719 (8 five-second windows 14:07:09-14:08:01Z, 667-1712 dispatches/frame, mean 1168; reason 'a stage of the ray-tracing structure builder, which is off'); research/world-drops/20261127-2301/cold/stderr.log:4127-9153 (129-1475)); used=yes; status=unproven
 - Xbox hardware / driver does: the console GPU builder library builds and refits the BVH (64-byte AMD nodes) on the GPU every frame; static world structures ship packed and are unpacked in place by builder programs (DecompressHeader, Box32/Box16Rehydration, LeafRehydration)
-- deviation: default OFF on every launcher (tools/mac/run.sh, tools/macos/victory.sh, tools/metal/run.sh set no RT variable). Every builder stage is dropped (counted in 'dropped ... without a host pipeline'): no dynamic BVH is built, no static BVH rehydrated; trace programs find nothing (docs/fork-ray-tracing.md:140 'every ray misses'). Deliberate, 3 legitimate reasons: (1) all-or-none safety: a partly running builder wrote garbage bounds into title memory and killed the title (pipeline.rs:255-281, run 98); (2) cost ~40 ms/frame on 7900XTX (fork doc:3-7); (3) open correctness gaps: dynamic structures overlap (8/65 good in light-10, 48/275 in light-15, doc:109-117), a replay capture with the builder on hangs the card (doc:126). Cold cache + BUILDER=1 passed the title's 30 s GPU watchdog (ec648b34 message; fix not in mac/livetr).
-- restore_plan (how to break through): 1) one run of mac/livetr with VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 to read 'stays off ... which=[hashes]' or 'runs' (0.5 d + a game run, needs the user's go); 2) port ec648b34 (builder pipelines queued at creation, not made on the recording thread) from refs/remotes/win-all/gpu/cf-lamp2px (0.5 d); 3) title memory by address (memory.rs) on D3DMetal under Wine+Rosetta (3-6 d, unknown); 4) lift quarantine, compare structures with a CPU build by bvh.rs node rules (3-5 d). Total 7-12 person-days. The 3 wave64 first-lane scan programs no longer block: on the new Metal base XboxBvhBuilder translates 52/52 and builds its pipelines (Metal backend owner, 2026-11-28), so the earlier step 3 (1-5 d, total 8-17) is gone. Queue position: after the world geometry is drawn (mesh/GS host gaps dominate the visible loss). Fidelity path = run the title's own builder + traversal, not the Metal RT API.
-- tests: none (no unit test of builder_runs / is_builder gating in mac/livetr)
-- notes: Gate introduced by fxceless 578d459c (commit date 2026-11-24), kept by the user's Windows line (scripts/play.ps1:26, only with -RayTracing). On the OLD base (origin/main, upstream #481/#2118) the builder is ON whenever all its pipelines are made (pipeline/builder.rs, no switch): different semantics, do not mix. OLD Metal base: 50/53 made (3 refused for first-lane; research/game-runs/*-metal, e.g. 20261127-205345-metal stderr 'made=50 refused=3'). NEW Metal base: 52/52 (earlier drafts counted 53 on the old base; the difference between 53 and 52 is not reconciled here).
+- deviation: default OFF on every launcher (tools/mac/run.sh, tools/macos/victory.sh, tools/metal/run.sh set no RT variable). Every builder stage is dropped (counted in 'dropped ... without a host pipeline'): no dynamic BVH is built, no static BVH rehydrated; trace programs find nothing (docs/fork-ray-tracing.md:140 'every ray misses'). Deliberate, 3 legitimate reasons: (1) all-or-none safety: a partly running builder wrote garbage bounds into title memory and killed the title (pipeline.rs:255-281, run 98); (2) cost ~40 ms/frame on 7900XTX (fork doc:3-7); (3) open correctness gaps: dynamic structures overlap (8/65 good in light-10, 48/275 in light-15, doc:109-117), a replay capture with the builder on hangs the card (doc:126). Cold cache + BUILDER=1 passed the title's 30 s GPU watchdog (ec648b34 message); fixed by mac: cherry-pick of ec648b34 (builder pipelines queued at creation, a dispatch skips while one is being made; VICTORY_BVH_BUILDER_SYNC=1 restores the old behaviour) - unit tests only, 待运行验证 (cold-cache run with VICTORY_BVH_BUILDER=1: first frame must stay under 30 s).
+- restore_plan (how to break through): 1) one run of mac/livetr with VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 to read 'stays off ... which=[hashes]' or 'runs' (0.5 d + a game run, needs the user's go); 2) DONE in code 2026-11-28: ec648b34 (builder pipelines queued at creation, not made on the recording thread) cherry-picked from the Windows line (fix/sun-clamp, gpu/cf-*), 待运行验证 (cold-cache run); 3) title memory by address (memory.rs) on D3DMetal under Wine+Rosetta (3-6 d, unknown); 4) lift quarantine, compare structures with a CPU build by bvh.rs node rules (3-5 d). Total 7-12 person-days. The 3 wave64 first-lane scan programs no longer block: on the new Metal base XboxBvhBuilder translates 52/52 and builds its pipelines (Metal backend owner, 2026-11-28), so the earlier step 3 (1-5 d, total 8-17) is gone. Queue position: after the world geometry is drawn (the Metal backend already draws 3D world frames, 7 of the first 15 corpora, w300 = prison interior, see research/captures/INDEX.md; mesh/GS host gaps dominate the visible loss). Fidelity path = run the title's own builder + traversal, not the Metal RT API.
+- tests: victory-gpu pipeline::builder_verdict_tests (3: all made / being made skips without turning off / one that cannot be made turns it off); builder_runs and the dispatch gating themselves still have no test
+- notes: Gate introduced by fxceless 578d459c (commit date 2026-11-24), kept by the user's Windows line (scripts/play.ps1:26, only with -RayTracing). On the OLD base (origin/main, upstream #481/#2118) the builder is ON whenever all its pipelines are made (pipeline/builder.rs, no switch): different semantics, do not mix. OLD Metal base: 50/53 made (3 refused for first-lane; research/game-runs/*-metal, e.g. 20261127-205345-metal stderr 'made=50 refused=3'). NEW Metal base: 52/52 (earlier drafts counted 53 on the old base; the difference between 53 and 52 is not reconciled here). | 2026-11-28: status gap -> unproven only for the cold-cache making step: ec648b34 is in mac/livetr as a mac: cherry-pick (source Windows fix/sun-clamp), 3 unit tests, no run yet (待运行验证). The builder stays default OFF (disposition stubbed): correctness gaps (3) and steps 1, 3, 4 above are open.
 
-## 11. mac.pipeline.d3dm_noop_draw — D3DMetal creates a pipeline it cannot compile as a no-op (creation returns S_OK, stdout 'marking PSO(n) as no-op'; GS stage always, about half the mesh pipelines, some pixel/graphics); the host side detects the flag (pipeline object +0x58 -> inner +0x28) and drops those pipelines' draws (victory-gpu/src/mac/d3dm_vb.rs)
+## 10. mac.pipeline.d3dm_noop_draw — D3DMetal creates a pipeline it cannot compile as a no-op (creation returns S_OK, stdout 'marking PSO(n) as no-op'; GS stage always, about half the mesh pipelines, some pixel/graphics); the host side detects the flag (pipeline object +0x58 -> inner +0x28) and drops those pipelines' draws (victory-gpu/src/mac/d3dm_vb.rs)
 
 - owner / chain / hop: mac / command / host D3D12 (D3DMetal 4.0b3) pipeline creation -> shared pipeline/host.rs
 - freq: 800 (log: 800+ no-op pipelines per run (stdout) in the 2026-11-27/28 runs: rect_gs 310/326, mesh 495/877, other graphics 58/300, compute 0); used=yes; status=unproven
@@ -111,7 +101,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - deviation: D3DMetal draws nothing for these pipelines, so a D3DMetal world frame is not a pixel reference; dropping their draws on our side is not shown to cure the SetRenderVertexBuffers crash (no pipeline-bound-before-crash log was captured)
 - restore_plan (how to break through): None. Parked: the Metal backend is the only main path; revisit only if D3DMetal is needed as a world reference again (then: rebuild no-GS pipelines for rect_gs, and log the last bound pipeline before the crash).
 - tests: d3dm_vb::tests (2, branch mac/d3dm-vb-workaround only, not in mac/livetr)
-- notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序。已搁置（2026-11-28 00:15，上级决定）：分支 mac/d3dm-vb-workaround（提交 57f07e5e，WIP，未并入 mac/livetr，未推送）；崩溃与 no-op 的因果未证明，A/B 样本不足（改前 3 个有效、改后 2 个有效）。See also shared.pipeline.d3dmetal_noop_pso and shared.draw.set_render_vertex_buffers_crash.
+- notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序。已搁置（2026-11-28 00:15，上级决定）：分支 mac/d3dm-vb-workaround（提交 57f07e5e，WIP，未并入 mac/livetr，未推送）；崩溃与 no-op 的因果未证明，A/B 样本不足（改前 3 个有效、改后 2 个有效）。See also shared.pipeline.d3dmetal_noop_pso and shared.draw.set_render_vertex_buffers_crash. | D3DMetal-only limit; Metal backend 3D world frames: research/captures/INDEX.md, first batch of 15 corpora captured on our Metal backend (2026-11-28): 7 are 3D world frames (w2, w48, w98, w298, w300, w600, w1000); w300 is the prison interior with HUD prompts, taken as the first scene the player can control (lead 2026-11-28; INDEX.md still files all 7 under opening-cutscene timing).
+
+## 11. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
+
+- owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
+- freq: 679 (census:2026-11-28 (dxop-per-program.tsv)); used=yes; status=gap
+- Xbox hardware / driver does: RDNA2 64-bit atomics on buffers, images and LDS (image atomics 64-bit used by visibility-buffer/software raster)
+- deviation: MSC accepts 64-bit atomics on buffer/texture/texture_heap but refuses atomicBinOp.i64 on the descriptor heap (probe-results m1-msc-features-2026-11-27). 1 Ps program of the package fails this way (census), others unknown; MSC manual: "64-bit atomics: Limited". A program that needs it is not drawn.
+- restore_plan (how to break through): Route heap-based i64 atomics to buffer/texture forms with explicit resource selection (waterfall) before MSC; where the heap object is a buffer the buffer form is accepted. Feasibility 待验证. MSC UserManual.md "Feature support matrix" (metal-irconverter 4.0.3), 2026-11-27
+- tests: shader:emit/mod.rs::heap_texture_atomic_widths; shader:emit/size_tests.rs::a_counter_texture_is_set_by_a_store_of_one_channel|back/tests/dxop_atomic64.rs::msc_takes_64_bit_atomic_min_max_without_the_original_and_nothing_else
+- notes: see S-D-012: 679 programs (677 ps, 2 cs) use atomicBinOp.i64, not 1; 616 are stopped first by attributeAtVertex (now lowered) and the single i64 refusal left is 1 program. code: emit/lower.rs atomics, resource.rs; census failure: 1 Ps "atomicBinOp.i64". freq: 1 program in census (low), 0 in run.
 
 ## 12. shared.rt.resolve — CS_RaytracingResolve compute pipelines (~1000, shade ray hits): never made without BVH (pipeline/make.rs:63-76 left_out; skip unless VICTORY_RT_RESOLVE=1 or VICTORY_BVH_BUILDER=1); their ExecuteIndirect dispatches are dropped (list.rs:1923)
 
@@ -193,17 +193,27 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/gfx_pipeline.rs::the_biggest_mesh_output_dxil_allows_compiles
 - notes: code: back/src/pipeline.rs mesh limit check
 
-## 20. mac.loader.clwb_nop — clwb write-back loops replaced by NOPs (only if exactly 8 loops are found)
+## 20. mac.isa.clwb — clwb (cache-line write-back) executes
+
+- owner / chain / hop: mac / command / title x86-64 -> Rosetta
+- freq: 8 (static-census); used=yes; status=unproven
+- Xbox hardware / driver does: Zen 2 CLWB writes a dirty cache line back to memory without evicting it; used so the GPU (not cache-coherent on the console for some memory types) sees CPU writes.
+- deviation: Instruction does not exist under Rosetta: SIGILL. Windows line emulates by exception (one per loop, ~300 us through Wine).
+- restore_plan (how to break through): See mac.loader.clwb_nop. No Arm equivalent is reachable from translated code; clflushopt/clflush do execute (probe) and could replace clwb loops if a flush were ever needed (evicts the line, so slower but correct).
+- tests: mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count, any_other_count_patches_nothing_and_says_what_it_found, the_patch_is_wanted_under_rosetta_and_the_variable_decides (decode + NOP in a buffer, native); crash.rs clwb_loop tests; probe-wine clwb inpage/fault/ro (VEH sees the illegal-instruction exception and steps over 4 bytes); clflush, clflushopt, prefetcht0, prefetchw inpage/fault/ro
+- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'，且 w300 无非法指令（不做零拷贝就无需真 clwb） | Census: 8 clwb in 4 functions (8 loops = what the loader finds). clflushopt 0, clflush 0 in the title. | Wine probe: clflush and clflushopt execute but do not fault on a PAGE_NOACCESS page (x86 faults), harmless: the title has 0 of them; prefetch never faults (as x86).
+
+## 21. mac.loader.clwb_nop — clwb write-back loops replaced by NOPs (only if exactly 8 loops are found)
 
 - owner / chain / hop: mac / command / loader patch L4 (clwb.rs)
 - freq: 8 (log); used=yes; status=unproven
 - Xbox hardware / driver does: CLWB pushes dirty lines to memory so non-coherent consumers (GPU, DMA) see CPU writes.
 - deviation: Write-back dropped. Safe on this path because all title memory is read by our own CPU code (copies for the GPU: unified memory, CPU-coherent). Would break if the GPU read title memory without a CPU copy (zero-copy) and CPU caches were not coherent.
 - restore_plan (how to break through): Today: keep NOP. If zero-copy is ever built (mach_vm_remap / MTLBuffer no-copy on the title pages), replace by a real flush: clflush is available under Rosetta (probe) or rely on Apple silicon CPU/GPU coherency for shared memory (Apple docs: unified memory; 待核实 for explicit cache maintenance on shared MTLBuffers).
-- tests: victory-loader mac::clwb tests::finds_the_loops_the_title_has_and_only_those (native)
-- notes: A test would need a runtime check that no GPU read bypasses the CPU: add counter "title pages read by GPU without copy" (0 today).
+- tests: victory-loader mac::clwb tests::finds_the_loops_the_title_has_and_only_those, eight_loops_are_replaced_and_logged_with_the_count (log line + count 8), any_other_count_patches_nothing_and_says_what_it_found (0/7/9: nothing patched, count logged), the_patch_is_wanted_under_rosetta_and_the_variable_decides (native)
+- notes: 代码与单元测试已做，待今日下午运行。proven 条件：下午日志有 'clwb: 8 loops replaced'（计数 8） | A test would need a runtime check that no GPU read bypasses the CPU: add counter "title pages read by GPU without copy" (0 today).
 
-## 21. S-I-025 — compute programs with a descriptor read only as data ("a descriptor read only as data is not supported")
+## 22. S-I-025 — compute programs with a descriptor read only as data ("a descriptor read only as data is not supported")
 
 - owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
 - freq: 5 (census:2026-11-27); used=yes; status=gap
@@ -213,7 +223,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: census.json translate.failures class "Cs: a descriptor read only as data is not supported" 5; example GFX10 code at 0x2070.
 
-## 22. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
+## 23. mac.hle.commit_quota — commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit
 
 - owner / chain / hop: mac / command / victory-hle xmem.rs commit(), commit_refused(); Wine/macOS commit
 - freq: 5 (static-census: title import call sites that commit memory (VirtualAlloc 1, XMemVirtualAlloc 1, XMemAllocatePhysicalPages 1, XMemAllocDefault 1, XMemAlloc 1)); used=yes; status=unproven
@@ -223,7 +233,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: xmem::tests::commit_limit_report_includes_request_and_system_commit, transfers_shrink_the_title_budget, statistics_have_the_console_layout
 - notes: 16 reservations total 62 GB virtual; only committed part matters.
 
-## 23. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
+## 24. mac.hle.display_audio_misc — HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, every package selector reported installed, trigger motors dropped, APU rate conversion absent
 
 - owner / chain / hop: mac / command / victory-hle display.rs, dsp.rs, speech.rs, xpackage.rs, gameinput.rs, apu.rs (all marked `shortcut:` in code)
 - freq: 4 (log); used=yes; status=unproven
@@ -233,7 +243,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none per stub
 - notes: Windows-line stubs, generic; listed because the user asked for every stub.
 
-## 24. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
+## 25. C-V-011 — compute pipeline whose shader does not translate: dispatches dropped
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -243,7 +253,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/pipeline.rs "shader does not translate"; translator: crates/victory-shader/src/emit/wave.rs. freq=3 logged programs in this run, 26 containers in census.
 
-## 25. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
+## 26. C-V-013 — indirect execution: records clamped by a helper compute shader before ExecuteIndirect
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: 3 (runlog:20261127-221938-map); used=yes; status=gap
@@ -253,7 +263,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/indirect.rs, mac/hlsl.rs. FINDING for the Mac lead: tools/metal/run.sh did not set VICTORY_HELPER_DXC in this run. freq=3 dropped signatures in the log.
 
-## 26. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
+## 27. shared.indirect.clamp_dropped — indirect execution dropped when the argument-clamp shader fails to build (HLSL needs SM 6.6 / InterlockedOr on RWByteAddressBuffer)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 2 (log); used=yes; status=proven
@@ -263,7 +273,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: indirect::tests (26); mac::hlsl::tests::the_shader_model_is_raised_to_6
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 1 per process at start-up.
 
-## 27. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
+## 28. C-R-001 — title output size: settings.xml video/resolutionFullscreen patched to 1280x720 by default on a Mac (VICTORY_OUTPUT unset)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75 (applied at every launch; no per-run counter)); used=yes; status=gap
@@ -273,7 +283,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. owner=mac: loader patch; Mac lead fills the history and the effects of turning it off. Observed in run 20261127-221938-map: swapchain 1280x720 R8G8B8A8_UNORM, 2 buffers.
 
-## 28. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
+## 29. C-R-003 — upscaler selection: VICTORY_UPSCALER off by default (title picks 6 its own; 7 = AMD FidelityFX only on Series S with a flag)
 
 - owner / chain / hop: mac / command / 7 resolution chain
 - freq: 1 (code:mac.rs:68-75); used=yes; status=unproven
@@ -283,25 +293,15 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: Reference location: mac.rs:68-75. Switch default 0/off; docs/mac/macos.md table row VICTORY_UPSCALER.
 
-## 29. S-I-020 — 64-bit atomics: buffer, texture, groupshared and descriptor-heap (atomicBinOp.i64)
-
-- owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
-- freq: 1 (census:2026-11-27); used=yes; status=gap
-- Xbox hardware / driver does: RDNA2 64-bit atomics on buffers, images and LDS (image atomics 64-bit used by visibility-buffer/software raster)
-- deviation: MSC accepts 64-bit atomics on buffer/texture/texture_heap but refuses atomicBinOp.i64 on the descriptor heap (probe-results m1-msc-features-2026-11-27). 1 Ps program of the package fails this way (census), others unknown; MSC manual: "64-bit atomics: Limited". A program that needs it is not drawn.
-- restore_plan (how to break through): Route heap-based i64 atomics to buffer/texture forms with explicit resource selection (waterfall) before MSC; where the heap object is a buffer the buffer form is accepted. Feasibility 待验证. MSC UserManual.md "Feature support matrix" (metal-irconverter 4.0.3), 2026-11-27
-- tests: shader:emit/mod.rs::heap_texture_atomic_widths; shader:emit/size_tests.rs::a_counter_texture_is_set_by_a_store_of_one_channel
-- notes: code: emit/lower.rs atomics, resource.rs; census failure: 1 Ps "atomicBinOp.i64". freq: 1 program in census (low), 0 in run.
-
-## 30. mac.loader.resolution — L3: sites +0x224352b (settings size to screen setter) and +0x247af25 (pool check int3); VICTORY_OUTPUT / VICTORY_POOL_CHECK
+## 30. mac.loader.resolution — L3: sites +0x224352b (settings size to screen setter) and +0x247af25 (pool check int3); VICTORY_OUTPUT / VICTORY_POOL_CHECK; div-by-zero clamp at +0x28f03e8 (trampoline in .text padding +0x5f40966, with any patch asked, never on a fidelity run)
 
 - owner / chain / hop: mac / loader / resolution chain
 - freq: 1 (log); used=yes; status=unproven
 - Xbox hardware / driver does: none (title code patch)
 - deviation: fidelity must not patch; --pool-check skip is also a patch (non-fidelity)
-- restore_plan (how to break through): add log line 'resolution: fidelity, no site patched'
-- tests: victory-loader mac::resolution tests
-- notes: 1440p fidelity may stop at the pool int3: informative | Patch application itself is proven by victory-loader mac::resolution tests (10) and the 'resolution patched site=...' log lines in the perf runs (previous status of this row).
+- restore_plan (how to break through): Done 2026-11-28 (mac: L3): path line logged once before any site is written; fidelity writes nothing, not even the divide clamp.
+- tests: victory-loader mac::resolution tests (incl. the_divide_clamp_calls_its_trampoline; a_fidelity_run_patches_no_site_and_says_so, a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp, the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch: plan_asked/path_line, native)
+- notes: 代码与单元测试已做，待今日下午运行。proven 条件：fidelity 档日志有 'resolution: fidelity, no site patched' 且无 '... Done' 行、无 'non-fidelity:' 行；perf 档（1280x720 或 VICTORY_UPSCALER=7，Series S）有 'resolution: perf, 4 sites ...' 加 'div-by-zero clamp ... Done'，无 0xc0000094；w300 无停在池检查 int3 | 1440p fidelity may stop at the pool int3: informative | Patch application itself is proven by victory-loader mac::resolution tests (10) and the 'resolution patched site=...' log lines in the perf runs (previous status of this row). | 2026-11-28: the known divide by zero in the upscaler at +0x28f03e8 (divisor +0x10c of the round-robin distributor is 0 when the output is shrunk, trap 0xc0000094) is now clamped to 1: mac: cherry-pick of origin 0cc44dc6 (#615, kostuch0), checks the 6 original bytes (build 1.0.2.1 only). Adaptation: applied only when some resolution patch is asked, so a fidelity run still patches nothing. Evidence: unit test of the trampoline/call bytes only, no run: status stays unproven, 待运行验证 (run at the default 1280x720 on Series S or VICTORY_UPSCALER=7: no 0xc0000094 and a "div-by-zero clamp ... Done" resolution line).
 
 ## 31. mac.fault.ntquery_class7 — NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder()
 
@@ -572,4 +572,14 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - restore_plan (how to break through): Metal: three R32 views or a structured buffer; owner Metal.
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
+
+## 58. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
+
+- owner / chain / hop: mac / command / title code: hang watchdog thread (+0x2215c35 -> +0x23cf683)
+- freq: not measured (log); used=yes; status=unproven
+- Xbox hardware / driver does: The watchdog exists on the console too; frames there stay far under 30 s.
+- deviation: Our backend with long frame stalls (about 31 s, about 115 s, see metal.gpu.fidelity_slow_frame) is killed by it. L5 --no-watchdog (VICTORY_MAC_NO_WATCHDOG=1) turns it off: a non-fidelity workaround, used for the morning test (晨测) and capture runs only.
+- restore_plan (how to break through): Keep L5 as the non-fidelity workaround; the fidelity fix is frames fast enough that the watchdog stays quiet (metal.gpu.fidelity_slow_frame), no fidelity result may cite a run with it off.
+- tests: victory-loader mac::watchdog on a synthetic image (L5); victory-gpu pipeline::builder_verdict_tests (3, the BVH builder making path, ec648b34); not run on the exe
+- notes: A hang that is real hangs for good with L5 on: always give such runs a wall-clock limit (RUN.md). Corpus captures (research/captures/INDEX.md) all ran with the watchdog off, so they are non-fidelity. | 2026-11-28: one cause of a >30 s frame is fixed in code: cold-cache BVH builder pipelines were made on the recording thread at the first builder dispatch (title died at +0x23cf683 about 77 s after start, 2026-11-26 run with VICTORY_BVH_BUILDER=1). ec648b34 (source: Windows fix/sun-clamp, gpu/cf-*) queues them at creation and skips the dispatch while one is being made; mac: cherry-pick, unit tests only, 待运行验证 (cold-cache run). Status gap -> unproven for that cause only; slow frames of the Metal fidelity path are still metal.gpu.fidelity_slow_frame and L5 stays the non-fidelity workaround.
 
