@@ -226,13 +226,13 @@ gd_uninstall() {
     if gd_loaded; then launchctl bootout "gui/$uid/$GUARD_LABEL" 2>/dev/null || launchctl unload "$plist" 2>/dev/null; sleep 1; fi
     gd_loaded && { echo "heavy-guard: $GUARD_LABEL is still loaded" >&2; return 1; }
     rm -f "$plist"
-    GD_LOAD=$(gd_load); GD_HELD=uninstall; gd_resume
+    GD_LOAD=$(gd_load); GD_HELD=uninstall; gd_resume 2>/dev/null
     echo "heavy-guard: uninstalled $GUARD_LABEL"
 }
 gd_status() {
     if gd_loaded; then echo "agent $GUARD_LABEL: loaded, pid $(gd_agent_pid)"; else echo "agent $GUARD_LABEL: not loaded"; fi
     echo "plist: $(gd_plist_path) $([ -f "$(gd_plist_path)" ] && echo present || echo absent)"
-    echo "mode: $([ "$(cat "$GUARD_MODE" 2>/dev/null)" = stop ] && echo 'stopping (game running, load high)' || echo normal)   stopped now: $(wc -l <"$GUARD_STOPPED" 2>/dev/null | tr -d ' ' || echo 0)"
+    echo "mode: $([ "$(cat "$GUARD_MODE" 2>/dev/null)" = stop ] && echo 'stopping (game running, load high)' || echo normal)   stopped now: $( [ -f "$GUARD_STOPPED" ] && wc -l <"$GUARD_STOPPED" | tr -d ' ' || echo 0)"
     echo "log $GUARD_LOG:"; tail -n 8 "$GUARD_LOG" 2>/dev/null | sed 's/^/  /'
 }
 
