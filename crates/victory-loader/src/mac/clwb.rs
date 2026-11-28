@@ -203,6 +203,49 @@ pub fn nop_clwb_loops(base: u64, info: &victory_pe::ImageInfo) -> Outcome {
 mod tests {
     use super::*;
 
+    /// The real build (Series 1.0.2.1): `CLWB_LOOPS` loops, and every `clwb` (66 [rex] 0f ae /6) of its
+    /// executable sections is in one of them. Reads the cached title image (`VICTORY_TITLE_IMAGE`, or
+    /// data/shared/cache/images/victory-image-b99f876b74d4a77f.dll under `~/Documents/GTA6Project`); the file is
+    /// game data, so without it the test says so and passes.
+    #[test]
+    fn the_real_build_has_the_loops_and_no_other_clwb() {
+        let path = std::env::var_os("VICTORY_TITLE_IMAGE").map(std::path::PathBuf::from).unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                .join("Documents/GTA6Project/data/shared/cache/images/victory-image-b99f876b74d4a77f.dll")
+        });
+        let Ok(image) = std::fs::read(&path) else {
+            eprintln!("no title image at {}: not checked", path.display());
+            return;
+        };
+        let u32_at = |at: usize| u32::from_le_bytes(image[at..at + 4].try_into().unwrap()) as usize;
+        let pe = u32_at(0x3c);
+        let sections = usize::from(u16::from_le_bytes([image[pe + 6], image[pe + 7]]));
+        let headers = pe + 24 + usize::from(u16::from_le_bytes([image[pe + 20], image[pe + 21]]));
+        let (mut loops, mut clwbs, mut text) = (0, 0, 0);
+        for n in 0..sections {
+            let h = headers + 40 * n;
+            let (virtual_size, raw_size, raw, flags) = (u32_at(h + 8), u32_at(h + 16), u32_at(h + 20), u32_at(h + 36));
+            if flags & 0x2000_0000 == 0 {
+                continue;
+            }
+            let code = &image[raw..raw + virtual_size.min(raw_size)];
+            text += code.len();
+            loops += clwb_loop_sites(code).len();
+            // Every clwb: 66, an optional REX (40/41), 0f ae, ModRM with mod 00 or 01/10 and reg 6.
+            clwbs += (0..code.len().saturating_sub(5))
+                .filter(|&at| {
+                    let o = if matches!(code[at + 1], 0x40..=0x4f) { at + 2 } else { at + 1 };
+                    code[at] == 0x66 && code[o] == 0x0f && code[o + 1] == 0xae && (code[o + 2] >> 3) & 7 == 6 && code[o + 2] >> 6 != 3
+                })
+                .count();
+        }
+        assert!(text > 90_000_000, "{text} bytes of code");
+        assert_eq!(loops, CLWB_LOOPS);
+        // (a byte pattern can also match inside other instructions: the count is of the pattern, so it
+        // can only be more than the real clwb count; equal means none is outside a loop)
+        assert_eq!(clwbs, CLWB_LOOPS, "clwb instructions outside the loops");
+    }
+
     #[test]
     fn finds_the_loops_the_title_has_and_only_those() {
         // clwb [rcx]; add rcx, 0x40; cmp rcx, rax; jbe top

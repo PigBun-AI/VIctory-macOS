@@ -44,7 +44,7 @@
 | mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | proven | emulated |
 | mac.isa.vextract128_mem | vextractf128/vextracti128 store to memory (xmm half of ymm) | 33 | static-census | proven | translated |
 | mac.isa.store256_plain | plain 256-bit vector stores (vmovups/vmovdqu/vmovaps ymm to memory), crossing into a protected page | 119,255 | static-census | proven | translated |
-| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | unproven | stubbed |
+| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | proven | stubbed |
 | mac.isa.nontemporal_store | non-temporal stores (vmovntps/vmovntdq ymm, movnti, movntdq) | 53 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_semantics | lock cmpxchg / cmpxchg16b: memory result and ZF | 28,361 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | proven | emulated |
@@ -68,9 +68,9 @@
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
 | mac.loader.masked_patch | masked-store rewrite to plain stores (masked.rs): scans c4-VEX 0F38 8e/2e/2f stores + vcvtps2ph + vextract128… | 1,234 | log | proven | translated |
-| mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | unproven | translated |
+| mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | proven | faithful |
 | mac.loader.wide_patch | 256-bit store split into two 128-bit stores (wide.rs), sites from `cargo xtask wide-stores` | 117,413 | static-census | proven | stubbed |
-| mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | unproven | stubbed |
+| mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | proven | stubbed |
 | mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | unproven | stubbed |
 
 ### 故障跟踪与异常
