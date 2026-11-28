@@ -45,7 +45,7 @@ echo fake >"$T/victory-fake-until-test.exe"
 mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/sh\n' >"$ROOT/target/dxc-d3dmetal"; chmod +x "$ROOT/target/dxc-d3dmetal"; }
 
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock"
-export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_SERVER_CALLS="$T/server.calls" VICTORY_MAC_UNTIL_POLL=0.25
+export VICTORY_RUN_GUARD=0 VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_SERVER_CALLS="$T/server.calls" VICTORY_MAC_UNTIL_POLL=0.25
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD
 fails=0; n=0
 ok() { n=$((n + 1)); echo "ok $n - $1"; }
@@ -127,7 +127,7 @@ mkdir -p "$T/before/tools"
 if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && ! git -C "$ROOT" diff --quiet HEAD -- tools/mac/run.sh; then
     mkdir -p "$T/before/tools/mac"; cp "$T/run-before.sh" "$T/before/tools/mac/run.sh"
     ln -sfn "$ROOT/tools/macos" "$T/before/tools/macos"; ln -sfn "$ROOT/target" "$T/before/target"
-    # (every other script of tools/mac that run.sh sources or calls: game-lock.sh, purpose.sh, collect-title-crash.sh ...)
+    # (every other script of tools/mac that run.sh sources or calls: game-lock.sh, purpose.sh, heavy-guard.sh, collect-title-crash.sh ...)
     for f in "$ROOT"/tools/mac/*; do
         case "${f##*/}" in run.sh|run.local.env) continue ;; esac
         ln -sfn "$f" "$T/before/tools/mac/${f##*/}"

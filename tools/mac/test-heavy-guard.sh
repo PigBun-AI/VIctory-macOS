@@ -2,14 +2,15 @@
 # Tests of tools/mac/heavy-guard.sh with fake "heavy processes" (a sleep that calls itself victory-census), a fake game lock and a
 # load injected through VICTORY_GUARD_LOAD. Nothing of the machine's real lock, slots or processes is touched: the state directory and
 # the lock are in a temp dir, and every scan is limited to the descendants of this script (VICTORY_GUARD_SCOPE_PID), so a real
-# cargo or probe-wine.exe of someone else is never seen. The launchd agent is not installed (the plist is only printed and checked).
+# cargo or probe-wine.exe of someone else is never seen. There is no launchd agent any more (install/uninstall only report that run.sh hosts the guard); the hosted guard
+# (`run --parent PID`, started by run.sh) is tested here with a fake parent process, and with run.sh itself in test-run-lock.sh.
 #   tools/mac/test-heavy-guard.sh [TMPDIR]
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="${1:-$(mktemp -d "${TMPDIR:-/tmp}/heavy-guard-test.XXXXXX")}"
 mkdir -p "$T"; T="$(cd "$T" && pwd)"
 export VICTORY_HEAVY_DIR="$T/heavy" VICTORY_GAME_LOCK="$T/game.lock" VICTORY_HEAVY_POLL=1 VICTORY_HEAVY_QUEUE_POLL=0.2
-export VICTORY_GUARD_SCOPE_PID=$$ VICTORY_GUARD_PLIST_DIR="$T/LaunchAgents"
+export VICTORY_GUARD_SCOPE_PID=$$ VICTORY_GUARD_PATTERN='^x-no-guard-by-hand$'   # (the pattern: a guard of the real machine is not "running" here)
 unset VICTORY_HEAVY_SLOT VICTORY_GUARD_LOAD
 mkdir -p "$VICTORY_HEAVY_DIR"
 G="$ROOT/tools/mac/heavy-guard.sh"; H="$ROOT/tools/mac/heavy.sh"
@@ -119,15 +120,50 @@ expect "run ended by TERM: it continues what it stopped" '! state $P1 | grep -q 
 expect "the loop logged its start" 'grep -q "heavy-guard started" "$VICTORY_HEAVY_DIR/guard.log"'
 release; kill -KILL $P1 2>/dev/null
 
-echo "== launchd plist (not installed here)"
-bash "$G" install --dry-run >"$T/plist.xml" 2>&1
-expect "install --dry-run prints a valid plist" 'plutil -lint "$T/plist.xml" >/dev/null'
-expect "the plist: label, KeepAlive, RunAtLoad, run, this script's path" 'grep -q "<string>com.gta6project.heavy-guard</string>" "$T/plist.xml" && grep -q "<key>KeepAlive</key><true/>" "$T/plist.xml" && grep -q "<key>RunAtLoad</key><true/>" "$T/plist.xml" && grep -q "<string>run</string>" "$T/plist.xml" && grep -q "$ROOT/tools/mac/heavy-guard.sh" "$T/plist.xml"'
-expect "dry-run wrote nothing" '[ ! -e "$VICTORY_GUARD_PLIST_DIR" ]'
-LOADED=$(launchctl list | awk 'NR > 1 && $1 != "-" {print $3; exit}')
-VICTORY_GUARD_LABEL=$LOADED bash "$G" install >"$T/inst.out" 2>&1; rc=$?
-expect "install refuses when an agent of that label is already loaded (checked with the label of a running system agent), and writes nothing" '[ $rc = 1 ] && grep -q "already loaded" "$T/inst.out" && [ ! -e "$VICTORY_GUARD_PLIST_DIR" ]'
-expect "status works with no agent" 'bash "$G" status | grep -q "not loaded"'
+echo "== the hosted guard (run --parent PID): ends with its parent, or when the lock is not held, after SIGCONT"
+bgpids=()
+fake 1; sleep 0.4; P1=$(mine 1)
+hold
+rm -f "$VICTORY_HEAVY_DIR/guard.log" "$VICTORY_HEAVY_DIR/guard.mode" "$VICTORY_HEAVY_DIR/guard.stopped"
+sleep 99999 & PAR=$!; bgpids+=($PAR)
+VICTORY_GUARD_LOAD=70 VICTORY_GUARD_INTERVAL=3 bash "$G" run --parent $PAR >/dev/null 2>&1 & GP=$!; bgpids+=($GP)
+waitfor "hosted: stops the fake heavy process" 'state $P1 | grep -q T' 8
+expect "hosted: the pid file names the guard and its parent" '[ "$(sed -n 1p "$VICTORY_HEAVY_DIR/guard.pid")" = $GP ] && [ "$(sed -n 3p "$VICTORY_HEAVY_DIR/guard.pid")" = $PAR ] && bash "$G" running'
+kill -KILL $PAR; wait $PAR 2>/dev/null; t0=$SECONDS
+waitfor "parent killed with SIGKILL: the guard has ended within 5 s (the interval is 3 s, the parent is looked at every second)" '! kill -0 $GP 2>/dev/null' 5
+expect "parent gone: what it stopped has been continued, the pid file is gone, it said why" '! state $P1 | grep -q T && [ ! -e "$VICTORY_HEAVY_DIR/guard.pid" ] && grep -q "parent $PAR is gone" "$VICTORY_HEAVY_DIR/guard.log" && ! bash "$G" running'
+expect "parent gone: the stopped list is empty" '[ ! -s "$VICTORY_HEAVY_DIR/guard.stopped" ]'
+# a dead parent at the start: the guard ends at once
+VICTORY_GUARD_LOAD=70 bash "$G" run --parent $PAR >/dev/null 2>&1; rc=$?
+expect "a parent that is not there at the start: ends at once, exit 0" '[ $rc = 0 ]'
+# lock not held (fallback)
+fake 2; sleep 0.4; P2=$(mine 2)
+sleep 99999 & PAR=$!; bgpids+=($PAR)
+VICTORY_GUARD_LOAD=70 VICTORY_GUARD_INTERVAL=1 bash "$G" run --parent $PAR >/dev/null 2>&1 & GP=$!; bgpids+=($GP)
+waitfor "hosted: stops it again (lock held, load 70)" 'state $P1 | grep -q T || state $P2 | grep -q T' 8
+release
+waitfor "lock no longer held: the guard ends by itself, parent still alive" '! kill -0 $GP 2>/dev/null && kill -0 $PAR 2>/dev/null' 8
+expect "lock not held: everything it stopped continues, and it said so" '! state $P1 | grep -q T && ! state $P2 | grep -q T && grep -q "game lock is not held" "$VICTORY_HEAVY_DIR/guard.log" && [ ! -s "$VICTORY_HEAVY_DIR/guard.stopped" ]'
+# TERM on a hosted guard (what run.sh does at its end)
+hold
+VICTORY_GUARD_LOAD=70 VICTORY_GUARD_INTERVAL=1 bash "$G" run --parent $PAR >/dev/null 2>&1 & GP=$!; bgpids+=($GP)
+waitfor "hosted again: stops" 'state $P1 | grep -q T || state $P2 | grep -q T' 8
+kill -TERM $GP; wait $GP 2>/dev/null
+expect "TERM: continues what it stopped, pid file gone" '! state $P1 | grep -q T && ! state $P2 | grep -q T && [ ! -e "$VICTORY_HEAVY_DIR/guard.pid" ]'
+# `resume` by hand
+kill -STOP $P1; printf '%s\t%s\t%s\n' $P1 "$(gl_pidstart $P1)" victory-census >"$VICTORY_HEAVY_DIR/guard.stopped"
+bash "$G" resume >/dev/null 2>&1
+expect "resume: continues what the list names (and only that), empties the list" '! state $P1 | grep -q T && [ ! -s "$VICTORY_HEAVY_DIR/guard.stopped" ]'
+kill -KILL $PAR $P1 $P2 2>/dev/null
+release
+
+echo "== launchd is gone"
+bash "$G" install >"$T/inst.out" 2>&1; rc=$?
+expect "install: error, exit 2, says run.sh hosts the guard" '[ $rc = 2 ] && grep -q "已改由 run.sh 托管" "$T/inst.out"'
+bash "$G" uninstall >"$T/uninst.out" 2>&1; rc=$?
+expect "uninstall: the same" '[ $rc = 2 ] && grep -q "已改由 run.sh 托管" "$T/uninst.out"'
+expect "no plist anywhere in this script, no launchctl call in heavy-guard.sh" '! grep -q "launchctl" "$G"'
+expect "status works, no guard running" 'bash "$G" status | grep -q "guard: not running"'
 expect "no argument: usage, exit 2" 'bash "$G" 2>/dev/null; [ $? = 2 ]'
 echo
 echo "$((n - fails)) of $n passed (logs in $T)"

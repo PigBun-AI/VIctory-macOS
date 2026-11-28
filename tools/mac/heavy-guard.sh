@@ -3,13 +3,21 @@
 # WHILE A GAME RUNS (the game lock, tools/mac/game-lock.sh, is held) and quiets the heavy processes that are not in a heavy.sh slot.
 # With the game lock free it does nothing (parallel work is not limited then), except to let go of what it stopped earlier.
 #
-#   tools/mac/heavy-guard.sh run          the loop (what launchd runs): a scan every VICTORY_GUARD_INTERVAL seconds (default 10)
+#   tools/mac/heavy-guard.sh run [--parent PID]
+#                                         the loop: a scan every VICTORY_GUARD_INTERVAL seconds (default 10). tools/mac/run.sh starts it as its
+#                                         own child, `run --parent <run.sh's pid>`, once it holds the game lock, and ends it when it lets the
+#                                         lock go: the guard lives and dies with the game run (no launchd agent: macOS does not let a launchd
+#                                         job's bash read ~/Documents). Started by hand without --parent it runs until it is stopped.
 #   tools/mac/heavy-guard.sh once         one scan, then exit (tests; what it stopped stays stopped, `once` again with the lock free resumes it)
-#   tools/mac/heavy-guard.sh install      write ~/Library/LaunchAgents/com.gta6project.heavy-guard.plist and start it (refuses if an agent
-#                                         of that label is already loaded; --dry-run prints the plist and does nothing)
-#                                         (exit 3: loaded but macOS keeps launchd's /bin/bash out of ~/Documents until it has Full Disk Access)
-#   tools/mac/heavy-guard.sh uninstall    stop it, remove the plist (what it had stopped is resumed first)
-#   tools/mac/heavy-guard.sh status       the agent's state (launchctl), the mode, the stopped list, the last log lines
+#   tools/mac/heavy-guard.sh resume       send SIGCONT to everything this guard stopped (the list is <state dir>/guard.stopped), then exit
+#   tools/mac/heavy-guard.sh running      exit 0 if a guard is running (<state dir>/guard.pid, or a `heavy-guard.sh run` by hand), else 1
+#   tools/mac/heavy-guard.sh status       the mode, the guard running, the stopped list, the last log lines
+#   tools/mac/heavy-guard.sh install|uninstall   gone: the guard is run.sh's child now ("已改由 run.sh 托管"); both say so and exit 2
+#
+# With --parent (the hosted guard) it ends by itself, after SIGCONT of everything it stopped, when
+#  * the parent process is gone (checked every second, kill -0 and not a zombie, same start time): run.sh was killed with SIGKILL, so no
+#    orphan is left, and
+#  * the game lock is not held any more (the lock was let go, or was never taken).
 #
 # What a scan does (one `ps`, one awk, a few tests):
 #  * lock free: nothing (a process it stopped before is sent SIGCONT).
@@ -26,17 +34,17 @@
 #    this guard stopped (same pid, same start time) is ever sent SIGCONT; when the guard itself ends, it resumes them.
 # Every action is a line of <state dir>/guard.log: time, pid, command, action, load, lock. Settings can also be in <state dir>/guard.conf
 # (shell assignments of the variables above, read at every scan). Tests: VICTORY_GUARD_LOAD=<number> replaces the load average,
-# VICTORY_GAME_LOCK, VICTORY_HEAVY_DIR as for heavy.sh, VICTORY_GUARD_SCOPE_PID=<pid> limits a scan to the descendants of that process.
-# launchd: label com.gta6project.heavy-guard (VICTORY_GUARD_LABEL), KeepAlive; output in <state dir>/guard.out.
+# VICTORY_GAME_LOCK, VICTORY_HEAVY_DIR as for heavy.sh, VICTORY_GUARD_SCOPE_PID=<pid> limits a scan to the descendants of that process,
+# VICTORY_GUARD_PATTERN is the pgrep pattern `running` uses to see a guard started by hand. Output of a hosted guard: <state dir>/guard.out.
 
 GUARD_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 . "$(dirname "$GUARD_SELF")/heavy.sh"
 
-GUARD_LABEL="${VICTORY_GUARD_LABEL:-com.gta6project.heavy-guard}"
-GUARD_PLIST_DIR="${VICTORY_GUARD_PLIST_DIR:-$HOME/Library/LaunchAgents}"
 GUARD_LOG="${VICTORY_GUARD_LOG:-$HV_DIR/guard.log}"
 GUARD_STOPPED="$HV_DIR/guard.stopped"
 GUARD_MODE="$HV_DIR/guard.mode"
+GUARD_PID="$HV_DIR/guard.pid"
+GD_PARENT=""; GD_PARENT_START=""
 
 gd_log() { # PID CMD ACTION
     printf '%s pid=%s cmd="%s" action=%s load=%s lock=%s\n' "$(date +%FT%T)" "$1" "$(printf '%s' "$2" | cut -c1-120)" "$3" "$GD_LOAD" "$GD_HELD" >>"$GUARD_LOG"
@@ -132,116 +140,98 @@ gd_scan() {
         }')
 }
 
+# ---- the hosted guard: lives and dies with its parent (run.sh) ----
+# the parent is alive: kill -0, not a zombie (a killed run.sh whose own parent has not waited for it yet), and the same start time
+gd_parent_alive() {
+    local st rest
+    kill -0 "$GD_PARENT" 2>/dev/null || return 1
+    read -r st rest < <(ps -o stat=,lstart= -p "$GD_PARENT" 2>/dev/null)
+    case "$st" in ''|Z*) return 1 ;; esac
+    [ -z "$GD_PARENT_START" ] || [ "$rest" = "$GD_PARENT_START" ]
+}
+# <state dir>/guard.pid: pid, start time, parent (empty when started by hand)
+gd_pidfile_write() { printf '%s\n%s\n%s\n' "$$" "$(gl_pidstart $$)" "$GD_PARENT" >"$GUARD_PID.tmp.$$" && mv -f "$GUARD_PID.tmp.$$" "$GUARD_PID"; }
+gd_pidfile_drop() { [ "$(sed -n 1p "$GUARD_PID" 2>/dev/null)" = "$$" ] && rm -f "$GUARD_PID"; return 0; }
+# a guard is running: the pid file names a live one (a hosted one only while its parent lives, as one that is about to end does not count),
+# or a plain `heavy-guard.sh run` (no --parent) is there that predates the pid file
+gd_running() {
+    local p s par
+    p=$(sed -n 1p "$GUARD_PID" 2>/dev/null); s=$(sed -n 2p "$GUARD_PID" 2>/dev/null); par=$(sed -n 3p "$GUARD_PID" 2>/dev/null)
+    if [ -n "$p" ] && [ "$p" != "$$" ] && gl_alive "$p" "$s" && { [ -z "$par" ] || kill -0 "$par" 2>/dev/null; }; then return 0; fi
+    pgrep -f "${VICTORY_GUARD_PATTERN:-^[^ ]*bash( -[a-z]+)* [^ ]*heavy-guard\\.sh run *\$}" 2>/dev/null | grep -v -x -F "$$" | grep -q .
+}
+# sleep one interval; a hosted guard looks at its parent every second
+gd_nap() {
+    local iv="${VICTORY_GUARD_INTERVAL:-10}" i=0
+    case "$iv" in
+        ''|*[!0-9]*) sleep "$iv" & wait $!; return 0 ;;
+    esac
+    if [ -z "$GD_PARENT" ]; then sleep "$iv" & wait $!; return 0; fi
+    while [ "$i" -lt "$iv" ]; do
+        sleep 1 & wait $!
+        gd_parent_alive || return 0
+        i=$((i + 1))
+    done
+}
+
 gd_run() {
     local cycle=0
-    trap 'gd_resume; exit 0' TERM INT HUP
-    trap 'gd_resume' EXIT
-    echo "$(date +%FT%T) heavy-guard started (pid $$, interval ${VICTORY_GUARD_INTERVAL:-10} s, lock $GL_LOCK)" >>"$GUARD_LOG"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --parent) GD_PARENT="${2:-}"; shift ;;
+            *) echo "heavy-guard: run: unknown argument $1" >&2; exit 2 ;;
+        esac
+        shift
+    done
+    if [ -n "$GD_PARENT" ]; then
+        case "$GD_PARENT" in *[!0-9]*) echo "heavy-guard: --parent takes a pid" >&2; exit 2 ;; esac
+        GD_PARENT_START=$(gl_pidstart "$GD_PARENT")
+    fi
+    mkdir -p "$HV_DIR" 2>/dev/null
+    [ -z "$GD_PARENT" ] || exec >>"$HV_DIR/guard.out" 2>&1
+    trap 'gd_resume; gd_pidfile_drop; exit 0' TERM INT HUP
+    trap 'gd_resume; gd_pidfile_drop' EXIT
+    gd_pidfile_write
+    echo "$(date +%FT%T) heavy-guard started (pid $$, interval ${VICTORY_GUARD_INTERVAL:-10} s, lock $GL_LOCK${GD_PARENT:+, parent $GD_PARENT})" >>"$GUARD_LOG"
     while :; do
+        if [ -n "$GD_PARENT" ] && ! gd_parent_alive; then
+            GD_LOAD=$(gd_load); GD_HELD=parent-gone; gd_resume
+            echo "$(date +%FT%T) heavy-guard: parent $GD_PARENT is gone, resumed what it stopped, ending (pid $$)" >>"$GUARD_LOG"
+            exit 0
+        fi
         gd_scan
+        if [ -n "$GD_PARENT" ] && [ "$GD_HELD" = free ]; then
+            echo "$(date +%FT%T) heavy-guard: the game lock is not held, resumed what it stopped, ending (pid $$)" >>"$GUARD_LOG"
+            exit 0
+        fi
         cycle=$((cycle + 1))
         if [ $((cycle % 360)) = 0 ] && [ "$(stat -f %z "$GUARD_LOG" 2>/dev/null || echo 0)" -gt 2000000 ]; then mv -f "$GUARD_LOG" "$GUARD_LOG.1"; fi
-        sleep "${VICTORY_GUARD_INTERVAL:-10}" &
-        wait $!
+        gd_nap
     done
 }
 
-# ---- launchd ----
-gd_plist_path() { echo "$GUARD_PLIST_DIR/$GUARD_LABEL.plist"; }
-gd_xml() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
-gd_plist() {
-    local v
-    cat <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>$GUARD_LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>$(printf '%s' "$GUARD_SELF" | gd_xml)</string>
-        <string>run</string>
-    </array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>ThrottleInterval</key><integer>10</integer>
-    <key>ProcessType</key><string>Background</string>
-    <key>Nice</key><integer>5</integer>
-    <key>StandardOutPath</key><string>$(printf '%s' "$HV_DIR/guard.out" | gd_xml)</string>
-    <key>StandardErrorPath</key><string>$(printf '%s' "$HV_DIR/guard.out" | gd_xml)</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key><string>$(printf '%s' "$HOME" | gd_xml)</string>
-        <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:$(printf '%s' "$HOME" | gd_xml)/.local/bin</string>
-EOF
-    for v in VICTORY_HEAVY_DIR VICTORY_GAME_LOCK VICTORY_HEAVY_BUDGET VICTORY_GUARD_NAMES VICTORY_GUARD_ARGS VICTORY_GUARD_PROTECT \
-             VICTORY_GUARD_INTERVAL VICTORY_GUARD_STOP_LOAD VICTORY_GUARD_RESUME_LOAD VICTORY_GUARD_LOG; do
-        [ -z "${!v:-}" ] || printf '        <key>%s</key><string>%s</string>\n' "$v" "$(printf '%s' "${!v}" | gd_xml)"
-    done
-    cat <<EOF
-    </dict>
-</dict>
-</plist>
-EOF
+gd_gone() {
+    echo "heavy-guard: '$1' is gone: the guard is run.sh's child now (it starts it once it holds the game lock and ends it with the run); there is no launchd agent any more. 已改由 run.sh 托管。" >&2
+    exit 2
 }
-gd_loaded() { launchctl list "$GUARD_LABEL" >/dev/null 2>&1; }
-gd_agent_pid() { launchctl list "$GUARD_LABEL" 2>/dev/null | sed -n 's/^[[:space:]]*"PID" = \([0-9]*\);.*/\1/p'; }
-
-gd_install() {
-    local dry=0 plist uid pid n
-    [ "${1:-}" != --dry-run ] || dry=1
-    plist=$(gd_plist_path); uid=$(id -u)
-    if [ $dry = 1 ]; then gd_plist; return 0; fi
-    if gd_loaded; then
-        echo "heavy-guard: an agent $GUARD_LABEL is already loaded (pid $(gd_agent_pid)); not installing over it. Run '$0 uninstall' first." >&2
-        return 1
-    fi
-    n=$(pgrep -f "heavy-guard.sh run" | grep -v "^$$\$" | tr '\n' ' ')
-    [ -z "$n" ] || { echo "heavy-guard: a 'heavy-guard.sh run' is already running by hand (pid $n); stop it first." >&2; return 1; }
-    mkdir -p "$GUARD_PLIST_DIR" "$HV_DIR" || return 1
-    gd_plist >"$plist" || return 1
-    plutil -lint "$plist" >/dev/null || { echo "heavy-guard: the plist is not valid" >&2; return 1; }
-    : >"$HV_DIR/guard.out" 2>/dev/null
-    launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || launchctl load -w "$plist" || { echo "heavy-guard: launchctl could not load $plist" >&2; return 1; }
-    sleep 3
-    if gd_loaded; then
-        pid=$(gd_agent_pid)
-        echo "heavy-guard: installed $plist; launchctl list: label $GUARD_LABEL pid ${pid:-?}; log $GUARD_LOG"
-        # macOS (TCC) keeps a launchd job's /bin/bash out of ~/Documents (the checkout, the game lock and this state directory are there) until
-        # /bin/bash has Full Disk Access: then the job dies at once with "Operation not permitted" (status 126) and launchd retries every 10 s
-        if [ -z "$pid" ] && tail -n 3 "$HV_DIR/guard.out" 2>/dev/null | grep -q "Operation not permitted"; then
-            echo "heavy-guard: BUT the agent cannot run: macOS does not let a launchd job read ~/Documents (\"Operation not permitted\", see $HV_DIR/guard.out)." >&2
-            echo "  Fix (once, by the user): System Settings > Privacy & Security > Full Disk Access > + > Cmd-Shift-G /bin/bash > switch it on;" >&2
-            echo "  launchd retries every 10 s, so the guard then starts by itself. Until then '$0 run' from a terminal/app that may read ~/Documents works (not restarted by launchd)." >&2
-            return 3
-        fi
-    else
-        echo "heavy-guard: loaded, but launchctl list does not show $GUARD_LABEL" >&2; return 1
-    fi
-}
-gd_uninstall() {
-    local plist uid
-    plist=$(gd_plist_path); uid=$(id -u)
-    if gd_loaded; then launchctl bootout "gui/$uid/$GUARD_LABEL" 2>/dev/null || launchctl unload "$plist" 2>/dev/null; sleep 1; fi
-    gd_loaded && { echo "heavy-guard: $GUARD_LABEL is still loaded" >&2; return 1; }
-    rm -f "$plist"
-    GD_LOAD=$(gd_load); GD_HELD=uninstall; gd_resume 2>/dev/null
-    echo "heavy-guard: uninstalled $GUARD_LABEL"
-}
+gd_resume_cmd() { GD_LOAD=$(gd_load); GD_HELD=resume; gd_resume; echo "heavy-guard: resumed what it had stopped ($GUARD_STOPPED)"; }
 gd_status() {
-    if gd_loaded; then echo "agent $GUARD_LABEL: loaded, pid $(gd_agent_pid)"; else echo "agent $GUARD_LABEL: not loaded"; fi
-    echo "plist: $(gd_plist_path) $([ -f "$(gd_plist_path)" ] && echo present || echo absent)"
+    local p par
+    if gd_running; then
+        p=$(sed -n 1p "$GUARD_PID" 2>/dev/null); par=$(sed -n 3p "$GUARD_PID" 2>/dev/null)
+        echo "guard: running (pid ${p:-?}, ${par:+run.sh pid $par}${par:-started by hand or by an older version})"
+    else echo "guard: not running"; fi
     echo "mode: $([ "$(cat "$GUARD_MODE" 2>/dev/null)" = stop ] && echo 'stopping (game running, load high)' || echo normal)   stopped now: $( [ -f "$GUARD_STOPPED" ] && wc -l <"$GUARD_STOPPED" | tr -d ' ' || echo 0)"
     echo "log $GUARD_LOG:"; tail -n 8 "$GUARD_LOG" 2>/dev/null | sed 's/^/  /'
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
-        run) gd_run ;;
+        run) shift; gd_run "$@" ;;
         once) GD_LOAD=0; GD_HELD=?; gd_scan ;;
-        install) shift; gd_install "$@" ;;
-        uninstall) gd_uninstall ;;
+        resume) gd_resume_cmd ;;
+        running) gd_running ;;
+        install|uninstall) gd_gone "$1" ;;
         status) gd_status ;;
         *) sed -n '2,/^$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
     esac

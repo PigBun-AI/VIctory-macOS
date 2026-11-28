@@ -112,7 +112,7 @@ echo fake >"$T/victory-fake-ft-test.exe"
 FAKE_PAT="${T//./\\.}/victory-fake-ft-test\\.exe"   # (this test's own directory: no real game, no other copy of the test can match)
 mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/sh\n' >"$ROOT/target/dxc-d3dmetal"; chmod +x "$ROOT/target/dxc-d3dmetal"; }
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock"
-export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_EMIT="$T/emit.py" FAKE_LOADFILE="$T/load.now" VICTORY_LOAD_LOG_INTERVAL=1
+export VICTORY_RUN_GUARD=0 VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_EMIT="$T/emit.py" FAKE_LOADFILE="$T/load.now" VICTORY_LOAD_LOG_INTERVAL=1
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD
 runit() { # NAME TOTAL HIGH
     echo "3.00" >"$T/load.now"

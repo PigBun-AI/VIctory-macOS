@@ -149,18 +149,23 @@ not squeezed.
 5. **`run.sh` (the game) does not go through `heavy.sh`**: it takes the game lock (and must not be niced). So do the scripts that only drive
    `run.sh` (`play.sh`, `drop-ab.sh` runs, `rt-builder-accept.sh run`, `accept-batch.sh`): their game runs are under the lock, their log
    reading is light (`drop-ab.sh`'s report goes through `heavy.sh`).
-6. **The guard, `tools/mac/heavy-guard.sh`** (launchd agent `com.gta6project.heavy-guard`, a scan every 10 s, one `ps`) catches what ignores the
-   rule. **Only while the game lock is held** it acts; with the lock free it does nothing. It `renice`s to 19 every heavy process that is
+6. **The guard, `tools/mac/heavy-guard.sh`** (a scan every 10 s, one `ps`) catches what ignores the rule. **It is a child of `run.sh`**: once
+   `run.sh` holds the game lock it starts `heavy-guard.sh run --parent <run.sh's pid>` in the background, writes the guard's pid into the lock
+   directory (`<lock>/guard.pid`, `guard.pidstart`), and before it lets the lock go (normal end, `--until-*`, `--timeout`, INT, TERM) it sends the
+   guard SIGTERM, which sends SIGCONT to everything the guard stopped. So the guard lives exactly as long as the game run; there is no launchd
+   agent (macOS does not let a launchd job's `/bin/bash` read `~/Documents`, where the checkout, the lock and the state directory are), and
+   `heavy-guard.sh install|uninstall` only say "已改由 run.sh 托管" and exit 2. No guard is started with `--allow-concurrent` (no lock), when one is
+   running already (one in the lock directory, a hosted one of the state directory's `guard.pid`, or one started by hand with a plain `heavy-guard.sh
+   run`), or with `VICTORY_RUN_GUARD=0` (tests). Two `run.sh` queued for the lock: only the holder has a guard. **Nothing is left stopped if
+   `run.sh` is killed with SIGKILL**: the guard looks at its parent every second (`kill -0`, not a zombie, same start time), sends SIGCONT to
+   everything it stopped and ends (so at the latest a few seconds after the kill); it does the same when the game lock is not held any more.
+   `heavy-guard.sh resume` continues what the guard has stopped by hand. **Only while the game lock is held** it acts. It `renice`s to 19 every heavy process that is
    not in a `heavy.sh` slot (command name `cargo rustc rustdoc victory-census victory-shader-exec probe-wine.exe clang clang++ cc1 cc1plus ld
    ld64 ld64.lld lld rust-lld`, a cargo test binary; configurable: `VICTORY_GUARD_NAMES`, `VICTORY_GUARD_ARGS`, `<state dir>/guard.conf`), and
    when the 1-minute load average is above 30 it sends them `SIGSTOP`, and `SIGCONT` when the lock is released or the load is under 20. It never
    touches the game (`victory.exe run --execute`), `wineserver`, `winedevice`, any `run.sh` and what runs below one or below the lock holder,
    never kills, and only continues what it stopped itself. Each action is a line of `<state dir>/guard.log` (time, pid, command, action, load,
-   lock). `heavy-guard.sh install|uninstall|status`; install refuses if an agent of that label is already loaded.
-   **macOS needs a one-time permission for the launchd agent**: a launchd job's `/bin/bash` may not read `~/Documents` (checkout, lock and state
-   directory are there) until `/bin/bash` has *Full Disk Access* (System Settings > Privacy & Security > Full Disk Access); without it the agent dies
-   with "Operation not permitted" and `install` says so (exit 3). The permission is the user's to give; `heavy-guard.sh run` started from an app that
-   may read `~/Documents` works meanwhile.
+   lock); `heavy-guard.sh status` shows the guard, the mode and the last lines.
 7. **Frame times and load**: `run.sh` already logs the load average every 10 s (`load.log`); at the end it lines the frame times (`frametime.log`,
    `--frametime-log`) up with it (`tools/mac/frametime-summary.sh`). A frame that falls into a 10-second stretch whose 1-minute load average is
    above 30 is **invalid** (`frametime-annot.csv`: frame, frame_us, draws, time, load, valid). The median and p90 in `summary.txt` use the valid
@@ -168,7 +173,7 @@ not squeezed.
    `数据无效：load 超过 30`**. (A frame has no clock time in the log: it is placed by adding the frame times up backwards from the last write
    of `frametime.log`; a load line covers the 10 s after it. `VICTORY_LOAD_INVALID`, `VICTORY_INVALID_RATIO` change the limits.)
 
-Tests: `tools/mac/test-heavy.sh`, `tools/mac/test-heavy-guard.sh` (temp state directory and fake lock, only their own fake processes).
+Tests: `tools/mac/test-heavy.sh`, `tools/mac/test-heavy-guard.sh` (temp state directory and fake lock, only their own fake processes; the hosted guard with a fake parent), `tools/mac/test-run-lock.sh` (the guard as `run.sh`'s child: it runs, ends with `run.sh`, ends within 15 s of a `kill -9`, one guard for two queued runs, none with `--allow-concurrent`).
 
 ## Data directories
 

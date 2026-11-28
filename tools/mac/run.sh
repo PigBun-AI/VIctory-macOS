@@ -93,6 +93,9 @@
 # directories: give every concurrent run its own (docs/mac/RUN.md). `tools/mac/game-lock.sh status` shows holder and queue. Heavy CPU work (builds,
 # tests) goes through tools/mac/heavy.sh, which drops its budget to 1 job while the lock is held (docs/mac/RUN.md "Heavy tasks"). Every run logs the load
 # average every 10 s to <out>/load.log (and at the start in start.txt), to tell a clean frame-time run from a noisy one.
+# Once it holds the lock, run.sh starts tools/mac/heavy-guard.sh as its own child (`run --parent <pid>`; its pid in <lock>/guard.pid) and ends it,
+# with SIGCONT of what it stopped, before it lets the lock go; if run.sh is killed with SIGKILL the guard notices within seconds and ends by
+# itself. Not with --allow-concurrent, not when a guard already runs, not with VICTORY_RUN_GUARD=0 (tests).
 #
 # Other VICTORY_* / WINE* variables in the environment pass through unchanged.
 # The Metal stage (the directory with front/, x86_64-windows/ and x86_64-unix/) is found in this order:
@@ -421,7 +424,32 @@ if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
 # (victory.exe is only ever started below this line; --print-env has left already)
 . "$ROOT/tools/mac/game-lock.sh"
 GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"; GL_PURPOSE="$purpose"
-pid=""; wd=""; sm=""; ld=""; uw=""; _cleaned=0
+pid=""; wd=""; sm=""; ld=""; uw=""; guard=""; _cleaned=0
+# The heavy-guard (tools/mac/heavy-guard.sh) is this run's child, started once the lock is held and ended before the lock is let go (no launchd
+# agent: macOS keeps a launchd job's bash out of ~/Documents). Its pid is in the lock directory (guard.pid, guard.pidstart). Not started with
+# --allow-concurrent (no lock), when a guard already runs (one in the lock directory, or one started by hand), or with VICTORY_RUN_GUARD=0.
+# If this run.sh is killed with SIGKILL the guard sees its parent gone within a second, continues what it stopped and ends.
+guard_start() {
+    local g="$ROOT/tools/mac/heavy-guard.sh" gp
+    [ "${VICTORY_RUN_GUARD:-1}" != 0 ] && [ -f "$g" ] || return 0
+    gp=$(sed -n 1p "$GL_LOCK/guard.pid" 2>/dev/null)
+    if [ -n "$gp" ] && gl_alive "$gp" "$(sed -n 1p "$GL_LOCK/guard.pidstart" 2>/dev/null)"; then return 0; fi
+    if bash "$g" running; then echo "tools/mac/run.sh: a heavy-guard is already running; not starting another" >&2; return 0; fi
+    bash "$g" run --parent $$ </dev/null >/dev/null 2>&1 &
+    guard=$!
+    printf '%s\n' "$guard" >"$GL_LOCK/guard.pid.tmp" && mv -f "$GL_LOCK/guard.pid.tmp" "$GL_LOCK/guard.pid"
+    gl_pidstart "$guard" >"$GL_LOCK/guard.pidstart"
+}
+# SIGTERM (its trap continues everything it stopped); if it does not end in 5 s, `heavy-guard.sh resume` does the continuing (never SIGKILL: a
+# killed guard could not continue anything)
+guard_stop() {
+    [ -n "$guard" ] || return 0
+    local g="$ROOT/tools/mac/heavy-guard.sh" _i
+    kill -TERM "$guard" 2>/dev/null
+    for _i in $(seq 1 50); do kill -0 "$guard" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$guard" 2>/dev/null; then bash "$g" resume >/dev/null 2>&1; else wait "$guard" 2>/dev/null; fi
+    guard=""
+}
 part=""   # a clone being made (data directory or a part of it): an interrupted run takes it away, so no half-made directory is left
 cleanup() {
     [ "$_cleaned" = 0 ] || return 0
@@ -437,6 +465,7 @@ cleanup() {
     for _j in "$sm" "$ld" "$uw"; do
         [ -z "$_j" ] || { pkill -P "$_j" 2>/dev/null; kill "$_j" 2>/dev/null; }
     done
+    guard_stop
     gl_release
 }
 trap cleanup EXIT
@@ -458,6 +487,7 @@ if [ "$concurrent" = 0 ]; then
     # `victory.exe run --execute ...` counts: a run.sh that is queued for the lock has `--exe ...victory.exe` in ITS command line)
     others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe run --execute}" | tr '\n' ' ')   # (the pattern is a test knob)
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
+    guard_start
 fi
 
 # the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data. A clone is made beside the

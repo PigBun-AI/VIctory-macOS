@@ -10,7 +10,8 @@
 # Also a library: `. tools/mac/game-lock.sh` gives gl_acquire / gl_release (used by run.sh).
 #
 # How it works: the lock is a directory made with mkdir (atomic). In it: pid, pidstart (the process start time, so a
-# reused pid is not mistaken for the holder), since, worktree, backend, out, cmd. A lock whose pid is gone is stale and
+# reused pid is not mistaken for the holder), since, worktree, backend, out, cmd, purpose, and guard.pid / guard.pidstart (the heavy-guard run.sh
+# started, see tools/mac/heavy-guard.sh). A lock whose pid is gone is stale and
 # the next one who looks takes it over (moved away with an atomic rename, then removed). Waiters queue in
 # <lock>.queue/ (one file each, ordered by arrival) and take the lock in that order; a waiter that died is dropped.
 # Place: $VICTORY_GAME_LOCK, else $HOME/Documents/GTA6Project/research/.victory-game.lock (VICTORY_GAME_LOCK can be set

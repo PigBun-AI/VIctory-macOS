@@ -6,7 +6,11 @@
 #   (b) the two runs are serial (start/end events in order), both succeed
 #   (c) an interrupted run lets the lock go (holder, and a waiter in the queue), the game is stopped, the data are not touched by a waiter
 # also: --print-env takes no lock and writes nothing; --allow-concurrent (approved) does not take the lock and does not wait.
-# VICTORY_GAME_LOCK, GTA6_ROOT, the Wine directory and VICTORY_MAC_EXE_PATTERN all point into a temporary directory. Takes about 40 s.
+# The heavy-guard is run.sh's child (the last section): (a) it runs once run.sh holds the lock and its pid is in the lock directory, (b) it ends with a
+# normal end of run.sh and continues what it stopped (a fake heavy process), (c) a run.sh killed with SIGKILL: the guard ends within 15 s and
+# continues the fake heavy process, nothing is left, (d) two run.sh queued for the lock: one guard at any time (and none when one runs by hand),
+# (e) --allow-concurrent starts none. The guard only sees the descendants of this script (VICTORY_GUARD_SCOPE_PID), load 70 injected.
+# VICTORY_GAME_LOCK, GTA6_ROOT, the Wine directory, VICTORY_HEAVY_DIR and VICTORY_MAC_EXE_PATTERN all point into a temporary directory. Takes about 80 s.
 #   tools/mac/test-run-lock.sh [TMPDIR]        (TMPDIR is kept: it holds every instance's logs)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -47,6 +51,7 @@ mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/
 
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock" VICTORY_METAL_OUT="$T/stage"
 export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_SERVER_CALLS="$T/server.calls" FAKE_EVENTS="$T/events" GL_POLL=0.2 GL_REPORT=1
+export VICTORY_HEAVY_DIR="$T/heavy" VICTORY_GUARD_SCOPE_PID=$$ VICTORY_GUARD_LOAD=70 VICTORY_GUARD_INTERVAL=2 VICTORY_GUARD_PATTERN='^x-no-guard-by-hand$'
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD VICTORY_DATA_DIR VICTORY_CACHE_DIR VICTORY_RENDER_SCALE VICTORY_UPSCALER VICTORY_OUTPUT
 : >"$FAKE_EVENTS"; : >"$FAKE_SERVER_CALLS"
 fails=0; n=0
@@ -127,6 +132,100 @@ wait "$pid_G"; rc_G=$?
 expect "--allow-concurrent: G ran while A held the lock (overlap), exit 0, the lock stayed A's" "[ $rc_G = 0 ] && event 'G start' && event 'G end' && ! event 'A end' && [ \"\$(cat $VICTORY_GAME_LOCK/pid)\" = \$pid_A ] && grep -q 'NOT taking the game lock' $T/G.console.err"
 wait "$pid_A"; rc_A=$?
 expect "after all: A succeeded, lock free, queue empty, nothing left" "[ $rc_A = 0 ] && lock_free && queue_empty && no_fake_left"
+
+echo "== the heavy-guard is run.sh's child"
+GL="$VICTORY_GAME_LOCK"; HG="$ROOT/tools/mac/heavy-guard.sh"
+bgp=()
+guards_of() { pgrep -f "heavy-guard\\.sh run --parent $1\$"; }   # the guards whose parent is that pid
+fake_heavy() { ( exec -a victory-census sleep "$1" ) & bgp+=($!); eval "FH=$!"; }
+st_of() { ps -o stat= -p "$1" 2>/dev/null | tr -d ' '; }
+stopped() { st_of "$1" | grep -q T; }
+guard_pid_in_lock() { sed -n 1p "$GL/guard.pid" 2>/dev/null; }
+trap 'for p in ${bgp[@]+"${bgp[@]}"}; do kill -CONT "$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; done' EXIT
+: >"$FAKE_EVENTS"; : >"$T/server.calls"
+tok=$((500000 + $$))
+
+echo "-- (a) run.sh has the lock: the guard runs, its pid is in the lock directory"
+fake_heavy $((tok + 1)); FH1=$FH
+start A 5 --new-game
+wait_for 'event "A start"' 100 || bad "A never started"
+wait_for '[ -n "$(guard_pid_in_lock)" ]' 50
+GA=$(guard_pid_in_lock)
+expect "(a) the lock directory has the guard's pid and start time, the guard is alive and is a child of this run.sh (run --parent <run.sh>)" "[ -n \"\$GA\" ] && kill -0 \$GA && [ -s $GL/guard.pidstart ] && [ \"\$(ps -o ppid= -p \$GA | tr -d ' ')\" = \$pid_A ] && ps -o args= -p \$GA | grep -q 'heavy-guard.sh run --parent '\$pid_A"
+expect "(a) it is the only guard of this run, and it says it is running" "[ \"\$(guards_of \$pid_A | wc -l | tr -d ' ')\" = 1 ] && bash $HG running"
+wait_for 'stopped $FH1' 80
+expect "(a) at work: the fake heavy process (outside the run) is stopped at load 70" 'stopped $FH1'
+expect "(a) game-lock.sh status still works with the guard's files in the lock directory" "bash $ROOT/tools/mac/game-lock.sh status | grep -q 'game lock: HELD'"
+
+echo "-- (b) run.sh ends normally: the guard ends and continues what it stopped"
+wait "$pid_A"; rc_A=$?
+expect "(b) run.sh exit 0, the guard is gone, its lock directory is gone" "[ $rc_A = 0 ] && [ -z \"\$(guards_of \$pid_A)\" ] && lock_free && ! kill -0 \$GA 2>/dev/null"
+expect "(b) the fake heavy process got SIGCONT, the stopped list is empty, the log says SIGSTOP then SIGCONT" "! stopped \$FH1 && [ ! -s $VICTORY_HEAVY_DIR/guard.stopped ] && grep -q \"pid=\$FH1 .*action=SIGSTOP\" $VICTORY_HEAVY_DIR/guard.log && grep -q \"pid=\$FH1 .*action=SIGCONT\" $VICTORY_HEAVY_DIR/guard.log"
+expect "(b) the guard's pid file is gone with it" "[ ! -e $VICTORY_HEAVY_DIR/guard.pid ]"
+kill -KILL $FH1 2>/dev/null
+
+echo "-- (c) run.sh killed with SIGKILL: the guard ends within 15 s, nothing is left stopped"
+fake_heavy $((tok + 2)); FH2=$FH
+: >"$FAKE_EVENTS"
+start C 8 --new-game
+wait_for 'event "C start"' 100 || bad "C never started"
+wait_for '[ -n "$(guard_pid_in_lock)" ]' 50
+GC=$(guard_pid_in_lock)
+wait_for 'stopped $FH2' 80
+expect "(c) before the kill: the guard of C runs and has stopped the fake heavy process" "kill -0 \$GC && stopped \$FH2"
+t0=$SECONDS
+kill -KILL "$pid_C"; wait "$pid_C" 2>/dev/null
+wait_for '! kill -0 $GC 2>/dev/null' 150
+secs=$((SECONDS - t0))
+expect "(c) the guard has ended within 15 s of the kill (took $secs s)" "! kill -0 \$GC 2>/dev/null && [ $secs -le 15 ]"
+expect "(c) the fake heavy process got SIGCONT, nothing is left stopped, the list is empty, the log says why it ended" "! stopped \$FH2 && [ ! -s $VICTORY_HEAVY_DIR/guard.stopped ] && grep -q 'parent $pid_C is gone' $VICTORY_HEAVY_DIR/guard.log && [ -z \"\$(guards_of $pid_C)\" ] && [ ! -e $VICTORY_HEAVY_DIR/guard.pid ]"
+wait_for no_fake_left 150   # (the title of the killed run ends by itself after its 8 s)
+kill -KILL $FH2 2>/dev/null
+rm -rf "$GL" "$GL.queue"    # (the killed run's lock is stale; the next run would take it over, this is only tidy)
+
+echo "-- (d) two run.sh queued for the lock: one guard at any time"
+: >"$FAKE_EVENTS"
+start A 6 --new-game
+wait_for 'event "A start"' 100 || bad "A never started"
+wait_for '[ -n "$(guard_pid_in_lock)" ]' 50
+start B 3 --new-game
+sleep 3
+expect "(d) A holds the lock and has its guard; B queues and has none: exactly one guard of the two" "[ -n \"\$(ls $GL.queue 2>/dev/null)\" ] && [ \"\$(pgrep -f 'heavy-guard\\.sh run --parent ('\$pid_A'|'\$pid_B')\$' | wc -l | tr -d ' ')\" = 1 ] && [ -n \"\$(guards_of \$pid_A)\" ] && [ -z \"\$(guards_of \$pid_B)\" ]"
+GA=$(guard_pid_in_lock)
+wait "$pid_A"
+wait_for 'event "B start"' 150
+wait_for '[ -n "$(guard_pid_in_lock)" ]' 50
+GB=$(guard_pid_in_lock)
+expect "(d) when A has ended B has the lock and its own guard (a new one), A's is gone: one guard" "[ -n \"\$GB\" ] && [ \"\$GB\" != \"\$GA\" ] && ! kill -0 \$GA 2>/dev/null && [ \"\$(pgrep -f 'heavy-guard\\.sh run --parent ('\$pid_A'|'\$pid_B')\$' | wc -l | tr -d ' ')\" = 1 ] && [ -n \"\$(guards_of \$pid_B)\" ]"
+wait "$pid_B"; rc_B=$?
+expect "(d) B succeeded, no guard of A or B is left, lock free" "[ $rc_B = 0 ] && [ -z \"\$(guards_of \$pid_A; guards_of \$pid_B)\" ] && lock_free && queue_empty"
+# a guard started by hand is running: run.sh does not start another
+VICTORY_GUARD_LOAD=1 bash "$HG" run >/dev/null 2>&1 & MG=$!; bgp+=($MG)
+wait_for 'bash $HG running' 30
+: >"$FAKE_EVENTS"
+start A 3 --new-game
+wait_for 'event "A start"' 100 || bad "A never started"
+expect "(d) a guard by hand runs: run.sh starts none (nothing in the lock directory, no child guard), says so" "[ -z \"\$(guard_pid_in_lock)\" ] && [ -z \"\$(guards_of \$pid_A)\" ] && grep -q 'a heavy-guard is already running' $T/A.console.err"
+wait "$pid_A"
+kill -TERM $MG; wait $MG 2>/dev/null
+
+echo "-- (e) --allow-concurrent: no lock, no guard"
+: >"$FAKE_EVENTS"
+start A 6 --new-game
+wait_for 'event "A start"' 100 || bad "A never started"
+wait_for '[ -n "$(guard_pid_in_lock)" ]' 50
+GA=$(guard_pid_in_lock)
+start G 2 --allow-concurrent --i-have-approval --data "$T/gdata" --cache "$T/gcache"
+wait_for 'event "G start"' 100 || bad "G never started"
+expect "(e) G (concurrent) started no guard; the lock's guard is still A's, one guard in all" "[ -z \"\$(guards_of \$pid_G)\" ] && [ \"\$(guard_pid_in_lock)\" = \"\$GA\" ] && [ \"\$(pgrep -f 'heavy-guard\\.sh run --parent ('\$pid_A'|'\$pid_G')\$' | wc -l | tr -d ' ')\" = 1 ]"
+wait "$pid_G"; wait "$pid_A"
+: >"$FAKE_EVENTS"
+start G 3 --allow-concurrent --i-have-approval --data "$T/gdata" --cache "$T/gcache"
+wait_for 'event "G start"' 100 || bad "G never started"
+sleep 1
+expect "(e) G alone: no lock directory, no guard" "lock_free && [ -z \"\$(guards_of \$pid_G)\" ] && [ ! -e $VICTORY_HEAVY_DIR/guard.pid ]"
+wait "$pid_G"
+expect "(e) at the end: no guard left, no fake title, lock free" "[ -z \"\$(pgrep -f 'heavy-guard\\.sh run --parent')\" ] || pgrep -f 'heavy-guard\\.sh run --parent' | while read -r p; do kill -0 \$p; done; lock_free && queue_empty && no_fake_left"
 echo
 echo "$((n - fails)) of $n passed (logs in $T)"
 [ "$fails" = 0 ]
