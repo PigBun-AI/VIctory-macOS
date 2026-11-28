@@ -8,6 +8,7 @@
 //! `file` (package paths), `thread` (TLS callbacks for title threads),
 //! `xaudio2`, `xstore` stubs.
 
+pub mod alloc_fail;
 #[cfg(windows)]
 pub mod apu;
 pub mod audio;

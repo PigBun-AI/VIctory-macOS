@@ -1035,6 +1035,16 @@ the title got a NULL from an allocator and wrote 0 at image+0x2215c35, in **3 of
 (`low_guards`, `FOUR_GIB`), its call in `run.rs` and the retry in `XMemVirtualAlloc` came along with it, in the form at e68a2191.
 Our `Section` keeps its own design (`window` + commit bitmap, `VICTORY_SECTION_WINDOW=0`), not upstream's `whole()`: `map_own_view`
 is used in `Section::window` and `View::map`; upstream's test of the shared whole view is not ported, its floor test is.
+
+*Allocation-failure log (11-28, `victory-hle/src/modules/alloc_fail.rs`, called from `xmem.rs`).* Every point where memory is refused to the
+title says so in one line, `xmem alloc failed: site=<where> n=<count at the site> size=0x... (N MiB) <detail>`, the first 32 per site and then each
+power of two (the count `n` is exact): `XMemVirtualAlloc` (host refused after the low-address retry; kind, flags, range, error),
+`XMemAlloc.hook(__XMemAllocationHooks__)` (**the title's own routine returned NULL**, with the attributes and the hook address),
+`XMemAllocDefault.32bit` / `.layout` / `.heap`, `XMemAllocatePhysicalPages.args` / `.section`, `XMemMapPhysicalPages.unknown_page` / `.host`,
+`XMemMapPhysicalPagesScatter`, `commit.physical_pages`. A run with none of these lines had no allocation failure at those points; so the
+matrix row `mac.hle.low_address_commit` is cleared into `mac.title.hang_watchdog` (G7) unless a line shows up. Tests (native, the module is not
+Windows-only): `alloc_fail::tests` (line format, the hook result with its attributes, per-site counts, logged-then-powers-of-two). The call
+sites in `xmem.rs` are Windows-only and compile for windows-gnullvm; they are not run under Wine yet.
 Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only, none run under Wine).
 *Retire when:* mac/livetr merges the line that has it.
 

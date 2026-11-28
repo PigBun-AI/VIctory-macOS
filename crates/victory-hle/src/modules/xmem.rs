@@ -30,6 +30,7 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::BOOL;
 
+use super::alloc_fail::{self, Site};
 use crate::{HleModule, hle_export};
 
 const MIB: usize = 1 << 20;
@@ -163,6 +164,14 @@ pub extern "system" fn XMemVirtualAlloc(
     }
     if at.is_null() {
         let error = std::io::Error::last_os_error();
+        // The one line per refusal (mac H, `alloc_fail`), whatever the kind of request.
+        alloc_fail::note(
+            Site::VirtualAlloc,
+            size,
+            &format!(
+                "kind={kind:#x} flags={flags:#x} base={base:p} range={lowest:#x}..={highest:#x} error={error}"
+            ),
+        );
         if kind & MEM_COMMIT != 0 {
             commit_refused(size, "virtual memory", error);
         } else {
@@ -306,7 +315,16 @@ pub extern "system" fn XMemAlloc(size: usize, attributes: u64) -> *mut c_void {
         hook => {
             // SAFETY: the title's own routine of this type.
             let alloc: AllocRoutine = unsafe { std::mem::transmute(hook) };
-            alloc(size, attributes)
+            let block = alloc(size, attributes);
+            // The title's own allocator giving the title NULL back (mac H, `alloc_fail`).
+            if block.is_null() {
+                alloc_fail::note(
+                    Site::HookReturnedNull,
+                    size,
+                    &format!("{} hook={hook:#x}", alloc_fail::attributes(attributes)),
+                );
+            }
+            block
         }
     }
 }
@@ -326,15 +344,20 @@ pub extern "system" fn XMemFree(address: *mut c_void, attributes: u64) {
 /// The system allocator behind [`XMemAlloc`].
 pub extern "system" fn XMemAllocDefault(size: usize, attributes: u64) -> *mut c_void {
     if attributes & ALLOC_32BIT != 0 {
-        return XMemVirtualAlloc(
+        let block = XMemVirtualAlloc(
             std::ptr::null_mut(),
             size,
             MEM_RESERVE | MEM_COMMIT,
             GRAPHICS | ADDRESS_32BIT,
             PAGE_READWRITE,
         );
+        if block.is_null() {
+            alloc_fail::note(Site::Default32Bit, size, &alloc_fail::attributes(attributes));
+        }
+        return block;
     }
     let Some(layout) = layout(size, attributes) else {
+        alloc_fail::note(Site::DefaultBadLayout, size, &alloc_fail::attributes(attributes));
         return std::ptr::null_mut();
     };
     // shortcut: the host heap's addresses lie above 2^40, unlike the
@@ -345,6 +368,7 @@ pub extern "system" fn XMemAllocDefault(size: usize, attributes: u64) -> *mut c_
     let block = unsafe { alloc(layout) };
     if block.is_null() {
         tracing::warn!(size, "XMemAllocDefault: the host heap is out of memory");
+        alloc_fail::note(Site::DefaultHeapOom, size, &alloc_fail::attributes(attributes));
         return block.cast();
     }
     // SAFETY: the block holds the alignment (at least the header) and then
@@ -718,11 +742,17 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     pages: *mut usize,
 ) -> BOOL {
     if count.is_null() || pages.is_null() {
+        alloc_fail::note(
+            Site::PhysicalPagesArgs,
+            0,
+            &format!("flags={flags:#x} count_null={} pages_null={}", count.is_null(), pages.is_null()),
+        );
         return 0;
     }
     // SAFETY: checked non-null.
     let n = unsafe { *count };
     let Some(size) = n.checked_mul(PAGE).filter(|&s| s > 0) else {
+        alloc_fail::note(Site::PhysicalPagesArgs, 0, &format!("flags={flags:#x} pages={n}: no size"));
         return 0;
     };
     // A pagefile-backed section of `size` bytes, its pages committed when
@@ -746,6 +776,7 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     if handle.is_null() {
         let error = std::io::Error::last_os_error();
         tracing::warn!(n, %error, "XMemAllocatePhysicalPages failed");
+        alloc_fail::note(Site::PhysicalPagesSection, size, &format!("flags={flags:#x} pages={n} error={error}"));
         // SAFETY: checked non-null.
         unsafe { count.write(0) };
         return 0;
@@ -1183,6 +1214,11 @@ pub extern "system" fn XMemMapPhysicalPages(
     while i < n {
         let Some(first) = slices[i].clone() else {
             tracing::warn!(page = pages[i], "XMemMapPhysicalPages: unknown page");
+            alloc_fail::note(
+                Site::MapPagesUnknown,
+                n * PAGE,
+                &format!("address={address:p} page={:#x} index={i} of {n}", pages[i]),
+            );
             return std::ptr::null_mut();
         };
         // One view per run of consecutive slices of one section.
@@ -1196,6 +1232,11 @@ pub extern "system" fn XMemMapPhysicalPages(
             })
             .count();
         if !map(&mut physical, base + i * PAGE, run * PAGE, first) {
+            alloc_fail::note(
+                Site::MapPagesHost,
+                run * PAGE,
+                &format!("address={:#x} index={i} of {n}", base + i * PAGE),
+            );
             return std::ptr::null_mut();
         }
         i += run;
@@ -1211,6 +1252,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
     pages: *const usize,
 ) -> BOOL {
     if addresses.is_null() {
+        alloc_fail::note(Site::MapScatter, n * PAGE, "no address list");
         return 0;
     }
     lift_thread();
@@ -1221,7 +1263,11 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
             .map(|i| unsafe { (*addresses.add(i) as usize, if pages.is_null() { 0 } else { *pages.add(i) }) })
             .collect();
         if wanted.iter().all(|w| w.0 % PAGE == 0) {
-            return scatter(&wanted).into();
+            let done = scatter(&wanted);
+            if !done {
+                alloc_fail::note(Site::MapScatter, n * PAGE, &format!("{n} pages, side by side: the host refused"));
+            }
+            return done.into();
         }
     }
     for i in 0..n {
@@ -1237,6 +1283,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
             )
         };
         if XMemMapPhysicalPages(address, 1, page).is_null() {
+            alloc_fail::note(Site::MapScatter, PAGE, &format!("address={address:p} index={i} of {n}"));
             return 0;
         }
     }
@@ -1747,7 +1794,9 @@ fn commit(base: usize, len: usize) -> bool {
     if !unsafe { VirtualAlloc(base as *const c_void, len, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
         return true;
     }
-    commit_refused(len, "physical pages", std::io::Error::last_os_error());
+    let error = std::io::Error::last_os_error();
+    alloc_fail::note(Site::CommitPhysical, len, &format!("address={base:#x} error={error}"));
+    commit_refused(len, "physical pages", error);
     false
 }
 
