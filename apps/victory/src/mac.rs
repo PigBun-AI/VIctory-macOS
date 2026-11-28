@@ -101,11 +101,18 @@ pub fn apply(plan: Plan, image: &victory_loader::LoadedImage, execute: bool) {
         println!("cmpxchg16      {n} sites counted (VICTORY_MAC_CMPXCHG16_CHECK=1)");
     }
     #[cfg(target_arch="x86_64")]
-    if execute && std::env::var("VICTORY_PRESTREAM_PROBE").as_deref() == Ok("1") {
+    if execute && (std::env::var("VICTORY_PRESTREAM_PROBE").as_deref() == Ok("1") || std::env::var("VICTORY_POOL_OWNER_PROBE").as_deref() == Ok("1")) {
         // mac L8: mapped image, before starting title threads.
         match unsafe { victory_loader::mac::prestream::install(image.base() as usize, image.info().size_of_image as usize, plan.prestream_known) } {
             Ok(()) => eprintln!("VIctory prestream: L8 installed"),
             Err(reason) => eprintln!("VIctory prestream: warn: {reason}"),
+        }
+    }
+    #[cfg(target_arch="x86_64")]
+    if execute && std::env::var("VICTORY_POOL_OWNER_PROBE").as_deref() == Ok("1") {
+        match unsafe { victory_loader::mac::pool_owner::install(image.base() as usize, image.info().size_of_image as usize, plan.prestream_known) } {
+            Ok(()) => eprintln!("VIctory pool-owner: L9 installed (BUILDING only)"),
+            Err(reason) => eprintln!("VIctory pool-owner: warn: {reason}"),
         }
     }
     // Every other 256-bit store of the title split into 128-bit halves, from

@@ -108,6 +108,8 @@ mod report {
 #[cfg(all(windows, target_arch = "x86_64"))]
 pub use runtime::{install, summary};
 #[cfg(all(windows, target_arch = "x86_64"))]
+pub(super) use runtime::last_phase_address;
+#[cfg(all(windows, target_arch = "x86_64"))]
 mod runtime {
     use super::{report::*, *};
     use std::{
@@ -145,6 +147,7 @@ mod runtime {
             _pad: 0,
         }
     }; 2];
+    pub(crate) fn last_phase_address() -> usize { LIFE.as_ptr() as usize } // L9 reads using the same sequence protocol.
     static START: OnceLock<(Instant, u64)> = OnceLock::new();
     fn ticks() -> u64 {
         unsafe { std::arch::x86_64::_rdtsc() }

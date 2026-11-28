@@ -691,7 +691,10 @@ mod hook {
             *dumps += 1;
             if let Some(snapshot) = super::STORAGE_SNAPSHOT.get() { snapshot("L7-int3"); }
             #[cfg(target_arch="x86_64")]
-            if trap - base as u64 == 0x5149aec { crate::mac::prestream::summary("5149aec"); } // mac L8
+            if trap - base as u64 == 0x5149aec {
+                crate::mac::prestream::summary("5149aec"); // mac L8
+                crate::mac::pool_owner::summary("5149aec"); // mac L9
+            }
             let regs = Regs {
                 rax: context.Rax,
                 rbx: context.Rbx,

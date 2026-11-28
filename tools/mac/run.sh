@@ -194,7 +194,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 title_args=("$@")
-case "$purpose" in *mac.title.srl_prestream_stall*|*mac.title.int3_self_exit_r6*) export VICTORY_PRESTREAM_PROBE=1 ;; esac # mac L8; included by print_environment
+case "$purpose" in *srl_prestream_stall*|*int3_self_exit_r6*) export VICTORY_PRESTREAM_PROBE=1 VICTORY_POOL_OWNER_PROBE=1 ;; esac # mac L8/L9; included by print_environment
 # --purpose: required for every run that would start the game (not --print-env); exit status 7
 . "$ROOT/tools/mac/purpose.sh"
 if [ "$print_env" = 0 ]; then purpose_check "$purpose" || { echo "tools/mac/run.sh: refused" >&2; exit "$PURPOSE_EXIT"; }; fi
@@ -374,6 +374,7 @@ if [ -n "$record_at" ] && [ -z "${VICTORY_RECORD:-}" ]; then
     echo "tools/mac/run.sh: warning: VICTORY_RECORD_AT is set but VICTORY_RECORD (the folder) is not: nothing will be recorded" >&2
 fi
 [ "$frametime" = 0 ] || export VICTORY_FRAMETIME_LOG="$out/frametime.log"
+if [ "${VICTORY_POOL_OWNER_PROBE:-}" = 1 ]; then export VICTORY_POOL_OWNER_DIR="${VICTORY_POOL_OWNER_DIR-$(winpath "$out")}"; fi # L9 per-slot sidecars at dump/exit
 # the title's output: the profile decides, and says so in the log
 # The profile travels to the title (mac X13, victory-loader mac/output_chain.rs): fidelity keeps its own 4K output and turns native
 # 1440p off whatever VICTORY_NATIVE_1440P / VICTORY_RENDER_1080P say; perf takes native 1440p by default. Before X13 the title
