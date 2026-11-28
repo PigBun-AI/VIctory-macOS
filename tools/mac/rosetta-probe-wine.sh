@@ -86,7 +86,8 @@ cvt_f2i:vcvttps2dq_xmm cvt_f2i:vcvtps2dq_xmm cvt_f2i:vcvttsd2si_r32 cvt_f2i:vcvt
 cvt_f2i:vcvttpd2dq_xmm cvt_f2i:vcvttpd2dq_ymm cvt_f2i:vcvtpd2dq_xmm cvt_f2i:vcvtpd2dq_ymm
 cvt_f2i:*_mem cvt_i2f:*_mem cvt_f2f:*_mem
 avx_move:*vmovaps avx_move:*vmovups avx_move:*vmovapd avx_move:*vmovupd avx_move:*vmovdqa avx_move:*vmovdqu avx_move:*vlddqu avx_move:*vmovss avx_move:*vmovsd
-avx_move:*vmovd_ avx_move:*vmovq_ avx_move:*vmovlp avx_move:*vmovhp avx_move:*vmovlhps avx_move:*vmovhlps avx_move:*dup avx_move:*broadcast avx_move:*vmovmsk avx_move:*vpmovmskb"
+avx_move:*vmovd_ avx_move:*vmovq_ avx_move:*vmovlp avx_move:*vmovhp avx_move:*vmovlhps avx_move:*vmovhlps avx_move:*dup avx_move:*broadcast avx_move:*vmovmsk avx_move:*vpmovmskb
+avx_fparith:*vaddp avx_fparith:*vadds avx_fparith:*vsubp avx_fparith:*vsubs avx_fparith:*vmulp avx_fparith:*vmuls avx_fparith:*vdivp avx_fparith:*vdivs avx_fparith:*vmaxp avx_fparith:*vmaxs avx_fparith:*vminp avx_fparith:*vmins avx_fparith:*vsqrtps_xmm avx_fparith:*vsqrtps_ymm avx_fparith:*vsqrtpd avx_fparith:*vsqrts"
     [ -n "${PROBE_LIST:-}" ] && LIST="$PROBE_LIST"   # e.g. PROBE_LIST="cvt_f2i:*_mem cvt_i2f:*_mem" to rerun a subset
     {
     echo "# Rosetta-under-Wine ISA numeric probe $(date '+%Y-%m-%d %H:%M %Z') macOS $(sw_vers -productVersion) $(sysctl -n machdep.cpu.brand_string) jobs=$JOBS fast=${PROBE_FAST:-0} neg=${PROBE_NEG:-0}"

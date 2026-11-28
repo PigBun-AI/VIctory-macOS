@@ -36,12 +36,15 @@ static inline Unp sf_unpack(Fmt f, uint64_t x) {
 // sf_unb=1 makes sf_round report, in sf_unb_eres, the exponent of the leading bit after rounding to the format's
 // precision with an unbounded exponent range (x86 decides "tiny" for FTZ from that); it then returns 0.
 static int sf_unb = 0, sf_unb_eres = 0x7fffffff;
+// sf_ftz=1: MXCSR.FTZ - a result that is tiny after rounding with an unbounded exponent (x86 detects tininess after rounding) becomes a zero of the same sign
+static int sf_ftz = 0;
 
 // Rounds (r + eps) * 2^e0 (eps in [0,1) if sticky) to format f; the sign is given separately.
 static uint64_t sf_round(Fmt f, int sign, u128 r, int e0, int sticky, int rm) {
     int bias = (1 << (f.eb - 1)) - 1, emax = (1 << f.eb) - 1, emin = 1 - bias;
     uint64_t sb = (uint64_t)sign << (f.eb + f.mb);
     if (r == 0) { if (sf_unb) sf_unb_eres = -(1 << 30); return sb; }
+    if (sf_ftz && !sf_unb) { sf_unb = 1; sf_unb_eres = 0x7fffffff; (void)sf_round(f, sign, r, e0, sticky, rm); sf_unb = 0; if (sf_unb_eres < 1 - bias) return sb; }
     int n = sf_msb(r), eres = e0 + n;
     if (sf_unb) emin = -(1 << 28);
     int lsb = (eres > emin ? eres : emin) - f.mb, sh = lsb - e0;

@@ -164,10 +164,10 @@ static void call_k(KF k, const IRec *in, Out *out, long n, uint32_t mx) { if (mx
 
 // one op, one MXCSR value: nrec records of random streams (stream chosen per record), then the model comparison.
 // exh: element-pair exhaustive pass (8-bit: every (a,b) pair in every lane position = 65536 records; 16-bit: all 2^32 pairs once).
-static int g_str[CHN];
+static int g_str[CHN]; static int g_exh_hi;
 static uint64_t exh_records(const Op *o) {
     int L = o->w / ESZ[o->ek];
-    return o->ek == EK_I8 ? 65536u : (1ull << 32) / (uint64_t)L;      // I16: all 2^32 pairs; F32 with one source: all 2^32 inputs
+    return o->ek == EK_I8 ? (o->exh == 2 ? 131072u : 65536u) : (1ull << 32) / (uint64_t)L;      // I16: all 2^32 pairs; F32 with one source: all 2^32 inputs
 }
 static void gen_exh(IRec *rc, const Op *o, uint64_t cnt) {
     int L = o->w / ESZ[o->ek], sz = ESZ[o->ek];
@@ -190,14 +190,15 @@ static int run_stream_op(const Op *o, uint32_t mx, long nrec, int exh, const cha
         long n = total - done < CHN ? total - done : CHN;
         for (long i = 0; i < n; i++) {
             IRec *rc = &g_in[i]; int stream;
-            if (mode_exh) { stream = 6; gen_exh(rc, o, cnt++); }
+            if (mode_exh) { stream = 6; g_exh_hi = (int)(cnt >> 16); gen_exh(rc, o, o->exh == 2 ? (cnt & 0xFFFF) : cnt); cnt++; }
             else { stream = (int)(rnd() % 8); if (stream > 5) stream = o->flt ? 4 : 5; if (!o->flt && (stream == 2 || stream == 3)) stream = 5; gen_rec(rc, o, stream); }
+            if (o->fix) o->fix(rc, o, stream);
             g_str[i] = stream; memset(&g_exp[i], 0, sizeof(Out)); memset(&g_got[i], 0, sizeof(Out));
         }
         call_k(o->k, g_in, g_got, n, mx);
         for (long i = 0; i < n; i++) {
             Out *e = &g_exp[i];
-            if (o->mem_image) { memcpy(e->r, g_in[i].d, 32); memcpy(e->x, g_in[i].c, 32); }
+            if (o->mem_image) { memcpy(e->r, g_in[i].d, 32); memcpy(e->x, g_in[i].c, 32); } else if (o->mem_r) memcpy(e->r, g_in[i].d, 32);
             o->m(&cx, &g_in[i], e);
             if (g_neg && (done + i) % 4099 == 17) { if (o->cr) e->r[(done + i) % 32] ^= 1; else e->x[0] ^= 1; }      // engine-level negative control: one wrong expectation per 4099 records
             int lane = 0; int bad = cmp_out(o, &g_got[i], e, &lane);
@@ -217,13 +218,13 @@ static int run_straddle(const Op *o) {
     Rep r; rep_init(&r, "straddle"); static uint8_t *pg; if (!pg) pg = VirtualAlloc(NULL, 0x20000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     static const int bnd[3] = {0x4000, 0x5000, 0x8000}; Ctx cx = {o, o->w, o->imm, 0x1F80}; Out got, exp; int sz = o->sz ? o->sz : o->w;
     for (int bi = 0; bi < 3; bi++) for (int rel = -(sz + 1); rel <= 1; rel++) for (int rep = 0; rep < 600 >> (g_fast > 3 ? 3 : g_fast); rep++) {
-        if (o->mem_image) {            // store: the 64-byte image lives across the boundary; the written bytes [memoff, memoff+sz) start at B+rel
-            IRec rc; gen_rec(&rc, o, (int)(rnd() % 6)); Out *op = (Out *)(pg + bnd[bi] + rel - o->memoff);
-            call_k(o->k, &rc, op, 1, 0x1F80); memset(&exp, 0, sizeof exp); memcpy(exp.r, rc.d, 32); memcpy(exp.x, rc.c, 32); o->m(&cx, &rc, &exp);
+        if (o->mem_image || o->mem_r) {            // store: the 64-byte image lives across the boundary; the written bytes [memoff, memoff+sz) start at B+rel
+            IRec rc; gen_rec(&rc, o, (int)(rnd() % 6)); if (o->fix) o->fix(&rc, o, 5); Out *op = (Out *)(pg + bnd[bi] + rel - o->memoff);
+            call_k(o->k, &rc, op, 1, 0x1F80); memset(&exp, 0, sizeof exp); memcpy(exp.r, rc.d, 32); if (o->mem_image) memcpy(exp.x, rc.c, 32); o->m(&cx, &rc, &exp);
             memcpy(&got, op, sizeof got); int lane = 0; int bad = cmp_out(o, &got, &exp, &lane); char buf[320]; buf[0] = 0; if (bad) describe(buf, sizeof buf, o, &rc, &got, &exp, lane);
             NOTE(&r, 0, bad, "rel=%d %s", rel, buf);
         } else {
-            IRec *rc = (IRec *)(pg + bnd[bi] + rel - 64 - o->memoff); gen_rec(rc, o, (int)(rnd() % 6)); memset(&exp, 0, sizeof exp); memset(&got, 0, sizeof got);
+            IRec *rc = (IRec *)(pg + bnd[bi] + rel - 64 - o->memoff); gen_rec(rc, o, (int)(rnd() % 6)); if (o->fix) o->fix(rc, o, 5); memset(&exp, 0, sizeof exp); memset(&got, 0, sizeof got);
             call_k(o->k, rc, &got, 1, 0x1F80); o->m(&cx, rc, &exp); int lane = 0; int bad = cmp_out(o, &got, &exp, &lane); char buf[320]; buf[0] = 0; if (bad) describe(buf, sizeof buf, o, rc, &got, &exp, lane);
             NOTE(&r, 0, bad, "rel=%d %s", rel, buf);
         }
@@ -236,7 +237,7 @@ typedef int (*PlanFn)(const Op *);
 static int plan_default(const Op *o) {
     int fl = 0; long n = o->alias == AL_DD ? (16L << 20) : (4L << 20);
     fl += run_stream_op(o, 0x1F80, n, o->exh, NULL);
-    if ((o->alias == AL_MEM || o->mem_image) && o->al == 0) fl += run_straddle(o);
+    if ((o->alias == AL_MEM || o->mem_image || o->mem_r) && o->al == 0) fl += run_straddle(o);
     return fl;
 }
 static int batch_ops(const char *fam, void (*reg)(void), const char *sel, PlanFn plan) {

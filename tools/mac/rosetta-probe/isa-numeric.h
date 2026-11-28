@@ -335,7 +335,7 @@ static int pass_f2f(const F2F *f, int rcm, uint32_t mx, int exhaustive, long lon
 }
 
 // ---------------- batch driver ----------------
-static int sel_ok(const char *sel, const char *name) { return !sel || (sel[0] == '*' ? strstr(name, sel + 1) != NULL : !strcmp(name, sel)); }   // exact form name, or *substring
+static int sel_ok(const char *sel, const char *name) { if (!sel) return 1; size_t n = strlen(sel); if (sel[0] == '*') return strstr(name, sel + 1) != NULL; if (n && sel[n - 1] == '*') return !strncmp(name, sel, n - 1); return !strcmp(name, sel); }   // exact form name, *substring, or prefix*
 static const uint32_t RCMX[4] = {0x1F80, 0x1F80 | (1 << 13), 0x1F80 | (2 << 13), 0x1F80 | (3 << 13)};
 static const long long NS = 1ll << 26;
 static int batch_cvt_f2i(const char *sel) {

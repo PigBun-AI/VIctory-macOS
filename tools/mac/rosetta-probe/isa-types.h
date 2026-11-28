@@ -25,6 +25,8 @@ typedef struct Op {
     int sz;                                  // bytes moved (loads/stores of less than a vector)
     int p2;                                  // store source offset inside the src1 field (vmovhps m64,x stores the high half)
     int al;                                  // required alignment of the memory operand (0 = none)
+    int mem_r;                               // 1: destination is memory inside out.r (pre-filled with d); r is compared in full, x[] only where xm says
+    void (*fix)(IRec *, const struct Op *, int stream);   // generator hook applied to every record (integer ops: flags, width-specific edge values)
 } Op;
 static const char *g_fam = "diff";
 static const int ESZ[6] = {1, 2, 4, 8, 4, 8};
