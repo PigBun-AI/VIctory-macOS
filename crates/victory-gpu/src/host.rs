@@ -986,6 +986,8 @@ fn create() -> windows::core::Result<Host> {
         }
         // mac S1: whether the host takes `attributeAtVertex`; decided before any shader is translated.
         victory_shader::emit::set_host_attribute_at_vertex(crate::mac::attribute_at_vertex::host_has_it());
+        // mac S5: whether mesh shaders get a compute form and a fetch vertex program (the Metal chain with a back that runs the part: those over 32 KiB).
+        victory_shader::emit::set_host_mesh_compute(crate::mac::mesh_compute::host_mode());
         let messages = debug
             .then(|| device.cast::<ID3D12InfoQueue>().ok())
             .flatten();

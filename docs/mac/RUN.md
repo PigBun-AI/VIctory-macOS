@@ -248,6 +248,21 @@ directory, default `GTA6.Xbox.v1.0.2.1` in `GTA6_ROOT`), `VICTORY_MAC_WINE_DIR` 
 for, `VICTORY_PRESENT_MAX`, `VICTORY_POOL_CHECK`, `VICTORY_LOG_RENDER_SIZE`, `VICTORY_FRAMETIME_LOG`, `VICTORY_CAPTURE_FRAMES`,
 `VICTORY_RECORD_AT`, `VICTORY_MAC_NO_WATCHDOG`, `VICTORY_INPUT_RECORD`, `VICTORY_PATCH_MASKED`. `--print-env` lists them all. Only the wineserver of the run's own prefix is ever stopped.
 
+## The stage's capability file `CAPS`
+
+A Metal stage (the directory with `front/`, `x86_64-windows/`, `x86_64-unix/`) may hold a text file `CAPS` that says what its back can do:
+one capability per line, a line that starts with `#` is a comment, a capability is a whole line (no spaces around it). Today there is one:
+
+- `mesh_compute`: the back runs the mesh->compute form of S5. With such a line `run.sh` exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` to the title
+  (the name the S5 code in `crates/victory-gpu/src/mac/mesh_compute.rs` reads). Without it nothing is exported.
+
+Why: S5 appends a VMCS part to a mesh container over 32 KB; that changes the container's hash, and 966 entries of an old back's AGX crash list no
+longer match. An old stage run with a new exe must therefore not get the part: no `CAPS` file, or no such line, means the variable is not set and
+the translation output is byte for byte the old one. A value set by hand in the environment is kept as it is (`0` stays `0`) and `CAPS` is then not
+read. `--print-env` lists the variable when it is exported and has a `# metal: caps: ...` line that says why it is or is not (and from which
+file). `VICTORY_MESH_COMPUTE=0|1|2` (off, problem programs, all) overrides the answer of the S5 code and is for tests only, never for a real run.
+The D3DMetal backend has no stage and ignores all of this. Tests: `tools/mac/test-run-until.sh` ("the stage's CAPS file").
+
 ## Capture runs: `--record-at`, `--capture-frames`, `--no-watchdog`, `--corpus`
 
 **`w<N>`** (patch I2) names the N-th world frame after world frame 1 (`w0` is world frame 1, `w300` world frame 301). A present number

@@ -42,6 +42,7 @@ pub const WHITELIST: &[&str] = &[
     "VICTORY_GROUP_SYNC",
     "VICTORY_SHADER_OPT",
     "VICTORY_VIEWADDR_TABLE",
+    "VICTORY_SKIP_STALL", // mac S3 (from the Windows line 9da1676e)
 ];
 
 /// One generation's values of the switches in [`WHITELIST`] (`None`: unset).

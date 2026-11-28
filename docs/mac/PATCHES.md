@@ -792,6 +792,15 @@ first line when more than 20% are invalid. `frametime-annot.csv` has the marking
 10 s) is the load.log interval. Test: `tools/mac/test-frametime-summary.sh` (made-up logs, and `run.sh` with a fake Wine and a fake `uptime`).
 Pure Mac tooling.
 
+### M11 — the stage's capability file `CAPS`: `run.sh` exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` only for a stage that says `mesh_compute`
+
+Only `run.sh` (after the stage is known), `test-run-until.sh` and `docs/mac/RUN.md` change. If `$stage/CAPS` has a whole line `mesh_compute` (lines
+starting with `#` are comments, one capability per line) the title gets `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1`; otherwise nothing is exported and
+a value set by hand is kept. Reason (S5): the VMCS part appended to a mesh container over 32 KB changes the container's hash, so 966 entries of an old
+back's AGX crash list would no longer match; an old stage with a new exe must not append it. `--print-env` shows the variable and its source
+(`# metal: caps:`). Metal-backend only; D3DMetal unaffected. Tests: `test-run-until.sh` (CAPS with `mesh_compute`, with other lines only, without a
+file, `--print-env`, and a run with a fake Wine). Pure Mac tooling; drop it when every stage carries the part's support (then S5 defaults on).
+
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
 *What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is
@@ -1083,14 +1092,51 @@ census also found that wide on changes the DXIL of 36 containers that translated
 `CS_IrradianceCache_*`, `CS_Gather*`): the earlier claim "programs that translated before are byte-identical" held for
 which programs translate, not for their code. By default those are back to the pre-S3 form.
 Wide stays available with `VICTORY_WAVE_WIDE=1` (the live-file switch) for experiments, never in a run that matters.
-*TODO (root fix):* the wide branch must not put a group barrier in a divergent path, or the decision must be made by the whole group
-(a flag in LDS, a group barrier, then an OR over all waves, so every wave takes the same path and the region's scalar results are
-selected by the wave's own decision).
+*Root fix (2026-11-28, branch `mac/wave-wide-fix`, node S-I-016, S3 wide form: shader chain, wave64 -> 32 divergent barrier).*
+The earlier reading "a group barrier in a divergent path hangs the group" was not what happens. `ptfx_CS_lightAtlas_Sprite`
+(`2561af9577c47289`; `numthreads(64,1,1)`: ONE console wave64 = two host wave32s of one group; LDS 3 dwords: [2] a wave counter,
+[0],[1] the halves' exchange slots; 108 `dx.op.barrier` in 13 blocks, each half-to-half exchange = store slot / barrier / load both /
+barrier) has, in its GFX10 code, a lane skip at 0x377c (`s_and_saveexec_b64` + `s_cbranch_execz` to 0x6150) around the loop
+0x3898..0x612c, a loop that ends on `v_cmp_eq_u32 vcc, s65, v66` + `s_cbranch_vccz` (and an inner waterfall over a mask's bits).
+`ir::without_skips` (the "scalars followed" form the wide form is built on) left that skip out, so a group in which no lane is in the
+skip (a tile with nothing to light) ran the loop with EXEC empty: the compare finds no lane and the loop turns until the lowering's
+bound (4096 turns, itself inside the outer 4096), with ~20 group barriers per turn: ~100 s of GPU time per dispatch (log:
+`gpuprof: a scope took 104667-110807 ms: execute-indirect cs 8d74b76fb8c0cb8d`). Not a mismatch of barriers between the two host waves:
+the static CFG walk of the DXIL found no branch around a barrier whose condition differs between the halves (the barrier-holding branches decide on values both halves exchange; `research/widefix-20261128/ROOTCAUSE-NOTES.md`).
+Fix, all in `victory-shader` (marked `mac S3`): (1) `ir::without_skips`'s stall check (`stalls`, the Windows line's `VICTORY_SKIP_STALL`,
+cherry-picked as 9da1676e) now also knows a compare into VCC/SGPRs under an empty EXEC (no lane), `s_and` of masks with one empty,
+`s_cbranch_vccz/vccnz`, and calls a region stalling when every way on was followed and none left it (before: only a decided chain
+that came back); the skip stays and `widen()` takes it wave-wide: the whole group decides (an LDS flag per host wave, barrier, OR over
+both). (2) `lower::branches_around`: a one-block loop closes on its own branch, which counts as outside its region (a block post-dominates
+itself); that branch is now in the region, so the cross-lane code of the loop is taken by the whole group, not per lane exit (found by the
+hardware test). Evidence: unit `a_skip_around_a_loop_that_never_ends_with_no_lane_left_is_kept` (fails on 035b3728's `ir.rs`),
+`the_loop_behind_a_skip_translates_wide`; hardware (Wine, D3DMetal; `tools/mac/wine-tests.sh -p victory-shader s3_tests`)
+`two_host_waves_with_different_conditions_take_the_loop_behind_the_skip_together` (a cut-down of the loop, 8 conditions: no lane in the skip,
+a few lanes of the lower half, the lower half, 33, 40 and 64 lanes; 60 s limit; fails without the fix, passes with it).
+Census `victory-census translate`, whole package, 25 985 containers, host wave 32: default 25 760 translated (225 refused), the same
+set and every DXIL size as before the fix; `VICTORY_WAVE_WIDE=1` 25 780 (205 refused), the same set as before the fix, of which 12 DXILs change
+(the 7 programs of the 36 whose wide form the kept skip changes: `ptfx_CS_lightAtlas_Sprite` 146 112 -> 146 592 B, `_Trail`, `CS_Gather*`,
+`CS_RTConstantCost...`, `CS_TraceShadowRays_Full`, `CS_ProjDecalResolve_Vectorized`; and 5 of the 20 newly translated water programs).
+Data `research/census-widefix-20261128/{fix1,fix-off}`. Prologue with `VICTORY_WAVE_WIDE=1`, new game, diagnostics exe `0121e7be`
+(`research/widefix-20261128/run-w300-fixed2`): world frame 300 at 172 s, no frame over 5 s (the longest, 4.4 s, is the world-frame-1 load),
+no `a scope took`, `2561af9577c47289` bound at present 1220. Before: 4 of 4 runs with ~100 s frames from w54-70 on. The default stays OFF
+(the owner decides when it comes back).
+Semantics of the 36 changed containers (local branch `mac/widefix-equiv`, not for push: `equiv_tests.rs` + `tools/mac/equiv-plan.py`, on the Mac GPU,
+40 fixed-seed input sets each, wide form against the form the translator picks without it): 15 of the 36 have a plan the harness can bind
+(the others index views from memory, or use 1D/3D/array textures the executor cannot bind). Of the 56 containers (36 changed + 20 newly translated), 36
+have a form without wide and 20 have none; 51 of the 56 wide forms pass Metal Shader Converter and Metal on the executor (`equiv_compile`), and 5 of the 20 new ones
+are refused for double precision (MSC 4.0.3 cannot convert it: the back must keep stopping them before MSC).
+Of the 15: 6 identical in every run (2 of them never store: no coverage), 4 identical except 1 ulp in a denormal (8 dwords, `0x8f7` vs `0x8f6`),
+2 not run (no store happens), 3 differ (`CS_ClusterLights`-class `55d2bce91ec9abcc` and its twin `d3e5b737ea7cc150`: wide has every bit the other has plus the other
+half-wave's; `8dd8d739047fe557`: a whole-wave prefix sum + atomic allocation, the other form's two halves each scan alone and
+overlap, 16 342-16 406 non-zero dwords against 16 374-16 438). Those three are programs for which the other form is the "APPROXIMATE, any mask" local-waves
+form, so the difference is the other form's error, not the wide form's; there is no exact reference form for them (that is why the wide form exists).
+Not proven: no GFX10 interpreter exists here to give the console's own result. Results: `research/widefix-20261128/equiv/containers/*.result`.
 
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
 
-*Risk.* An upstream comment records that the wide form lost an NVIDIA card, and on Apple GPUs it hangs single-thread groups (above): it is off by default here, and `VICTORY_WAVE_WIDE=1` is not safe until the root fix is in.
+*Risk.* An upstream comment records that the wide form lost an NVIDIA card, and on Apple GPUs it hangs single-thread groups (above): it is off by default here. With the root fix (above) `VICTORY_WAVE_WIDE=1` ran the prologue to w300 without a long frame; turning the default back on is the owner's call.
 
 ### S1 — `GetAttributeAtVertex` without `attributeAtVertex`: the other vertices as flat inputs (`victory-shader` `emit/{vertex_flat,lower,mod,wire}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`, `mac/attribute_at_vertex.rs`)
 
@@ -1253,6 +1299,58 @@ Windows-only): `alloc_fail::tests` (line format, the hook result with its attrib
 sites in `xmem.rs` are Windows-only and compile for windows-gnullvm; they are not run under Wine yet.
 Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only, none run under Wine).
 *Retire when:* mac/livetr merges the line that has it.
+
+### S5 — a mesh program as a compute program and a fetch vertex program: the `VMCS` container part (`victory-shader` `emit/{mesh_cs,lower,shader,mod,host}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `mac/mesh_compute.rs`)
+
+*What.* The translator can make two more DXIL containers of a mesh program, for a host that cannot build the mesh pipeline
+(interface v1, `docs/metal/mesh-compute.md` section 8, owned by the Metal back):
+* the **compute form**: the same program as `cs_6_6` with the mesh program's `numthreads`; `setMeshOutputCounts`, `emitIndices` and
+  the vertex and primitive outputs become `rawBufferStore`s to a scratch buffer (UAV `u0`, space 4000000000); the group's slot in the
+  scratch is `g × group_stride` with `g = id.x + dim_x × (id.y + dim_y × id.z)`, the dimensions a root CBV (`b0`, same space, 16 bytes
+  `{x, y, z, 0}`, declared in the VS too, unread there); a lane writes only its own vertex and primitive, so the counts are the
+  declared maxima cut to the thread count; a culled primitive keeps indices 0 as in the mesh form;
+* the **fetch vertex program**: `vs_6_6` with only `SV_VertexID` (`3p + corner`) and `SV_InstanceID` (`g`); it reads the counts and
+  the primitive's index word from the scratch (SRV `t0`, same space), and a primitive past the count or with an index past the vertex count
+  returns zeros (a triangle without area); every vertex and primitive element is returned (per-primitive elements, S1's added ones too,
+  as constant); no cull-primitive element exists in the scratch.
+Both go, with the `vmcl 1` layout text, into a `VMCS` part (version 1, flags 0) appended to the mesh shader's own container (hash recomputed);
+the other parts, so the mesh pipeline, are byte for byte what they were (test `nothing_is_attached_unless_the_host_asks`). A program that
+cannot be lowered (payload or object stage, more than 256 vertices, not triangles, or anything the lowering refuses) gets no part and no error.
+Policy (host asks): `emit::set_host_mesh_compute(Off | Problem | All)` (tools: `VICTORY_MESH_COMPUTE=0|1|2`), default **Off**; Problem = only
+programs whose Metal mesh struct is over 32 KiB. It travels in `host_settings()` bits 29-30, so the shader cache and `victory-shader-dylib` key
+on it. `emit::translate_mesh_compute` returns the products without a mode (census, tests).
+*Host.* victory-gpu tells the translator at host creation (`mac/mesh_compute.rs`, one hook line in `host.rs` beside S1's): **Problem on the Metal chain when the back says it runs the part
+(`VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1`, exported by `tools/mac/run.sh` when the stage's `CAPS` file has a line `mesh_compute`), otherwise Off, and Off on
+D3DMetal**; `VICTORY_MESH_COMPUTE=0|1|2` overrides. Why the gate: the back's denylists (`msc-denylist`, `mesh-pair-denylist`) name a stage by the FNV hash of its whole
+container, which the `VMCS` part changes: 966 of the 1273 pairs of the pair denylist have a mesh that gets the part in Problem mode, so a back that does not
+hash without the part must not be given it (the converter itself ignores the part: 442 mesh containers built identically with and without it on the back before mc-back). The chain is known by `VICTORY_METAL_OUT`, which `tools/mac/run.sh --backend metal` exports to the title (nothing
+else the exe sees tells the two apart: S1's `host_attribute_at_vertex` is false on both). Tests: `mac::mesh_compute::tests`.
+*Not done (decided to wait for the performance phase).* Pruning the outputs the pixel program does not read: the translation of a mesh shader does not see its
+pixel shader, so it needs the host to pass the pixel program's (name, index) reads next to S1's `vertex_reads`, and the layout key `reads MASK` (not written now, meaning all).
+Hook lines in upstream files are marked `mac S5`. Tests: `emit/mesh_cs_tests.rs` (13 unit tests; hardware tests under Wine
+`the_compute_and_fetch_draw_is_the_mesh_pipelines_draw`, `mesh_compute_form_draws_flagged_triangles_and_drops_culled_ones`: the compute
+pass and the fetch draw give the same texels as the native mesh path, dispatch sizes 1x1x1, 2x1x1, 1x3x1, 2x2x2).
+
+*Why not needed on Windows.* D3D12 mesh pipelines have no output-size limit that matters; Metal's mesh stage has 32 KiB of output per group
+(1261 of the title's real mesh pipelines are over it; Apple's GPU compiler crashes on 1400 more, see S1), so the Metal back runs such a mesh shader
+as a compute pass and a vertex draw (docs/metal/mesh-compute.md).
+
+*Remove when.* Metal's mesh stage takes the title's meshes (size and compiler), or the back no longer emulates mesh pipelines: drop `mesh_cs.rs`, the
+`cs` form of `Parts` and the hooks (`grep 'mac S5'`).
+
+*Acceptance (2026-11-28).* Census (`victory-census mscs`, branch `mc/census-s5` of the Metal back at 242f1925 + this patch; data under `victory-data/census-s5/`):
+**A, every mesh program of the package (8765 containers, each translated alone, mode All)**: 8765 get a `VMCS` part; the fetch vertex
+program builds a Metal render pipeline (through MSC, with the default pixel shader) in 8765; the compute form builds a compute pipeline in
+7536 with the root signature the back makes today and in **8765 with the static samplers visible to all stages**: the 1229 others are all
+one error, `ResourceNotReferencedByRootSignature (SMP space 0 register 0)`, a fault of the back (`mesh_emu::extend_root` makes the
+parameters visible to the compute stage but leaves the static samplers at the mesh stage's visibility), not of the translator.
+Of the 520 mesh programs whose native mesh pipeline Metal refuses for the 32 KiB, all 520 have both forms and build (367 with today's root, the other 153 after the sampler fix).
+**B, the 9050 (mesh, pixel) pairs of the pipeline book** (mesh translated with the pixel program's S1 reads, the fetch vertex program paired with
+the real pixel program): compute 9050, fetch + pixel pipeline 9047; the 3 others (`06980160f6c5516f:2f3b5ef239a76315`, `52b873d99483b41b:81b24241b09514d6`,
+`ab008fdce9f216c6:81b24241b09514d6`) are pairs whose pixel program already crashes Apple's compiler on the native mesh path without S1 (the "3 that crash without S1"
+above), they crash in the vertex form too (XPC_ERROR_CONNECTION_INTERRUPTED, reproduced). The prototype sample was 200/200 and 199/200.
+Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass plus the fetch draw gives the texels of the native mesh pipeline
+(dispatch 1x1x1, 2x1x1, 1x3x1, 2x2x2) and the flagged-triangle / cull / out-of-range-index test passes.
 
 ## Not ported this round (decided with the Windows line as the reference)
 

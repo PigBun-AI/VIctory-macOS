@@ -35,6 +35,8 @@ mod meshfit;
 #[cfg(target_vendor = "apple")]
 mod meshstat;
 #[cfg(target_vendor = "apple")]
+mod mscs;
+#[cfg(target_vendor = "apple")]
 mod mspair;
 #[cfg(target_vendor = "apple")]
 mod opcodes;
@@ -111,6 +113,7 @@ fn main() {
         "meshfit" => meshfit::run(rest),
         "opcodes" => opcodes::run(rest),
         "mspair" => mspair::run(rest),
+        "mscs" => mscs::run(rest),
         other => Err(format!("unknown command `{other}`")),
     };
     if let Err(e) = result {
