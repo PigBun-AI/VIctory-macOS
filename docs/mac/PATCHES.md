@@ -242,6 +242,8 @@ return: they pass without comparing anything.
   as x86); Rosetta computes the flags of a miss from memory - accumulator (ZF right) and clears bits 63:32 of rax on a 32-bit hit.
   The test now holds the decoder to what the processor's own `cmp` gives (Rosetta does that right), and the processor's `cmpxchg`
   only to ZF, memory, rdx and the low bits of rax. Passes under Wine; with the decoder's operands swapped it fails.
+  Exposure of the title: `tools/mac/census-cmpxchg-flags.sh` walks every path after all 28,305 `lock cmpxchg [mem]` sites until
+  CF/SF/OF/PF are overwritten or the path ends: 0 readers, 0 unresolved (so Rosetta's wrong flags of a miss are never seen).
 - D3DMetal: `root::malformed_blobs_are_rejected_by_the_host` and
   `pipeline::library::a_rejected_blob_gives_an_empty_library` (it accepts malformed blobs),
   `descriptor::host::{views_are_made_beside_the_heap_and_copied_in, a_raw_view_is_moved_only_where_its_descriptor_says_where_it_is}`

@@ -47,7 +47,7 @@
 | mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | unproven | stubbed |
 | mac.isa.nontemporal_store | non-temporal stores (vmovntps/vmovntdq ymm, movnti, movntdq) | 53 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_semantics | lock cmpxchg / cmpxchg16b: memory result and ZF | 28,361 | static-census | proven | translated |
-| mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | gap | emulated |
+| mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | proven | emulated |
 | mac.isa.lock_other_xchg | other locked RMW (xadd, or, and, inc, dec, bts, btr, add, sub, xor) and xchg with memory | 28,435 | static-census | proven | translated |
 | mac.isa.cpuid_xgetbv | cpuid and xgetbv as the title sees them | 11 | static-census | proven | emulated |
 | mac.isa.rdtsc | rdtsc / rdtscp | 0 | static-census | unproven | emulated |
