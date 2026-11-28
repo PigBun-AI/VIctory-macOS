@@ -2,6 +2,8 @@
 # Merges the translation matrices, prints the coverage summary and writes
 #   docs/metal/translation-unproven.md  (used=yes and status != proven, by freq)
 #   docs/metal/translation-stubbed.md   (disposition=stubbed, by freq)
+#   docs/metal/translation-priority.md  (used=yes/unknown, not proven, by priority = log10(freq+1) x max(symptom) / cost; format in
+#                                        docs/metal/symptom-format.md)
 # Inputs: docs/metal/translation-matrix.csv.txt (this line) and the Mac lead's
 # docs/mac/translation-matrix-mac.csv, looked for in this order:
 #   MATRIX_MAC=<file>            that file
@@ -10,7 +12,8 @@
 #   the file in this checkout    docs/mac/translation-matrix-mac.csv
 #   none of them                 skipped, said in the first line
 # Columns are read by header name; a column the Mac file lacks is empty there.
-# A row id in both files: the Mac file wins.
+# A row id in both files: the Mac file wins. The symptom and cost of a row: its own columns (the Mac file, when it has them), else
+# docs/metal/symptom-overlay-mac.tsv.txt, else the same id's row of this line's file.
 # Usage: tools/metal/matrix.sh [--check]   (--check: fail if the .md files are not current)
 set -euo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,7 +21,7 @@ cd "$here"
 check=0; [ "${1:-}" = "--check" ] && check=1
 export MATRIX_MAC="${MATRIX_MAC:-}" MAC_MATRIX_REF="${MAC_MATRIX_REF:-fork/mac/livetr}" CHECK=$check
 exec python3 - <<'PY'
-import csv, os, sys, collections
+import csv, os, sys, collections, re, math
 
 MAIN = 'docs/metal/translation-matrix.csv.txt'
 import io, subprocess
@@ -27,7 +30,7 @@ MAC_REF = os.environ['MAC_MATRIX_REF']
 MAC_PATH = 'docs/mac/translation-matrix-mac.csv'
 check = os.environ['CHECK'] == '1'
 COLS = ['id','chain','hop','unit','owner','used','freq','freq_source','tests','reference','reference_detail',
-        'status','disposition','xbox_hw','deviation','restore_plan','notes']
+        'status','disposition','xbox_hw','deviation','restore_plan','notes','symptom','cost']
 
 def parse(f, path):
     rd = csv.DictReader(f)
@@ -55,6 +58,7 @@ def load_mac():
     return [], None
 
 rows = {r['id']: r for r in load(MAIN)}
+main_by_id = dict(rows)
 mac_rows, mac_from = load_mac()
 mac_n = 0
 if mac_rows:
@@ -88,6 +92,18 @@ for r in rows:
     if r['id'] in mac_ids and len(problems) > problems_before:
         # rows of the Mac lead's file are reported, not failed on
         warnings.extend(problems[problems_before:]); del problems[problems_before:]
+
+SYM_RE = re.compile(r'^geom([0-3]) color([0-3]) flicker([0-3]) slow([0-3]) crash([0-3])((?: (?:估|freq=floor|closed|summary))*)$')
+COST_RE = re.compile(r'^(\d+(?:\.\d+)?)(估?)$')
+for r in rows:
+    if r['id'] in mac_ids:
+        continue
+    if not SYM_RE.match(r['symptom']):
+        problems.append(f"{r['id']}: symptom '{r['symptom']}' is not 'geomN colorN flickerN slowN crashN [估] [freq=floor] [closed]'")
+    if r['cost'] and not COST_RE.match(r['cost']):
+        problems.append(f"{r['id']}: cost '{r['cost']}' is not hours (number, 估 after it when estimated)")
+    if r['status'] != 'proven' and r['used'] != 'no' and not r['cost']:
+        problems.append(f"{r['id']}: not proven and used but no cost")
 
 out = []
 P = out.append
@@ -166,7 +182,70 @@ if warnings:
 if problems:
     P(''); P('PROBLEMS:'); out.extend('  ' + p for p in problems)
 
-files = {'docs/metal/translation-unproven.md': '\n'.join(md) + '\n', 'docs/metal/translation-stubbed.md': '\n'.join(sm) + '\n'}
+# ---- priority: log10(freq+1) x max(symptom) / cost (docs/metal/symptom-format.md)
+OVERLAY = 'docs/metal/symptom-overlay-mac.tsv.txt'
+overlay = {}
+if os.path.exists(OVERLAY):
+    with open(OVERLAY, newline='') as f:
+        lines = [l for l in f if not l.startswith('#')]
+    for o in csv.DictReader(lines, delimiter='\t'):
+        overlay[o['id']] = o
+def scoring(r):
+    """(symptom text, cost text, where from) of a merged row."""
+    i = r['id']
+    sym = r['symptom'] or (overlay.get(i) or {}).get('symptom') or (main_by_id.get(i) or {}).get('symptom') or ''
+    cost = r['cost'] or (overlay.get(i) or {}).get('cost') or (main_by_id.get(i) or {}).get('cost') or ''
+    return sym, cost
+ranked, skipped, unscored = [], [], []
+for r in rows:
+    sym, cost = scoring(r)
+    m = SYM_RE.match(sym)
+    if not m:
+        unscored.append(r['id']); continue
+    scores = [int(x) for x in m.groups()[:5]]
+    tags = m.group(6).split()
+    if r['status'] == 'proven':
+        continue
+    why = ('closed' if 'closed' in tags else 'summary row (its parts are rows)' if 'summary' in tags else
+           'used=no' if r['used'] == 'no' else
+           'reference only (D3DMetal)' if r['notes'].startswith('仅参照（D3DMetal）') else None)
+    if why:
+        skipped.append((r['id'], r['status'], why)); continue
+    fv = num(r['freq']); fnote = ''
+    if fv is None:
+        fv, fnote = 1.0, 'unknown=1'
+    if 'freq=floor' in tags and fnote:      # words only, no number: a measured, reproducible symptom takes the floor
+        fv, fnote = 1e4, 'floor 1e4'
+    cm = COST_RE.match(cost) if cost else None
+    cnote = ''
+    if cm:
+        ch = max(float(cm.group(1)), 0.25); cnote = '估' if cm.group(2) else ''
+    else:
+        ch, cnote = 4.0, '估(default 4)'
+    mx = max(scores)
+    ranked.append(dict(r=r, sym=sym, mx=mx, f=fv, fnote=fnote, cost=ch, cnote=cnote, est='估' in tags, prio=math.log10(fv + 1) * mx / ch))
+ranked.sort(key=lambda x: (-x['prio'], x['r']['id']))
+pm = ['# Used but not proven, by priority (generated by tools/metal/matrix.sh — do not edit)', '',
+      'priority = log10(freq + 1) x max(symptom) / cost. symptom = what a wrong node does, five kinds 0-3 (geom, color, flicker, slow, crash); '
+      'cost = estimated person-hours; 估 = estimated. freq unknown or words only counts as 1 (`unknown=1`), measured-and-reproducible symptom rows with no number take the floor 1e4 (`floor 1e4`). '
+      'Rows that are proven, used=no, closed, summary rows or reference-only (D3DMetal) rows are not ranked. Format and rules: `docs/metal/symptom-format.md`. '
+      'Mac rows use `docs/metal/symptom-overlay-mac.tsv.txt` until the Mac matrix has the columns.', '',
+      '| # | id | owner | status | freq | symptom | max | cost h | priority | next step |', '|---|---|---|---|---|---|---|---|---|---|']
+for n, x in enumerate(ranked, 1):
+    r = x['r']
+    pm.append(f"| {n} | {r['id']} | {r['owner']} | {r['status']} | {fmt(x['f'])}{' (' + x['fnote'] + ')' if x['fnote'] else ''} | {esc(x['sym'])} | {x['mx']} | "
+              f"{x['cost']:g}{x['cnote']} | {x['prio']:.3f} | {esc((r['restore_plan'] or '—')[:110])} |")
+pm += ['', f'ranked: {len(ranked)}; not ranked (closed, summary, used=no, reference only): {len(skipped)}; rows without a parsable symptom: {len(unscored)}', '']
+if skipped:
+    pm += ['## Not ranked', '', '| id | status | why |', '|---|---|---|'] + [f'| {a} | {b} | {c} |' for a, b, c in skipped] + ['']
+P(''); P(f'priority: {len(ranked)} ranked, {len(skipped)} not ranked, {len(unscored)} without symptom (warn)')
+for n, x in enumerate(ranked[:10], 1):
+    P(f"  {n:>2}. {x['r']['id']} {x['prio']:.3f}  max {x['mx']}  cost {x['cost']:g}{x['cnote']}  freq {fmt(x['f'])}")
+if unscored:
+    warnings.append('no symptom: ' + ', '.join(unscored))
+
+files = {'docs/metal/translation-unproven.md': '\n'.join(md) + '\n', 'docs/metal/translation-stubbed.md': '\n'.join(sm) + '\n',
+         'docs/metal/translation-priority.md': '\n'.join(pm) + '\n'}
 bad = False
 for p, text in files.items():
     if check:

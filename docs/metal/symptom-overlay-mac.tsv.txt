@@ -1,0 +1,122 @@
+# Scores of the Mac matrix rows until docs/mac/translation-matrix-mac.csv.txt carries the symptom and cost columns
+# (then the Mac file wins, row by row). Source: the Mac integration lead's 2026-11-28 symptom-mac.tsv and mac-ranked.tsv.
+# Format: docs/metal/symptom-format.md. A 估 on a cost = an estimate.
+id	symptom	cost	source
+mac.isa.maskmov_ymm_store_nofault	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.maskmov_ymm_store_fault_crossing	geom0 color0 flicker0 slow0 crash3		2026-11-28-symptom-mac.tsv
+mac.isa.vcvtps2ph_mem_fault	geom0 color0 flicker0 slow0 crash3		2026-11-28-symptom-mac.tsv
+mac.isa.vextract128_mem	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.store256_plain	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.clwb	geom0 color0 flicker0 slow2 crash2		2026-11-28-symptom-mac.tsv
+mac.isa.nontemporal_store	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.lock_cmpxchg_semantics	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.lock_cmpxchg_flags	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.lock_other_xchg	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.cpuid_xgetbv	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.rdtsc	geom0 color0 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.bmi_lzcnt_popcnt	geom1 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.fma_f16c	geom1 color2 flicker1 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.avx_general	geom1 color1 flicker0 slow0 crash2 summary	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.amd_only	geom0 color0 flicker1 slow1 crash2	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.tso_ordering	geom0 color0 flicker2 slow0 crash2	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.fault_resume_ordinary	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.page_size	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.loader.masked_patch	geom1 color0 flicker0 slow0 crash2		2026-11-28-symptom-mac.tsv
+mac.loader.masked_default_off	geom0 color0 flicker0 slow0 crash2		2026-11-28-symptom-mac.tsv
+mac.loader.wide_patch	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.loader.clwb_nop	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.loader.resolution	geom0 color0 flicker0 slow0 crash2	0.5	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.res.output	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.res.internal	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.res.drs	geom0 color1 flicker1 slow2 crash0	3	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.res.fsr	geom0 color0 flicker0 slow0 crash1	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.fault.tracking_decision	geom0 color0 flicker0 slow2 crash0		2026-11-28-symptom-mac.tsv
+mac.fault.ntquery_class7	geom0 color1 flicker0 slow0 crash1	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.fault.xmem_no_write_watch	geom0 color0 flicker0 slow1 crash1		2026-11-28-symptom-mac.tsv
+mac.fault.files_overlapped_wait	geom0 color0 flicker0 slow2 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.fault.titlewrite	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.fault.shadow_inplace	geom1 color1 flicker1 slow2 crash0	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.fault.safecopy_asm	geom0 color0 flicker0 slow0 crash2		2026-11-28-symptom-mac.tsv
+mac.hle.xmem_virtual_alloc	geom0 color0 flicker0 slow0 crash2		2026-11-28-symptom-mac.tsv
+mac.hle.console_model	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.hle.low_address_commit	geom0 color0 flicker0 slow0 crash2	3	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.commit_quota	geom0 color0 flicker1 slow1 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.working_set_statistics	geom1 color0 flicker1 slow1 crash1	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.tools_memory	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.hle.globalmemorystatus	geom1 color0 flicker1 slow1 crash1	2	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.cool_fox_residency	geom0 color0 flicker1 slow1 crash1	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.zero_copy_alias	geom0 color0 flicker1 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.suspendthread	geom0 color0 flicker1 slow0 crash1	2	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.files	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.hle.dstorage	geom0 color0 flicker0 slow1 crash1		2026-11-28-symptom-mac.tsv
+mac.hle.display_audio_misc	geom0 color1 flicker0 slow0 crash0	3	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.device.create	geom0 color0 flicker0 slow0 crash2		2026-11-28-symptom-mac.tsv
+shared.root.signature	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+shared.descriptor.heaps	geom2 color2 flicker1 slow0 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.resource.heaps_at_addresses	geom1 color0 flicker1 slow2 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.fence.wait	geom0 color0 flicker0 slow1 crash2		2026-11-28-symptom-mac.tsv
+shared.device.feature_query	geom0 color0 flicker0 slow0 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.object.unknown_method	geom1 color0 flicker0 slow0 crash2	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.pipeline.unknown_creation_methods	geom1 color0 flicker0 slow2 crash0 closed	4	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.pipeline.untranslated_shader	geom3 color1 flicker1 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.draw.no_host_pipeline	geom3 color1 flicker1 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.draw.descriptor_drops	geom2 color0 flicker1 slow0 crash0	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.indirect.clamp_dropped	geom0 color0 flicker0 slow0 crash3		2026-11-28-symptom-mac.tsv
+shared.query.timestamps	geom0 color0 flicker1 slow1 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.query.depth_bounds	geom1 color0 flicker1 slow0 crash0	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.resource.typed_buffer_r32g32b32	geom2 color1 flicker1 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.residency.make_resident	geom0 color0 flicker0 slow0 crash1	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.lock_cmpxchg16_split	geom0 color0 flicker2 slow0 crash2	0.5	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.cmpxchg32_rax_hit	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.isa.rmw_fault_access_type	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+mac.hle.audio_timer_leak	geom0 color0 flicker0 slow0 crash1	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.title.int3_31f50	geom0 color0 flicker0 slow0 crash3	2	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.pipeline.d3dmetal_noop_pso	geom3 color3 flicker3 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.draw.set_render_vertex_buffers_crash	geom0 color0 flicker0 slow0 crash3	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.res.metalfx	geom0 color0 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.res.display_mode	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.res.ui_layout	geom1 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.res.present_cap	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+shared.rt.bvh_build	geom0 color3 flicker1 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.rt.resolve	geom1 color3 flicker2 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.rt.activate_rays	geom0 color1 flicker1 slow0 crash0	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.rt.ambient_standin	geom0 color2 flicker1 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shader.rt.builder_first_lane_scan	geom0 color1 flicker1 slow0 crash0	6	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.rt.host_dxr_tier	geom0 color0 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.pipeline.d3dm_noop_draw	geom3 color3 flicker3 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shader.mesh.output_size_32k	geom2 color0 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.dbghelp_minidump	geom0 color0 flicker0 slow0 crash1	1	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shader.ps.attribute_at_vertex	geom2 color1 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+metal.post.auto_exposure	geom0 color3 flicker3 slow0 crash0 freq=floor	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+metal.gpu.fidelity_slow_frame	geom0 color0 flicker1 slow3 crash3 closed	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.title.hang_watchdog	geom0 color0 flicker1 slow3 crash3	1	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.runtime.hle_counters	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.hle.xmem_map_partial_view	geom1 color0 flicker2 slow0 crash1	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.title.int3_self_exit_r6	geom0 color0 flicker0 slow0 crash3 freq=floor	3	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.title.srl_prestream_stall	geom1 color0 flicker0 slow1 crash3 freq=floor	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.isa.avx.rcp_rsqrt_packed	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.avx.rcp_rsqrt_scalar	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.isa.avx.convert	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+C-V-003	geom1 color2 flicker1 slow0 crash0	28	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+C-V-012	geom1 color1 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+shared.descriptor.partial_3d_uav	geom2 color1 flicker1 slow0 crash0	8估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+C-V-014	geom1 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+api.CreateConstantBufferView	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+api.Resource::Map	geom1 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+C-V-017	geom0 color0 flicker0 slow1 crash2		2026-11-28-symptom-mac.tsv
+C-V-008	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+S-G-009	geom0 color1 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+S-D-001	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+C-V-001	geom1 color0 flicker0 slow2 crash0 closed	28	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+S-I-001	geom1 color1 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+C-V-009	geom1 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv
+S-I-002	geom0 color1 flicker1 slow0 crash0		2026-11-28-symptom-mac.tsv
+C-V-016	geom0 color0 flicker1 slow2 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+S-G-012	geom1 color0 flicker0 slow0 crash0	8	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.device.options_double	geom1 color1 flicker0 slow0 crash0	2估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.device.options_tiled	geom2 color1 flicker0 slow0 crash1	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.device.options_conservative	geom1 color1 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+shared.shader.wave_wide_default	geom1 color0 flicker1 slow1 crash0	24估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.loader.write_sites_vector	geom0 color0 flicker0 slow0 crash0		2026-11-28-symptom-mac.tsv
+mac.hle.net_wine_exports	geom0 color0 flicker0 slow0 crash0	4估	2026-11-28-symptom-mac.tsv + mac-ranked.tsv
+mac.hle.xgamesave_link_fallback	geom0 color0 flicker0 slow0 crash1		2026-11-28-symptom-mac.tsv

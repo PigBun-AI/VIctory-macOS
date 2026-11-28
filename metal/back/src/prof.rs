@@ -462,6 +462,34 @@ fn absorb(w: &mut Window, p: &Pending) {
                     row.gs[4] = row.gs[4].max(groups);
                 }
             }
+            // `VICTORY_METAL_GPUPROF_ARGS`: indirect compute dispatches of 60,000 groups or more in x,
+            // once per distinct label and count (the clamp in victory-gpu keeps 65,535 on a card it
+            // does not know; Metal itself takes any 32-bit count).
+            if let (Some(i), Some(sn)) = (
+                split_snap(&p.prof.labels[k]).1,
+                SNAP.get().and_then(|s| s.as_ref()),
+            ) && !split_snap(&p.prof.labels[k]).0.contains("graphics-gs")
+            {
+                let a = sn.read(i);
+                if a.len() >= 3
+                    && a[0]
+                        >= std::env::var("VICTORY_METAL_GPUPROF_ARGS_MINX")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(60_000)
+                {
+                    static SEEN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+                    let head = split_snap(&p.prof.labels[k]).0.to_string();
+                    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+                    if seen.len() < 200 && !seen.contains(&(head.clone(), a[0])) {
+                        eprintln!(
+                            "victory-metal gpuprof: indirect dispatch of {} x {} x {} groups reached the back: {head}",
+                            a[0], a[1], a[2]
+                        );
+                        seen.push((head, a[0]));
+                    }
+                }
+            }
             w.scoped_ns += part;
             if part >= SLOW_NS {
                 slow.push((part, &p.prof.labels[k]));
