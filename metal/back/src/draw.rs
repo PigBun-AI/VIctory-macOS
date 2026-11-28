@@ -1174,6 +1174,12 @@ impl crate::record::CommandList {
         let args_va = tlab_va.unwrap_or_else(|| {
             crate::prof::LAST_ARGS_VA.load(std::sync::atomic::Ordering::Relaxed)
         });
+        let meta_push = |t: &str| {
+            crate::prof::DUMP_META
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_str(t);
+        };
         meta_push(&format!(
             "\n  root arguments va {args_va:#x} (record's: {})",
             tlab_va.is_some()
