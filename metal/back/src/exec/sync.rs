@@ -284,7 +284,11 @@ impl State {
             heap,
             sampler,
             shader_visible: a.flags & 1 != 0,
-            keys: Default::default(),
+            keys: if sampler {
+                Vec::new()
+            } else {
+                vec![0; a.capacity as usize]
+            },
         };
         a.heap = HeapId(self.heaps.insert(entry).map_err(exhausted)?);
         Ok(())
@@ -308,11 +312,12 @@ impl State {
                 .map(|(base, _)| base),
             _ => None,
         };
-        if let Some(h) = self.heaps.get_mut(a.heap.0) {
-            match key {
-                Some(k) => h.keys.insert(a.index, k),
-                None => h.keys.remove(&a.index),
-            };
+        if let Some(slot) = self
+            .heaps
+            .get_mut(a.heap.0)
+            .and_then(|h| h.keys.get_mut(a.index as usize))
+        {
+            *slot = key.unwrap_or(0);
         }
         Ok(())
     }
@@ -488,15 +493,20 @@ impl State {
                 .write(a.dst_index + i as u32, e)
                 .map_err(|e| status_of(&e))?;
         }
-        let keys: Vec<Option<u64>> = (0..a.count)
-            .map(|i| src.keys.get(&(a.src_index + i)).copied())
-            .collect();
-        let dst = self.heaps.get_mut(a.dst_heap.0).ok_or(Status::NOT_FOUND)?;
-        for (i, k) in keys.into_iter().enumerate() {
-            match k {
-                Some(k) => dst.keys.insert(a.dst_index + i as u32, k),
-                None => dst.keys.remove(&(a.dst_index + i as u32)),
-            };
+        if !dst.sampler {
+            let s = a.src_index as usize;
+            let d = a.dst_index as usize;
+            let n = a.count as usize;
+            if a.src_heap == a.dst_heap {
+                self.heaps
+                    .get_mut(a.dst_heap.0)
+                    .unwrap()
+                    .keys
+                    .copy_within(s..s + n, d);
+            } else {
+                let (src, dst) = self.heaps.pair_mut(a.src_heap.0, a.dst_heap.0).unwrap();
+                dst.keys[d..d + n].copy_from_slice(&src.keys[s..s + n]);
+            }
         }
         Ok(())
     }

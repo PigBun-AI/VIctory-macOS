@@ -45,6 +45,15 @@ impl<T> Table<T> {
         self.map.get_mut(&id)
     }
 
+    /// Mutably borrows two distinct slots (for copies between heaps).
+    pub(crate) fn pair_mut(&mut self, src: u32, dst: u32) -> Option<(&mut T, &mut T)> {
+        if src == dst {
+            return None;
+        }
+        let [a, b] = self.map.get_disjoint_mut([&src, &dst]);
+        Some((a?, b?))
+    }
+
     /// Puts `value` under an existing handle.
     pub(crate) fn replace(&mut self, id: u32, value: T) {
         if self.map.contains_key(&id) {

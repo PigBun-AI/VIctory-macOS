@@ -170,8 +170,8 @@ pub(crate) struct Heap {
     pub(crate) shader_visible: bool,
     /// What each written view of the heap looks at, by identity (see
     /// [`emu`]'s pass-split rule): a buffer's base address, a texture's
-    /// resource id with bit 62 set. Slots never written or cleared are absent.
-    pub(crate) keys: std::collections::HashMap<u32, u64>,
+    /// resource id with bit 62 set. Zero means absent; samplers have no keys.
+    pub(crate) keys: Vec<u64>,
 }
 
 /// Everything `HELLO` made.

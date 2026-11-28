@@ -172,7 +172,8 @@ fn touched(st: &State, side: &Side) -> Touch {
                         }
                         // What the view looks at: recorded when it was written
                         // (a texture's entry holds a view id, not the texture).
-                        let Some(&key) = h.keys.get(&idx) else {
+                        let Some(key) = h.keys.get(idx as usize).copied().filter(|k| *k != 0)
+                        else {
                             no_key += 1;
                             continue;
                         };
