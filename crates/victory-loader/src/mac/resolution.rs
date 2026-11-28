@@ -449,8 +449,65 @@ pub unsafe fn write_together(base: usize, size: usize, parts: &[(&Site, &[u8])])
 }
 
 /// Sites written together, each with its replacement.
-#[cfg(windows)]
 type Group = Vec<(&'static Site, Vec<u8>)>;
+
+/// What the switches ask to be patched, as groups of sites (each written all or none) with the
+/// value the log shows: nothing for a fidelity run, which must leave the title's code alone.
+/// Pure, so both paths are tested without an image.
+pub fn plan_asked(
+    output: Asked,
+    pool_skip: bool,
+    scale: Option<f32>,
+    upscaler: Option<u32>,
+) -> Vec<(Group, String)> {
+    // Sites that only make sense together go in one group, written all or
+    // none: a smaller output with the pool check left in stops the title,
+    // and the check gone without a smaller output is pointless.
+    let mut asked: Vec<(Group, String)> = Vec::new();
+    if let Asked::Size((w, h)) = output {
+        let mut group = vec![(&OUTPUT, output_code(w, h))];
+        if (w, h) != (3840, 2160) {
+            group.push((&POOL_CHECK, pool_check_code()));
+        }
+        asked.push((group, format!("{w}x{h}")));
+    }
+    // Left to the title, the pool check alone (docs/mac/PATCHES.md, L3): not
+    // when the output is patched, which has the check in its group already.
+    let output_patched = matches!(output, Asked::Size((w, h)) if (w, h) != (3840, 2160));
+    if pool_skip && !output_patched {
+        asked.push((vec![(&POOL_CHECK, pool_check_code())], "skip".to_string()));
+    }
+    if let Some(s) = scale {
+        asked.push((vec![(&OWN_SCALE, own_scale_code(s))], format!("{s}")));
+    }
+    if let Some(kind) = upscaler {
+        asked.push((vec![(&PICKER, picker_code(kind))], format!("returns {kind}")));
+    }
+    // The divide-clamp: with any of the above, so a small output that zeroes
+    // the distributor's divisor does not trap with 0xc0000094. mac: not on a
+    // fidelity run (VICTORY_OUTPUT=0, nothing asked) that must leave the title's
+    // code alone and log no `resolution: ... Done` line.
+    if !asked.is_empty() {
+        asked.push((
+            vec![(&DIV_TRAMP, div_trampoline_code()), (&DIV_ZERO, div_call_code())],
+            "div-by-zero clamp".into(),
+        ));
+    }
+    asked
+}
+
+/// The line that says which path this run is on, once, before any site is written:
+/// `resolution: fidelity, no site patched` when nothing is asked (the title's own settings
+/// decide), else `resolution: perf, N sites patched: ...` over what is asked (the sites that
+/// then fail are said one by one).
+pub fn path_line(asked: &[(Group, String)]) -> String {
+    if asked.is_empty() {
+        return "resolution: fidelity, no site patched".to_owned();
+    }
+    let sites: usize = asked.iter().map(|(g, _)| g.len()).sum();
+    let what: Vec<&str> = asked.iter().map(|(_, v)| v.as_str()).collect();
+    format!("resolution: perf, {sites} sites asked to be patched ({})", what.join(", "))
+}
 
 /// Applies what the switches ask for; a line each in the log and on
 /// standard output.
@@ -460,45 +517,8 @@ type Group = Vec<(&'static Site, Vec<u8>)>;
 /// code yet.
 #[cfg(windows)]
 pub unsafe fn apply_asked(base: usize, size: usize) {
-    // Sites that only make sense together go in one group, written all or
-    // none: a smaller output with the pool check left in stops the title,
-    // and the check gone without a smaller output is pointless.
-    let mut asked: Vec<(Group, String)> = Vec::new();
-    if let Asked::Size((w, h)) = asked_output() {
-        let mut group = vec![(&OUTPUT, output_code(w, h))];
-        if (w, h) != (3840, 2160) {
-            group.push((&POOL_CHECK, pool_check_code()));
-        }
-        asked.push((group, format!("{w}x{h}")));
-    }
-    // Left to the title, the pool check alone (docs/mac/PATCHES.md, L3): not
-    // when the output is patched, which has the check in its group already.
-    let output_patched = matches!(asked_output(), Asked::Size((w, h)) if (w, h) != (3840, 2160));
-    if pool_check_skip_asked() && !output_patched {
-        asked.push((vec![(&POOL_CHECK, pool_check_code())], "skip".to_string()));
-    }
-    if let Some(s) = asked_render_scale() {
-        asked.push((vec![(&OWN_SCALE, own_scale_code(s))], format!("{s}")));
-    }
-    if let Some(kind) = asked_upscaler() {
-        asked.push((
-            vec![(&PICKER, picker_code(kind))],
-            format!("returns {kind}"),
-        ));
-    }
-    // The divide-clamp: with any of the above, so a small output that zeroes
-    // the distributor's divisor does not trap with 0xc0000094. mac: not on a
-    // fidelity run (VICTORY_OUTPUT=0, nothing asked) that must leave the title's
-    // code alone and log no `resolution:` line.
-    if !asked.is_empty() {
-        asked.push((
-            vec![
-                (&DIV_TRAMP, div_trampoline_code()),
-                (&DIV_ZERO, div_call_code()),
-            ],
-            "div-by-zero clamp".into(),
-        ));
-    }
+    let asked = plan_asked(asked_output(), pool_check_skip_asked(), asked_render_scale(), asked_upscaler());
+    println!("{}", path_line(&asked));
     for (group, value) in asked {
         let parts: Vec<(&Site, &[u8])> = group.iter().map(|(s, c)| (*s, c.as_slice())).collect();
         // SAFETY: the caller's promise.
@@ -532,6 +552,48 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fidelity_run_patches_no_site_and_says_so() {
+        // VICTORY_OUTPUT=0 (the title's own size), nothing else asked: no group, so no site.
+        let asked = plan_asked(Asked::Title, false, None, None);
+        assert!(asked.is_empty(), "no divide clamp either: it only comes with a patch");
+        assert_eq!(path_line(&asked), "resolution: fidelity, no site patched");
+    }
+
+    #[test]
+    fn a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp() {
+        let asked = plan_asked(Asked::Size((1280, 720)), false, None, None);
+        let sites: Vec<u32> = asked.iter().flat_map(|(g, _)| g.iter().map(|(s, _)| s.at as u32)).collect();
+        assert_eq!(
+            sites,
+            [OUTPUT.at, POOL_CHECK.at, DIV_TRAMP.at, DIV_ZERO.at].map(|a| a as u32),
+            "output + pool check in one group, then the clamp"
+        );
+        assert_eq!(asked[0].1, "1280x720");
+        assert_eq!(
+            path_line(&asked),
+            "resolution: perf, 4 sites asked to be patched (1280x720, div-by-zero clamp)"
+        );
+        // The title's own 3840x2160 needs no pool check.
+        let asked = plan_asked(Asked::Size((3840, 2160)), true, None, None);
+        assert_eq!(asked[0].0.len(), 1, "only the output site: 3840x2160 is what the pool is sized for");
+        assert_eq!(asked.len(), 3, "output, the pool check alone (this output has none in its group), clamp");
+    }
+
+    #[test]
+    fn the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch() {
+        // Pool check skipped with the title's own size: one site, plus the clamp.
+        let asked = plan_asked(Asked::Title, true, None, None);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[0].1, "skip");
+        assert!(path_line(&asked).starts_with("resolution: perf, 3 sites"), "{}", path_line(&asked));
+        let asked = plan_asked(Asked::Title, false, Some(0.75), Some(7));
+        assert_eq!(asked.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>(), ["0.75", "returns 7", "div-by-zero clamp"]);
+        // An output that keeps the pool check in its group does not get it a second time.
+        let asked = plan_asked(Asked::Size((1920, 1080)), true, None, None);
+        assert_eq!(asked.iter().filter(|(g, _)| g.iter().any(|(s, _)| s.at == POOL_CHECK.at)).count(), 1);
+    }
 
     #[test]
     fn the_pool_check_is_skipped_only_when_asked() {

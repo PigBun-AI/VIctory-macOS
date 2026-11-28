@@ -45,7 +45,7 @@ Between runs `run.sh` stops only its own prefix's Wine; wait for `end.txt` befor
 | File | Line / column | For |
 |---|---|---|
 | `start.txt` | commit, changed files, exe hash, `settings.xml` size (fidelity) or `non-fidelity: output patched to 1280x720` | the run is what it says |
-| `stdout.log` | `resolution:` lines (`Done`, or `skip` of the pool check); `non-fidelity:` (perf only, **must not appear in fidelity**); `render size:` lines | no resolution patch in fidelity; internal size |
+| `stdout.log` | `resolution:` lines (a fidelity run: exactly `resolution: fidelity, no site patched` and no `... Done` line; a perf run: `resolution: perf, N sites ...`, then `Done` per site, or `skip` of the pool check); `non-fidelity:` (perf only, **must not appear in fidelity**); `render size:` lines | no resolution patch in fidelity; internal size |
 | `stdout.log`/`stderr.log` | `presenting to a window width= height=` (expect 2560x1440 fidelity, 1280x720 perf); `display mode reported to the title`; `video memory as the system counts it` (before/after the swap chain, after a resize) | output, window, video memory budget |
 | `stderr.log` | `world frame 1 (input scripts ...` | the world was entered (the replay is set, so the latch is logged) |
 | both | `ms/frame` lines (the host's meter: fps, ms/frame, preparing, GPU, draws) | frame time cross-check |

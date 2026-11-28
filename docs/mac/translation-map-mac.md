@@ -71,7 +71,7 @@
 | mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | unproven | translated |
 | mac.loader.wide_patch | 256-bit store split into two 128-bit stores (wide.rs), sites from `cargo xtask wide-stores` | 117,413 | static-census | proven | stubbed |
 | mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | unproven | stubbed |
-| mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | proven | stubbed |
+| mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | unproven | stubbed |
 
 ### 故障跟踪与异常
 

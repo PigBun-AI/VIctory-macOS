@@ -487,6 +487,11 @@ title). The patch changes the title's *output*; the internal size follows (outpu
   line (a loader change then), and the node is registered in the matrix as a **stubbed** node: its numbers say the title ran with that
   one check jumped over, not that it ran on its own. Until a run stops there, nothing changes.
 - When the output is patched the log says `non-fidelity: output patched to WxH` (stdout, once), besides `resolution: ... Done` per site.
+- Path line (11-28), once, before any site is written (`resolution::path_line`, planning is `resolution::plan_asked`): a fidelity run
+  (nothing asked: `VICTORY_OUTPUT=0`, no pool check, scale or upscaler switch) logs `resolution: fidelity, no site patched` and
+  writes nothing, not even the divide clamp; any patch asked logs `resolution: perf, N sites asked to be patched (...)`. Tests
+  (native): `a_fidelity_run_patches_no_site_and_says_so`, `a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp`,
+  `the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch`.
 - Which settings decide the output: see "Which `settings.xml` keys decide the output" below.
 
 Remove when the Mac GPU path is fast enough for the title's own size.
