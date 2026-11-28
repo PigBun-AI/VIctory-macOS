@@ -3,7 +3,7 @@
 //! Reference: addrlib of Mesa (`src/amd/addrlib`, MIT; commit ec5abcdd4ec9b9d5c896afe81a457f17e6ae4797), the library AMD's drivers use,
 //! `Addr2ComputeSurfaceInfo` and `Addr2ComputeSurfaceAddrFromCoord`, Navi 21 (GFX10.3), no pipe-bank XOR
 //! (`pipeBankXor` 0: the modes without XOR give the same addresses on every GFX10 part). The file is made by
-//! `tools/mac/addrlib-oracle/gen.py` (the oracle is `tools/mac/addrlib-oracle/oracle.cpp`); do not edit it by hand.
+//! `tools/mac/addrlib-oracle/gen.py` (the oracle is `tools/mac/addrlib-oracle/oracle.cpp.txt`); do not edit it by hand.
 //! Per case: mode, dimension (1, 2, 3), element bytes, texels per element side, width, height, depth or array
 //! size, mips; then the surface size in bytes, the first mip in the mip tail (the number of mips: none),
 //! FNV-1a of the address of every element (mips in order, then slices, rows, columns; 8 little-endian bytes
