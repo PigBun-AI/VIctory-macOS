@@ -1425,11 +1425,26 @@ total (median +6 %, 90th percentile +14 %, largest 2.9x). MSC/Metal on a 20 % sa
 ps 104/1,028, ms 917/934 on **and** off, the same programs; with the 12-operation sequence the pipeline build time of the sample (a loaded machine, noisy) is cs +57 %, vs +17 %,
 ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
 
-### 待分配 — four translator fixes found by the opcode oracle's A batch (`victory-shader/src/emit/lower.rs`)
+### S9 — a `v_cndmask_b32` whose mask is a plain number counts for the console-lane analysis (`victory-shader` `emit/lower.rs`, `selects_by_number_mask`)
 
-*What.* (1) `selects_by_number_mask`: a `v_cndmask_b32` whose scalar mask is a plain number (`s_mov_b32 vcc_lo, sN`, not a lane mask) now counts for the `console_lanes` pre-analysis; before, a compute program with a thread count tripped `debug_assert!(threads.is_none() || console_lanes)` in `cross_lane` (in a release build it used the host lane number unrelabelled: a silently wrong select). Test `a_scalar_move_into_vcc_translates_in_a_thread_limited_program`. (2) `v_writelane_b32` masks its lane operand with 31 (wave32) or 63 (wave64), as the ISA's S1[4:0]/[5:0]; a number past the wave named no lane and wrote none. (3) `trig_turns` (`v_sin_f32`/`v_cos_f32`, the f16 forms): an infinity or NaN argument gives NaN (`x - floor(x)` is NaN there; the host's sin(NaN) is 0): the two `semantic` rows of `shader-hw-known.txt` are gone. (4) `s_wqm_b32`, `s_wqm_b64`, `s_bfm_b64` of a plain number (not a lane mask) translate (they were "Unsupported"; 4,088 + 19,646 + 390 instructions in the title, the wqm ones mostly of lane masks, which keep their own path in `structure.rs`). Everything is covered by `emit/oracle_a_tests.rs` (`docs/mac/opcode-oracle.md`).
-*Why not needed on Windows.* (1)-(4) are as wrong there as here, but no Windows run has met them (D3D12's sin(NaN) is NaN, the debug assertion is a test build's); the same code serves both, so the fixes are harmless there.
-*Remove when.* Never needed: upstream may take them as they are.
+*What.* A `v_cndmask_b32` whose scalar mask is a plain number (`s_mov_b32 vcc_lo, sN`, a root constant, a loaded dword; not a lane mask the structuring tracks) now counts for the `console_lanes` pre-analysis. Before, a compute program with a thread count tripped `debug_assert!(threads.is_none() || console_lanes)` in `cross_lane` (in a release build it used the host lane number unrelabelled: a silently wrong select). Test `a_scalar_move_into_vcc_translates_in_a_thread_limited_program`; oracle rows in `emit/oracle_a_tests.rs` (`docs/mac/opcode-oracle.md`). Found by the opcode oracle's A batch.
+*Why not needed on Windows.* As wrong there as here, but no Windows run has met it (the debug assertion is a test build's); the same code serves both, so the fix is harmless there.
+*Remove when.* Never needed: upstream may take it as it is.
+
+### S10 — `v_writelane_b32` masks its lane operand (`victory-shader` `emit/lower.rs`)
+
+*What.* The lane is S1[4:0] (wave32) or S1[5:0] (wave64), as the ISA reads it (the operand is masked with 31 or 63); a number past the wave named no lane and wrote none. Oracle rows in `emit/oracle_a_tests.rs`.
+*Why not needed on Windows.* As wrong there; no Windows run has met it. *Remove when.* Never needed: upstream may take it as it is.
+
+### S11 — `v_sin_f32`/`v_cos_f32` (and the f16 forms) of NaN or infinity give NaN (`victory-shader` `emit/lower.rs`, `trig_turns`)
+
+*What.* An infinity or NaN argument gives NaN (`x - floor(x)` is NaN there; the host's sin(NaN) is 0 through MSC/Metal). The two `semantic` rows of `tools/mac/shader-hw-known.txt` for `v_sin_and_v_cos_*_reduce_large_turns` are gone. Oracle rows in `emit/oracle_a_tests.rs`.
+*Why not needed on Windows.* D3D12's sin(NaN) is NaN already; the same code serves both. *Remove when.* Never needed.
+
+### S12 — `s_wqm_b32`, `s_wqm_b64`, `s_bfm_b64` of a plain number translate (`victory-shader` `emit/lower.rs`)
+
+*What.* They were "Unsupported" when the operand is a number rather than a lane mask (4,088 + 19,646 + 390 instructions in the title; the wqm ones are mostly lane masks, which keep their own path in `structure.rs`). `s_wqm` is the quad-wise OR of a number; `s_bfm_b64` is `((1 << S0[5:0]) - 1) << S1[5:0]`. Oracle rows in `emit/oracle_a_tests.rs`.
+*Why not needed on Windows.* Not known to be met by a Windows run (not measured); the same code serves both. *Remove when.* Never needed.
 
 ## Not ported this round (decided with the Windows line as the reference)
 

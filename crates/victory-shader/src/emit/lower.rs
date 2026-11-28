@@ -1449,7 +1449,7 @@ pub(super) fn reads_mask_as_data(st: &Structured, i: &Inst) -> bool {
     })
 }
 
-/// mac 待分配: a select (`v_cndmask_b32`) whose lane mask is a plain number (vcc written by
+/// mac S9: a select (`v_cndmask_b32`) whose lane mask is a plain number (vcc written by
 /// `s_mov_b32 vcc_lo, s2`, a root constant, a loaded dword ...) and no ballot or compare the
 /// structuring tracks. The lowering takes the lane's own bit of it, which is the console's
 /// lane only with console lanes: without them a thread-limited program asserted in
@@ -1701,7 +1701,7 @@ impl<'a> Lower<'a> {
                     || matches!(n, "v_readlane_b32" | "v_writelane_b32")
                     || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
                     || reads_mask_as_data(x.st, i)
-                    || selects_by_number_mask(x.st, i) // mac 待分配
+                    || selects_by_number_mask(x.st, i) // mac S9
             }) || lane_constant_masks(x.st)
                 // (a branch the wave takes together asks the wave)
                 || !x.st.wide.is_empty();
@@ -4562,7 +4562,7 @@ impl<'a> Lower<'a> {
         let size = self.unary(6, part);
         let exact = self.s.m.cmp(c, pred::OEQ, size, at);
         let r = self.s.m.select(c, exact, zero, r);
-        // mac 待分配: an infinity or NaN has no fraction: the result is NaN (the host's sin and cos of
+        // mac S11: an infinity or NaN has no fraction: the result is NaN (the host's sin and cos of
         // NaN is 0, and `x - floor(x)` of an infinity is NaN, which `part` carries here).
         let unordered = self.s.m.cmp(c, pred::UNO, part, part);
         self.s.m.select(c, unordered, part, r)
@@ -6525,7 +6525,7 @@ impl<'a> Lower<'a> {
                     self.set(scc, Val::Bit(s));
                     Ok(())
                 }
-                // mac 待分配: the quad-wise OR of a number (a lane mask goes the way of `structure`)
+                // mac S12: the quad-wise OR of a number (a lane mask goes the way of `structure`)
                 "s_wqm_b64" => {
                     let (a, b) = (half(self, 0, 0)?, half(self, 0, 1)?);
                     let (ra, rb) = (self.wqm_bits(a), self.wqm_bits(b));
@@ -6535,7 +6535,7 @@ impl<'a> Lower<'a> {
                     self.set(scc, Val::Bit(s));
                     Ok(())
                 }
-                // mac 待分配: ((1 << S0[5:0]) - 1) << S1[5:0]
+                // mac S12: ((1 << S0[5:0]) - 1) << S1[5:0]
                 "s_bfm_b64" => {
                     let (n, o) = (src32(self, 0)?, src32(self, 1)?);
                     let i64t = self.s.m.int(64);
@@ -9639,7 +9639,7 @@ impl<'a> Lower<'a> {
                     return Err("a lane write in a half-wave");
                 }
                 let me = self.console_lane();
-                // mac 待分配: the lane is S1[4:0] (wave32) or S1[5:0] (wave64), as the ISA reads it;
+                // mac S10: the lane is S1[4:0] (wave32) or S1[5:0] (wave64), as the ISA reads it;
                 // a larger number named no lane here and wrote none.
                 let k = self.s.m.i32(if self.x.native.wave64 { 63 } else { 31 });
                 let lane = self.s.m.bin(c, Bin::And, lane, k);
