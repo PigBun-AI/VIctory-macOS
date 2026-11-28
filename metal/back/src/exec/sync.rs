@@ -55,6 +55,7 @@ impl State {
             queues: Default::default(),
             swapchains: Default::default(),
             note: None,
+            isolated: 0,
         }
     }
 

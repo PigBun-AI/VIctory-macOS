@@ -247,6 +247,25 @@ fn crash_report() {
     }
 }
 
+/// Work commands that refuse before they record anything into the open list.
+fn is_isolable(c: &Command<'_>) -> bool {
+    matches!(
+        c,
+        Command::CopyTextureRegion(_)
+            | Command::CopyResource(_)
+            | Command::CopyBufferRegion(_)
+            | Command::FillBuffer(_)
+            | Command::ClearUav(_)
+            | Command::ClearUavTexture(_)
+            | Command::ExecuteIndirect(_)
+            | Command::Dispatch(_)
+            | Command::DispatchMesh(_)
+            | Command::Draw(_)
+            | Command::DrawIndexed(_)
+            | Command::WriteImmediate(_)
+    )
+}
+
 impl State {
     /// Runs a block that [`validate`] accepted.
     pub(super) fn run_block(&mut self, block: &[u8]) -> Status {
@@ -259,6 +278,9 @@ impl State {
             open: None,
         };
         let mut failed: Option<(Status, String)> = None;
+        // The first command that failed alone (see `ExecOptions::strict_block`): the block
+        // runs on, then answers with its status so the caller can log it.
+        let mut first_isolated: Option<(Status, String)> = None;
         run.st.note = None;
         // The drop statistics (`VICTORY_METAL_DROPSTATS`): ops counted as they
         // run, and what a failure loses with them.
@@ -289,6 +311,34 @@ impl State {
                 counted.after(s, &c, before, &result, &run);
             }
             if let Err(s) = result {
+                // A refused piece of work (a copy, clear, draw, dispatch the back cannot do)
+                // fails alone: it is logged and counted, and the block goes on with the list
+                // still open. The command refuses before it records anything; structural
+                // commands (lists, queues, pipeline and pass state) still stop the block, as
+                // does everything with `ExecOptions::strict_block` (VICTORY_METAL_STRICT_BLOCK=1).
+                if !run.st.options.strict_block
+                    && matches!(s, Status::UNSUPPORTED | Status::INVALID_ARG)
+                    && run.open.is_some()
+                    && is_isolable(&c)
+                {
+                    let why = run
+                        .st
+                        .note
+                        .take()
+                        .unwrap_or_else(|| "no reason recorded".into());
+                    run.st.isolated += 1;
+                    if first_isolated.is_none() {
+                        first_isolated = Some((s, format!("{:?}: {why}", c.opcode())));
+                    }
+                    if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
+                        eprintln!(
+                            "victory-metal back: {:?} failed alone: {s:?}: {why} (the block goes on; isolated so far {})",
+                            c.opcode(),
+                            run.st.isolated
+                        );
+                    }
+                    continue;
+                }
                 if std::env::var_os("VICTORY_METAL_LOG").is_some_and(|v| v != "0") {
                     // `note` still holds the reason a refusal recorded (the
                     // block's own note below replaces it).
@@ -340,7 +390,15 @@ impl State {
         }
         drop(run);
         match result {
-            Ok(()) => Status::OK,
+            Ok(()) => match first_isolated {
+                Some((s, what)) => {
+                    self.note = Some(format!(
+                        "{what} (it failed alone, the rest of the block ran)"
+                    ));
+                    s
+                }
+                None => Status::OK,
+            },
             Err((s, what)) => {
                 // The wire carries a status only; `ExecuteCommandLists` has no
                 // result at all, so the command that stopped the block is

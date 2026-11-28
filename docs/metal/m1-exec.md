@@ -42,9 +42,18 @@ modules know nothing of the wire protocol.
    opcode or variant this back does not implement. A block that fails has **no
    effect** at all. Stream header caps: unknown bit → `BAD_STREAM`; a capability
    the device lacks (e.g. `TRANSLATED` on arm64) → `UNSUPPORTED`.
-2. **Run.** A state error (dead handle, value out of range) stops the block at
-   that command: the open list and the lists not yet handed to a queue are
-   dropped, lists already committed stay, the status is returned.
+2. **Run.** A piece of work the back refuses (a copy, clear, draw, dispatch,
+   indirect call or write that answers `UNSUPPORTED` or `INVALID_ARG`, which
+   all refuse before they record anything) **fails alone**: it is logged
+   (`VICTORY_METAL_LOG`), counted (`Executor::isolated_commands`, the drop
+   statistics) and the rest of the block runs, the list staying open; the
+   block answers the first such status once it is done. Any other state error
+   (list, queue, pipeline or pass state, a dead handle, an internal Metal
+   error) stops the block at that command: the open list and the lists not yet
+   handed to a queue are dropped, lists already committed stay, the status is
+   returned. `VICTORY_METAL_STRICT_BLOCK=1` (`ExecOptions::strict_block`) makes
+   every refusal stop the block, as before (the old behaviour lost a whole
+   frame's lists to one unsupported copy).
 3. Ended lists are gathered per queue and committed together with one
    `Queue::submit` (one `ExecuteCommandLists`) before a `QUEUE_SIGNAL`/`QUEUE_WAIT`
    on that queue, at the end of the block, and early whenever a queue has

@@ -84,7 +84,7 @@ fn a_pipeline_runs_under_an_identical_root_signature_made_separately() {
     assert_eq!(run(other, 3), Status::INVALID_ARG);
     assert_eq!(cpu_read(out.cpu_addr, 1), [0]);
     let why = fx.executor().last_error().expect("the stop is explained");
-    assert!(why.contains("Dispatch"), "{why}");
+    assert!(why.to_lowercase().contains("dispatch"), "{why}");
 }
 
 /// The chain the front sends for `UNORDERED_ACCESS -> INDIRECT_ARGUMENT ->

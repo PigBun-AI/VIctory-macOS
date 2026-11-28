@@ -35,7 +35,11 @@ fn a_failing_op_and_what_it_takes_with_it_are_counted_as_dropped() {
     let _ = std::fs::remove_dir_all(&dir);
     // SAFETY: nothing else in this test binary reads the environment concurrently.
     unsafe { std::env::set_var("VICTORY_METAL_DROPSTATS", &dir) };
-    let fx = Fx::new();
+    // The stop-the-block behaviour (`strict_block`); `exec_isolation.rs` has the default.
+    let fx = Fx::with_options(victory_metal_back::exec::ExecOptions {
+        strict_block: true,
+        ..small_options()
+    });
     let q = fx.queue();
     // Block 1: a dispatch with no pipeline bound fails the block; the draw and
     // the dispatch after it never run.

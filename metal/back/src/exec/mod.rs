@@ -79,6 +79,13 @@ pub struct ExecOptions {
     /// What MSC adds to converted shaders to behave like the original API
     /// (the default checks buffer bounds: an out-of-range read gives 0).
     pub compat: crate::msc::Compat,
+    /// A command of a block that is refused (`UNSUPPORTED` / `INVALID_ARG`:
+    /// a copy, clear, draw, dispatch the back cannot do) stops the whole
+    /// block, dropping every list not yet committed (the old behaviour,
+    /// `VICTORY_METAL_STRICT_BLOCK=1`). The default is to fail that command
+    /// alone: it is logged and counted (`Executor::isolated_commands`,
+    /// `VICTORY_METAL_DROPSTATS`) and the rest of the block runs.
+    pub strict_block: bool,
 }
 
 impl Default for ExecOptions {
@@ -90,6 +97,7 @@ impl Default for ExecOptions {
                 ..QueueOptions::default()
             },
             compat: crate::msc::Compat::BOUNDS_CHECK,
+            strict_block: std::env::var_os("VICTORY_METAL_STRICT_BLOCK").is_some_and(|v| v != "0"),
         }
     }
 }
@@ -175,6 +183,8 @@ pub(crate) struct State {
     /// Why the last call refused, for `Executor::last_error` (the wire has
     /// only a status). Taken by the executor after each call.
     pub(crate) note: Option<String>,
+    /// Commands that failed alone (not `strict_block`) over the executor's life.
+    pub(crate) isolated: u64,
 }
 
 /// `Error` to the status a `Link` call answers with.
@@ -247,6 +257,12 @@ impl Executor {
     /// converter or Metal refused), for diagnostics: the wire only has a status.
     pub fn last_error(&self) -> Option<String> {
         lock(&self.last_error).clone()
+    }
+
+    /// How many commands failed alone (the rest of their block ran), over this
+    /// executor's life; see `ExecOptions::strict_block`.
+    pub fn isolated_commands(&self) -> u64 {
+        lock(&self.state).as_ref().map_or(0, |s| s.isolated)
     }
 
     pub(crate) fn note_error(&self, what: String) {

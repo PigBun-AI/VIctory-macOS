@@ -30,8 +30,9 @@ back) write into the directory; the front turns the Unix path into a `Z:` path f
 
 ## What counts as a drop
 
-Back: a command that fails (`refuse` leaves the reason in `State::note`); every later op of the same block
-(the first failure stops it: `run_block`); the ops of lists ended but not committed when the block stops; a
+Back: a command that fails (`refuse` leaves the reason in `State::note`); a refused copy, clear, draw or dispatch
+fails alone (only that op is dropped, `failed alone` in the log); any other failure stops the block and every later
+op of the same block goes with it (`run_block`; `VICTORY_METAL_STRICT_BLOCK=1` stops on every refusal); the ops of lists ended but not committed when the block stops; a
 block refused before it runs (`block refused ...`); an indirect GS draw skipped on purpose
 (`VICTORY_METAL_SKIP_GS_INDIRECT`, which `run.sh` sets to 1: the draw returns `Ok` but is counted).
 Front: lists whose `Close` returns an error (the reason carries the source line that set it), and an
