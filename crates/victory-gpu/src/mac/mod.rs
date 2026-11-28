@@ -10,6 +10,7 @@ pub mod frames;
 pub mod hlsl;
 pub mod layout_stats; // mac G11
 pub mod present_cap;
+pub mod prove; // mac G12
 pub mod pso_x;
 pub mod render_size;
 pub mod rosetta;

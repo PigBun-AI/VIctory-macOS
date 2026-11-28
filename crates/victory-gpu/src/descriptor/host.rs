@@ -4915,6 +4915,10 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 }
 
 #[cfg(test)]
+#[path = "../mac/prove/descriptor_views.rs"]
+mod prove_views; // mac G12
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

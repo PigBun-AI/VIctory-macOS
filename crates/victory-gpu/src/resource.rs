@@ -48,7 +48,7 @@ const HEAP_IIDS: [Iid; 4] = [
     PAGEABLE_IIDS[1],
     PAGEABLE_IIDS[2],
 ];
-const RESOURCE_IIDS: [Iid; 4] = [
+pub(crate) const RESOURCE_IIDS: [Iid; 4] = [ // mac G12: pub(crate) for the tests of mac/prove
     guid(
         0x696442be,
         0xa72e,

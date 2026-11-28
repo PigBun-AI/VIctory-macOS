@@ -1546,6 +1546,10 @@ static FUNCTIONS: Table<24> = {
 };
 
 #[cfg(test)]
+#[path = "mac/prove/descriptor_records.rs"]
+mod prove_records; // mac G12
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::object::{S_OK, slot};
