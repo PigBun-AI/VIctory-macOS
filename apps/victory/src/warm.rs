@@ -99,7 +99,7 @@ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, t
                             // builder) or refused: not done, so that a warm
                             // with other switches still makes it.
                             // `VICTORY_WARM_ONLY_MADE=0`: every one written down, as before.
-                            if there || std::env::var_os("VICTORY_WARM_ONLY_MADE").is_some_and(|v| v == "0") {
+                            if written_down(there, std::env::var_os("VICTORY_WARM_ONLY_MADE").is_some_and(|v| v == "0")) {
                                 let _ = writeln!(lock(&done_out), "{fingerprint} {}", keys[n]);
                             }
                         });
@@ -133,6 +133,13 @@ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, t
         times.iter().sum::<f64>() / 1e3
     );
     Ok(())
+}
+
+/// Is a pipeline the warm loop has dealt with written down as done in `warm-done.txt`? Only one
+/// that was really made (`there`), unless `VICTORY_WARM_ONLY_MADE=0` (`write_all`: every one, as
+/// before 5ed66db). mac: the decision as a function, so that it has a test.
+fn written_down(there: bool, write_all: bool) -> bool {
+    there || write_all
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -215,4 +222,24 @@ fn make(dir: &Path, these: &str) -> Result<()> {
     // Without what a run's end does (nothing to save, the host's threads).
     let _ = out.flush();
     std::process::exit(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::written_down;
+
+    /// What a warm of 1,000 pipelines writes into `warm-done.txt` when 670 of them were left out
+    /// by the run's switches or refused: with the fix only the 330 that were made (the count of
+    /// "done" lines); with `VICTORY_WARM_ONLY_MADE=0` (the old behaviour) all 1,000, so a later
+    /// warm with other switches would skip the 670 and the game would make them in a frame.
+    #[test]
+    fn a_pipeline_left_out_or_refused_is_not_written_down_as_done() {
+        let made: Vec<bool> = (0..1000).map(|i| i % 100 < 33).collect(); // 330 made, 670 not
+        let after = made.iter().filter(|&&there| written_down(there, false)).count();
+        let before = made.iter().filter(|&&there| written_down(there, true)).count();
+        assert_eq!(after, 330);
+        assert_eq!(before, 1000);
+        assert!(!written_down(false, false));
+        assert!(written_down(true, false));
+    }
 }
