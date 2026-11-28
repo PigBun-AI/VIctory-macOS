@@ -502,6 +502,10 @@ fn absorb(w: &mut Window, p: &Pending) {
             }
             _ => String::new(),
         };
+        let args = match vis_last().filter(|_| vis_enabled()) {
+            Some(n) => format!("{args} [visibility samples {n}]"),
+            None => args,
+        };
         eprintln!(
             "victory-metal gpuprof: a scope took {:.1} ms on the card: {head}{args} (list of {} scopes, queued {:.1} s ago)",
             ns as f64 / 1e6,
