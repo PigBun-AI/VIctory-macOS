@@ -87,6 +87,51 @@ pub(crate) fn bind_reason(why: Option<&'static str>) {
     if enabled() { BIND_WHY.set(why); }
 }
 
+thread_local! {
+    static CBV_BIND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Attribute only synchronous slot creation in this bind, including on early return.
+/// Never inherit an unrelated PSO from the last draw on a recording thread.
+pub(crate) struct CbvScope(usize);
+impl Drop for CbvScope {
+    fn drop(&mut self) { CBV_BIND.set(self.0); }
+}
+pub(crate) fn cbv_bind(object: usize) -> Option<CbvScope> {
+    enabled().then(|| CbvScope(CBV_BIND.replace(object)))
+}
+pub(crate) fn cbv_table(slot: usize, address: u64, size: u32, root: u8, index: u32) {
+    with(|s| {
+        let seq = s.by_object.get(&CBV_BIND.get()).map_or(0, |i| i + 1);
+        if s.cbv_slots.len() >= 65536 && !s.cbv_slots.contains_key(&slot) { s.cbv_slots.clear(); }
+        s.cbv_slots.insert(slot, (address, size, seq, root, index));
+    });
+}
+pub(crate) fn cbv_materialized(slot: usize, address: u64, size: u32, gpu: u64, accepted: bool) {
+    with(|s| cbv_count(s, slot, address, size, gpu, accepted));
+}
+fn cbv_count(s: &mut State, slot: usize, address: u64, size: u32, gpu: u64, accepted: bool) {
+    *s.cbv_residues.entry((address as u8, gpu as u8, accepted)).or_default() += 1;
+    let (seq, how, root, index) = match s.cbv_slots.get(&slot) {
+        Some(&(a, z, seq, root, index)) if (a, z) == (address, size) => (seq, "last_named_table", root, index),
+        _ => (s.by_object.get(&CBV_BIND.get()).map_or(0, |i| i + 1), "bind_context_only", u8::MAX, u32::MAX),
+    };
+    s.cbv_psos.entry((seq, accepted, how)).or_insert((0, slot, root, index)).0 += 1;
+}
+
+#[test]
+fn cbv_residues_and_last_slot_bind_do_not_confuse_a_rewritten_view() {
+    let mut s = State::default();
+    s.cbv_slots.insert(123, (0x1050, 32, 7, 2, 41));
+    cbv_count(&mut s, 123, 0x1050, 32, 0x2050, true);
+    cbv_count(&mut s, 123, 0x1100, 32, 0x2004, false);
+    cbv_count(&mut s, 123, 0x1050, 16, 0x2004, false);
+    assert_eq!(s.cbv_residues[&(0x50, 0x50, true)], 1);
+    assert_eq!(s.cbv_residues[&(0, 4, false)], 1);
+    assert_eq!(s.cbv_psos[&(7, true, "last_named_table")], (1, 123, 2, 41));
+    assert_eq!(s.cbv_psos[&(0, false, "bind_context_only")].0, 2);
+}
+
 /// What the title asked the host to do.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum Op {
@@ -219,6 +264,11 @@ struct Pso {
 
 #[derive(Default)]
 struct State {
+    // G15: five-second deltas. Keep one example CPU heap slot per PSO,
+    // not an unbounded list of dynamic slots or title addresses.
+    cbv_residues: std::collections::BTreeMap<(u8, u8, bool), u64>,
+    cbv_psos: std::collections::BTreeMap<(usize, bool, &'static str), (u64, usize, u8, u32)>,
+    cbv_slots: HashMap<usize, (u64, u32, usize, u8, u32)>,
     uav_ranges: [u64; 3], // G13: full, strict subrange, unknown
     feature_results: std::collections::BTreeMap<u32, std::collections::BTreeMap<i32, u64>>,
     frame: Counts,
@@ -478,6 +528,13 @@ pub(crate) fn on_present(present: u64) {
         if now.duration_since(last) >= Duration::from_secs(5) {
             s.last_tick = Some(now);
             summary(s, "all");
+            for ((title_mod, gpu_mod, accepted), n) in std::mem::take(&mut s.cbv_residues) {
+                tracing::info!(title_mod, gpu_mod, accepted, n, "drop-stats cbv residue delta");
+            }
+            for ((seq, accepted, how), (n, slot, root, index)) in std::mem::take(&mut s.cbv_psos) {
+                let shaders = seq.checked_sub(1).and_then(|i| s.psos.get(i)).map_or("unknown", |p| &p.shaders);
+                tracing::info!(seq, shaders, accepted, how, root, index, n, example_cpu_slot = format_args!("{slot:#x}"), "drop-stats cbv bind delta");
+            }
             let mut silent = std::collections::BTreeMap::new();
             for SilentSite(name, counter) in SILENT.lock().unwrap_or_else(|e| e.into_inner()).iter() {
                 *silent.entry(*name).or_insert(0u64) += counter.load(Relaxed);

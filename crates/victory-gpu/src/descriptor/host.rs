@@ -2877,7 +2877,7 @@ impl HostHeap {
     /// Makes slot `index` (a dynamic one) from `view`; a null view if the
     /// host cannot.
     pub(crate) fn make_at(&self, index: u32, view: &View) {
-        let kept = make_twinned(view, self.at(index), self.twin(index));
+        let kept = make_twinned(view, self.at(index), self.twin(index), Some((self, index)));
         if kept.is_none() {
             null_for(view, self.at(index));
         }
@@ -2916,7 +2916,7 @@ impl HostHeap {
                     return None;
                 }
                 let twin = twinned(&view);
-                let kept = make_twinned(&view, views.slot(at), Some(views.slot(at + 1)))?;
+                let kept = make_twinned(&view, views.slot(at), Some(views.slot(at + 1)), None)?;
                 let stride_word = view_stride_word(&view);
                 let address = view_address(&view).unwrap_or(0);
                 let listed = Listed {
@@ -3224,7 +3224,7 @@ impl HostHeap {
         unsafe { host.device.CopyDescriptorsSimple(1, self.cpu(to), from, kind) };
     }
 
-    fn cpu(&self, index: u32) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+    pub(crate) fn cpu(&self, index: u32) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: self.cpu + index as usize * self.step as usize,
         }
@@ -3408,7 +3408,7 @@ impl HostHeap {
             let kept = if later {
                 None
             } else {
-                make_twinned(&view, self.at(index), self.twin(index))
+                make_twinned(&view, self.at(index), self.twin(index), Some((self, index)))
             };
             if kept.is_none() && !self.sampler {
                 null_for(&view, self.at(index));
@@ -4241,7 +4241,7 @@ fn constant_bytes(size: u32) -> u32 {
 /// Makes the host descriptor for `view` at `at`: the host resource it
 /// views, or `None` if it cannot.
 fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
-    make_twinned(view, at, None)
+    make_twinned(view, at, None, None)
 }
 
 /// [`make`]; `twin`: where the raw twin of a buffer view goes
@@ -4251,6 +4251,7 @@ fn make_twinned(
     view: &View,
     at: D3D12_CPU_DESCRIPTOR_HANDLE,
     twin: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
+    destination: Option<(&HostHeap, u32)>, // at may be a thread's reused staging slot
 ) -> Option<Kept> {
     let host = host()?;
     let device = &host.device;
@@ -4258,17 +4259,29 @@ fn make_twinned(
         &View::Constant(address, size) => {
             let shadow = crate::shadow::find(address, u64::from(size))?;
             let gpu = shadow.gpu(address);
-            if gpu % 256 != 0 {
+            let align = crate::mac::cbv::alignment(); // mac G15
+            let accepted = crate::mac::cbv::accepts(address, gpu, align);
+            if (address | gpu) & 255 != 0 && crate::mac::drop_stats::enabled() {
+                let slot = destination.map_or(0, |(h, i)| h.cpu(i).ptr);
+                crate::mac::drop_stats::cbv_materialized(slot, address, size, gpu, accepted);
+            }
+            if !accepted {
                 crate::mac::drop_stats::silent!("descriptor.cbv", "unaligned");
                 once!(
                     address = format_args!("{address:#x}"),
-                    "constant buffer not 256-byte aligned on the host"
+                    gpu = format_args!("{gpu:#x}"), align,
+                    "constant buffer placement rejected"
                 );
+                return None;
+            }
+            let bytes = crate::mac::cbv::extent(size, align);
+            if align == 16 && u64::from(bytes) > shadow.left(address) {
+                crate::mac::drop_stats::silent!("descriptor.cbv", "extent_outside_shadow");
                 return None;
             }
             let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC {
                 BufferLocation: gpu,
-                SizeInBytes: constant_bytes(size),
+                SizeInBytes: bytes,
             };
             // SAFETY: slots of our heap; the range lies in the host copy.
             unsafe {

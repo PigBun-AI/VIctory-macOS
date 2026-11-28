@@ -1561,6 +1561,7 @@ impl State {
     /// False if the draw or dispatch must not run: a root SRV it reads
     /// could not be given a view.
     pub(crate) fn bind(&mut self, list: &HostList, p: &HostPipeline, compute: bool) -> bool {
+        let _cbv_scope = crate::mac::drop_stats::cbv_bind(p.pso.as_raw() as usize); // mac G15
         let l = &list.list;
         // Textures picked by index, before anything asks for them.
         self.early_textures(list, p, compute);
@@ -3728,6 +3729,20 @@ impl State {
         let selected_slot = |mask: &[u64; 4], slot: u8| mask[usize::from(slot / 64)] & (1u64 << (slot % 64)) != 0;
         for group in &plan.groups {
             let slot = group.slot;
+            if crate::mac::drop_stats::enabled()
+                && let Some(&Root::Table(table)) = self.roots_ref(compute).get(usize::from(slot))
+                && let Some(heap) = self.heap_of(table)
+                && let Some(host) = heap.host()
+            {
+                for u in group.entries.iter().filter(|u| u.kind == ResourceType::Cbv) {
+                    let Some(at) = table.checked_add(u64::from(u.table_offset_dwords) * 4) else { continue };
+                    if let Some(i) = heap.index(at)
+                        && let Some(View::Constant(address, size)) = crate::descriptor::view(at)
+                    {
+                        crate::mac::drop_stats::cbv_table(host.cpu(i).ptr, address, size, slot, i);
+                    }
+                }
+            }
             let needs_snapshot = group.has_cbv
                 || match self.roots_ref(compute).get(usize::from(slot)) {
                     Some(&Root::Table(table)) => self.heap_of(table).is_some_and(|heap| {

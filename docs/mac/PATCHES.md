@@ -691,6 +691,10 @@ per-surface pipe-bank XOR) is worth writing.
 *Why not needed on Windows.* The Windows line has the same detiler and the same question; this is a measurement, not a fix. *Remove when*
 the census has been read and the answer is in the map row.
 
+### G15 — Scarlett CBV placement on the Metal chain
+
+See [diagnosis and evidence](cbv-alignment.md). Use 16-byte placement on our Metal chain; `VICTORY_CBV_ALIGN=256` restores the original guard. The reference path stays unchanged. Remove when shared upstream descriptor translation handles the Scarlett contract per host backend and supplies equivalent telemetry.
+
 ### G13 — shared GPU telemetry for 3D UAV ranges and device feature queries
 
 `VICTORY_MAC_DROP_STATS=1` reports cumulative 3D UAV counts (full, strict subrange, unknown) and CheckFeatureSupport counts by feature ID and HRESULT. G11 layout stats can report the same view classification independently. No rendering behavior changes. Retire once equivalent upstream counters exist.

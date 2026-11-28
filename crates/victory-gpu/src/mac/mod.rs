@@ -4,6 +4,7 @@
 //! line's files in as few places as possible.
 
 pub mod adapter;
+pub(crate) mod cbv; // mac G15
 pub mod attribute_at_vertex; // mac S1
 pub mod drop_stats;
 pub mod frames;
