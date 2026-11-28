@@ -689,8 +689,8 @@ impl CommandList {
         Ok(())
     }
 
-    /// `VICTORY_METAL_GS_GROUP_CAP`: clamps the mesh threadgroup count the expansion wrote at
-    /// `action_va` (`GS_GROUPS_AT`, x) to the cap the executor set, if any.
+    /// `VICTORY_METAL_GS_GROUP_CAP`: clamps the mesh threadgroup counts (x, y, z) the expansion wrote at
+    /// `action_va` (`GS_GROUPS_AT`) to the cap the executor set, if any.
     pub(crate) fn cap_gs_groups(&mut self, action_va: u64) -> Result<()> {
         let Some(cap) = crate::prof::GS_CAP.with(|c| c.get()) else {
             return Ok(());
