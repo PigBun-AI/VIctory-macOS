@@ -337,6 +337,31 @@ fn name(encoding: Encoding, opcode: u16) -> Option<&'static str> {
         .map(|i| table[i].1)
 }
 
+/// The encoding and opcode of a mnemonic as the tsv of the ISA census spells it (mac S6: the
+/// opcode oracle builds instructions from names). The VOP3-only table gives the VOP3 opcode;
+/// VOP1/VOP2/VOPC names give their own encoding's opcode.
+#[cfg(test)]
+pub(crate) fn opcode_of(mnemonic: &str) -> Option<(Encoding, u16)> {
+    use opcodes as t;
+    let tables: [(Encoding, &[(u16, &str)]); 9] = [
+        (Encoding::Sop2, t::SOP2),
+        (Encoding::Sopk, t::SOPK),
+        (Encoding::Sop1, t::SOP1),
+        (Encoding::Sopc, t::SOPC),
+        (Encoding::Vop2, t::VOP2),
+        (Encoding::Vop1, t::VOP1),
+        (Encoding::Vopc, t::VOPC),
+        (Encoding::Vop3, t::VOP3),
+        (Encoding::Vop3p, t::VOP3P),
+    ];
+    tables.iter().find_map(|&(enc, table)| {
+        table
+            .iter()
+            .find(|&&(_, n)| n == mnemonic)
+            .map(|&(op, _)| (enc, op))
+    })
+}
+
 fn isa(offset: usize, reason: &'static str) -> ShaderError {
     ShaderError::Isa { offset, reason }
 }
