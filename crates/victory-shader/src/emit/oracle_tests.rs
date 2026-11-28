@@ -56,6 +56,13 @@ enum Ty {
     U64,
     /// four independent integers
     Quad,
+    /// multiply-add inputs a fused and a double-rounded result tell apart: `c` is minus the
+    /// rounded product `a * b` (the fused sum is then the rounding error of the product, the
+    /// other one 0), and one step off it
+    Mad,
+    /// `[a, a, -(a * a)]` for the one `a` (bits) given, and `a` and its neighbours: the literal
+    /// forms (`v_madak_f32`: K = -(a * a); `v_madmk_f32`: K = a, the third dword is S1)
+    Sq(u32),
     Fin,
     Class,
     Turn,
@@ -527,9 +534,10 @@ fn f32_arith() -> Vec<Row> {
         fl("v_max_f32", 2, 0, 0.0, |x| minmax(x[0], x[1], false)),
         fl("v_fma_f32", 3, 0, 0.0, |x| vec![x[0].mul_add(x[1], x[2])]),
         fl("v_fmac_f32", 3, 0, 0.0, |x| vec![x[0].mul_add(x[1], x[2])]),
-        // the multiply-add that rounds twice: a fused one is accepted too
-        fl("v_mad_f32", 3, 0, 0.0, |x| vec![x[0] * x[1] + x[2], x[0].mul_add(x[1], x[2])]),
-        fl("v_mac_f32", 3, 0, 0.0, |x| vec![x[0] * x[1] + x[2], x[0].mul_add(x[1], x[2])]),
+        // GFX10.1's multiply-add rounds twice (the product, then the sum): a fused result is
+        // wrong (the A batch's `mad_*` family tests inputs the two tell apart)
+        fl("v_mad_f32", 3, 0, 0.0, |x| vec![x[0] * x[1] + x[2]]),
+        fl("v_mac_f32", 3, 0, 0.0, |x| vec![x[0] * x[1] + x[2]]),
     ]
 }
 
@@ -750,10 +758,20 @@ fn families() -> Vec<(&'static str, Vec<Row>)> {
 }
 
 /// Differences that are known and not translator bugs, or bugs handed over: (mnemonic, reason).
-const KNOWN: &[(&str, &str)] = &[(
-    "v_cvt_f16_f32",
-    "shortcut, documented: by default the translator takes the host's f32->f16 conversion, which rounds toward zero (lower.rs f16_nearest_on); with VICTORY_F16_NEAREST=1 it matches (oracle_f16_nearest_matches)",
-)];
+const KNOWN: &[(&str, &str)] = &[
+    (
+        "v_cvt_f16_f32",
+        "shortcut, documented: by default the translator takes the host's f32->f16 conversion, which rounds toward zero (lower.rs f16_nearest_on); with VICTORY_F16_NEAREST=1 it matches (oracle_f16_nearest_matches)",
+    ),
+    (
+        "v_add_f64",
+        "refused by design: the Metal device has no 64-bit floats (5 programs, all compute); v_cvt_f32_f64 translates by integer arithmetic",
+    ),
+    (
+        "s_andn2_wrexec_b32",
+        "refused by design: the new mask holds lanes the old one did not (MASK_ELSEWHERE); read as data it has no host lane to sit in. Used as an exec update (the '[exec only]' row) it translates",
+    ),
+];
 
 enum Outcome {
     Passed(usize),
@@ -820,6 +838,11 @@ fn run_family(family: &str, rows: &[Row]) {
 
 /// A row, its tag (`[imm]`, `#hi`: what makes it one of several rows of a mnemonic), and its
 /// own program when it has one.
+thread_local! {
+    /// A run that reports differences without failing (the 16-bit rows in the host's default rounding).
+    pub(super) static TOLERATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 type Item<'a> = (&'a Row, String, Option<&'a [u32]>);
 
 fn run_list(family: &str, rows: Vec<Item>) {
@@ -836,7 +859,10 @@ fn run_list(family: &str, rows: Vec<Item>) {
             Outcome::Untranslated(t) => ("UNTRANSLATED", 0, t),
             Outcome::Refused(t) => ("refused", 0, t),
         };
-        let known = KNOWN.iter().find(|(n, _)| *n == row.name || *n == label);
+        let known = KNOWN
+            .iter()
+            .find(|(n, _)| *n == row.name || *n == label)
+            .or_else(|| TOLERATE.get().then_some(&("", "tolerated by this run")));
         eprintln!("oracle {family:18} {label:24} {outcome}{} {cases} {detail}", if known.is_some() { " (known)" } else { "" });
         if let Some(path) = std::env::var_os("VICTORY_ORACLE_OUT") {
             use std::io::Write;

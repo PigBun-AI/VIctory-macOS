@@ -118,7 +118,7 @@ pub(super) fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader
 /// mac S6: the tail of [`build_cs`] for a caller that writes its own program (the opcode
 /// oracle's lane programs): `words` as given, `vgprs` registers, `wave64` for a console wave of 64, `consts` root
 /// constant dwords in `s0..` (the descriptor table address follows them).
-pub(super) fn build_words(words: &[u32], threads: u32, lds_bytes: u32, wave64: bool, vgprs: u32, consts: u32) -> HostShader {
+pub(super) fn build_words(words: &[u32], threads: u32, lds_bytes: u32, wave64: bool, vgprs: u16, consts: u8) -> HostShader {
     let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let native = NativeProgram {
         stage: HwStage::Cs,
@@ -128,7 +128,7 @@ pub(super) fn build_words(words: &[u32], threads: u32, lds_bytes: u32, wave64: b
             RootParam {
                 root: RootType::Constants,
                 table_offset_dwords: 0,
-                sgprs: consts,
+                sgprs: u32::from(consts),
                 base_register: 0,
                 user_data: 0,
                 slot: 0,
@@ -153,7 +153,7 @@ pub(super) fn build_words(words: &[u32], threads: u32, lds_bytes: u32, wave64: b
             slot: 1,
         }],
         io: StageIo::Cs(ComputeIo {
-            rsrc2: ((consts + 1) << 1) | ((lds_bytes / 512) << 15), // 5 user SGPRs: s0..s4
+            rsrc2: ((u32::from(consts) + 1) << 1) | ((lds_bytes / 512) << 15), // 5 user SGPRs: s0..s4
             threads: [threads, 1, 1],
         }),
         code,

@@ -1,6 +1,4 @@
 # test	class	reason
 # class: base = the harness; semantic = MSC/Metal differs from D3D12/the console; bug = translator bug handed over
-emit::valu_tests::v_sin_and_v_cos_f32_reduce_large_turns	semantic	sin(NaN) is 0 through MSC/Metal (D3D12: NaN); the lowering ends in a plain sin of NaN [shared-prove D3DMetal baseline fails this test too; owner: oracle-a]
-emit::valu_tests::v_sin_and_v_cos_f16_reduce_large_turns	semantic	same, half precision [shared-prove D3DMetal baseline fails this test too; owner: oracle-a]
 emit::size_tests::a_counter_texture_is_set_by_a_store_of_one_channel	semantic	store then atomic add on the same texel in one thread: result 9, wants 10. Probes: with the store removed the adds work (3+1=4); a second add after the store changes nothing: the store lands after the later atomics (Metal does not order a texture write against a texture atomic of one thread; COMPAT ENSURE_TG_MEMORY_COHERENCY does not help) [shared-prove D3DMetal baseline fails this test too; owner: oracle-b]
 emit::tests::scalar_buffer_loads_read_the_same_dwords_one_call_or_four@opt127	semantic	a four-dword load that starts inside the view and runs past its end reads the next memory for the first dword past the end (got 7 once, D3D12 wants 0; it reads whatever follows the buffer, so it comes and goes: one run in two); MSC bounds-checks the vector access, not each dword

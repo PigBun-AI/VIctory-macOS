@@ -4561,7 +4561,11 @@ impl<'a> Lower<'a> {
         let at = self.s.m.f32(at.to_bits());
         let size = self.unary(6, part);
         let exact = self.s.m.cmp(c, pred::OEQ, size, at);
-        self.s.m.select(c, exact, zero, r)
+        let r = self.s.m.select(c, exact, zero, r);
+        // mac S7: an infinity or NaN has no fraction: the result is NaN (the host's sin and cos of
+        // NaN is 0, and `x - floor(x)` of an infinity is NaN, which `part` carries here).
+        let unordered = self.s.m.cmp(c, pred::UNO, part, part);
+        self.s.m.select(c, unordered, part, r)
     }
 
     /// The high dword of a 32 × 32-bit product.
@@ -6521,6 +6525,38 @@ impl<'a> Lower<'a> {
                     self.set(scc, Val::Bit(s));
                     Ok(())
                 }
+                // mac S7: the quad-wise OR of a number (a lane mask goes the way of `structure`)
+                "s_wqm_b64" => {
+                    let (a, b) = (half(self, 0, 0)?, half(self, 0, 1)?);
+                    let (ra, rb) = (self.wqm_bits(a), self.wqm_bits(b));
+                    self.set(lo, Val::I32(ra));
+                    self.set(hi, Val::I32(rb));
+                    let s = nonzero(self, ra, rb);
+                    self.set(scc, Val::Bit(s));
+                    Ok(())
+                }
+                // mac S7: ((1 << S0[5:0]) - 1) << S1[5:0]
+                "s_bfm_b64" => {
+                    let (n, o) = (src32(self, 0)?, src32(self, 1)?);
+                    let i64t = self.s.m.int(64);
+                    self.s.flags |= flags::INT64;
+                    let k63 = self.s.m.i32(63);
+                    let n = self.s.m.bin(c, Bin::And, n, k63);
+                    let o = self.s.m.bin(c, Bin::And, o, k63);
+                    let n = self.s.m.cast(c, Cast::ZExt, n, i64t);
+                    let o = self.s.m.cast(c, Cast::ZExt, o, i64t);
+                    let one = self.s.m.int_const(i64t, 1);
+                    let m = self.s.m.bin(c, Bin::Shl, one, n);
+                    let m = self.s.m.bin(c, Bin::Sub, m, one);
+                    let r = self.s.m.bin(c, Bin::Shl, m, o);
+                    let k32 = self.s.m.int_const(i64t, 32);
+                    let rl = self.s.m.cast(c, Cast::Trunc, r, self.s.t.i32);
+                    let rh = self.s.m.bin(c, Bin::LShr, r, k32);
+                    let rh = self.s.m.cast(c, Cast::Trunc, rh, self.s.t.i32);
+                    self.set(lo, Val::I32(rl));
+                    self.set(hi, Val::I32(rh));
+                    Ok(())
+                }
                 "s_lshl_b64" | "s_lshr_b64" | "s_ashr_i64" => {
                     let (a, b) = (half(self, 0, 0)?, half(self, 0, 1)?);
                     let n = src32(self, 1)?;
@@ -6586,6 +6622,10 @@ impl<'a> Lower<'a> {
                 let cond = self.scc_in(inst)?;
                 let (a, b) = (src32(self, 0)?, src32(self, 1)?);
                 (self.s.m.select(c, cond, a, b), None)
+            }
+            "s_wqm_b32" => {
+                let a = src32(self, 0)?;
+                (self.wqm_bits(a), None)
             }
             "s_brev_b32" => {
                 let a = src32(self, 0)?;
@@ -6773,6 +6813,22 @@ impl<'a> Lower<'a> {
             self.vals.insert(scc, val);
         }
         Ok(())
+    }
+
+    /// Every group of four bits all ones where any of them is set (`s_wqm`).
+    fn wqm_bits(&mut self, x: V) -> V {
+        let c = self.cur;
+        let mut t = x;
+        for d in [1, 2, 3] {
+            let k = self.s.m.i32(d);
+            let sh = self.s.m.bin(c, Bin::LShr, x, k);
+            t = self.s.m.bin(c, Bin::Or, t, sh);
+        }
+        let keep = self.s.m.i32(0x1111_1111);
+        let t = self.s.m.bin(c, Bin::And, t, keep);
+        let k4 = self.s.m.i32(4);
+        let t4 = self.s.m.bin(c, Bin::Shl, t, k4);
+        self.s.m.bin(c, Bin::Sub, t4, t)
     }
 
     /// Packs whether each consecutive group of four pixels has a set bit.
@@ -9583,6 +9639,10 @@ impl<'a> Lower<'a> {
                     return Err("a lane write in a half-wave");
                 }
                 let me = self.console_lane();
+                // mac S7: the lane is S1[4:0] (wave32) or S1[5:0] (wave64), as the ISA reads it;
+                // a larger number named no lane here and wrote none.
+                let k = self.s.m.i32(if self.x.native.wave64 { 63 } else { 31 });
+                let lane = self.s.m.bin(c, Bin::And, lane, k);
                 let is = self.s.m.cmp(c, pred::EQ, me, lane);
                 let r = self.s.m.select(c, is, a, old);
                 int(self, r)

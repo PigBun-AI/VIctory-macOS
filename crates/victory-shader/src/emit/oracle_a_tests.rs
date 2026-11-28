@@ -319,6 +319,30 @@ pub(super) fn cases(ty: Ty, args: usize) -> Vec<[u32; 4]> {
                 out.push(q);
             }
         }
+        Ty::Mad => {
+            for _ in 0..600 {
+                // exponents -20..20: the product stays normal, its rounding error too
+                let m = |r: &mut Rng| f32::from_bits((r.next() & 0x8000_0000) | ((107 + r.next() % 41) << 23) | (r.next() & 0x7f_ffff));
+                let (a, b) = (m(&mut r), m(&mut r));
+                let p = a * b;
+                let c = match r.next() % 4 {
+                    0 | 1 => -p,
+                    2 => f32::from_bits((-p).to_bits().wrapping_add(1)),
+                    _ => f32::from_bits((-p).to_bits().wrapping_sub(1)),
+                };
+                out.push([a.to_bits(), b.to_bits(), c.to_bits(), 0]);
+            }
+        }
+        Ty::Sq(abits) => {
+            let a = f32::from_bits(abits);
+            for da in [0i32, 0, 1, -1] {
+                let x = f32::from_bits((abits as i32 + da) as u32);
+                for db in [0i32, 1, -1] {
+                    let y = f32::from_bits((abits as i32 + db) as u32);
+                    out.push([x.to_bits(), y.to_bits(), (-(a * a)).to_bits(), 0]);
+                }
+            }
+        }
         Ty::Fin => {
             let sp = finite_specials();
             for _ in 0..500 {
@@ -432,21 +456,40 @@ fn f32_misc() -> Vec<Spec> {
     // the DX9 multiply: 0 * anything (NaN, inf) is 0; then the add, fused or not
     v.push(sp(
         flc("v_mad_legacy_f32", Ty::F32, 3, 0, 0.0, |x| {
-            let mut c = Vec::new();
-            for p in [0.0f32, -0.0] {
-                if x[0] == 0.0 || x[1] == 0.0 {
-                    c.push(p + x[2]);
-                }
-            }
-            if x[0] != 0.0 && x[1] != 0.0 {
-                c.push(x[0] * x[1] + x[2]);
-                c.push(x[0].mul_add(x[1], x[2]));
-            }
-            c
+            // 0 * anything (NaN, inf) is 0; the product and the sum each round
+            if x[0] == 0.0 || x[1] == 0.0 { vec![0.0 + x[2], -0.0 + x[2]] } else { vec![x[0] * x[1] + x[2]] }
         }),
         "",
         prog(vop3(o("v_mad_legacy_f32"), 10, vgpr(1), vgpr(2), vgpr(3)).to_vec(), 10),
     ));
+    // GFX10.1's multiply-add family rounds twice (product, then sum); the inputs of `Ty::Mad` and
+    // `Ty::Sq` come out different when it is fused (MSC may contract an fmul + fadd into an fma)
+    let unfused = |name: &'static str, legacy: bool| {
+        flc(name, Ty::Mad, 3, 0, 0.0, move |x| {
+            let p = if legacy && (x[0] == 0.0 || x[1] == 0.0) { 0.0 } else { x[0] * x[1] };
+            vec![p + x[2]]
+        })
+    };
+    v.push(sp(unfused("v_mad_f32", false), "", prog(vop3(o("v_mad_f32"), 10, vgpr(1), vgpr(2), vgpr(3)).to_vec(), 10)));
+    v.push(sp(unfused("v_mad_legacy_f32", true), "[mad]", prog(vop3(o("v_mad_legacy_f32"), 10, vgpr(1), vgpr(2), vgpr(3)).to_vec(), 10)));
+    for name in ["v_mac_f32", "v_mac_legacy_f32"] {
+        v.push(sp(unfused(name, name.contains("legacy")), "[mad]", prog(vec![smov_to_v(2, 10), vop2(o(name), 10, vgpr(1), 2)], 10)));
+    }
+    for a in [1.0f32 + 2f32.powi(-12), 1.0 + 3.0 * 2f32.powi(-13), 1.0001, 3.1, 1e-3 + 7e-8] {
+        let tag = format!("[a={a:e}]");
+        let k = (-(a * a)).to_bits();
+        let ab = a.to_bits();
+        v.push(sp(
+            flc("v_madak_f32", Ty::Sq(ab), 2, 0, 0.0, move |x| vec![x[0] * x[1] + f32::from_bits(k)]),
+            tag.clone(),
+            prog([vec![vop2(o("v_madak_f32"), 10, vgpr(1), 2)], vec![k]].concat(), 10),
+        ));
+        v.push(sp(
+            flc("v_madmk_f32", Ty::Sq(ab), 3, 0, 0.0, move |x| vec![x[0] * a + x[2]]),
+            tag,
+            prog([vec![vop2(o("v_madmk_f32"), 10, vgpr(1), 3)], vec![ab]].concat(), 10),
+        ));
+    }
     // the literal forms: the constant is the dword after the instruction
     for k in [1.0f32, -3.5, 1e20, 0.0] {
         let kb = k.to_bits();
@@ -457,7 +500,7 @@ fn f32_misc() -> Vec<Spec> {
             prog([vop2w("v_fmaak_f32"), vec![kb]].concat(), 10),
         ));
         v.push(sp(
-            flc("v_madak_f32", Ty::F32, 2, 0, 0.0, move |x| vec![x[0] * x[1] + k, x[0].mul_add(x[1], k)]),
+            flc("v_madak_f32", Ty::F32, 2, 0, 0.0, move |x| vec![x[0] * x[1] + k]),
             tag.clone(),
             prog([vop2w("v_madak_f32"), vec![kb]].concat(), 10),
         ));
@@ -543,7 +586,7 @@ fn int_misc() -> Vec<Spec> {
         let sel = move |x: u64| if out == 10 { x as u32 } else { (x >> 32) as u32 };
         let w = vop3b(o("v_mad_u64_u32"), 10, 20, vgpr(1), vgpr(2), vgpr(3)); // S2 = v[3:4]
         v.push(sp(
-            bitsrow("v_mad_u64_u32", Ty::U64, 2, move |i| sel(u64::from(i[0]) * u64::from(i[1]) + (u64::from(i[3]) << 32 | u64::from(i[2])))),
+            bitsrow("v_mad_u64_u32", Ty::U64, 2, move |i| sel((u64::from(i[0]) * u64::from(i[1])).wrapping_add(u64::from(i[3]) << 32 | u64::from(i[2])))),
             hi,
             prog(w.to_vec(), out),
         ));
@@ -1034,15 +1077,35 @@ fn salu_misc() -> Vec<Spec> {
     }
     let s2 = |name: &'static str, g: fn(&[u32; 3]) -> u32| sp(int(name, 2, g), "", prog(to12(vec![sop2(o(name), 12, 0, 1)]), 10));
     // ISA: S0 shifted by S1[4:0], the field S1[22:16] bits wide, sign-extended from its top bit
-    v.push(s2("s_bfe_i32", |i| {
-        let w = (i[1] >> 16) & 0x7f;
-        if w == 0 {
-            return 0;
-        }
-        let m = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
-        let t = (u64::from(i[0]) >> (i[1] & 31)) & m;
-        (if t >> (w - 1) & 1 == 1 { t | !m } else { t }) as u32
-    }));
+    // A field that reaches past bit 31 (width + offset > 32) is not defined by the ISA text (it
+    // reads (1 << w) - 1 of a 32-bit shift): the literal reading (no sign bit inside the value) and
+    // the clamped one (the field ends at bit 31, which is its sign) are both accepted.
+    v.push(sp(
+        Row {
+            name: "s_bfe_i32",
+            ty: Ty::U32,
+            args: 2,
+            want: Box::new(|i| {
+                let (w, off) = ((i[1] >> 16) & 0x7f, i[1] & 31);
+                let t = u64::from(i[0] >> off);
+                let sext = |w: u32| -> u32 {
+                    if w == 0 {
+                        return 0;
+                    }
+                    let m = (1u64 << w) - 1;
+                    let f = t & m;
+                    (if f >> (w - 1) & 1 == 1 { f | !m } else { f }) as u32
+                };
+                if w + off <= 32 {
+                    Want::Bits(vec![sext(w)])
+                } else {
+                    Want::Bits(vec![t as u32, sext(32 - off)])
+                }
+            }),
+        },
+        "",
+        prog(to12(vec![sop2(o("s_bfe_i32"), 12, 0, 1)]), 10),
+    ));
     v.push(s2("s_mul_hi_u32", |i| ((u64::from(i[0]) * u64::from(i[1])) >> 32) as u32));
     v.push(s2("s_bfm_b32", |i| ((1u32 << (i[0] & 31)).wrapping_sub(1)) << (i[1] & 31)));
     v.push(s2("s_lshl2_add_u32", |i| (i[0] << 2).wrapping_add(i[1])));
@@ -1177,7 +1240,7 @@ fn lane_cases(gk: Gen, full: bool) -> Vec<[u32; 8]> {
     for n in 0..300 {
         let m0 = if full { u32::MAX } else if n % 3 == 0 { r.next() } else { masks[r.next() as usize % masks.len()] };
         let p = if n % 3 == 1 { r.next() } else { pats[r.next() as usize % pats.len()] };
-        let mut v = |r: &mut Rng| -> [u32; 2] {
+        let v = |r: &mut Rng| -> [u32; 2] {
             match gk {
                 Gen::F32 => [if r.next() % 4 == 0 { random_float(r) } else { fs[r.next() as usize % fs.len()] }, 0],
                 Gen::I32 => [if r.next() % 3 == 0 { r.next() } else { is[r.next() as usize % is.len()] }, 0],
@@ -1275,7 +1338,7 @@ fn run_lane_family(family: &str, rows: &[LaneRow]) {
             Outcome::Untranslated(t) => ("UNTRANSLATED", 0, t),
             Outcome::Refused(t) => ("refused", 0, t),
         };
-        let known = KNOWN.iter().find(|(n, _)| *n == row.name || *n == label);
+        let known = KNOWN.iter().find(|(n, _)| *n == label);
         eprintln!("oracle {family:18} {label:24} {outcome}{} {cases} {detail}", if known.is_some() { " (known)" } else { "" });
         if let Some(path) = std::env::var_os("VICTORY_ORACLE_OUT") {
             use std::io::Write;
@@ -1386,6 +1449,18 @@ fn exec_rows() -> Vec<LaneRow> {
             lane_out(|l| (new >> l & 1 == 1).then_some(new))
         }),
     });
+    // the same without reading the result as data: the lanes of the new mask run on
+    rows.push(LaneRow {
+        name: "s_andn2_wrexec_b32",
+        tag: "[exec only]".into(),
+        body: vec![set_vcc, sop1(o("s_andn2_wrexec_b32"), 20, VCC_LO)],
+        gk: Gen::I32,
+        full: false,
+        model: Box::new(|c| {
+            let new = c[1] & !c[0];
+            lane_out(|l| (new >> l & 1 == 1).then_some(0))
+        }),
+    });
     // ISA: popcount(S0 & lanes below this one) + S1; the high form of a wave of 32 adds nothing
     rows.push(LaneRow {
         name: "v_mbcnt_lo_u32_b32",
@@ -1456,7 +1531,27 @@ fn lane_families() -> Vec<(&'static str, Vec<LaneRow>)> {
 
 fn run_a(family: &str) {
     let (name, specs) = families().into_iter().find(|(n, _)| *n == family).unwrap();
+    // the 16-bit float rows are exact only with the console's rounding (VICTORY_F16_NEAREST=1)
+    let nearest = family == "a_valu_f16_packed" || family == "a_trans_misc";
+    if nearest {
+        super::super::lower::TEST_F16_NEAREST.set(Some(true));
+    }
+    let items = || specs.iter().map(|s| (&s.row, s.tag.clone(), Some(s.words.as_slice()))).collect();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_list(name, items())));
+    super::super::lower::TEST_F16_NEAREST.set(None);
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
+/// The same 16-bit rows with the host's default rounding: reports the differences (toward zero:
+/// the last place of a result that is not exact is one lower), never fails.
+#[test]
+fn oracle_a_f16_default_rounding_report() {
+    super::TOLERATE.set(true);
+    let (name, specs) = families().into_iter().find(|(n, _)| *n == "a_valu_f16_packed").unwrap();
     run_list(name, specs.iter().map(|s| (&s.row, s.tag.clone(), Some(s.words.as_slice()))).collect());
+    super::TOLERATE.set(false);
 }
 
 macro_rules! a_test {
@@ -1511,8 +1606,22 @@ fn every_a_row_is_a_gfx10_mnemonic() {
     }
     assert_eq!(to_half64(65519.0, true), 0x7bff);
     assert_eq!(to_half64(65520.0, false), 0x7c00);
+    // the multiply-add inputs do tell a fused result from a double-rounded one (else the rows prove nothing)
+    let tells = |ty: Ty, args: usize, k: Option<f32>| {
+        cases(ty, args)
+            .iter()
+            .filter(|c| {
+                let (a, b) = (f32::from_bits(c[0]), f32::from_bits(c[1]));
+                let c = k.unwrap_or(f32::from_bits(c[2]));
+                a * b + c != a.mul_add(b, c)
+            })
+            .count()
+    };
+    assert!(tells(Ty::Mad, 3, None) > 300, "{}", tells(Ty::Mad, 3, None));
+    let a = f32::from_bits(0x3f80_1000);
+    assert!(tells(Ty::Sq(0x3f80_1000), 2, Some(-(a * a))) >= 4);
     // cases exist for every input family and are not empty
-    for ty in [Ty::F16, Ty::Mix, Ty::U64, Ty::Quad, Ty::Fin, Ty::Class, Ty::Turn, Ty::F64] {
+    for ty in [Ty::F16, Ty::Mix, Ty::U64, Ty::Quad, Ty::Fin, Ty::Class, Ty::Turn, Ty::F64, Ty::Mad, Ty::Sq(0x3f80_1000)] {
         for args in 1..=3 {
             assert!(!cases(ty, args).is_empty());
         }
