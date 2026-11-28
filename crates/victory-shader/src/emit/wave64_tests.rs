@@ -129,6 +129,7 @@ fn lowered_counted(
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     }, counted);
     lower::TEST_HOST_WAVE.set(was);
     let lowered = lowered?;
@@ -268,6 +269,7 @@ fn on_64_lanes(native: &NativeProgram, p: &ir::Program) -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     });
     lower::TEST_HOST_WAVE.set(was);
     let lowered = lowered.expect("lower");

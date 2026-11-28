@@ -143,6 +143,17 @@ impl Host {
         &self,
         stages: &[(&HostShader, D3D12_SHADER_VISIBILITY)],
     ) -> Result<ID3D12RootSignature, String> {
+        self.root_signature_scratch(stages, false)
+    }
+
+    /// [`Host::root_signature_for`]; with `scratch` (mac S5, mesh as compute, interface v1), three more root
+    /// parameters at the end: the scratch buffer as a UAV (`u0`, [`super::mesh_cs::SCRATCH_SPACE`]), as an SRV
+    /// (`t0`, the same space), and the dispatch dimensions (`b0`, the same space, four constants).
+    pub fn root_signature_scratch(
+        &self,
+        stages: &[(&HostShader, D3D12_SHADER_VISIBILITY)],
+        scratch: bool,
+    ) -> Result<ID3D12RootSignature, String> {
         let mut params: Vec<D3D12_ROOT_PARAMETER1> = stages
             .iter()
             .map(|&(s, vis)| D3D12_ROOT_PARAMETER1 {
@@ -180,6 +191,34 @@ impl Host {
                         ShaderRegister: u32::from(slot),
                         RegisterSpace: super::ROOT_CBV_SPACE,
                         Flags: D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+                    },
+                },
+                ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+            });
+        }
+        if scratch {
+            for ty in [D3D12_ROOT_PARAMETER_TYPE_UAV, D3D12_ROOT_PARAMETER_TYPE_SRV] {
+                params.push(D3D12_ROOT_PARAMETER1 {
+                    ParameterType: ty,
+                    Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                        Descriptor: D3D12_ROOT_DESCRIPTOR1 {
+                            ShaderRegister: super::mesh_cs::SCRATCH_REGISTER,
+                            RegisterSpace: super::mesh_cs::SCRATCH_SPACE,
+                            Flags: D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+                        },
+                    },
+                    ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+                });
+            }
+            // The dispatch dimensions, `b0` of the same space (the back binds a root CBV there; four root
+            // constants are the same to the shader).
+            params.push(D3D12_ROOT_PARAMETER1 {
+                ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+                Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                    Constants: D3D12_ROOT_CONSTANTS {
+                        ShaderRegister: 0,
+                        RegisterSpace: super::mesh_cs::SCRATCH_SPACE,
+                        Num32BitValues: 4,
                     },
                 },
                 ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
@@ -649,6 +688,23 @@ pub struct Draw<'a> {
     pub size: (u32, u32),
     /// Mesh thread groups to dispatch instead of drawing (0: draw).
     pub mesh_groups: u32,
+    /// mac S5: a compute pass into a scratch buffer before the draw (the draw then fetches from it).
+    pub scratch: Option<ScratchPass<'a>>,
+}
+
+/// mac S5: the compute pass of a mesh program in compute form, run by [`Host::draw`] before its draw:
+/// the pipeline (made with the same root signature, [`Host::root_signature_scratch`]), its root
+/// constants, the dispatch dimensions, and the scratch buffer's size. The draw is then `DrawInstanced(draw_vertices,
+/// x * y * z)`, and `uav`, `srv` are the root parameters of the scratch buffer.
+#[cfg(test)]
+pub struct ScratchPass<'a> {
+    pub cs: &'a ID3D12PipelineState,
+    pub roots: Vec<(u32, Root)>,
+    pub dim: [u32; 3],
+    pub bytes: u64,
+    pub uav: u32,
+    pub srv: u32,
+    pub draw_vertices: u32,
 }
 
 #[cfg(test)]
@@ -873,6 +929,54 @@ impl Host {
                     Root::View { .. } | Root::Uav(_) => return Err("root views in a draw".into()),
                 }
             }
+            // mac S5: the compute pass, then the barrier that hands its buffer to the draw's vertex stage.
+            let mut scratch_va = 0;
+            if let Some(sp) = &d.scratch {
+                let desc = D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                    Width: sp.bytes.max(16),
+                    Height: 1,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                    Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+                    ..Default::default()
+                };
+                let buffer = make(D3D12_HEAP_TYPE_DEFAULT, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, None)?;
+                scratch_va = buffer.GetGPUVirtualAddress();
+                list.SetPipelineState(sp.cs);
+                list.SetComputeRootSignature(root);
+                for (param, arg) in &sp.roots {
+                    match arg {
+                        Root::Constants(data) => {
+                            list.SetComputeRoot32BitConstants(*param, data.len() as u32, data.as_ptr().cast(), 0)
+                        }
+                        _ => return Err("only constants in a scratch pass".into()),
+                    }
+                }
+                list.SetComputeRootUnorderedAccessView(sp.uav, scratch_va);
+                list.Dispatch(sp.dim[0], sp.dim[1], sp.dim[2]);
+                list.ResourceBarrier(&[
+                    D3D12_RESOURCE_BARRIER {
+                        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                            UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                                // SAFETY: a borrowed pointer; the barrier never releases it.
+                                pResource: std::mem::transmute_copy(&buffer),
+                            }),
+                        },
+                    },
+                    transition(
+                        &buffer,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    ),
+                ]);
+                list.SetPipelineState(pso);
+                keep.push(buffer);
+            }
             list.OMSetRenderTargets(1, Some(&rtv), false, None);
             list.RSSetViewports(&[D3D12_VIEWPORT {
                 Width: w as f32,
@@ -896,7 +1000,10 @@ impl Host {
                     }]),
                 );
             }
-            if d.mesh_groups > 0 {
+            if let Some(sp) = &d.scratch {
+                list.SetGraphicsRootShaderResourceView(sp.srv, scratch_va);
+                list.DrawInstanced(sp.draw_vertices, sp.dim.iter().product(), 0, 0);
+            } else if d.mesh_groups > 0 {
                 let list6: ID3D12GraphicsCommandList6 = list.cast().map_err(err)?;
                 list6.DispatchMesh(d.mesh_groups, 1, 1);
             } else {

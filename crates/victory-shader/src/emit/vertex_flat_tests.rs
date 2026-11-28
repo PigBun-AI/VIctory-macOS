@@ -10,7 +10,7 @@ use crate::{ShaderError, io, ir, resource, structure};
 
 const S_ENDPGM: u32 = 0xBF81_0000;
 
-fn element(name: &str, kind: u8, row: u32) -> SigElement {
+pub(super) fn element(name: &str, kind: u8, row: u32) -> SigElement {
     SigElement {
         name: name.into(),
         index: 0,
@@ -26,7 +26,7 @@ fn element(name: &str, kind: u8, row: u32) -> SigElement {
 }
 
 /// Runs `f` as a host that has no `attributeAtVertex`.
-fn without<R>(f: impl FnOnce() -> R) -> R {
+pub(super) fn without<R>(f: impl FnOnce() -> R) -> R {
     lower::TEST_ATTRIBUTE_AT_VERTEX.set(Some(false));
     let r = f();
     lower::TEST_ATTRIBUTE_AT_VERTEX.set(None);
@@ -43,7 +43,7 @@ fn calls<R>(name: &str, f: impl FnOnce() -> R) -> (R, bool) {
 
 /// A pixel program: `v_mul_f32 v3, 0.5, v0` (a computed i), `v_interp_p1_f32 v2, v3, attr0.x` and
 /// `v_interp_p2_f32 v2, v1, attr0.x`, then `exp mrt0`: TEXCOORD0.x from its three vertices.
-fn pixel() -> Result<HostShader, ShaderError> {
+pub(super) fn pixel() -> Result<HostShader, ShaderError> {
     let words = [
         0x1006_00F0u32, // v_mul_f32 v3, 0.5, v0
         0xC808_0003,    // v_interp_p1_f32 v2, v3, attr0.x
@@ -91,12 +91,23 @@ fn pixel() -> Result<HostShader, ShaderError> {
 /// A 32-lane triangle mesh program: lane n is vertex n at (lane & 1 ? 3 : -1, lane & 2 ? 3 : -1, 0.5, 1) with
 /// TEXCOORD0 = the same four floats, and primitive n = triangle (0, 1, 2). `outputs`: the mesh's
 /// vertex output signature beside the position.
-fn mesh(lanes: u32, max_vertices: u32, max_primitives: u32) -> Result<HostShader, ShaderError> {
+pub(super) fn mesh(lanes: u32, max_vertices: u32, max_primitives: u32) -> Result<HostShader, ShaderError> {
     mesh_with(lanes, max_vertices, max_primitives, false)
 }
 
 /// [`mesh`] whose TEXCOORD0 output is a 16-bit one (the host declares it a 32-bit float).
-fn mesh_with(lanes: u32, max_vertices: u32, max_primitives: u32, fp16: bool) -> Result<HostShader, ShaderError> {
+pub(super) fn mesh_with(lanes: u32, max_vertices: u32, max_primitives: u32, fp16: bool) -> Result<HostShader, ShaderError> {
+    let (bytes, native) = mesh_program(lanes, max_vertices, max_primitives, fp16);
+    let c = Container::parse(&bytes)?;
+    let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
+    let st = structure::structure(&p)?;
+    let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
+    let io = io::raise(&p, &native)?;
+    emit(&c, &native, &p, &st, &io, &res)
+}
+
+/// mac S5: the container (the vertex output signature) and the native program of [`mesh_with`].
+pub(super) fn mesh_program(lanes: u32, max_vertices: u32, max_primitives: u32, fp16: bool) -> (Vec<u8>, NativeProgram) {
     let words = [
         0xD765_0001u32, // v_mbcnt_lo_u32_b32 v1, -1, 0
         0x0001_00C1,
@@ -142,16 +153,10 @@ fn mesh_with(lanes: u32, max_vertices: u32, max_primitives: u32, fp16: bool) -> 
     let position = SigElement { kind: 3, usage: 0xF, ..element("SV_Position", 3, 0) };
     let uv = element("TEXCOORD", 0, 1);
     let osg1 = container::signature(&[position, uv], false);
-    let bytes = crate::dxbc::build(&[(FourCC::OSG1, &osg1)]);
-    let c = Container::parse(&bytes)?;
-    let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
-    let st = structure::structure(&p)?;
-    let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
-    let io = io::raise(&p, &native)?;
-    emit(&c, &native, &p, &st, &io, &res)
+    (crate::dxbc::build(&[(FourCC::OSG1, &osg1)]), native)
 }
 
-fn read(name: &str, index: u32, channel: u8, vertices: u8) -> VertexRead {
+pub(super) fn read(name: &str, index: u32, channel: u8, vertices: u8) -> VertexRead {
     VertexRead { name: name.into(), index, channel, vertices }
 }
 

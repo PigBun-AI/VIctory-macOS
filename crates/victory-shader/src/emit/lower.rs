@@ -83,6 +83,8 @@ pub(crate) struct Parts<'a> {
     pub prims: Vec<SigElement>,
     /// Mesh: what the group id arrives multiplied by.
     pub mesh_stride: u32,
+    /// mac S5, mesh: lowered as a compute program writing this scratch layout (`mesh_cs`).
+    pub cs: Option<super::mesh_cs::Layout>,
 }
 
 /// mac S1: a mesh stage's exchange of per-vertex values through group memory (`vertex_flat`). Lane m
@@ -352,6 +354,8 @@ struct Lower<'a> {
     console_lanes: bool,
     /// Mesh: the thread index in the group (made in the entry block).
     flat: Option<V>,
+    /// mac S5, mesh as compute: the group's byte offset in the scratch buffer (made in the entry block).
+    cs_base: Option<V>,
     /// mac S1: the reads of vertices 1 and 2 as flat elements ([`vertex_flat`]); pixel: the first added
     /// input is `self.s.inputs[vflat_id]`; mesh: `vtx` is the exchange that fills them.
     vreads: Vec<VertexRead>,
@@ -1200,7 +1204,7 @@ pub fn host_settings() -> [u32; 4] {
         host_max_wave(),
         super::shader::view_heap_limit(),
         super::shader::raw_views(),
-        host_rdna() | u32::from(!host_attribute_at_vertex()) << 31,
+        host_rdna() | u32::from(!host_attribute_at_vertex()) << 31 | super::mesh_compute_bits(super::host_mesh_compute()), // mac S5: bits 29, 30
     ]
 }
 
@@ -1214,6 +1218,12 @@ static HOST_ATTRIBUTE_AT_VERTEX: std::sync::atomic::AtomicU8 = std::sync::atomic
 /// Tells the translator whether the host takes `attributeAtVertex` ([`host_attribute_at_vertex`]).
 pub fn set_host_attribute_at_vertex(on: bool) {
     HOST_ATTRIBUTE_AT_VERTEX.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`super::host_mesh_compute`], for its thread only (mac S5).
+    pub(super) static TEST_MESH_COMPUTE: std::cell::Cell<Option<super::mesh_cs::MeshComputeMode>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1747,6 +1757,22 @@ impl<'a> Lower<'a> {
                 max_primitives: ms.max_primitives,
                 topology: ms.topology,
             });
+            // mac S5: the compute form: the same program, its outputs stored to the scratch buffer.
+            if let Some(l) = &x.cs {
+                s.cs_form = true;
+                s.scratch = Some(super::shader::Scratch {
+                    space: super::mesh_cs::SCRATCH_SPACE,
+                    register: super::mesh_cs::SCRATCH_REGISTER,
+                    uav: true,
+                    handle: None,
+                    dims: None,
+                });
+                s.mesh = Some(super::shader::Mesh {
+                    max_vertices: l.max_vertices,
+                    max_primitives: l.max_primitives,
+                    topology: ms.topology,
+                });
+            }
             // Barriers order the lanes' LDS accesses; the console's
             // allocation request needs them too, but the host does not. One
             // lane sends that request, and what it dominates (the path for
@@ -1871,6 +1897,7 @@ impl<'a> Lower<'a> {
             halves,
             wave_base: None,
             flat: None,
+            cs_base: None, // mac S5
             vreads,
             vflat_id,
             vtx,
@@ -5083,6 +5110,9 @@ impl<'a> Lower<'a> {
         if threads > 128 || mesh.max_vertices > 256 || mesh.max_primitives > 256 {
             return Err("a mesh shader beyond the host's limits");
         }
+        if self.s.cs_form {
+            return self.cs_prologue(mesh); // mac S5
+        }
         // D3D12 caps the outputs of the declared maxima at 32 KiB. Lane n
         // writes only vertex n and primitive n, so maxima past the lanes are
         // never reached: they come down to the lane count when the outputs
@@ -5140,6 +5170,118 @@ impl<'a> Lower<'a> {
             );
             self.end_guarded(at, &[]);
         }
+        Ok(())
+    }
+
+    /// mac S5, mesh as compute: the group's start in the scratch buffer (`mesh_cs::Layout`): the flat group
+    /// `g = id.x + dim_x * (id.y + dim_y * id.z)` times the group stride (the dimensions are the root CBV
+    /// the back appends, `b0` of the scratch's space).
+    fn cs_group_base(&mut self) -> V {
+        if let Some(b) = self.cs_base {
+            return b;
+        }
+        let entry = self.s.entry;
+        let i32t = self.s.t.i32;
+        let id: Vec<V> = (0..3)
+            .map(|c| {
+                let c = self.s.m.i32(c);
+                self.s.op(entry, "groupId.i32", Attr::ReadNone, i32t, 94, &[c])
+            })
+            .collect();
+        let h = self.s.scratch_dims_handle();
+        let row = self.s.m.i32(0);
+        let dims = self.s.op(entry, "cbufferLoadLegacy.i32", Attr::ReadOnly, self.s.t.cbuf_ret, 59, &[h, row]);
+        let dim = |l: &mut Self, c: u32| l.s.m.extract(entry, dims, c);
+        let (dx, dy) = (dim(self, 0), dim(self, 1));
+        let m = &mut self.s.m;
+        let yz = m.bin(entry, Bin::Mul, dy, id[2]);
+        let yz = m.bin(entry, Bin::Add, id[1], yz);
+        let yz = m.bin(entry, Bin::Mul, dx, yz);
+        let g = m.bin(entry, Bin::Add, id[0], yz);
+        let stride = m.i32(self.x.cs.as_ref().expect("a compute form").group_stride);
+        let base = m.bin(entry, Bin::Mul, g, stride);
+        self.cs_base = Some(base);
+        base
+    }
+
+    /// mac S5: `rawBufferStore` of up to four dwords at byte `at` of the scratch buffer.
+    fn cs_put(&mut self, at: V, values: &[V]) {
+        let h = self.s.scratch_handle();
+        let iu = self.s.m.undef(self.s.t.i32);
+        let mut args = vec![h, at, iu];
+        args.extend(values);
+        args.resize(3 + 4, iu);
+        args.push(self.s.m.i8((1u8 << values.len()) - 1));
+        args.push(self.s.m.i32(4));
+        let void = self.s.t.void;
+        self.s.op(self.cur, "rawBufferStore.i32", Attr::NoUnwind, void, 140, &args);
+    }
+
+    /// mac S5: the byte of the scratch buffer at `area + index x stride + offset`.
+    fn cs_at(&mut self, area: u32, index: V, stride: u32, offset: u32) -> V {
+        let c = self.cur;
+        let base = self.cs_group_base();
+        let s = self.s.m.i32(stride);
+        let at = self.s.m.bin(c, Bin::Mul, index, s);
+        let start = self.s.m.i32(area + offset);
+        let at = self.s.m.bin(c, Bin::Add, at, start);
+        self.s.m.bin(c, Bin::Add, base, at)
+    }
+
+    /// mac S5: lane `n`'s output channel to its vertex's or primitive's record (an element the pixel
+    /// program does not read has no place: dropped).
+    fn cs_store(&mut self, primitive: bool, id: usize, col: u8, bits: V) {
+        let l = self.x.cs.as_ref().expect("a compute form");
+        let (slots, area, stride) = if primitive {
+            (&l.prim, l.prim_area, l.prim_stride)
+        } else {
+            (&l.vertex, super::mesh_cs::VERTEX_HEAD, l.vertex_stride)
+        };
+        let Some(Some(offset)) = slots.get(id).copied() else {
+            return;
+        };
+        let flat = self.mesh_thread();
+        let at = self.cs_at(area, flat, stride, offset + 4 * u32::from(col));
+        self.cs_put(at, &[bits]);
+    }
+
+    /// mac S5: the primitive's packed indices (`v0 | v1 << 8 | v2 << 16`; a culled primitive's are 0 already, as
+    /// in the mesh form: a triangle without area).
+    fn cs_indices(&mut self, flat: V, corners: [V; 3]) {
+        let c = self.cur;
+        let mut word = corners[0];
+        for (k, &i) in corners.iter().enumerate().skip(1) {
+            let shift = self.s.m.i32(8 * k as u32);
+            let i = self.s.m.bin(c, Bin::Shl, i, shift);
+            word = self.s.m.bin(c, Bin::Or, word, i);
+        }
+        let l = self.x.cs.as_ref().expect("a compute form");
+        let (area, stride) = (l.prim_area, l.prim_stride);
+        let at = self.cs_at(area, flat, stride, 0);
+        self.cs_put(at, &[word]);
+    }
+
+    /// mac S5: the counts, and every primitive of the group starting culled (word 0).
+    fn cs_prologue(&mut self, mesh: super::shader::Mesh) -> Result<(), Why> {
+        let threads = self.s.threads.expect("mesh")[0];
+        let flat = self.mesh_thread();
+        let zero = self.s.m.i32(0);
+        // One lane writes the counts.
+        let first = self.s.m.cmp(self.cur, pred::EQ, flat, zero);
+        let at = self.begin_guarded(Some(first));
+        let base = self.cs_group_base();
+        let (v, p) = (self.s.m.i32(mesh.max_vertices), self.s.m.i32(mesh.max_primitives));
+        self.cs_put(base, &[v, p]);
+        self.end_guarded(at, &[]);
+        // Lane n clears primitive n (the lanes are the primitives, `mesh.max_primitives <= threads`).
+        let p = self.s.m.i32(mesh.max_primitives);
+        let guard = (threads > mesh.max_primitives).then(|| self.s.m.cmp(self.cur, pred::IULT, flat, p));
+        let at = self.begin_guarded(guard);
+        let l = self.x.cs.as_ref().expect("a compute form");
+        let (area, stride) = (l.prim_area, l.prim_stride);
+        let to = self.cs_at(area, flat, stride, 0);
+        self.cs_put(to, &[zero]);
+        self.end_guarded(at, &[]);
         Ok(())
     }
 
@@ -12838,6 +12980,15 @@ impl<'a> Lower<'a> {
                 }
                 _ => (".i32", x),
             };
+            if self.s.cs_form {
+                // mac S5: into the scratch buffer, as the bits the element holds.
+                let stored = if suffix == ".f32" { self.as_int(x) } else { x };
+                self.cs_store(primitive, id, col, stored);
+                if mesh && !primitive {
+                    self.vtx_store(id, col, bits, raw_half.is_some())?; // mac S1
+                }
+                continue;
+            }
             let mut args = vec![
                 self.s.m.i32(id as u32),
                 self.s.m.i32(0),
@@ -12915,9 +13066,13 @@ impl<'a> Lower<'a> {
         for i in indices {
             args.push(self.s.m.select(c, culled, z, i));
         }
-        let void = self.s.t.void;
-        self.s
-            .op(c, "emitIndices", Attr::NoUnwind, void, 169, &args);
+        if self.s.cs_form {
+            self.cs_indices(flat, [args[1], args[2], args[3]]); // mac S5
+        } else {
+            let void = self.s.t.void;
+            self.s
+                .op(c, "emitIndices", Attr::NoUnwind, void, 169, &args);
+        }
         self.vtx_corners(flat, [args[1], args[2], args[3]]); // mac S1
         self.end_guarded(at, &[]);
         Ok(())
@@ -13095,6 +13250,10 @@ impl<'a> Lower<'a> {
         pending.sort_by_key(|&(id, comp, _)| (id, comp));
         for (id, comp, value) in pending {
             self.s.prims[id].usage |= 1 << comp;
+            if self.s.cs_form {
+                self.cs_store(true, id, comp, value); // mac S5
+                continue;
+            }
             let args = [
                 self.s.m.i32(id as u32),
                 self.s.m.i32(0),
@@ -13621,6 +13780,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            cs: None, // mac S5
         })
         .map(|_| ())
     }
@@ -13671,6 +13831,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            cs: None, // mac S5
         })
     }
 
@@ -13841,6 +14002,7 @@ mod tests {
             outputs: vec![],
             prims: vec![],
             mesh_stride: 0,
+            cs: None, // mac S5
         }).unwrap();
 
         let container =

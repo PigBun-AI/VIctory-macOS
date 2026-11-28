@@ -1291,6 +1291,58 @@ sites in `xmem.rs` are Windows-only and compile for windows-gnullvm; they are no
 Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only, none run under Wine).
 *Retire when:* mac/livetr merges the line that has it.
 
+### S5 — a mesh program as a compute program and a fetch vertex program: the `VMCS` container part (`victory-shader` `emit/{mesh_cs,lower,shader,mod,host}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `mac/mesh_compute.rs`)
+
+*What.* The translator can make two more DXIL containers of a mesh program, for a host that cannot build the mesh pipeline
+(interface v1, `docs/metal/mesh-compute.md` section 8, owned by the Metal back):
+* the **compute form**: the same program as `cs_6_6` with the mesh program's `numthreads`; `setMeshOutputCounts`, `emitIndices` and
+  the vertex and primitive outputs become `rawBufferStore`s to a scratch buffer (UAV `u0`, space 4000000000); the group's slot in the
+  scratch is `g × group_stride` with `g = id.x + dim_x × (id.y + dim_y × id.z)`, the dimensions a root CBV (`b0`, same space, 16 bytes
+  `{x, y, z, 0}`, declared in the VS too, unread there); a lane writes only its own vertex and primitive, so the counts are the
+  declared maxima cut to the thread count; a culled primitive keeps indices 0 as in the mesh form;
+* the **fetch vertex program**: `vs_6_6` with only `SV_VertexID` (`3p + corner`) and `SV_InstanceID` (`g`); it reads the counts and
+  the primitive's index word from the scratch (SRV `t0`, same space), and a primitive past the count or with an index past the vertex count
+  returns zeros (a triangle without area); every vertex and primitive element is returned (per-primitive elements, S1's added ones too,
+  as constant); no cull-primitive element exists in the scratch.
+Both go, with the `vmcl 1` layout text, into a `VMCS` part (version 1, flags 0) appended to the mesh shader's own container (hash recomputed);
+the other parts, so the mesh pipeline, are byte for byte what they were (test `nothing_is_attached_unless_the_host_asks`). A program that
+cannot be lowered (payload or object stage, more than 256 vertices, not triangles, or anything the lowering refuses) gets no part and no error.
+Policy (host asks): `emit::set_host_mesh_compute(Off | Problem | All)` (tools: `VICTORY_MESH_COMPUTE=0|1|2`), default **Off**; Problem = only
+programs whose Metal mesh struct is over 32 KiB. It travels in `host_settings()` bits 29-30, so the shader cache and `victory-shader-dylib` key
+on it. `emit::translate_mesh_compute` returns the products without a mode (census, tests).
+*Host.* victory-gpu tells the translator at host creation (`mac/mesh_compute.rs`, one hook line in `host.rs` beside S1's): **Problem on the Metal chain when the back says it runs the part
+(`VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1`, exported by `tools/mac/run.sh` when the stage's `CAPS` file has a line `mesh_compute`), otherwise Off, and Off on
+D3DMetal**; `VICTORY_MESH_COMPUTE=0|1|2` overrides. Why the gate: the back's denylists (`msc-denylist`, `mesh-pair-denylist`) name a stage by the FNV hash of its whole
+container, which the `VMCS` part changes: 966 of the 1273 pairs of the pair denylist have a mesh that gets the part in Problem mode, so a back that does not
+hash without the part must not be given it (the converter itself ignores the part: 442 mesh containers built identically with and without it on the back before mc-back). The chain is known by `VICTORY_METAL_OUT`, which `tools/mac/run.sh --backend metal` exports to the title (nothing
+else the exe sees tells the two apart: S1's `host_attribute_at_vertex` is false on both). Tests: `mac::mesh_compute::tests`.
+*Not done (decided to wait for the performance phase).* Pruning the outputs the pixel program does not read: the translation of a mesh shader does not see its
+pixel shader, so it needs the host to pass the pixel program's (name, index) reads next to S1's `vertex_reads`, and the layout key `reads MASK` (not written now, meaning all).
+Hook lines in upstream files are marked `mac S5`. Tests: `emit/mesh_cs_tests.rs` (13 unit tests; hardware tests under Wine
+`the_compute_and_fetch_draw_is_the_mesh_pipelines_draw`, `mesh_compute_form_draws_flagged_triangles_and_drops_culled_ones`: the compute
+pass and the fetch draw give the same texels as the native mesh path, dispatch sizes 1x1x1, 2x1x1, 1x3x1, 2x2x2).
+
+*Why not needed on Windows.* D3D12 mesh pipelines have no output-size limit that matters; Metal's mesh stage has 32 KiB of output per group
+(1261 of the title's real mesh pipelines are over it; Apple's GPU compiler crashes on 1400 more, see S1), so the Metal back runs such a mesh shader
+as a compute pass and a vertex draw (docs/metal/mesh-compute.md).
+
+*Remove when.* Metal's mesh stage takes the title's meshes (size and compiler), or the back no longer emulates mesh pipelines: drop `mesh_cs.rs`, the
+`cs` form of `Parts` and the hooks (`grep 'mac S5'`).
+
+*Acceptance (2026-11-28).* Census (`victory-census mscs`, branch `mc/census-s5` of the Metal back at 242f1925 + this patch; data under `victory-data/census-s5/`):
+**A, every mesh program of the package (8765 containers, each translated alone, mode All)**: 8765 get a `VMCS` part; the fetch vertex
+program builds a Metal render pipeline (through MSC, with the default pixel shader) in 8765; the compute form builds a compute pipeline in
+7536 with the root signature the back makes today and in **8765 with the static samplers visible to all stages**: the 1229 others are all
+one error, `ResourceNotReferencedByRootSignature (SMP space 0 register 0)`, a fault of the back (`mesh_emu::extend_root` makes the
+parameters visible to the compute stage but leaves the static samplers at the mesh stage's visibility), not of the translator.
+Of the 520 mesh programs whose native mesh pipeline Metal refuses for the 32 KiB, all 520 have both forms and build (367 with today's root, the other 153 after the sampler fix).
+**B, the 9050 (mesh, pixel) pairs of the pipeline book** (mesh translated with the pixel program's S1 reads, the fetch vertex program paired with
+the real pixel program): compute 9050, fetch + pixel pipeline 9047; the 3 others (`06980160f6c5516f:2f3b5ef239a76315`, `52b873d99483b41b:81b24241b09514d6`,
+`ab008fdce9f216c6:81b24241b09514d6`) are pairs whose pixel program already crashes Apple's compiler on the native mesh path without S1 (the "3 that crash without S1"
+above), they crash in the vertex form too (XPC_ERROR_CONNECTION_INTERRUPTED, reproduced). The prototype sample was 200/200 and 199/200.
+Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass plus the fetch draw gives the texels of the native mesh pipeline
+(dispatch 1x1x1, 2x1x1, 1x3x1, 2x2x2) and the flagged-triangle / cull / out-of-range-index test passes.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
