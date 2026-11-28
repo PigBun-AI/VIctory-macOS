@@ -1505,9 +1505,38 @@ fn dynamic_slots(count: u32, null: u32) -> u32 {
             .unwrap_or(DYNAMIC << 2)
     });
     if null < PORTABLE_VIEWS {
-        return DYNAMIC;
+        return capped_dynamic(std::env::var("VICTORY_DYNAMIC_SLOTS").ok().and_then(|v| v.trim().parse().ok()), null);
     }
     null.saturating_sub(count).min(most).max(DYNAMIC)
+}
+
+/// [`dynamic_slots`] on a capped host heap (NVIDIA: 1,000,000 views; ledger R2/V5): [`DYNAMIC`],
+/// or `VICTORY_DYNAMIC_SLOTS` (default unset: as before) clamped to [`DYNAMIC`]..`null / 2`, so the
+/// refused tables (dropped draws) can be traded against the title's slots kept in place (a
+/// shader that picks a title slot past those by index reads the null slot: ledger R1).
+/// Ported from VIctory-NVIDIA a9632bc (GPL). Pure, for tests.
+fn capped_dynamic(asked: Option<u32>, null: u32) -> u32 {
+    asked.map_or(DYNAMIC, |a| a.clamp(DYNAMIC, (null / 2).max(DYNAMIC)))
+}
+
+/// Tables refused for want of dynamic slots since the start (any build; ledger R2), and the
+/// time of the last report line.
+static DYNAMIC_REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DYNAMIC_REPORT: std::sync::Mutex<Option<(std::time::Instant, u64)>> = std::sync::Mutex::new(None);
+
+fn note_dynamic_refused() {
+    let n = DYNAMIC_REFUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let mut r = DYNAMIC_REPORT.lock().unwrap_or_else(|e| e.into_inner());
+    let (at, before) = r.get_or_insert((std::time::Instant::now(), 0));
+    if at.elapsed().as_secs_f64() >= 10.0 {
+        tracing::warn!(
+            "R2 dynamic descriptor slots: {} tables refused in the last {:.0} s ({} since the start); each a dropped draw (VICTORY_DYNAMIC_SLOTS)",
+            n - *before,
+            at.elapsed().as_secs_f64(),
+            n
+        );
+        *r = Some((std::time::Instant::now(), n));
+    }
 }
 
 impl HostHeap {
@@ -1780,6 +1809,7 @@ impl HostHeap {
             }
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(n, "no free dynamic descriptor slots: a table is not made"));
+            note_dynamic_refused();
             #[cfg(feature = "diagnostics")]
             {
                 use crate::copystat::{C, add};
@@ -5724,6 +5754,18 @@ mod tests {
         // Long after the last table, a write is due at once.
         heap.queue_texture(2, true, false, frame + 3 + TABLED_FRAMES);
         assert_eq!(slots(frame + 3 + TABLED_FRAMES), [2]);
+    }
+
+    /// R2: on a capped heap the asked number is taken within DYNAMIC..null/2; unset keeps DYNAMIC.
+    #[test]
+    fn capped_heaps_take_the_asked_dynamic_slots_within_bounds() {
+        let null = 999_999;
+        assert_eq!(capped_dynamic(None, null), DYNAMIC);
+        assert_eq!(capped_dynamic(Some(524_288), null), 499_999);
+        assert_eq!(capped_dynamic(Some(400_000), null), 400_000);
+        assert_eq!(capped_dynamic(Some(1), null), DYNAMIC);
+        // adversarial: the old code ignored the switch on a capped heap
+        assert_ne!(capped_dynamic(Some(400_000), null), DYNAMIC);
     }
 
     #[test]
