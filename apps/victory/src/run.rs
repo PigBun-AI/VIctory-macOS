@@ -52,6 +52,11 @@ pub fn run(
     }
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
+    if execute {
+        // Before the host's own memory (the image read below, the GPU
+        // device, the caches) takes the space the title's 32-bit memory needs.
+        victory_hle::modules::xmem::low_guards::install();
+    }
     let cfg = victory_core::Config::load()?;
     let mut original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let prepared = victory_loader::prepare(&original)?;
@@ -108,7 +113,7 @@ pub fn run(
         Console::SeriesX => victory_hle::console::Console::SeriesX,
         Console::SeriesS => victory_hle::console::Console::SeriesS,
     });
-    println!("console        {}", victory_hle::console::current().name());
+    println!("{}", victory_hle::modules::xsystem::console_line(victory_hle::console::current()));
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {
         println!("title dll      {name} at {:#x}", dll.base());

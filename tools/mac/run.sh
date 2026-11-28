@@ -3,10 +3,17 @@
 # Apple's D3DMetal or our Metal backend, scripted keys, logs. Not a build step
 # (tools/mac/check.sh builds). Full reference: docs/mac/RUN.md.
 #
-#   tools/mac/run.sh [options] [-- arguments for the title]
+#   tools/mac/run.sh --purpose "<map column>: <node id>,..." [options] [-- arguments for the title]
 #   tools/mac/run.sh --print-env [options]     print the environment and the command, run nothing
 #   tools/mac/run.sh --exec [options] -- ARGS  run `victory.exe ARGS` (for example `warm --jobs 4`) instead of the title, in
 #                                              the very same environment and prefix; no keys, no time limit, no log folder
+#
+# --purpose is REQUIRED (not for --print-env and --help): which column of the translation map this run fills and for which nodes, for example
+#   --purpose "freq: mac.isa.lock_cmpxchg_flags"      --purpose "callstats,freq: S-G-009,S-D-001"
+# The column is one or more of freq, callstats, new-nodes, corpus, perf-hotspot, separated by commas; after the colon at least one node id.
+# Without one, or one that does not fit, run.sh refuses to start with exit status 7 (no other exit status of run.sh is 7). The text is kept as it
+# is: first line of <out>/RUN.txt, in the game lock (`tools/mac/game-lock.sh status` shows it). Rule of the integration lead: until the map is
+# filled in, no run is made to look at the picture. play.sh and the other wrappers pass --purpose through.
 #
 # What a run is made of (each has an option; the options only ever choose, the
 # rest below is the same for every combination):
@@ -28,8 +35,14 @@
 #   --log-render-size            VICTORY_LOG_RENDER_SIZE=1: the title's internal size in the log (P2); costs a lock
 #                                per draw, so leave it off for timing runs
 #   --exe PATH --out DIR --timeout SEC (0 = none) --cache DIR --data DIR --prefix DIR
-#   --seed DIR                   the read-only seed the data directories are cloned from (default ../victory-data-livetr)
+#   --seed DIR                   the read-only seed the data directories are cloned from (default data/livetr under the GTA6 root)
 #   --fresh-data                 clone the run's data directory from the seed again, whatever is there (reproducible start)
+#   --new-game                   replace only the run's data/ (profile and saves) with a clone of the seed's, keeping the warm cache/
+#                                and dxc/ of the run's directory: the title starts a NEW game, with no world save, but no cold compile
+#   --worldsave                  start from a WORLD SAVE: seed = data/worldsave-seed (Windows save, read-only) and an own data
+#                                directory data/livetr-<profile>-<backend>-worldsave. Never implied: the default seed data/livetr
+#                                holds no world save (run.sh refuses a seed that does). The save world is very slow on our back
+#                                and turns white (known, being fixed): for watching progress only
 #   --keys SPEC | --no-keys      VICTORY_KEYS, default 8-3600/3:Enter (Enter every 3 s from 8 s)
 #   --input FILE|none            VICTORY_INPUT_REPLAY, default tools/mac/input/world-neutral.txt (I1)
 #   --record FILE                VICTORY_INPUT_RECORD (relative: under --out); turns the default replay off
@@ -73,9 +86,16 @@
 # ONE GAME AT A TIME on this Mac: before it starts victory.exe (the title, or --exec; not --print-env) run.sh takes the
 # machine-wide game lock (tools/mac/game-lock.sh: a directory next to all checkouts, shared by every worktree), queues if
 # another run holds it (printing the holder every 30 s), takes over a lock whose holder is gone, and lets it go when the
-# run ends, times out or is interrupted. `tools/mac/game-lock.sh status` shows holder and queue. Keep heavy CPU work (builds,
-# tests) away from a run: tools/mac/check.sh runs niced with fewer jobs while the lock is held. Every run logs the load
+# run ends, times out or is interrupted. LOCK FIRST, THEN ANY SIDE EFFECT: everything that changes a data directory, a cache, a
+# prefix or a log folder (the clone from the seed, --fresh-data, --new-game, --worldsave, settings.xml, the dlls put into the prefix's
+# system32, `wineserver -k`, mkdir of the data, cache and out folders) is done only once the lock is held; a run that queues has
+# touched nothing yet. --print-env takes no lock and changes nothing. With --allow-concurrent (no lock) nothing protects the data
+# directories: give every concurrent run its own (docs/mac/RUN.md). `tools/mac/game-lock.sh status` shows holder and queue. Heavy CPU work (builds,
+# tests) goes through tools/mac/heavy.sh, which drops its budget to 1 job while the lock is held (docs/mac/RUN.md "Heavy tasks"). Every run logs the load
 # average every 10 s to <out>/load.log (and at the start in start.txt), to tell a clean frame-time run from a noisy one.
+# Once it holds the lock, run.sh starts tools/mac/heavy-guard.sh as its own child (`run --parent <pid>`; its pid in <lock>/guard.pid) and ends it,
+# with SIGCONT of what it stopped, before it lets the lock go; if run.sh is killed with SIGKILL the guard notices within seconds and ends by
+# itself. Not with --allow-concurrent, not when a guard already runs, not with VICTORY_RUN_GUARD=0 (tests).
 #
 # Other VICTORY_* / WINE* variables in the environment pass through unchanged.
 # The Metal stage (the directory with front/, x86_64-windows/ and x86_64-unix/) is found in this order:
@@ -85,13 +105,14 @@
 # tools/mac/run.local.env is sourced at the start if it exists; a variable already set in the environment wins over the
 # file. With no stage found, the Metal backend stops with an error (set VICTORY_METAL_OUT, write run.local.env, or use
 # --backend d3dmetal). VICTORY_METAL_ARCHIVE (read-only archive of compiled Metal libraries) passes through the same way.
-# Wine: VICTORY_MAC_WINE_DIR, else ../VIctory-macOS/target/wine-cx next to this checkout.
+# Wine: VICTORY_MAC_WINE_DIR, else VIctory-macOS/target/wine-cx under the GTA6 root (the parent of the main checkouts; three levels up from worktrees/mac/<name>).
 # Builds (once) the DXC front end tools/macos/dxc-d3dmetal.sh and sets VICTORY_DXC_HELPER / DXC_LIB /
 # VICTORY_DXC_DIR for the helper shaders (docs/mac/PATCHES.md, G4). Only the Wine processes of the
 # chosen prefix are ever stopped.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-G="${GTA6_ROOT:-$(cd "$ROOT/.." && pwd)}"
+case "$ROOT" in */worktrees/mac/*|*/worktrees/metal/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/{mac,metal}/<name> or next to the main checkouts
+G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 WDIR="${VICTORY_MAC_WINE_DIR:-$G/VIctory-macOS/target/wine-cx}"
 WINE="$WDIR/bin/wine"; SERVER="$WDIR/bin/wineserver"
 
@@ -121,11 +142,11 @@ winpath() { printf 'Z:%s' "$(printf '%s' "$1" | tr / '\\')"; }
 # ---- options ---------------------------------------------------------------
 backend="${VICTORY_MAC_BACKEND:-metal}"; profile="${VICTORY_MAC_PROFILE:-perf}"
 exe="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
-out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""
+out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; sample=0; concurrent=0; fresh=0; seed=""; newgame=0; worldsave=0
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
 until_logs=(); until_world=""; until_present=""; until_capture=0; linger=0; linger_set=0
-lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
+purpose=""; lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
         --backend) backend=${2:?--backend metal|d3dmetal}; shift ;;
@@ -134,6 +155,7 @@ while [ $# -gt 0 ]; do
         --exe) exe=${2:?}; shift ;; --out) out=${2:?}; shift ;; --timeout) tmo=${2:?}; shift ;;
         --cache) cache=${2:?}; shift ;; --data) data=${2:?}; shift ;; --prefix) prefix=${2:?}; shift ;;
         --seed) seed=${2:?}; shift ;; --fresh-data) fresh=1 ;;
+        --new-game) newgame=1 ;; --worldsave) worldsave=1 ;;
         --keys) keys=${2:?}; shift ;; --no-keys) keys=none ;;
         --input) input=${2:?}; shift ;; --record) record=${2:?}; shift ;;
         --capture-frames) capture=${2:?}; shift ;;
@@ -152,6 +174,7 @@ while [ $# -gt 0 ]; do
         --until-world) until_world=${2:?--until-world N}; shift ;;
         --until-present) until_present=${2:?--until-present N}; shift ;;
         --linger) linger=${2:?--linger SECONDS}; linger_set=1; shift ;;
+        --purpose) purpose=${2?--purpose "<map column>: <node id>,..."}; shift ;;
         --print-env|--dry-run) print_env=1 ;;
         --exec) execmode=1 ;;
         -h|--help) usage ;;
@@ -161,6 +184,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 title_args=("$@")
+# --purpose: required for every run that would start the game (not --print-env); exit status 7
+. "$ROOT/tools/mac/purpose.sh"
+if [ "$print_env" = 0 ]; then purpose_check "$purpose" || { echo "tools/mac/run.sh: refused" >&2; exit "$PURPOSE_EXIT"; }; fi
 case "$backend" in d3dmetal|metal) ;; *) die "--backend is d3dmetal or metal, not '$backend'" ;; esac
 case "$profile" in fidelity|perf) ;; *) die "--profile is fidelity or perf, not '$profile'" ;; esac
 case "$settings_output" in 1280x720|1664x936|1920x1080|2560x1440|3840x2160) ;;
@@ -229,9 +255,20 @@ time_name="$(date +%Y%m%d-%H%M%S)"
 [ -n "$out" ] || out="$ROOT/target/mac-runs/$time_name"
 # One data directory per profile AND backend, each cloned (APFS clone) from the same read-only seed on first use, so two
 # runs of different backends start from the same state and can run side by side. The seed is never written.
-[ -n "$seed" ] || seed="$G/victory-data-livetr"
-base="$G/victory-data-livetr-$profile-$backend"
+if [ "$worldsave" = 1 ]; then
+    [ -n "$seed" ] || seed="$G/data/worldsave-seed"
+    base="$G/data/livetr-$profile-$backend-worldsave"
+else
+    [ -n "$seed" ] || seed="$G/data/livetr"
+    base="$G/data/livetr-$profile-$backend"
+fi
+[ "$fresh" = 0 ] || [ "$newgame" = 0 ] || die "--fresh-data and --new-game together: use one"
+# the default seed must stay a NEW-GAME seed: a world save (a SARC container) in it would put every derived directory in the save world
+if [ "$worldsave" = 0 ] && ls -d "$seed"/data/*/saves/*/*/SARC* >/dev/null 2>&1; then
+    die "the seed $seed holds a world save (SARC container): the default seed is new-game only; world saves live in $G/data/worldsave-seed (use --worldsave)"
+fi
 derived=1; { [ -n "${VICTORY_DATA_DIR:-}" ] || [ -n "$data" ] || [ -n "$cache" ]; } && derived=0
+[ "$newgame" = 0 ] || [ "$derived" = 1 ] || die "--new-game works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
 [ "$fresh" = 0 ] || [ "$derived" = 1 ] || die "--fresh-data works on the run's own directory $base only (no --data, --cache or VICTORY_DATA_DIR)"
 [ "$base" != "$seed" ] || die "the run's data directory is the seed"
 if [ -n "${VICTORY_DATA_DIR:-}" ] && [ -z "$data" ]; then data="$VICTORY_DATA_DIR"; fi
@@ -386,11 +423,38 @@ if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
 # ---- the game lock, cleanup ---------------------------------------------------
 # (victory.exe is only ever started below this line; --print-env has left already)
 . "$ROOT/tools/mac/game-lock.sh"
-GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"
-pid=""; wd=""; sm=""; ld=""; uw=""; _cleaned=0
+GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"; GL_PURPOSE="$purpose"
+pid=""; wd=""; sm=""; ld=""; uw=""; guard=""; _cleaned=0
+# The heavy-guard (tools/mac/heavy-guard.sh) is this run's child, started once the lock is held and ended before the lock is let go (no launchd
+# agent: macOS keeps a launchd job's bash out of ~/Documents). Its pid is in the lock directory (guard.pid, guard.pidstart). Not started with
+# --allow-concurrent (no lock), when a guard already runs (one in the lock directory, or one started by hand), or with VICTORY_RUN_GUARD=0.
+# If this run.sh is killed with SIGKILL the guard sees its parent gone within a second, continues what it stopped and ends.
+guard_start() {
+    local g="$ROOT/tools/mac/heavy-guard.sh" gp
+    [ "${VICTORY_RUN_GUARD:-1}" != 0 ] && [ -f "$g" ] || return 0
+    gp=$(sed -n 1p "$GL_LOCK/guard.pid" 2>/dev/null)
+    if [ -n "$gp" ] && gl_alive "$gp" "$(sed -n 1p "$GL_LOCK/guard.pidstart" 2>/dev/null)"; then return 0; fi
+    if bash "$g" running; then echo "tools/mac/run.sh: a heavy-guard is already running; not starting another" >&2; return 0; fi
+    bash "$g" run --parent $$ </dev/null >/dev/null 2>&1 &
+    guard=$!
+    printf '%s\n' "$guard" >"$GL_LOCK/guard.pid.tmp" && mv -f "$GL_LOCK/guard.pid.tmp" "$GL_LOCK/guard.pid"
+    gl_pidstart "$guard" >"$GL_LOCK/guard.pidstart"
+}
+# SIGTERM (its trap continues everything it stopped); if it does not end in 5 s, `heavy-guard.sh resume` does the continuing (never SIGKILL: a
+# killed guard could not continue anything)
+guard_stop() {
+    [ -n "$guard" ] || return 0
+    local g="$ROOT/tools/mac/heavy-guard.sh" _i
+    kill -TERM "$guard" 2>/dev/null
+    for _i in $(seq 1 50); do kill -0 "$guard" 2>/dev/null || break; sleep 0.1; done
+    if kill -0 "$guard" 2>/dev/null; then bash "$g" resume >/dev/null 2>&1; else wait "$guard" 2>/dev/null; fi
+    guard=""
+}
+part=""   # a clone being made (data directory or a part of it): an interrupted run takes it away, so no half-made directory is left
 cleanup() {
     [ "$_cleaned" = 0 ] || return 0
     _cleaned=1
+    case "$part" in "$G"/data/livetr-*-*.part.*|"$G"/data/livetr-*-*/data.part.*) chmod -R u+w "$part" 2>/dev/null; rm -rf "$part" ;; esac
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         # interrupted: the game must not outlive the lock
         kill -TERM "$pid" 2>/dev/null; "$SERVER" -k 2>/dev/null
@@ -401,6 +465,7 @@ cleanup() {
     for _j in "$sm" "$ld" "$uw"; do
         [ -z "$_j" ] || { pkill -P "$_j" 2>/dev/null; kill "$_j" 2>/dev/null; }
     done
+    guard_stop
     gl_release
 }
 trap cleanup EXIT
@@ -413,25 +478,48 @@ else
     gl_acquire "$backend" "$out" "$lock_tmo" || exit 4
 fi
 
-# ---- from here on: side effects --------------------------------------------
+# ---- from here on: side effects (the game lock is held, or --allow-concurrent was approved) -----------------------------------
+# Nothing above this line has written anything but the lock's own queue entry: not the data directory, not the cache, not the prefix.
 [ -x "$WINE" ] || { echo "no Wine at $WINE" >&2; exit 1; }
 [ -f "$exe" ] || { echo "no exe $exe" >&2; exit 1; }
 if [ "$concurrent" = 0 ]; then
-    # (the lock is ours; a victory.exe that is still running was not started through run.sh)
-    others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe}" | tr '\n' ' ')   # (the pattern is a test knob)
+    # (the lock is ours; a victory.exe that is still running was not started through run.sh. Only the title's own command line
+    # `victory.exe run --execute ...` counts: a run.sh that is queued for the lock has `--exe ...victory.exe` in ITS command line)
+    others=$(pgrep -f "${VICTORY_MAC_EXE_PATTERN:-victory\.exe run --execute}" | tr '\n' ' ')   # (the pattern is a test knob)
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
+    guard_start
 fi
 
-# the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data
+# the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data. A clone is made beside the
+# place it goes to ("*.part.<pid>") and renamed into it, so an interrupted run leaves no half-made directory that the next run takes as data.
+drop_part() { [ -z "$part" ] || { chmod -R u+w "$part" 2>/dev/null; rm -rf "$part"; }; part=""; }
 if [ "$derived" = 1 ]; then
     if [ "$fresh" = 1 ] && [ -d "$base" ]; then
         echo "--fresh-data: replacing $base"
-        case "$base" in "$G"/victory-data-livetr-*-*) rm -rf "$base" ;; *) die "will not delete $base" ;; esac
+        case "$base" in "$G"/data/livetr-*-*) rm -rf "$base" ;; *) die "will not delete $base" ;; esac
     fi
     if [ ! -d "$base" ]; then
         echo "making $base from the seed $seed (clone)"
-        mkdir -p "$base"
-        for d in data cache dxc; do [ -d "$seed/$d" ] && { cp -c -R "$seed/$d" "$base/$d" || cp -R "$seed/$d" "$base/$d"; }; done
+        mkdir -p "$(dirname "$base")"
+        part="$base.part.$$"; rm -rf "$part"; mkdir -p "$part"
+        for d in data cache dxc; do
+            [ -d "$seed/$d" ] || continue
+            { cp -c -R "$seed/$d" "$part/$d" || { rm -rf "$part/$d"; cp -R "$seed/$d" "$part/$d"; }; } || { drop_part; die "could not clone $seed/$d"; }
+        done
+        chmod -R u+w "$part"   # the world-save seed is read-only; the run's clone must be writable
+        mv "$part" "$base" || { drop_part; die "could not move the clone to $base"; }
+        part=""
+    elif [ "$newgame" = 1 ]; then
+        echo "--new-game: replacing only $base/data with a clone of $seed/data (cache and dxc stay)"
+        case "$base" in "$G"/data/livetr-*-*) ;; *) die "will not delete $base/data" ;; esac
+        part="$base/data.part.$$"; rm -rf "$part"
+        { cp -c -R "$seed/data" "$part" || { rm -rf "$part"; cp -R "$seed/data" "$part"; }; } && chmod -R u+w "$part" || { drop_part; die "could not clone $seed/data"; }
+        rm -rf "$base/data"
+        mv "$part" "$base/data" || { drop_part; die "could not move the clone to $base/data"; }
+        part=""
+    fi
+    if [ "$worldsave" = 0 ] && ls -d "$base"/data/*/saves/*/*/SARC* >/dev/null 2>&1; then
+        echo "note: $base/data holds a world save (the title's own autosave from an earlier run): it starts in the saved world. --new-game starts over" >&2
     fi
 fi
 mkdir -p "$data" "$cache"
@@ -512,6 +600,7 @@ if [ "$execmode" = 1 ]; then
 fi
 
 # what this run is, kept with its logs
+{ echo "purpose: $purpose"; echo "$(date +%FT%T) backend $backend profile $profile out $out"; } >"$out/RUN.txt"
 print_environment >"$out/run-env.txt"
 {
     date +%FT%T
@@ -566,7 +655,7 @@ fi
 (
     while kill -0 $pid 2>/dev/null; do
         echo "$(date +%FT%T) load average: $(uptime | sed 's/.*load averages*: //')" >>"$out/load.log"
-        sleep 10
+        sleep "${VICTORY_LOAD_LOG_INTERVAL:-10}"   # (10 s; the knob is for the tests)
     done
 ) 2>/dev/null &
 ld=$!
@@ -582,6 +671,7 @@ wait $pid; st=$?
 "$SERVER" -k 2>/dev/null
 end=$(date +%s)
 { date +%FT%T; echo "exit $st"; } >"$out/end.txt"
+"$ROOT/tools/mac/collect-title-crash.sh" "$data" "$out" "$out/start.txt"   # mac L7: the title's own crash.log into $out/title-crash/ (survives --new-game)
 # --until-*: met (exit 0) or not (exit 6), said in the logs and next to the run's settings
 final_st=$st; until_msg=""
 if [ "$until_on" = 1 ]; then
@@ -602,7 +692,13 @@ if [ "$until_on" = 1 ]; then
     echo "$until_msg" >>"$out/start.txt"; echo "# $until_msg" >>"$out/run-env.txt"; echo "until: $until_msg" >>"$out/end.txt"
     echo "$until_msg"
 fi
+# frame times against load.log: frames in a stretch with load average > 30 are invalid; the statistics use the valid ones only
+# (tools/mac/frametime-summary.sh; docs/mac/RUN.md). More than 20% invalid: the first line of summary.txt says 数据无效：load 超过 30.
+if [ -s "$out/frametime.log" ]; then
+    bash "$ROOT/tools/mac/frametime-summary.sh" "$out" >"$out/frametime-summary.txt" 2>/dev/null || : >"$out/frametime-summary.txt"
+fi
 {
+    [ ! -s "$out/frametime-summary.txt" ] || grep -m1 '^数据无效' "$out/frametime-summary.txt"
     echo "backend $backend, profile $profile, $((end - start)) s (limit $tmo), exit status $st"
     [ -z "$until_msg" ] || echo "$until_msg (run.sh exit status $final_st)"
     for pat in 'non-fidelity' '^resolution:' 'presenting to a window' 'display mode reported' 'VICTORY_PRESENT_MAX' 'render size:' 'world frame 1'; do
@@ -612,6 +708,7 @@ fi
     grep -a -h 'ms/frame' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | tail -2
     echo "GPU errors (kIOGPU/Hang/SubmissionsIgnored/device removed): $(grep -a -ci 'kIOGPU\|hang\|SubmissionsIgnored\|device removed\|DXGI_ERROR_DEVICE' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
     [ "$backend" != metal ] || echo "victory-metal lines: $(grep -a -c '^victory-metal' "$out/stderr.log")"
+    [ ! -s "$out/frametime-summary.txt" ] || grep -v '^数据无效' "$out/frametime-summary.txt"
 } >"$out/summary.txt"
 cat "$out/summary.txt"
 echo "logs in $out (exit $final_st)"

@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::object::{self, E_NOTIMPL, FENCE, HRESULT, Iid, Object, S_OK, Table, This, guid};
+use crate::object::{self, E_FAIL, E_NOTIMPL, FENCE, HRESULT, Iid, Object, S_OK, Table, This, guid};
 use crate::resource::PAGEABLE_IIDS;
 
 pub(crate) const FENCE_IIDS: [Iid; 5] = [
@@ -92,6 +92,9 @@ extern "system" fn completed_called(this: This) -> u64 {
     crate::timeline::polled(this as usize, value);
     value
 }
+/// How long a blocking `SetEventOnCompletion` (null event) waits for its value, in milliseconds (mac G12).
+pub(crate) static BLOCKING_WAIT_MS: AtomicU64 = AtomicU64::new(10_000);
+
 extern "system" fn set_event_on_completion(this: This, value: u64, event: *mut c_void) -> HRESULT {
     let fence = fence(this);
     let mut waiters = fence.waiters.lock().unwrap_or_else(|e| e.into_inner());
@@ -143,10 +146,23 @@ extern "system" fn set_event_on_completion(this: This, value: u64, event: *mut c
             tracing::warn!(value, "blocking fence wait timed out");
             return E_NOTIMPL;
         }
-        // shortcut: a null event means "block until reached"; nothing can
-        // reach it while no GPU work runs, so fail instead of hanging.
-        tracing::warn!(value, "blocking fence wait not implemented");
-        return E_NOTIMPL;
+        // mac G12: a null event means "block until reached" (D3D12). Whatever can signal it is a submission already
+        // made or another thread of the title, so wait for it, polling, as the branch above does; bounded, so
+        // that a value nothing will ever reach (a title bug) fails with a log line instead of hanging for good.
+        drop(waiters);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(BLOCKING_WAIT_MS.load(Ordering::Relaxed));
+        loop {
+            if fence.value.load(Ordering::Acquire) >= value {
+                return S_OK;
+            }
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(value, "blocking fence wait timed out");
+                return E_FAIL;
+            }
+            #[cfg(windows)]
+            crate::queue::release_held(false);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
     waiters.push((value, event as usize));
     S_OK
@@ -232,7 +248,8 @@ mod tests {
         assert_eq!(wait(f, 5, event), S_OK, "already reached");
         // SAFETY: as above.
         assert_eq!(unsafe { WaitForSingleObject(event, 0) }, WAIT_OBJECT_0);
-        assert_eq!(wait(f, 9, std::ptr::null_mut()), E_NOTIMPL);
+        BLOCKING_WAIT_MS.store(50, Ordering::Relaxed);
+        assert_eq!(wait(f, 9, std::ptr::null_mut()), E_FAIL, "nothing reaches 9");
         // The title reads the value at the fence's address.
         let at = slot::<extern "system" fn(This) -> u64>(f, 0x60)(f);
         // SAFETY: the fence's value.

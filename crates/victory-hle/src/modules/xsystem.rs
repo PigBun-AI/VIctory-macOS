@@ -94,6 +94,23 @@ const OS: Version = Version {
     revision: 0,
 };
 
+/// What the title's code maps to each model's device type: the value of the
+/// `ConsoleMode` it reads from the registry key (see `device_type`), 0x64 for
+/// a Series X and 0x60 for a Series S. (C-R-005)
+pub fn console_mode(console: victory_gpu::console::Console) -> u32 {
+    use victory_gpu::console::Console;
+    match console {
+        Console::SeriesX => 0x64,
+        Console::SeriesS => 0x60,
+    }
+}
+
+/// The opening log line for the console model the title is shown: `console
+/// Xbox Series X (device type 0x64)`, the second line for a Series S with 0x60.
+pub fn console_line(console: victory_gpu::console::Console) -> String {
+    format!("console        {} (device type {:#x})", console.name(), console_mode(console))
+}
+
 fn text(s: &str) -> [u8; 64] {
     let mut out = [0; 64];
     out[..s.len()].copy_from_slice(s.as_bytes());
@@ -139,8 +156,9 @@ mod device_type {
 
     use std::ffi::c_void;
 
-    use victory_gpu::console::{self, Console};
+    use victory_gpu::console;
 
+    use super::console_mode;
     use crate::modules::files::host;
     use crate::{HleModule, hle_export};
 
@@ -158,14 +176,6 @@ mod device_type {
     static OEM: u8 = 0;
     fn oem() -> Key {
         (&raw const OEM).cast_mut().cast()
-    }
-
-    /// What the title's code maps to each model's device type.
-    pub(super) fn console_mode(console: Console) -> u32 {
-        match console {
-            Console::SeriesX => 0x64,
-            Console::SeriesS => 0x60,
-        }
     }
 
     fn is(text: *const u16, expected: &str) -> bool {
@@ -290,8 +300,6 @@ mod device_type {
 
         #[test]
         fn titles_read_the_chosen_model() {
-            assert_eq!(console_mode(Console::SeriesX), 0x64);
-            assert_eq!(console_mode(Console::SeriesS), 0x60);
             let mut key = std::ptr::null_mut();
             let path = w(&KEY.to_ascii_lowercase());
             assert_eq!(RegOpenKeyW(LOCAL_MACHINE, path.as_ptr(), &mut key), SUCCESS);
@@ -369,6 +377,20 @@ pub(crate) use device_type::module;
 mod tests {
     use super::*;
     use crate::modules::xgameruntime::{S_OK, method};
+
+    #[test]
+    fn a_series_x_reads_device_type_0x64() {
+        use victory_gpu::console::Console;
+        assert_eq!(console_mode(Console::SeriesX), 0x64);
+        assert_eq!(console_line(Console::SeriesX), "console        Xbox Series X (device type 0x64)");
+    }
+
+    #[test]
+    fn a_series_s_reads_device_type_0x60() {
+        use victory_gpu::console::Console;
+        assert_eq!(console_mode(Console::SeriesS), 0x60);
+        assert_eq!(console_line(Console::SeriesS), "console        Xbox Series S (device type 0x60)");
+    }
 
     #[test]
     fn identity_strings_fit_the_documented_sizes() {

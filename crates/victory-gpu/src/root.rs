@@ -215,6 +215,10 @@ static FUNCTIONS: Table<24> = {
     Table(f)
 };
 
+#[cfg(all(test, windows))]
+#[path = "mac/prove/root_flags.rs"]
+mod prove_flags; // mac G12
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -93,6 +93,7 @@ fn lowered(native: &NativeProgram, host_wave: u32) -> Result<HostShader, ShaderE
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     });
     lower::TEST_HOST_WAVE.set(was);
     let result = result?;
@@ -106,6 +107,7 @@ fn lowered(native: &NativeProgram, host_wave: u32) -> Result<HostShader, ShaderE
         root_srvs: result.root_srvs,
         root_uavs: result.root_uavs,
         root_indexed_views: res.root_indexed_views,
+        vertex_reads: Vec::new(), // mac S1
     };
     match validator::Validator::load(validator::Validator::default_path().as_deref()) {
         Ok(mut v) => {

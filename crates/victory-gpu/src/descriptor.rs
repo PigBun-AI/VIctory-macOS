@@ -1318,6 +1318,9 @@ pub(crate) extern "system" fn create_uav(
     handle: u64,
 ) {
     let view = View::Unordered(resource as usize, counter as usize, words(desc));
+    if let Some(w) = words(desc) {
+        crate::mac::layout_stats::uav_3d(&w); // mac G11
+    }
     record(handle, view);
 }
 
@@ -1544,6 +1547,10 @@ static FUNCTIONS: Table<24> = {
     f[10] = start as *const (); // 0x50 GPU
     Table(f)
 };
+
+#[cfg(test)]
+#[path = "mac/prove/descriptor_records.rs"]
+mod prove_records; // mac G12
 
 #[cfg(test)]
 mod tests {

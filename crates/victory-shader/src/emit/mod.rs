@@ -79,6 +79,10 @@
 //!   geometry shader of ours between the translated vertex and pixel
 //!   shaders and draws triangle lists with the title's own vertex counts.
 //!   It binds nothing.
+//! * **Geometry shaders of the title** (mac S4, [`HwStage::Gs`], `gs_6_6`): the console's on-chip geometry stage
+//!   (one lane a triangle, the vertex shader's outputs in the ESGS ring in LDS) as a host geometry shader:
+//!   triangles in, `max_vertices` = the emits of the program, strips out; user data and descriptors as above (the
+//!   root constants visible to the geometry stage). See `gs.rs`.
 
 mod bitcode;
 pub mod live;
@@ -95,6 +99,11 @@ mod intersect_tests;
 pub mod host;
 mod lower;
 mod mesh_order; // mac S2
+#[cfg(all(test, not(windows)))]
+mod mac_dxil_check; // mac G12
+pub mod mesh_cs; // mac S5
+#[cfg(test)]
+mod mesh_cs_tests; // mac S5
 mod own_bits;
 #[cfg(all(test, windows))]
 mod permlane_tests;
@@ -104,6 +113,9 @@ mod shader;
 mod threading;
 #[cfg(windows)]
 pub mod validator;
+pub mod vertex_flat; // mac S1
+#[cfg(test)]
+mod vertex_flat_tests; // mac S1
 #[cfg(all(test, windows))]
 mod probe_tests;
 #[cfg(all(test, windows))]
@@ -124,9 +136,11 @@ use crate::{ShaderError, io, ir, resource, structure};
 
 pub use bitcode::census;
 pub use sampler::StaticSampler;
-pub use lower::{host_settings, set_host_max_wave, set_host_rdna};
+pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
+pub use mesh_cs::MeshComputeMode; // mac S5
+pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
 pub use lower::sunclamp::export_sat;
-pub use rect::rect_list_gs;
+pub use rect::{clip_as_varying, rect_list_gs, writes_clip_distance, CLIP_VARYING}; // mac S4
 pub use shader::{
     MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
     SLOT_STRIDES_COUNT, SLOT_TABLE_STRIDES, SLOT_TABLE_VIEW_ADDRESSES, SLOT_VIEW_ADDRESSES, USER_DATA_SPACE, VIEW_INTEGER, VIEW_SIGNED, VIEW_STRIDE_BITS, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
@@ -234,6 +248,12 @@ pub fn rt_pagecache() -> bool {
 pub fn viewaddr_table() -> bool {
     // mac S3: on unless `VICTORY_VIEWADDR_TABLE=0` (the shadow-mask ray programs are refused otherwise)
     switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), true) // mac S3
+}
+/// mac S3: whether `emit` tries the wave-wide branches ([`widen`]) for a wave64 program: only with
+/// `VICTORY_WAVE_WIDE=1`, and by default for the two scene kernels (upstream's rule). S3 had them on unless
+/// `=0`; on Apple GPUs they put a group barrier in a divergent path and hang single-thread groups.
+pub(crate) fn wide_branches_on(option: Option<&std::ffi::OsStr>, scene_kernel: bool) -> bool {
+    option.map_or(scene_kernel, |v| v == "1") // mac S3
 }
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
@@ -430,6 +450,10 @@ pub struct HostShader {
     pub root_uavs: Vec<u8>,
     /// Heap descriptors that can be selected from root state at bind time.
     pub root_indexed_views: Vec<crate::resource::RootIndexedView>,
+    /// mac S1: for a pixel shader, the channels it reads from vertices 1 and 2 (flat inputs the mesh stage
+    /// must fill, [`vertex_flat`]); for a mesh shader, what it was translated to hand on. Empty on a host
+    /// that has `attributeAtVertex` ([`host_attribute_at_vertex`]).
+    pub vertex_reads: Vec<VertexRead>,
 }
 
 impl HostShader {
@@ -469,6 +493,137 @@ pub struct UserData {
 /// already translated came out changed (an extra evaluation in each), for
 /// the sake of 9 that did not translate.
 pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
+    translate_with(container, &[])
+}
+
+/// [`translate`] of a mesh program that hands the values of `reads` on to a pixel program (mac S1: what
+/// the pixel program's `HostShader::vertex_reads` lists).
+pub fn translate_with(container: &[u8], reads: &[VertexRead]) -> Result<HostShader, ShaderError> {
+    vertex_flat::with_reads(reads, || translate_first_half(container)) // mac S1
+}
+
+/// [`translate_with`], and for a vertex shader of a rectangle list: with its clip distances written as
+/// plain outputs ([`clip_as_varying`]; mac S4) when `rect_clip`.
+pub fn translate_variant(container: &[u8], reads: &[VertexRead], rect_clip: bool) -> Result<HostShader, ShaderError> {
+    if rect_clip {
+        clip_as_varying(|| translate_with(container, reads)) // mac S4
+    } else {
+        translate_with(container, reads)
+    }
+}
+
+// mac S5: a mesh program as a compute program and a fetch vertex program (`mesh_cs`).
+
+/// mac S5: [`emit`] of a mesh program as a compute program and a fetch vertex program (the two products the
+/// `VMCS` part carries); `Err` for a program the compute form cannot take.
+pub(crate) fn emit_mesh_compute(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+) -> Result<mesh_cs::MeshCompute, ShaderError> {
+    let _sun = lower::sunclamp::scope(c.bytes, native.stage);
+    lower::take_needs();
+    let (shader, _, built) = emit_program_as(c, native, p, st, io, res, true)?;
+    mesh_cs::MeshCompute::new(shader, &built.expect("a compute form of a mesh program"))
+}
+
+/// mac S5: the compute form and the fetch vertex program of the mesh program in `container`, whatever the
+/// host's mode (tools: the census, which asks why a program has none). `reads`: what the pixel program hands
+/// the mesh stage as in [`translate_with`].
+pub fn translate_mesh_compute(container: &[u8], reads: &[VertexRead]) -> Result<mesh_cs::MeshCompute, ShaderError> {
+    vertex_flat::with_reads(reads, || {
+        let once = || {
+            let c = Container::parse(container)?;
+            let dxil = c.part(FourCC::DXIL).or(c.part(FourCC::ACCC)).ok_or(ShaderError::Malformed("no DXIL part"))?;
+            let native = crate::native_programs(dxil.data)?
+                .into_iter()
+                .find(|p| p.stage == HwStage::Ms)
+                .ok_or(ShaderError::Unsupported { offset: 0, what: "a container without a mesh program" })?;
+            let p = crate::spill::build(&native)?;
+            let st = structure::structure(&p);
+            let res = resource::track(&p, &native.layout, native.stage, st.as_ref().ok())?;
+            let io = io::raise(&p, &native)?;
+            emit_mesh_compute(&c, &native, &p, &st?, &io, &res)
+        };
+        match once() {
+            Err(ShaderError::Unsupported { what, .. }) if what == lower::FIRST_HALF => lower::with_first_half_pairs(once),
+            other => other,
+        }
+    })
+}
+
+/// mac S5: the mesh program `shader` (translated from `c`) with the `VMCS` part the host asks for
+/// ([`host_mesh_compute`]): the container otherwise as it was. A program the compute form cannot take (or
+/// that the mode leaves out) keeps the container as it is; the mesh pipeline's own translation is never
+/// changed.
+fn with_mesh_compute(
+    shader: HostShader,
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+) -> HostShader {
+    let mode = host_mesh_compute();
+    if mode == mesh_cs::MeshComputeMode::Off || native.stage != HwStage::Ms {
+        return shader;
+    }
+    let m = match emit_mesh_compute(c, native, p, st, io, res) {
+        Ok(m) => m,
+        Err(_) => return shader,
+    };
+    let fits = m.metal_mesh_bytes <= mesh_cs::METAL_MESH_LIMIT;
+    if mode == mesh_cs::MeshComputeMode::Problem && fits {
+        return shader;
+    }
+    match m.attach(&shader.dxil) {
+        Ok(dxil) => HostShader { dxil, ..shader },
+        Err(_) => shader,
+    }
+}
+
+/// mac S5: what the host asks for (the `VMCS` part, [`mesh_cs`]); set by the host at creation (victory-gpu, from
+/// the Metal chain), else `VICTORY_MESH_COMPUTE=0|1|2` (off, problem programs, all), else off.
+pub fn host_mesh_compute() -> mesh_cs::MeshComputeMode {
+    use mesh_cs::MeshComputeMode::*;
+    #[cfg(test)]
+    if let Some(m) = lower::TEST_MESH_COMPUTE.get() {
+        return m;
+    }
+    match HOST_MESH_COMPUTE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Off,
+        2 => Problem,
+        3 => All,
+        _ => {
+            static ENV: std::sync::OnceLock<mesh_cs::MeshComputeMode> = std::sync::OnceLock::new();
+            *ENV.get_or_init(|| match std::env::var("VICTORY_MESH_COMPUTE").as_deref() {
+                Ok("1") => Problem,
+                Ok("2") => All,
+                _ => Off,
+            })
+        }
+    }
+}
+
+static HOST_MESH_COMPUTE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// mac S5: tells the translator what the host asks for ([`host_mesh_compute`]).
+pub fn set_host_mesh_compute(mode: mesh_cs::MeshComputeMode) {
+    use mesh_cs::MeshComputeMode::*;
+    HOST_MESH_COMPUTE.store(match mode { Off => 1, Problem => 2, All => 3 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// mac S5: the mode in the two bits (29, 30) of the last settings word.
+pub(super) fn mesh_compute_bits(mode: mesh_cs::MeshComputeMode) -> u32 {
+    use mesh_cs::MeshComputeMode::*;
+    (match mode { Off => 0u32, Problem => 1, All => 2 }) << 29
+}
+
+fn translate_first_half(container: &[u8]) -> Result<HostShader, ShaderError> {
     match translate_plain(container) {
         Err(ShaderError::Unsupported { what, .. }) if what == lower::FIRST_HALF => {
             lower::with_first_half_pairs(|| translate_plain(container))
@@ -488,25 +643,46 @@ fn translate_plain(container: &[u8]) -> Result<HostShader, ShaderError> {
         .find(|p| {
             matches!(
                 p.stage,
-                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms
+                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms | HwStage::Gs // mac S4
             )
         })
         .ok_or(ShaderError::Unsupported {
             offset: 0,
-            what: "a container without a vertex, pixel, compute or mesh program",
+            what: "a container without a vertex, pixel, compute, mesh or geometry program",
         })?;
     let p = crate::spill::build(&native)?;
+    // mac S4: a geometry program's ring accesses are taken apart, and the arithmetic that only addressed them goes.
+    let (p, ring) = if native.stage == HwStage::Gs {
+        let (p, ring) = crate::gs::prepare(p)?;
+        (p, Some(ring))
+    } else {
+        (p, None)
+    };
     // Structurisation first: tracing per-lane descriptors needs it (its
     // failure is reported after the earlier stages').
     let st = structure::structure(&p);
     let res = resource::track(&p, &native.layout, native.stage, st.as_ref().ok())?;
-    let io = io::raise(&p, &native)?;
+    let mut io = io::raise(&p, &native)?;
+    io.gs = ring; // mac S4
     let st = st?;
     emit(&c, &native, &p, &st, &io, &res)
 }
 
 /// Emits a program whose earlier stages already ran.
 pub fn emit(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+) -> Result<HostShader, ShaderError> {
+    let shader = emit_main(c, native, p, st, io, res)?;
+    Ok(with_mesh_compute(shader, c, native, p, st, io, res)) // mac S5
+}
+
+/// [`emit`] before the mesh-as-compute part is added (mac S5).
+fn emit_main(
     c: &Container,
     native: &NativeProgram,
     p: &ir::Program,
@@ -625,9 +801,10 @@ pub fn emit(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
-        let _ = scene_kernel; // mac S3
-        let wide_on = wide_option.as_ref().is_none_or(|v| v != "0"); // mac S3
+        // mac S3: back to upstream's default (on for the two scene kernels, `=1` turns it on for the rest).
+        // S3 had it on unless `=0`; on Apple GPUs the wide branch puts a group barrier in a divergent
+        // path and `ptfx_CS_lightAtlas_Sprite` (single-thread group) hangs for ~100 s (prologue w54-70).
+        let wide_on = wide_branches_on(wide_option.as_deref(), scene_kernel); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
@@ -883,6 +1060,20 @@ fn emit_program(
     io: &io::Io,
     res: &resource::Resources,
 ) -> Result<(HostShader, Option<u32>), ShaderError> {
+    emit_program_as(c, native, p, st, io, res, false).map(|(shader, wave, _)| (shader, wave)) // mac S5
+}
+
+/// [`emit_program`]; with `cs` (a mesh program), the compute form of it (S5): the layout it wrote to and
+/// the lists it was made of come back too (mac S5).
+fn emit_program_as(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+    cs: bool,
+) -> Result<(HostShader, Option<u32>, Option<mesh_cs::Built>), ShaderError> {
     let sig = |fourcc| -> Result<Vec<container::SigElement>, ShaderError> {
         match c.part(fourcc) {
             Some(part) => signature(part.data),
@@ -892,6 +1083,17 @@ fn emit_program(
     let pixel = native.stage == HwStage::Ps;
     let mut inputs = sig(FourCC::ISG1)?;
     let mut outputs = sig(FourCC::OSG1)?;
+    // mac S4: a geometry shader's inputs come interpolated as the vertex shader's outputs were declared.
+    if native.stage == HwStage::Gs {
+        for e in &mut inputs {
+            e.interp = match (e.kind, e.comp) {
+                (3, _) => 4,
+                (0 | 6 | 7, 9) => 2,
+                (0, _) => 1,
+                _ => 0,
+            };
+        }
+    }
     // Interpolation as DXC declares it by default; pixel inputs that are
     // read get the mode their barycentrics say.
     let interpolated = if pixel { &mut inputs } else { &mut outputs };
@@ -929,8 +1131,16 @@ fn emit_program(
     for e in &mut prims {
         e.interp = 1;
     }
-    // mac S2: a mesh shader's outputs numbered for the least padding in Metal's struct.
+    // mac S1: a mesh shader's per-primitive outputs for the pixel shader's reads of vertices 1 and 2,
+    // added before S2 numbers them, so they are ordered with the others.
     if matches!(native.io, crate::native::StageIo::Ms(_)) {
+        let reads = vertex_flat::current(); // mac S1
+        let row = vertex_flat::first_row(&prims); // mac S1
+        prims.extend(vertex_flat::elements(&reads, Some(row))); // mac S1
+    }
+    // mac S2: a mesh shader's outputs numbered for the least padding in Metal's struct (not the
+    // compute form (S5), whose scratch buffer has no padding rules).
+    if matches!(native.io, crate::native::StageIo::Ms(_)) && !cs {
         mesh_order::vertex(&mut outputs); // mac S2
         mesh_order::primitive(&mut prims); // mac S2
     }
@@ -951,6 +1161,13 @@ fn emit_program(
         }
         _ => 0,
     };
+    // mac S5: the compute form of a mesh program: the scratch layout, from the lists as they are.
+    let mut built = None;
+    if let (true, crate::native::StageIo::Ms(ms)) = (cs, &native.io) {
+        let layout = mesh_cs::Layout::build(&outputs, &prims, ms.threads, ms.max_vertices, ms.max_primitives)?;
+        let metal_bytes = mesh_cs::metal_bytes(&outputs, &prims, ms.threads, ms.max_vertices, ms.max_primitives);
+        built = Some(mesh_cs::Built { layout, outputs: outputs.clone(), prims: prims.clone(), metal_bytes });
+    }
     let l = lower::lower(&lower::Parts {
         native,
         p,
@@ -961,10 +1178,11 @@ fn emit_program(
         outputs,
         prims,
         mesh_stride,
+        cs: built.as_ref().map(|b| b.layout.clone()), // mac S5
     })?;
     let wave_size = l.wave_size;
     let shader = HostShader {
-        stage: native.stage,
+        stage: if built.is_some() { HwStage::Cs } else { native.stage }, // mac S5
         dxil: l.dxil,
         user_data: l.user_data,
         static_samplers: l
@@ -984,8 +1202,11 @@ fn emit_program(
         root_srvs: l.root_srvs,
         root_uavs: l.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
+        vertex_reads: l.vertex_reads, // mac S1
     };
-    Ok((shader, wave_size))
+    #[cfg(all(test, not(windows)))]
+    mac_dxil_check::check(&shader.dxil); // mac G12
+    Ok((shader, wave_size, built))
 }
 
 /// The title's vertex output interpolation lives in PSV0. A float packed
@@ -1766,6 +1987,7 @@ mod tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         let file = |var: &str, stage| {
             std::env::var(var).ok().map(|p| super::HostShader {
@@ -1778,6 +2000,7 @@ mod tests {
                 root_srvs: Vec::new(),
                 root_uavs: Vec::new(),
                 root_indexed_views: Vec::new(),
+                vertex_reads: Vec::new(), // mac S1
             })
         };
         let ps = file("VICTORY_REF_PS", crate::HwStage::Ps).unwrap_or(ps);
@@ -1937,6 +2160,7 @@ mod tests {
                         stride: 0,
                         size: (16, 16),
                         mesh_groups: 1,
+                        scratch: None, // mac S5
                     },
                 )
                 .unwrap_or_else(|e| panic!("{label}: draw: {e}"));
@@ -1971,6 +2195,17 @@ mod tests {
 
     /// The triangle with its far corners at `reach` - 1.
     fn triangle_mesh_to(prim: u32, reach: f32) -> Result<HostShader, ShaderError> {
+        let (bytes, native) = triangle_mesh_program(prim, reach);
+        let c = Container::parse(&bytes)?;
+        let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
+        let st = structure::structure(&p)?;
+        let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
+        let io = io::raise(&p, &native)?;
+        emit(&c, &native, &p, &st, &io, &res)
+    }
+
+    /// The container and native program of [`triangle_mesh_to`].
+    fn triangle_mesh_program(prim: u32, reach: f32) -> (Vec<u8>, NativeProgram) {
         // (the second corner's y comes out as 2 x its lane bit: half of it)
         let [x, y] = [reach.to_bits(), (reach / 2.0).to_bits()];
         let words = [
@@ -2026,13 +2261,7 @@ mod tests {
             half: false,
         };
         let osg1 = container::signature(&[position], false);
-        let bytes = crate::dxbc::build(&[(FourCC::OSG1, &osg1)]);
-        let c = Container::parse(&bytes)?;
-        let p = ir::build(&native.patched_code(), native.wave64, native.vgprs)?;
-        let st = structure::structure(&p)?;
-        let res = resource::track(&p, &native.layout, native.stage, Some(&st))?;
-        let io = io::raise(&p, &native)?;
-        emit(&c, &native, &p, &st, &io, &res)
+        (crate::dxbc::build(&[(FourCC::OSG1, &osg1)]), native)
     }
 
     /// A primitive export's corners are 9-bit indices: the edge flag above
@@ -2120,6 +2349,7 @@ mod tests {
                             stride: 0,
                             size: (16, 16),
                             mesh_groups: 1,
+                            scratch: None, // mac S5
                         },
                     )
                     .unwrap_or_else(|e| panic!("{label}: draw: {e}"));
@@ -2138,6 +2368,92 @@ mod tests {
         }
         if ran == 0 {
             eprintln!("no device with mesh shaders; skipped");
+        }
+    }
+
+    /// mac S5: the same triangle programs as a compute pass and a fetch draw (`mesh_cs`): the flagged
+    /// triangle fills the target as through the mesh pipeline, the culled one lights nothing.
+    #[test]
+    #[cfg(windows)]
+    fn mesh_compute_form_draws_flagged_triangles_and_drops_culled_ones() {
+        use super::host::{Draw, Host, Root, ScratchPass};
+        use windows::Win32::Graphics::Direct3D12::*;
+        let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let ps = constant_color();
+        let ps = HostShader {
+            stage: HwStage::Ps,
+            dxil: ps,
+            user_data: Vec::new(),
+            samplers: Vec::new(),
+            static_samplers: Vec::new(),
+            root_cbvs: Vec::new(),
+            root_srvs: Vec::new(),
+            root_uavs: Vec::new(),
+            root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(),
+        };
+        let Ok(host) = Host::new(false) else {
+            eprintln!("no SM 6.6 hardware device; skipped");
+            return;
+        };
+        for (prim, culled) in [
+            (TRIANGLE, false),
+            (TRIANGLE | EDGE_FLAGS, false),
+            (TRIANGLE | EDGE_FLAGS | CULL, true),
+            // an index past the vertices (there are 32): the primitive is dropped
+            (40 << 10 | 2 << 20, true),
+        ] {
+            let (bytes, native) = triangle_mesh_program(prim, 4.0);
+            let m = {
+                let c = Container::parse(&bytes).unwrap();
+                let p = ir::build(&native.patched_code(), native.wave64, native.vgprs).unwrap();
+                let st = structure::structure(&p).unwrap();
+                let res = resource::track(&p, &native.layout, native.stage, Some(&st)).unwrap();
+                let io = io::raise(&p, &native).unwrap();
+                super::emit_mesh_compute(&c, &native, &p, &st, &io, &res).unwrap()
+            };
+            let root = host
+                .root_signature_scratch(
+                    &[
+                        (&m.cs, D3D12_SHADER_VISIBILITY_ALL),
+                        (&m.vs, D3D12_SHADER_VISIBILITY_VERTEX),
+                        (&ps, D3D12_SHADER_VISIBILITY_PIXEL),
+                    ],
+                    true,
+                )
+                .unwrap();
+            let cs = host.compute_pipeline_with(&root, &m.cs.dxil).unwrap();
+            let gfx = host.pipeline_with(&root, &m.vs.dxil, &ps.dxil).unwrap();
+            let texels = host
+                .draw(
+                    &root,
+                    &gfx,
+                    &Draw {
+                        roots: vec![(1, Root::Constants(vec![0])), (2, Root::Constants(vec![0])), (5, Root::Constants(vec![1, 1, 1, 0]))],
+                        textures: &[],
+                        samplers: &[],
+                        vertices: &[],
+                        stride: 0,
+                        size: (16, 16),
+                        mesh_groups: 0,
+                        scratch: Some(ScratchPass {
+                            cs: &cs,
+                            roots: vec![(0, Root::Constants(vec![0])), (5, Root::Constants(vec![1, 1, 1, 0]))],
+                            dim: [1, 1, 1],
+                            bytes: u64::from(m.group_bytes),
+                            uav: 3,
+                            srv: 4,
+                            draw_vertices: m.draw_vertices,
+                        }),
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{prim:#x}: draw: {e}"));
+            let lit = texels.iter().filter(|t| t[3] != 0.0).count();
+            if culled {
+                assert_eq!(lit, 0, "{prim:#x}: a culled triangle lit texels");
+            } else {
+                assert!(texels.iter().all(|t| *t == [1.0, 0.5, 0.25, 1.0]), "{prim:#x}: {lit} of 256 texels lit");
+            }
         }
     }
 
@@ -2362,6 +2678,7 @@ mod tests {
             outputs: Vec::new(),
             prims: Vec::new(),
             mesh_stride: 0,
+            cs: None, // mac S5
         })
         .unwrap();
         // The calls that read the SRV: 28 a dword, 7 with four a call.
@@ -2387,6 +2704,7 @@ mod tests {
             root_srvs: l.root_srvs,
             root_uavs: l.root_uavs,
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         let (root, pso) = host.compute_pipeline(&cs).unwrap();
         // Twelve dwords: the loads below run across the view's end.
@@ -2519,6 +2837,7 @@ mod tests {
             outputs: Vec::new(),
             prims: Vec::new(),
             mesh_stride: 0,
+            cs: None, // mac S5
         })
         .unwrap();
         let mut dxil = l.dxil;
@@ -2540,6 +2859,7 @@ mod tests {
                 root_srvs: l.root_srvs,
                 root_uavs: l.root_uavs,
                 root_indexed_views: Vec::new(),
+                vertex_reads: Vec::new(), // mac S1
             };
             let (root, pso) = host.compute_pipeline(&cs).unwrap();
             let inputs: Vec<u32> = [
@@ -2959,6 +3279,7 @@ mod barycentric_tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         validate(&vs);
         // One triangle covers an 8x8 target, with attribute values 2, 6, 10.
@@ -3001,6 +3322,7 @@ mod barycentric_tests {
                             stride: 32,
                             size: (8, 8),
                             mesh_groups: 0,
+                            scratch: None, // mac S5
                         },
                     )
                     .expect("draw partial interpolation");

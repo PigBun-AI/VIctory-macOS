@@ -984,6 +984,10 @@ fn create() -> windows::core::Result<Host> {
             let amd = crate::indirect::amd(&device);
             victory_shader::emit::set_host_rdna(amd && o1.WaveLaneCountMin == 32 && o1.WaveLaneCountMax == 64);
         }
+        // mac S1: whether the host takes `attributeAtVertex`; decided before any shader is translated.
+        victory_shader::emit::set_host_attribute_at_vertex(crate::mac::attribute_at_vertex::host_has_it());
+        // mac S5: whether mesh shaders get a compute form and a fetch vertex program (the Metal chain with a back that runs the part: those over 32 KiB).
+        victory_shader::emit::set_host_mesh_compute(crate::mac::mesh_compute::host_mode());
         let messages = debug
             .then(|| device.cast::<ID3D12InfoQueue>().ok())
             .flatten();
@@ -4006,6 +4010,12 @@ fn hand_back(back: &[Declared]) {
 }
 
 impl Host {
+    /// mac S1: whether the host takes `dx.op.attributeAtVertex` (false on D3DMetal and the Metal backend).
+    #[allow(dead_code)]
+    pub(crate) fn attribute_at_vertex(&self) -> bool {
+        victory_shader::emit::host_attribute_at_vertex()
+    }
+
     /// Whether the host runs mesh shaders at shader model 6.6 (translated
     /// mesh shaders need both); logged once.
     pub(crate) fn mesh_shaders(&self) -> bool {
@@ -9021,6 +9031,13 @@ impl Meter {
                 placed = crate::descriptor::host::PLACED_TEXTURE_SLOTS.load(Ordering::Relaxed),
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
+            let builder_making = crate::pipeline::BUILDER_MAKING.swap(0, Ordering::Relaxed);
+            if builder_making > 0 {
+                tracing::info!(
+                    "ray-tracing structure builder: {:.1} dispatches/frame skipped while its pipelines are being made",
+                    builder_making as f64 / frames
+                );
+            }
             #[cfg(feature = "diagnostics")]
             {
                 let put = [0, 1, 2, 3].map(|i| crate::shadow::PUT[i].swap(0, Ordering::Relaxed) as f64 / frames);

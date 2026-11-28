@@ -86,11 +86,11 @@ failed, 5 Windows unreachable. Environment knobs: `SYNC_DIR`, `SYNC_WIN_HOST`, `
 ## Testing without touching a live worktree
 
 ```sh
-git -C ../VIctory-macOS worktree add ../VIctory-livetr-synctest -b tmp/sync-test mac/livetr
-cp -cR target/debug ../VIctory-livetr-synctest/target/debug   # optional: APFS clone, saves the cold build
-../VIctory-livetr-synctest/tools/mac/sync-windows.sh --target-branch tmp/sync-test \
+git -C ../VIctory-macOS worktree add ../worktrees/mac/synctest -b tmp/sync-test mac/livetr
+cp -cR target/debug ../worktrees/mac/synctest/target/debug   # optional: APFS clone, saves the cold build
+../worktrees/mac/synctest/tools/mac/sync-windows.sh --target-branch tmp/sync-test \
     --state /tmp/sync-state --report-dir /tmp/sync-reports [--dry-run]
-git -C ../VIctory-macOS worktree remove --force ../VIctory-livetr-synctest && git -C ../VIctory-macOS branch -D tmp/sync-test
+git -C ../VIctory-macOS worktree remove --force ../worktrees/mac/synctest && git -C ../VIctory-macOS branch -D tmp/sync-test
 ```
 Conflict / failure scenarios: make a commit on top of the Windows tip, point
 `refs/remotes/win-all/synctest/<x>` at it and run with `--no-fetch --branch synctest/<x>`.

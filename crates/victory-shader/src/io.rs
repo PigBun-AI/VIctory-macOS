@@ -70,6 +70,11 @@ pub enum Input {
     MeshGroup,
     /// Mesh: s3, the wave's index in the group in bits 24-27.
     MergedWaveInfo,
+    /// Geometry (mac S4): `v0` or `v1`, the ESGS ring offsets of vertices 0 and 1, or 2 and 3 (16 bits each);
+    /// the number is the first vertex.
+    GsVertexPair(u8),
+    /// Geometry (mac S4): `s3`, the merged wave info (the number of primitives in bits 8-15).
+    GsWaveInfo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +195,8 @@ pub struct Io {
     /// Compute: how many SGPRs the hardware initializes
     /// ([`ComputeIo::initialized_sgprs`](crate::native::ComputeIo::initialized_sgprs)).
     pub initialized_sgprs: Option<u8>,
+    /// A geometry program's ring accesses and messages (mac S4).
+    pub gs: Option<crate::gs::Ring>,
 }
 
 /// Raises the I/O of `p`, built from `native`'s patched code. Fails for
@@ -301,6 +308,16 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
                 (Reg::S(3), Input::MergedWaveInfo),
             ];
             (loaded, &[][..], &ms.outputs[..])
+        }
+        // mac S4: a geometry program takes the ESGS ring offsets of its vertices in v0 and v1 and the wave's
+        // info in s3; it reads and writes the ring and sends its vertices by message (`crate::gs`).
+        (_, HwStage::Gs) => {
+            let loaded = vec![
+                (Reg::V(0), Input::GsVertexPair(0)),
+                (Reg::V(1), Input::GsVertexPair(2)),
+                (Reg::S(3), Input::GsWaveInfo),
+            ];
+            (loaded, &[][..], &[][..])
         }
         _ => return Err(unsupported(0, "I/O of this stage")),
     };

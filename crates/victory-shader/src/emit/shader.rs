@@ -248,6 +248,23 @@ pub(crate) struct Shader {
     pcache: Option<V>,
     main: V,
     pub entry: usize,
+    /// mac S5: a mesh program lowered as a compute program (`mesh_cs`): `finish` makes a `cs` of it.
+    pub cs_form: bool,
+    /// mac S5: the scratch buffer of the mesh-as-compute pair (a raw UAV for the compute program, a raw SRV for the
+    /// fetch vertex program), and its handle once made.
+    pub scratch: Option<Scratch>,
+}
+
+/// mac S5: where the scratch buffer of the mesh-as-compute pair is bound (`mesh_cs`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Scratch {
+    pub space: u32,
+    pub register: u32,
+    /// A UAV (the compute program writes it), else an SRV (the vertex program reads it).
+    pub uav: bool,
+    pub handle: Option<V>,
+    /// The dispatch dimensions block (a CBV `b0` in the same space, 16 bytes `{x, y, z, 0}`), once made.
+    pub dims: Option<V>,
 }
 
 impl Shader {
@@ -302,6 +319,8 @@ impl Shader {
             pcache: None,
             main,
             entry,
+            cs_form: false, // mac S5
+            scratch: None,  // mac S5
         }
     }
 
@@ -339,6 +358,8 @@ impl Shader {
         opcode: u32,
         args: &[V],
     ) -> V {
+        #[cfg(test)]
+        super::vertex_flat::note_op(name); // mac S1
         let mut params = vec![self.t.i32];
         params.extend(args.iter().map(|&a| self.m.type_of(a)));
         let fty = self.m.func_ty(ret, params);
@@ -444,6 +465,52 @@ impl Shader {
         let h = self.annotate(block, h, 11 | 0x1000, 0);
         self.flags |= flags::RAW_BUFFERS;
         self.root_uavs.push((slot, h));
+        h
+    }
+
+    /// mac S5: the handle of the dispatch dimensions block (`b0` of the scratch's space), made in the entry block.
+    pub fn scratch_dims_handle(&mut self) -> V {
+        let sc = self.scratch.expect("a scratch binding");
+        if let Some(h) = sc.dims {
+            return h;
+        }
+        let (r, i) = (self.m.i32(0), self.m.i32(0));
+        let bind = [r, r, self.m.i32(sc.space), self.m.i8(2)];
+        let bind = self.m.aggregate(self.t.bind, &bind);
+        let f = self.m.bool(false);
+        let block = self.entry;
+        let h = self.op(block, "createHandleFromBinding", Attr::ReadNone, self.t.handle, 217, &[bind, i, f]);
+        let h = self.annotate(block, h, 13, 16);
+        if let Some(s) = self.scratch.as_mut() {
+            s.dims = Some(h);
+        }
+        h
+    }
+
+    /// mac S5: the handle of the scratch buffer (`scratch` says the register, space and kind), made in the entry block.
+    pub fn scratch_handle(&mut self) -> V {
+        let sc = self.scratch.expect("a scratch binding");
+        if let Some(h) = sc.handle {
+            return h;
+        }
+        let r = self.m.i32(sc.register);
+        let bind = [r, r, self.m.i32(sc.space), self.m.i8(if sc.uav { 1 } else { 0 })];
+        let bind = self.m.aggregate(self.t.bind, &bind);
+        let f = self.m.bool(false);
+        let block = self.entry;
+        let h = self.op(
+            block,
+            "createHandleFromBinding",
+            Attr::ReadNone,
+            self.t.handle,
+            217,
+            &[bind, r, f],
+        );
+        let h = self.annotate(block, h, if sc.uav { 11 | 0x1000 } else { 11 }, 0);
+        self.flags |= flags::RAW_BUFFERS;
+        if let Some(s) = self.scratch.as_mut() {
+            s.handle = Some(h);
+        }
         h
     }
 
@@ -602,7 +669,8 @@ impl Shader {
         // Unordered views outside pixel and compute programs (memory by
         // address), as DXC counts them: ranges declared below, not views
         // picked from the heap (VIctory a1a2077a).
-        let compute = self.threads.is_some() && self.mesh.is_none() && self.geometry.is_none();
+        let as_cs = self.cs_form; // mac S5
+        let compute = self.threads.is_some() && (self.mesh.is_none() || as_cs) && self.geometry.is_none(); // mac S5
         if !self.root_uavs.is_empty() && !self.pixel && !compute {
             self.flags |= flags::UAVS_EVERY_STAGE;
         }
@@ -617,6 +685,7 @@ impl Shader {
             || !self.root_cbvs.is_empty()
             || !self.root_srvs.is_empty()
             || !self.root_uavs.is_empty()
+            || self.scratch.is_some() // mac S5
         {
             let empty = self.m.md_str("");
             let mut cbvs = None;
@@ -667,24 +736,48 @@ impl Shader {
                     dxil_kind: 13,
                 });
             }
+            // mac S5: the dispatch dimensions block of the scratch's space (declared in every form).
+            if let Some(sc) = self.scratch {
+                let arr = self.m.array(4, self.t.i32);
+                let ty = self.m.named_struct("ScratchDims", vec![arr]);
+                let p = self.m.ptr(ty);
+                let u = self.m.undef(p);
+                let ops = vec![
+                    Some(i32c(&mut self, cbv_list.len() as u32)),
+                    Some(self.m.md_value(u)),
+                    Some(empty),
+                    Some(i32c(&mut self, sc.space)),
+                    Some(i32c(&mut self, 0)),
+                    Some(i32c(&mut self, 1)),
+                    Some(i32c(&mut self, 16)),
+                    None,
+                ];
+                cbv_list.push(Some(self.m.md_node(ops)));
+                bindings.push(Binding { kind: 2, space: sc.space, register: 0, dxil_kind: 13 });
+            }
             if !cbv_list.is_empty() {
                 cbvs = Some(self.m.md_node(cbv_list));
             }
+            // mac S5: the scratch buffer is one more raw view, in its own space.
+            let scratch_srv = self.scratch.filter(|s| !s.uav);
+            let scratch_uav = self.scratch.filter(|s| s.uav);
             let mut srvs = None;
-            if !self.root_srvs.is_empty() {
+            if !self.root_srvs.is_empty() || scratch_srv.is_some() {
                 let ty = self
                     .m
                     .named_struct("struct.ByteAddressBuffer", vec![self.t.i32]);
                 let p = self.m.ptr(ty);
                 let u = self.m.undef(p);
                 let mut list = Vec::new();
-                for (n, (slot, _)) in self.root_srvs.clone().into_iter().enumerate() {
+                let mut places: Vec<(u32, u32)> = self.root_srvs.iter().map(|r| (ROOT_CBV_SPACE, u32::from(r.0))).collect();
+                places.extend(scratch_srv.map(|s| (s.space, s.register))); // mac S5
+                for (n, (space, register)) in places.into_iter().enumerate() {
                     let ops = vec![
                         Some(i32c(&mut self, n as u32)),
                         Some(self.m.md_value(u)),
                         Some(empty),
-                        Some(i32c(&mut self, ROOT_CBV_SPACE)),
-                        Some(i32c(&mut self, u32::from(slot))),
+                        Some(i32c(&mut self, space)),
+                        Some(i32c(&mut self, register)),
                         Some(i32c(&mut self, 1)),
                         Some(i32c(&mut self, 11)),
                         Some(i32c(&mut self, 0)),
@@ -693,15 +786,15 @@ impl Shader {
                     list.push(Some(self.m.md_node(ops)));
                     bindings.push(Binding {
                         kind: 4,
-                        space: ROOT_CBV_SPACE,
-                        register: u32::from(slot),
+                        space,
+                        register,
                         dxil_kind: 11,
                     });
                 }
                 srvs = Some(self.m.md_node(list));
             }
             let mut uavs = None;
-            if !self.root_uavs.is_empty() {
+            if !self.root_uavs.is_empty() || scratch_uav.is_some() {
                 let ty = self
                     .m
                     .named_struct("struct.RWByteAddressBuffer", vec![self.t.i32]);
@@ -710,7 +803,9 @@ impl Shader {
                 let no = self.m.bool(false);
                 let no = self.m.md_value(no);
                 let mut list = Vec::new();
-                for (n, (slot, _)) in self.root_uavs.clone().into_iter().enumerate() {
+                let mut places: Vec<(u32, u32)> = self.root_uavs.iter().map(|r| (ROOT_CBV_SPACE, u32::from(r.0))).collect();
+                places.extend(scratch_uav.map(|s| (s.space, s.register))); // mac S5
+                for (n, (space, register)) in places.into_iter().enumerate() {
                     // Id, variable, name, space, lower bound, range size,
                     // shape (11: raw buffer), globally coherent, counter,
                     // rasterizer ordered, no extra properties.
@@ -718,8 +813,8 @@ impl Shader {
                         Some(i32c(&mut self, n as u32)),
                         Some(self.m.md_value(u)),
                         Some(empty),
-                        Some(i32c(&mut self, ROOT_CBV_SPACE)),
-                        Some(i32c(&mut self, u32::from(slot))),
+                        Some(i32c(&mut self, space)),
+                        Some(i32c(&mut self, register)),
                         Some(i32c(&mut self, 1)),
                         Some(i32c(&mut self, 11)),
                         Some(no),
@@ -730,8 +825,8 @@ impl Shader {
                     list.push(Some(self.m.md_node(ops)));
                     bindings.push(Binding {
                         kind: 7,
-                        space: ROOT_CBV_SPACE,
-                        register: u32::from(slot),
+                        space,
+                        register,
                         dxil_kind: 11,
                     });
                 }
@@ -779,7 +874,7 @@ impl Shader {
             self.m.named_md("dx.resources", vec![r]);
         }
 
-        let graphics = self.threads.is_none() || self.mesh.is_some();
+        let graphics = !as_cs && (self.threads.is_none() || self.mesh.is_some()); // mac S5
         if graphics {
             // shortcut: every output is declared to depend on every input; the
             // exact sets need a dependence pass. Drivers read this state.
@@ -849,7 +944,7 @@ impl Shader {
         if let Some(threads) = self.threads {
             let t = threads.map(|n| Some(i32c(&mut self, n)));
             let t = self.m.md_node(t.to_vec());
-            match self.mesh {
+            match self.mesh.filter(|_| !as_cs) { // mac S5
                 // Mesh state (tag 9): threads, maximum vertices and
                 // primitives, topology, payload bytes.
                 Some(mesh) => {
@@ -894,7 +989,7 @@ impl Shader {
         self.m.named_md("dx.valver", vec![version]);
         // Program kinds: 0 pixel, 1 vertex, 2 geometry, 5 compute, 13 mesh.
         let (name, kind) = match (self.threads, self.pixel) {
-            _ if self.mesh.is_some() => ("ms", 13u32),
+            _ if self.mesh.is_some() && !as_cs => ("ms", 13u32), // mac S5
             _ if self.geometry.is_some() => ("gs", 2),
             (Some(_), _) => ("cs", 5u32),
             (None, true) => ("ps", 0),
@@ -954,8 +1049,10 @@ impl Shader {
             features |= 0x1000_0000;
         }
         let sfi0 = features.to_le_bytes();
-        let isg1 = container::signature(&self.inputs, true);
-        let osg1 = container::signature(&self.outputs, false);
+        // mac S5: a compute form has no signatures (its mesh outputs live in the scratch buffer).
+        let (inputs, outputs) = if as_cs { (Vec::new(), Vec::new()) } else { (self.inputs.clone(), self.outputs.clone()) };
+        let isg1 = container::signature(&inputs, true);
+        let osg1 = container::signature(&outputs, false);
         let flag = if self.pixel {
             self.outputs.iter().any(|o| (17..=19).contains(&o.kind))
         } else {
@@ -964,10 +1061,10 @@ impl Shader {
         let psv0 = container::psv(&Psv {
             stage: kind as u8,
             flag: flag && self.threads.is_none(),
-            inputs: &self.inputs,
-            outputs: &self.outputs,
-            prims: &self.prims,
-            mesh: self.mesh.map(|m| (m, self.lds_dwords * 4)),
+            inputs: &inputs,
+            outputs: &outputs,
+            prims: if as_cs { &[] } else { &self.prims }, // mac S5
+            mesh: self.mesh.filter(|_| !as_cs).map(|m| (m, self.lds_dwords * 4)), // mac S5
             geometry: self.geometry.map(|g| g.max_vertices),
             bindings: &bindings,
             threads: self.threads.unwrap_or_default(),
@@ -977,7 +1074,7 @@ impl Shader {
         let psg1 = container::signature(&self.prims, false);
         let mut parts: Vec<(&[u8; 4], &[u8])> =
             vec![(b"SFI0", &sfi0), (b"ISG1", &isg1), (b"OSG1", &osg1)];
-        if self.mesh.is_some() {
+        if self.mesh.is_some() && !as_cs { // mac S5
             parts.push((b"PSG1", &psg1));
         }
         parts.extend([(b"PSV0", &psv0[..]), (b"HASH", &hash), (b"DXIL", &dxil)]);

@@ -129,6 +129,7 @@ fn lowered_counted(
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     }, counted);
     lower::TEST_HOST_WAVE.set(was);
     let lowered = lowered?;
@@ -142,6 +143,7 @@ fn lowered_counted(
         root_srvs: lowered.root_srvs,
         root_uavs: lowered.root_uavs,
         root_indexed_views: res.root_indexed_views,
+        vertex_reads: Vec::new(), // mac S1
     })
 }
 
@@ -267,6 +269,7 @@ fn on_64_lanes(native: &NativeProgram, p: &ir::Program) -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     });
     lower::TEST_HOST_WAVE.set(was);
     let lowered = lowered.expect("lower");
@@ -281,6 +284,7 @@ fn on_64_lanes(native: &NativeProgram, p: &ir::Program) -> HostShader {
         root_srvs: lowered.root_srvs,
         root_uavs: lowered.root_uavs,
         root_indexed_views: res.root_indexed_views,
+        vertex_reads: Vec::new(), // mac S1
     };
     if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
         let mut copy = shader.dxil.clone();

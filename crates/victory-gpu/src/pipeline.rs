@@ -151,7 +151,34 @@ impl Shader {
     /// The translation, made on first use; a shader that does not
     /// translate is logged once.
     pub(crate) fn translated(&self) -> Option<&'static Translated> {
-        let key = crate::shader_cache::translation();
+        self.translated_with(&[]) // mac S1
+    }
+
+    /// [`Shader::translated`] of a mesh shader that hands the values of `reads` to the pixel shader it
+    /// is paired with (mac S1; `victory_shader::emit::vertex_flat`): one translation per set of reads.
+    pub(crate) fn translated_with(&self, reads: &[victory_shader::emit::VertexRead]) -> Option<&'static Translated> {
+        self.translated_as(reads, false)
+    }
+
+    /// [`Shader::translated_with`], and for a vertex shader of a rectangle list on a host whose geometry
+    /// stages cannot write clip distances (mac S4): with its clip distances as plain outputs, which the
+    /// rectangle stage cuts the rectangle by (`victory_shader::emit::clip_as_varying`).
+    pub(crate) fn translated_as(&self, reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> Option<&'static Translated> {
+        let mut key = crate::shader_cache::translation();
+        if rect_clip {
+            // mac S4
+            let mut h = blake3::Hasher::new();
+            h.update(&key);
+            h.update(b"VICTORY_RECT_CLIP");
+            key = *h.finalize().as_bytes();
+        }
+        if !reads.is_empty() {
+            // mac S1
+            let mut h = blake3::Hasher::new();
+            h.update(&key);
+            h.update(&victory_shader::emit::vertex_flat::encode(reads));
+            key = *h.finalize().as_bytes();
+        }
         let cell = self.translated.read().unwrap_or_else(|e| e.into_inner()).get(&key).copied();
         let cell = cell.unwrap_or_else(|| {
             let mut all = self.translated.write().unwrap_or_else(|e| e.into_inner());
@@ -159,7 +186,7 @@ impl Shader {
         });
         cell
             .get_or_init(|| {
-                let done = translate(&self.container);
+                let done = translate(&self.container, reads, rect_clip); // mac S1, S4
                 // `VICTORY_SHADER_SAVE=<dir>`: each shader as the title gave it (`.cdxil`) and as
                 // translated (`.dxil`), by the hash crash reports name it with
                 if let Some(dir) = std::env::var_os("VICTORY_SHADER_SAVE") {
@@ -215,7 +242,7 @@ impl Shader {
 }
 
 #[cfg(windows)]
-fn translate(container: &[u8]) -> Result<Translated, String> {
+fn translate(container: &[u8], reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> Result<Translated, String> {
     use victory_shader::{Container, FourCC, HwStage};
     // The translation depends on it (a view index past a capped heap).
     crate::descriptor::host::probe_view_limit();
@@ -224,7 +251,7 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         Some(part) => victory_shader::native_programs(part.data).map_err(|e| e.to_string())?,
         None => Vec::new(),
     };
-    let host = crate::shader_cache::host_shader(container)?;
+    let host = crate::shader_cache::host_shader_as(container, reads, rect_clip)?; // mac S1, S4
     let stores = programs.is_empty() || programs.iter().any(stores);
     let threads = programs.iter().find_map(|p| match &p.io {
         victory_shader::native::StageIo::Cs(cs) if cs.threads.iter().all(|&n| n > 0) => Some(cs.threads),
@@ -345,6 +372,63 @@ pub(crate) fn builder_rests(why: &'static str) {
     }
 }
 
+/// Builder dispatches skipped because a builder pipeline was still being
+/// made (see [`builder_runs`]); read and reset by the frame line.
+#[cfg(windows)]
+pub(crate) static BUILDER_MAKING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `VICTORY_BVH_BUILDER_SYNC=1`: make the builder's pipelines on the
+/// recording thread at its first dispatch, as before (can pass the title's
+/// 30 s watchdog on a cold cache).
+#[cfg(windows)]
+fn builder_sync() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER_SYNC").is_some_and(|v| v == "1"))
+}
+
+/// What the builder's pipelines allow, from each one's state (`None`: being
+/// made; `Some(made)`).
+#[derive(Debug, PartialEq, Eq)]
+enum BuilderVerdict {
+    /// One is still being made: skip this dispatch, look again at the next.
+    Making,
+    /// One cannot be made: the builder stays off.
+    Off,
+    /// All are made.
+    Whole,
+}
+
+fn builder_verdict(states: &[Option<bool>]) -> BuilderVerdict {
+    if states.iter().any(|s| *s == Some(false)) {
+        BuilderVerdict::Off
+    } else if states.iter().any(Option::is_none) {
+        BuilderVerdict::Making
+    } else {
+        BuilderVerdict::Whole
+    }
+}
+
+#[cfg(test)]
+mod builder_verdict_tests {
+    use super::{BuilderVerdict, builder_verdict};
+
+    #[test]
+    fn being_made_skips_without_turning_off() {
+        assert_eq!(builder_verdict(&[Some(true), None]), BuilderVerdict::Making);
+    }
+
+    #[test]
+    fn one_that_cannot_be_made_turns_it_off() {
+        assert_eq!(builder_verdict(&[None, Some(false), Some(true)]), BuilderVerdict::Off);
+    }
+
+    #[test]
+    fn all_made_is_whole() {
+        assert_eq!(builder_verdict(&[Some(true), Some(true)]), BuilderVerdict::Whole);
+        assert_eq!(builder_verdict(&[]), BuilderVerdict::Whole);
+    }
+}
+
 /// At a dispatch of a builder pipeline: whether the builder runs (see
 /// [`Builder`]).
 #[cfg(windows)]
@@ -359,6 +443,39 @@ pub(crate) fn builder_runs() -> bool {
     }
     if b.whole {
         return true;
+    }
+    if !builder_sync() {
+        // Not on this thread: made on the spot, a cold cache's builder
+        // programs took the frame past the title's 30 s GPU watchdog
+        // (cfbase3x, 2026-11-26: 0xc0000005 at victory-image+0x23cf683, 77 s
+        // after start, X with VICTORY_BVH_BUILDER=1). Queue them; the group
+        // skips its dispatches until all are made.
+        let states: Vec<Option<bool>> = b.pipelines.iter().map(make::state).collect();
+        match builder_verdict(&states) {
+            BuilderVerdict::Making => {
+                BUILDER_MAKING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return false;
+            }
+            BuilderVerdict::Off => {
+                // Without waiting for those still being made.
+                let missing: Vec<String> = b
+                    .pipelines
+                    .iter()
+                    .zip(&states)
+                    .filter(|(_, s)| **s == Some(false))
+                    .map(|(p, _)| make::hashes(p))
+                    .collect();
+                b.off = b.pipelines.len();
+                tracing::warn!(
+                    missing = missing.len(),
+                    of = b.pipelines.len(),
+                    which = ?missing,
+                    "the ray-tracing structure builder stays off: not all of its programs have a host pipeline, and its stages run all or none"
+                );
+                return false;
+            }
+            BuilderVerdict::Whole => {}
+        }
     }
     let missing: Vec<String> = b.pipelines.iter().filter(|p| !make::now(p)).map(|p| make::hashes(p)).collect();
     if !missing.is_empty() {
@@ -746,6 +863,10 @@ fn hand_out(
         let mut b = BUILDER.lock().unwrap_or_else(|e| e.into_inner());
         b.pipelines.push(host.clone());
         b.whole = false;
+        // Made while the title loads, not at the first dispatch.
+        if !builder_sync() {
+            make::prepare(&host);
+        }
     }
     let pipeline = Box::new(Pipeline {
         object: Object::new(&FUNCTIONS),
@@ -856,7 +977,7 @@ pub(crate) struct StreamDesc {
 /// A subobject type's size (type included), and the stage it is if it is a
 /// shader. The console numbers amplification and mesh shaders 23 and 24
 /// (PC: 24 and 25); its own types from 25 on are not sized yet.
-fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
+pub(crate) fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
     let stage = |name| Some((24, Some(name)));
     match kind {
         1 => stage("vertex"),
@@ -881,6 +1002,22 @@ fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
     }
 }
 
+/// Walks a stream's subobjects (mac G12: was inline in `create_stream`, taken out so a test can drive it): `each` gets
+/// the subobject's type, where it starts and the stage if it is a shader; stops at a type of unknown size.
+pub(crate) fn walk_stream(size: usize, stream: *const u8, mut each: impl FnMut(u32, *const u8, Option<&'static str>)) {
+    let mut at = 0;
+    while at + 8 <= size {
+        // SAFETY: inside the stream the title passes.
+        let kind = unsafe { stream.add(at).cast::<u32>().read_unaligned() };
+        let Some((len, stage)) = subobject(kind) else {
+            tracing::warn!(kind, at, "pipeline subobject of unknown size; the rest is ignored");
+            break;
+        };
+        each(kind, unsafe { stream.add(at) }, stage);
+        at += len;
+    }
+}
+
 /// Device method: a pipeline from a stream; the shaders are kept, and the
 /// graphics state for the host pipeline.
 pub(crate) extern "system" fn create_stream(
@@ -900,30 +1037,20 @@ pub(crate) extern "system" fn create_stream(
     let mut shaders = Vec::new();
     #[cfg(windows)]
     let mut graphics = host::GraphicsState::default();
-    let mut at = 0;
-    while at + 8 <= desc.size {
-        // SAFETY: inside the stream the title passes.
-        let kind = unsafe { desc.stream.add(at).cast::<u32>().read_unaligned() };
-        let Some((size, stage)) = subobject(kind) else {
-            tracing::warn!(
-                kind,
-                at,
-                "pipeline subobject of unknown size; the rest is ignored"
-            );
-            break;
-        };
+    walk_stream(desc.size, desc.stream, |kind, whole, stage| {
         if let Some(stage) = stage {
             // SAFETY: a shader subobject has its bytecode at +8.
-            let code = unsafe { &*desc.stream.add(at + 8).cast::<Bytecode>() };
+            let code = unsafe { &*whole.add(8).cast::<Bytecode>() };
             shaders.extend(copy(stage, code));
         }
         #[cfg(windows)]
-        // SAFETY: a whole subobject of this kind lies at `at`.
+        // SAFETY: a whole subobject of this kind lies at `whole`.
         unsafe {
-            graphics.read(kind, desc.stream.add(at))
+            graphics.read(kind, whole)
         };
-        at += size;
-    }
+        #[cfg(not(windows))]
+        let _ = kind;
+    });
     hand_out(
         shaders,
         #[cfg(windows)]
@@ -1011,6 +1138,10 @@ pub(crate) fn test_pipeline() -> This {
 pub(crate) fn test_host_address(this: This) -> usize {
     Arc::as_ptr(pipeline(this).host_now()) as usize
 }
+
+#[cfg(all(test, windows))]
+#[path = "mac/prove/pipeline_stream.rs"]
+mod prove_stream; // mac G12
 
 #[cfg(test)]
 mod tests {

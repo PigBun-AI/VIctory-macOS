@@ -3,9 +3,11 @@
 # usage: tools/mac/census-title-imports.sh [exe] [image] [outdir]
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
+# a heavy job (objdump of the whole title image, python over it): only through heavy.sh (docs/mac/RUN.md "Heavy tasks")
+[ -n "${VICTORY_HEAVY_SLOT:-}" ] || exec bash "$here/heavy.sh" --jobs 1 --label census-title-imports -- sh "$here/census-title-imports.sh" "$@"
 root=$HOME/Documents/GTA6Project
 exe=${1:-$root/GTA6.Xbox.v1.0.2.1/game_scarlett_master.exe}
-img=${2:-$root/victory-data/cache/images/victory-image-b99f876b74d4a77f.dll}
+img=${2:-$root/data/shared/cache/images/victory-image-b99f876b74d4a77f.dll}
 out=${3:-$root/research/census/title-isa-$(date +%Y%m%d)}
 objdump=$(command -v llvm-objdump || ls "$root"/VIctory-macOS/target/toolchain/llvm-mingw*/bin/llvm-objdump | head -1)
 "$objdump" -d --x86-asm-syntax=intel -j .text "$img" | python3 "$here/census-title-imports.py" "$exe" "$out"

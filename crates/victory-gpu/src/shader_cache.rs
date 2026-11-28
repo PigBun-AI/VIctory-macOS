@@ -128,6 +128,23 @@ fn build() -> [u8; 32] {
     *hash.finalize().as_bytes()
 }
 
+/// [`build`] for a translation that hands per-vertex values on (mac S1: a mesh shader with the reads
+/// of the pixel shader it is paired with); `build` itself when there are none.
+fn build_as(reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> [u8; 32] {
+    let base = build();
+    if reads.is_empty() && !rect_clip {
+        return base;
+    }
+    let mut hash = blake3::Hasher::new();
+    hash.update(&base);
+    hash.update(b"VICTORY_VERTEX_READS=");
+    hash.update(&victory_shader::emit::vertex_flat::encode(reads));
+    if rect_clip {
+        hash.update(b"VICTORY_RECT_CLIP"); // mac S4
+    }
+    *hash.finalize().as_bytes()
+}
+
 /// What tells one set of translations from another ([`build`]).
 pub(crate) fn translation() -> [u8; 32] {
     build()
@@ -153,20 +170,63 @@ pub fn precompile(container: &[u8]) -> Result<bool, String> {
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
+    host_shader_with(container, &[]) // mac S1
+}
+
+/// [`host_shader`] of a mesh shader that hands the values of `reads` to its pixel shader (mac S1,
+/// `victory_shader::emit::translate_with`). The live translator library takes no reads: with some, the
+/// linked translator runs.
+pub(crate) fn host_shader_with(container: &[u8], reads: &[victory_shader::emit::VertexRead]) -> Result<HostShader, String> {
+    host_shader_as(container, reads, false)
+}
+
+/// [`host_shader_with`], and with `rect_clip`: a vertex shader of a rectangle list whose clip distances
+/// are plain outputs (mac S4, `victory_shader::emit::translate_variant`). Also translated by the linked
+/// translator, as the reads are.
+pub(crate) fn host_shader_as(container: &[u8], reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> Result<HostShader, String> {
     // The generation this translation belongs to: its switches, and the translator library
     // (`VICTORY_LIVE_TRANSLATOR`) that is part of the key `build` computes from the same snapshot.
     let snap = victory_shader::emit::live::snapshot();
     let translate = |c: &[u8]| -> Result<HostShader, String> {
         #[cfg(windows)]
-        if let Some(id) = snap.translator.get() {
+        if let Some(id) = snap.translator.get()
+            && reads.is_empty()
+            && !rect_clip
+        {
             return crate::live_translator::translate(id, c, &snap);
         }
-        victory_shader::emit::live::scoped(&snap, || victory_shader::emit::translate(c)).map_err(|e| e.to_string())
+        victory_shader::emit::live::scoped(&snap, || victory_shader::emit::translate_variant(c, reads, rect_clip)).map_err(|e| e.to_string())
     };
     match CACHE.get() {
-        Some(cache) => cached(cache, &build(), container, translate),
+        Some(cache) => cached(cache, &build_as(reads, rect_clip), container, translate),
         None => translate(container),
     }
+}
+
+/// mac G12: an entry carries the first 16 bytes of the BLAKE3 of its key (the build and the container) and its
+/// encoding. The entry is published by an atomic rename, so a half-written file is never seen, but nothing checked
+/// that what is read is what was written: a flipped byte inside the DXIL (a disk error, a copied cache folder) decoded
+/// as a different, valid shader and was served, and so would an intact entry that sits under another key. An entry
+/// without a good trailer for its key (all entries of earlier builds) is a miss.
+const SEAL: usize = 16;
+
+fn trailer(key: &[u8], body: &[u8]) -> [u8; SEAL] {
+    let mut h = blake3::Hasher::new();
+    h.update(&(key.len() as u64).to_le_bytes());
+    h.update(key);
+    h.update(body);
+    h.finalize().as_bytes()[..SEAL].try_into().expect("16 bytes")
+}
+
+fn seal(mut encoded: Vec<u8>, key: &[u8]) -> Vec<u8> {
+    let t = trailer(key, &encoded);
+    encoded.extend_from_slice(&t);
+    encoded
+}
+
+fn unseal<'a>(bytes: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    let (body, t) = bytes.split_at_checked(bytes.len().checked_sub(SEAL)?)?;
+    (trailer(key, body) == *t).then_some(body)
 }
 
 /// The cache entry's converter: the build and the container in, the
@@ -187,7 +247,7 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
     fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
         self.ran.store(true, Ordering::Relaxed);
         let shader = (self.translate)(&input[32..]).map_err(anyhow::Error::msg)?;
-        Ok(encode(&shader))
+        Ok(seal(encode(&shader), input))
     }
 }
 
@@ -206,7 +266,7 @@ fn cached(
         let path = cache
             .get_or_convert(&converter, &input)
             .map_err(|e| format!("{e:#}"))?;
-        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
+        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| unseal(&b, &input).and_then(decode)) { // mac G12
             let (counter, what) = if converter.ran.load(Ordering::Relaxed) {
                 (&MISSES, "translated and cached")
             } else {
@@ -222,6 +282,10 @@ fn cached(
     MISSES.fetch_add(1, Ordering::Relaxed);
     (converter.translate)(container)
 }
+
+#[cfg(test)]
+#[path = "mac/prove/shader_cache_damage.rs"]
+mod prove_damage; // mac G12
 
 #[cfg(test)]
 mod tests {
@@ -257,6 +321,7 @@ mod tests {
                 byte_offset: 32,
                 shift: 5,
             }],
+            vertex_reads: Vec::new(), // mac S1
         }
     }
 

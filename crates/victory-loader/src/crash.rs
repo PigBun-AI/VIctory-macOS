@@ -70,7 +70,7 @@ pub fn log_crash(text: &str) {
     append_to_log(&text);
 }
 
-fn append_to_log(text: &str) {
+pub(crate) fn append_to_log(text: &str) {
     use std::io::Write;
     let Some(file) = LOG.get() else { return };
     let now = std::time::SystemTime::now()
@@ -115,6 +115,7 @@ pub fn report_crashes() {
         unsafe { report_unhandled(info) };
         EXCEPTION_CONTINUE_SEARCH
     }
+    crate::mac::int3dump::announce(); // mac L7: reads VICTORY_MAC_INT3_DUMP now
     // SAFETY: registers handlers that only read the exception they are
     // given; the title's own filter, once it sets one, takes the place of
     // ours and calls `report_unhandled` first.
@@ -484,6 +485,11 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if FATAL.contains(&unsafe { (*(*info).ExceptionRecord).ExceptionCode }) {
         // SAFETY: as above.
         unsafe { report("first-chance exception", info, false) };
+        // mac L7: VICTORY_MAC_INT3_DUMP, a read-only dump at the listed int3s (off by default)
+        // SAFETY: as above.
+        if unsafe { (*(*info).ExceptionRecord).ExceptionCode } == EXCEPTION_BREAKPOINT {
+            unsafe { crate::mac::int3dump::on_breakpoint(info) };
+        }
     }
     EXCEPTION_CONTINUE_SEARCH
 }

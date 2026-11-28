@@ -189,7 +189,7 @@ variable and the defaults are in `docs/mac/RUN.md`. What matters for the patches
   patch (follows tracking, not set), `VICTORY_PRESENT_MAX` (P1), `VICTORY_POOL_CHECK` (L3), `VICTORY_LOG_RENDER_SIZE` (P2),
   `WINEPREFIX` (explicit; only that prefix's wineserver is ever stopped), the data, cache and log directories, recording and
   frame capture options, `--sample` (memory/GPU lines in `mem.csv`).
-- **Data directories**: `victory-data-livetr-<profile>-<backend>`, cloned from the read-only seed `victory-data-livetr`; `--fresh-data` clones
+- **Data directories**: `data/livetr-<profile>-<backend>`, cloned from the read-only seed `data/livetr`; `--fresh-data` clones
   again. Both backends start from the same state and can run in parallel. These directories and the prefix are the allowed differences
   of `--print-env` between backends, besides `WINEDLLPATH`/`WINEDLLOVERRIDES`/`VICTORY_METAL_LOG`/`VICTORY_METAL_NOTIMPL_LOG`.
 - **Capture and watchdog switches**: `--record-at` (`VICTORY_RECORD_AT`, I2), `--capture-frames` (takes `w<N>`, I2), `--no-watchdog`
@@ -237,8 +237,13 @@ return: they pass without comparing anything.
   what_is_left_alone_is_no_known_hole}`: Wine's `NtQueryVirtualMemory` has no class 7
   (`MemoryRegionInformationEx`), so `watch::placeholder()` is never true (only matters with
   `VICTORY_FAULT_TRACKING=1`).
-- Rosetta: `titlewrite::decode::stores_do_what_the_processor_does` compares the flags of `lock cmpxchg [r11], dl`
-  with the decoder's (0x881 against Rosetta's 0x80): Rosetta does not compute them alike.
+- Rosetta (fixed 2026-11-28, `mac: T titlewrite ...`): `titlewrite::decode::stores_do_what_the_processor_does` compared the flags of
+  `lock cmpxchg [r11], dl` with the decoder's (0x881 against Rosetta's 0x80). The decoder was right (flags = accumulator - memory,
+  as x86); Rosetta computes the flags of a miss from memory - accumulator (ZF right) and clears bits 63:32 of rax on a 32-bit hit.
+  The test now holds the decoder to what the processor's own `cmp` gives (Rosetta does that right), and the processor's `cmpxchg`
+  only to ZF, memory, rdx and the low bits of rax. Passes under Wine; with the decoder's operands swapped it fails.
+  Exposure of the title: `tools/mac/census-cmpxchg-flags.sh` walks every path after all 28,305 `lock cmpxchg [mem]` sites until
+  CF/SF/OF/PF are overwritten or the path ends: 0 readers, 0 unresolved (so Rosetta's wrong flags of a miss are never seen).
 - D3DMetal: `root::malformed_blobs_are_rejected_by_the_host` and
   `pipeline::library::a_rejected_blob_gives_an_empty_library` (it accepts malformed blobs),
   `descriptor::host::{views_are_made_beside_the_heap_and_copied_in, a_raw_view_is_moved_only_where_its_descriptor_says_where_it_is}`
@@ -258,6 +263,17 @@ raw twins / counter texture / waterfall / page cache (4). D3DMetal's DXIL-to-Met
 The victory-shader count (297) is not a skip: the Windows line's crate is another code base from the
 Mac fork's (458 tests): per-file counts differ everywhere (`emit/lower/tests.rs` 93 and `halves_tests.rs` 45 are
 the fork's, `bvh.rs`, `bitcode/opt.rs`, `wave64_tests.rs` are the line's) and no test is gated on `VICTORY_HELPER_DXC`.
+
+`victory-hle` (2026-11-28, `tools/mac/wine-tests.sh -p victory-hle`; 181 pass, 4 fail, 2 ignored of 187 before the 2 new `files`
+tests and the 11 `mac_counts` ones were in): all of `xmem` (but one), `files` (7), `dstorage` (18; 1 benchmark ignored) pass, ten
+runs of each. Not passing:
+- `xmem::a_title_thread_goes_on_using_the_rest_of_a_view`: intermittent (about 1 in 10 inside the xmem suite, 0 of 32 alone): the
+  title thread reads its page back as 0 or as bytes up to 99 writes old while the other pages of the view are unmapped and mapped
+  again. `unmap()` returns the whole view to a placeholder and maps the rest again, so the page is a placeholder for a moment;
+  on Windows it faults and waits, here it did not fault and the writes were lost. Matrix: `mac.hle.xmem_map_partial_view`.
+- Not xmem, not explained here: `net::only_loopback_is_reachable` (Wine's ws2_32 has no `WSAConnectByList`),
+  `xgameui::dialogs_end_with_what_was_typed` (a different HRESULT on the host: -2147483638 for -2147467260),
+  `xgamesave::a_kept_blob_past_the_link_limit_is_copied` (the temp folder is not on NTFS, 1024 links to a file are not there).
 
 ### Findings of the first run under Rosetta (2026-11-27, not fixed)
 
@@ -421,14 +437,22 @@ when Rosetta reports these as writes; keep until a probe on a macOS update shows
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
-Rosetta can resume. Done whenever fault tracking runs under Rosetta, which is now the default (G2), so it
-needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`, a plain `wine victory.exe`,
-and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1241 patched to plain stores`.
-`VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `apps/victory/src/mac.rs`
-adds the 8 plain 256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
-variable is unset **or is plain `all`**: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
-exported) replaced the list, so those 8 were never patched on a `run.sh` start; and with tracking off by default
-nothing was patched at all without the variable. With `VICTORY_FAULT_TRACKING=0` nothing is patched (nothing is guarded).
+Rosetta can resume. Done **by default under Rosetta, with fault tracking on or off** (11-28: a masked store whose
+lane >= 1 faults is fatal under Rosetta whatever put the guard there; the patch costs a jump per site and nothing
+when no fault happens), so it needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`,
+a plain `wine victory.exe`, and `tools/mac/run.sh`, which no longer sets it) logs
+`masked stores  patch on (default under Rosetta, tracking on; all + the 8 extra sites of build 1.0.2.1)` and then
+`masked stores  1241 patched to plain stores`. Off Rosetta nothing is patched
+(`masked stores  patch off (not under Rosetta, ...)`).
+`VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `masked::decide`
+(`victory-loader/src/mac/masked.rs`; `apps/victory/src/mac.rs` only calls it and prints its `why`) adds the 8 plain
+256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
+variable is unset **or is plain `all`**, under Rosetta: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
+exported) replaced the list, so those 8 were never patched on a `run.sh` start; and until 11-28 (`4ab34ad8` made it follow
+tracking, which is on by default) `VICTORY_FAULT_TRACKING=0` patched nothing.
+*Tests* (native, `masked::patch_tests`): `plan_patches_by_default_under_rosetta_whatever_tracking_says` (the four
+combinations of Rosetta and tracking), `plan_takes_the_variable_as_it_is_and_the_extra_sites_only_for_all` (none / all /
+RVAs / another build), `the_extra_sites_are_all_plus_eight_distinct_rvas`.
 Not needed on Windows: it resumes them. Remove with G2.
 
 *Coverage (checked 2026-11-28 against the static census of build 1.0.2.1, `research/census/title-isa-20261127`;
@@ -479,6 +503,11 @@ title). The patch changes the title's *output*; the internal size follows (outpu
   line (a loader change then), and the node is registered in the matrix as a **stubbed** node: its numbers say the title ran with that
   one check jumped over, not that it ran on its own. Until a run stops there, nothing changes.
 - When the output is patched the log says `non-fidelity: output patched to WxH` (stdout, once), besides `resolution: ... Done` per site.
+- Path line (11-28), once, before any site is written (`resolution::path_line`, planning is `resolution::plan_asked`): a fidelity run
+  (nothing asked: `VICTORY_OUTPUT=0`, no pool check, scale or upscaler switch) logs `resolution: fidelity, no site patched` and
+  writes nothing, not even the divide clamp; any patch asked logs `resolution: perf, N sites asked to be patched (...)`. Tests
+  (native): `a_fidelity_run_patches_no_site_and_says_so`, `a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp`,
+  `the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch`.
 - Which settings decide the output: see "Which `settings.xml` keys decide the output" below.
 
 Remove when the Mac GPU path is fast enough for the title's own size.
@@ -491,6 +520,12 @@ loop), fine on a PC but too slow through Wine, so the 8 loops of the supported b
 out at load (nothing is patched unless exactly 8 are found). The loop scan is a copy of
 `crash.rs`'s `clwb_loop` (test included) so `crash.rs` is untouched; if the Windows line changes
 the pattern, change the copy. `VICTORY_NOP_CLWB=0/1`. Remove with G2, or if Rosetta handles `clwb`.
+*Log (11-28).* `clwb: 8 loops replaced` (the count is the number patched; exactly 8 are required). Any other count
+patches nothing and logs `clwb: 0 loops replaced (found N, expected 8: not the build they were counted in, nothing
+patched)`; off (not Rosetta or `VICTORY_NOP_CLWB=0`): `clwb: 0 loops replaced (left as they are: ...)`. *Tests*
+(native, `clwb::tests`): `eight_loops_are_replaced_and_logged_with_the_count` (8 loops in two sections, 4- and 5-byte
+forms, become NOPs of their length and the `add`/`cmp`/`jbe` stay), `any_other_count_patches_nothing_and_says_what_it_found`
+(0, 7, 9), `the_patch_is_wanted_under_rosetta_and_the_variable_decides`.
 
 ### L5 — the title's hang watchdog off, `VICTORY_MAC_NO_WATCHDOG=1` (`mac/watchdog.rs`, hook in `apps/victory/src/mac.rs`)
 
@@ -570,6 +605,88 @@ a 32-bit load. Three remain which the linear analysis could not decide (RVAs `0x
 CAS loops whose eax comes from a 32-bit `mov eax,[..]`, the third `cmpxchg [rcx+0x14], edx` followed by `vmovd xmm1, eax`, which
 reads only EAX): no exposure found, no patch.
 
+### L7 — a dump of the machine at the title's own `int3` assertions: `VICTORY_MAC_INT3_DUMP=<rva>[,<rva>...]` (`victory-loader/src/mac/int3dump.rs`, 7 lines in `crash.rs`; `tools/mac/collect-title-crash.sh`, 1 line in `tools/mac/run.sh`)
+
+*Class: **diagnostic, not fidelity, off by default.** It only reads memory and prints; the title's path after the trap is the one it had
+(the vectored handler still returns `EXCEPTION_CONTINUE_SEARCH`).*
+
+*Question (`mac.title.int3_self_exit_r6`, `mac.title.srl_prestream_stall`).* The title's BUILDING pool (22500 slots) is full at
+image+0x5149aec in about one long run in four, 350-490 s after the start. Is the pool full because its nodes are **held** (a leak, or a
+Prestream that never finishes), or because its **free list was damaged** (e.g. a `lock cmpxchg` update lost under Rosetta, see L1, L2, L6)?
+The title's own crash.log gives the use counts only, and `--new-game` replaces the data directory (and the log with it).
+
+*The switch.* `VICTORY_MAC_INT3_DUMP=0x5149aec` (hex RVAs, `0x` optional, comma separated; an item that is not hex is named and ignored;
+unset or empty = off). The vectored handler, after printing its usual first-chance report, checks a breakpoint exception (`0x80000003`):
+if its address (or the context's `rip`, or `rip-1`) is `module base + a listed RVA`, up to **4 dumps per process** are printed to stderr and
+appended to the loader's crash log, every line starting `VIctory int3-dump:` (`grep 'int3-dump' stderr.log`):
+
+1. all general registers, `rip` and `eflags`;
+2. `[rcx-0x40, rcx+0x100)` as qwords in hex, four to a line with the offset from `rcx` (`????????????????` for a qword that cannot be read);
+3. the pool at `rcx`: header (base `[rcx]`, step `[rcx+8]`, capacity `[rcx+0xc]`, used counter `[rcx+0x10]`, head `[rcx+0x20]`, next array `[rcx+0x28]`,
+   allocated mark `[rcx+0x30]`); the first 64 nodes (`base + i*step`, 32 bytes each, with their next entry); the free list from the head, at most
+   64 steps listed and the whole chain counted (stopping, with the reason, at a cycle, an index >= capacity, or a node marked allocated);
+   a census of the whole next array (slots marked allocated / not / outside the pool / unreadable) and a **verdict line**;
+4. the `rip` of every thread (suspended one at a time just long enough to read its context, into room made beforehand; named as `module+rva`),
+   the trapping one marked.
+
+*Where the free list's `next` is* (confirmed in the disassembly of `Alloc` 0x145149980, its constructor 0x1416cbe00 and `Free` 0x1451f2801 of
+build 1.0.2.1): **not in the node.** `next[i]` is a `u32` array at `[rcx+0x28]`; `Alloc` pops `head & 0x1ffff = i`, writes `head = (head & 0xffffffff00000000) | next[i] & 0x1ffff`
+(`lock cmpxchg [rcx+0x20]`), `lock inc [rcx+0x10]` and ors `[rcx+0x30]` (0x1ffff) into `next[i]`: **an index field of 0x1ffff in `next[]` means "allocated"**, 0x1fffe ends
+the list and is the head's "empty". `Free` puts the old head index into `next[i]` (the bits above the index are a counter), `lock dec [rcx+0x10]`.
+The trap at 0x145149aec is also reached when `[rcx] == 0` (no node memory); the dump says so.
+
+*Reading the verdict:* `EXHAUSTED` (head empty, every slot marked allocated, used counter = capacity) = the nodes are held: look for who does not give them back
+(the Prestream node, `mac.title.srl_prestream_stall`); `FREE LIST LOST` (head empty, K slots not marked allocated) = a damaged list, then the next runs are with
+`VICTORY_MAC_CMPXCHG16_CHECK=1` (L6) and without the 256-bit store patches (L1, L2) to see which one does it; `LIST INTACT` / `LIST BROKEN` = the head is not empty
+(trap from `[rcx]==0` or a free after the trap) / the chain is not the set of unmarked slots. The dump is not atomic: frees from other threads that land during it show as small differences (counter vs marks).
+
+*Tests* (`cargo test -p victory-loader --lib mac::int3dump`, native): the RVA list (prefix, duplicates, bad items), the hit test, the register and memory formatting (offsets, unreadable
+qwords, `rcx` near 0), the pool analysis on **fake memory buffers** (exhausted pool, lost free list, whole list with counters above the index, a 200-node list walked 64 steps but counted
+whole, cycle, index outside the pool, held node on the list, `[rcx] == 0`, implausible header, a missing part of the next array), the thread lines, and the order of the whole dump.
+Two Windows-only tests (`windows_tests`: the process reading its own memory and refusing unmapped addresses; a pool built in memory) compile with the cross build and are for `tools/mac/wine-tests.sh -p victory-loader --lib mac::int3dump` (not run yet).
+Memory is read with `ReadProcessMemory` on the own process, so an unreadable address is a `false`, not a second fault in the handler; a thread that traps inside the dump does not start another.
+
+*`tools/mac/collect-title-crash.sh DATA OUT [SINCE]`.* `run.sh` calls it once after `end.txt` is written: it looks for the title's own crash log under the run's data directory
+(`grep -rla 'Game State'`, newer than `start.txt`) and copies it to `$out/title-crash/`, so BUILDING/OBJECT/INSTANCE_LIST use, the SRL state and `Streaming Requests` survive the next `--new-game`.
+It never fails the run.
+
+*Remove when* `mac.title.int3_self_exit_r6` and `mac.title.srl_prestream_stall` are closed (the cause is found and fixed or the node is proved harmless); the module is self-contained.
+
+### G11 — `VICTORY_MAC_LAYOUT_STATS=1`: which texture layouts the title creates (`victory-gpu/src/mac/layout_stats.rs`, 1 hook in `resource.rs` `hand_out_resource`)
+
+*What.* Counts every texture the title creates by dimension, layout field (`0x100 | swizzle mode`), render-target/depth flags,
+element size, block, and whether it has mips, depth/array, or samples; logs one `layout stats:` line per distinct key when
+the texture count reaches 256, 512, ... and the number of textures whose mode the detiler cannot address (XOR modes `_T`/`_X`).
+Off unless set (one atomic load per texture). Nothing the title or the host sees changes.
+
+*Why.* Map rows C-V-003 (detile) and C-V-005 (tile modes): the detiler is proven against addrlib for the modes without XOR
+(`victory-formats/tests/addrlib_golden.rs`), and for sizes of the XOR modes; which modes the title really uses was never
+counted (the capture `frame.bin` holds host-side descriptions only). The count decides whether XOR addressing (needs the
+per-surface pipe-bank XOR) is worth writing.
+
+*Why not needed on Windows.* The Windows line has the same detiler and the same question; this is a measurement, not a fix. *Remove when*
+the census has been read and the answer is in the map row.
+
+### G12 — test-only hooks and a 3D UAV census for the shared-layer proofs (`victory-gpu/src/mac/prove/`, `#[path]` test modules in `descriptor.rs`, `descriptor/host.rs`, `resource.rs`; `pub(crate)` on `RESOURCE_IIDS`, `QUEUE_IIDS`, `ALLOCATOR_IIDS`, `QueueDesc` fields; `queue::signal_offset_for_tests`; `layout_stats::uav_3d` + 1 hook in `descriptor.rs` create_uav)
+
+*What.* Tests, nothing at run time: `descriptor_records` (CopyDescriptors/Simple, view records, increments), `descriptor_views` (GPU reads of SRV/UAV/cube/null/constant views on the host device against the D3D12 rules),
+`queue_fence` (fences, events, queue Signal/Wait), `resource_footprints` and `resource_heaps` (GetCopyableFootprints / GetResourceAllocationInfo against a model of the spec and the host device; placed/committed/Map rules). They are child
+modules (`#[path = "mac/prove/..."]`) so they reach private items; the visibility widening above is for the tests only. The one run-time part is the 3D unordered-access census (`VICTORY_MAC_LAYOUT_STATS=1`): counts the
+title's 3D UAVs with a first depth slice other than 0 or a size other than the rest (D3DMetal cannot make partial 3D views, finding F1 of C-V-012).
+Shader side: `victory-shader/tests/sampler_spec.rs` (S-G-009) and `emit/mac_dxil_check.rs` (S-D-001: a hook in `emit_program`, `cfg(all(test, not(windows)))`, that checks every DXIL container the translator's tests build with an independent container reader and `llvm-bcanalyzer`; Mac has no `dxil.dll`).
+
+One behaviour change (the only one outside tests): **shader cache entries are sealed** (`shader_cache.rs` `seal`/`unseal`, 16 bytes of BLAKE3 over the key (build + container) and the encoding, appended to each entry; an entry without a good trailer is a miss and is translated again). Before, a flipped byte inside an entry's DXIL decoded as a valid, different shader and was served; so was an intact entry under another key's name. All entries of earlier builds are misses once (the cache refills). Tests: `mac/prove/shader_cache_damage.rs`.
+`mac/prove/device_slots.rs` (C-V-001): slots 0x1c8/0x218 fail cleanly with `out` null when the switch is off.
+
+Second batch (branch mac/shared-prove-2): `victory-shader/src/gfx10/llvm_tests.rs` + `tests/data/gfx10_llvm_gfx10{10,30}_{0..3}.txt` (S-I-001, generated by `tools/mac/llvm-isa-oracle/gen.py` from LLVM's AMDGPU disassembler: mnemonics and lengths only, no game data), `mac/prove/{device_features,root_flags}.rs` (shared.device.feature_query, shared.root.signature).
+`mac/prove/pipeline_stream.rs` (C-V-009; `pipeline.rs`'s stream loop is now `walk_stream`, no change of behaviour) and `victory-shader/src/mac_prove_hints.rs` (S-I-002).
+One log line (`device.rs` check_feature_support): the first time the title queries each feature id, at info level: it tells whether the title reads the options it is given (rows shared.device.options_*; the values themselves are not changed: no evidence the title branches on them, and a change cannot be verified without a game run).
+**Second behaviour change: a blocking `ID3D12Fence::SetEventOnCompletion(value, NULL)` waits** (`fence.rs`, was E_NOTIMPL at once; polls the value, 10 s at most (`BLOCKING_WAIT_MS`), then E_FAIL with a log line instead of hanging); `object.rs` gains `E_FAIL`. Test: `queue_fence::a_blocking_wait_returns_when_another_thread_signals`.
+
+*Why.* Map nodes C-V-001/008/012/014/017, S-G-009, S-D-001 and api.CreateConstantBufferView/Resource::Map were "used, not proven"; second batch: S-I-001, shared.fence.wait, shared.device.feature_query, shared.root.signature.
+
+*Why not needed on Windows.* The Windows line has its own tests of these modules; these add spec-referenced ones. *Remove when* the Windows line adopts equivalent proofs; the census when F1 is answered.
+
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 
 New `victory-hle/src/modules/mac.rs`, registered in `modules/mod.rs` **only when `rosetta()`**,
@@ -597,6 +714,38 @@ minidump is of no use to us anywhere and the title still writes its own `crash.l
 
 *Remove when* Wine's dbghelp parses Rust DWARF without crashing (retest after a Wine bump).
 
+### H3 — how often the title calls each HLE function: `VICTORY_MAC_HLE_COUNTS=<file>` (`victory-hle/src/mac_counts.rs`, 3 hooks)
+
+*What.* Off by default. `VICTORY_MAC_HLE_COUNTS=<file>` (empty, `0`, `off`, `false`: off) puts a 32-byte x86-64 stub in front of
+every function of ours the title is given (`mov r11,<counter>; lock inc [r11]; mov r11,<function>; jmp r11`: `r11` is volatile and
+carries no argument, the stub ends in a jump, so it fits every signature and leaves no frame) and writes the counts per
+`module` (the `HleModule` name) and function as a text table to the file: every 5 s while they change
+(`VICTORY_MAC_HLE_COUNTS_SECS=<n>`, at least 1), and when the process ends (the title's `exit`, `abort` and `TerminateProcess` on itself call
+`mac_counts::flush`, and an `atexit` function writes it for any other CRT exit). The file is replaced atomically (written beside it,
+renamed). First line `# victory-hle-counts v1`, then `# pid=.. uptime_s=.. reason=periodic|exit|abort|terminate bound=N called=N total=N`,
+then `module<TAB>function<TAB>calls` by calls, most first; bound functions never called are there with 0. Off: nothing is
+wrapped, the registry returns the function's own address, the cost is one `OnceLock` read per bound import.
+
+*Hooks in upstream files.* `lib.rs` (`pub mod mac_counts;`), `registry.rs` (`lookup` goes through `export_address`, which calls
+`mac_counts::address_for`), `modules/kernel.rs` (the `GetProcAddress` result for our pseudo modules goes through the same
+function; `flush` in `exit`, `abort`, `TerminateProcess` on itself). Upstream semantics are unchanged.
+
+*Scope.* Only functions of ours (`Provenance::Hle`, and `GetProcAddress` on one of our modules); an import the host answers goes
+straight to Wine. x86-64 Windows only: on any other host `address_for` hands out the function itself and the table shows 0s (a
+warning says so). A function's address seen by the title is the stub's, so code that compares an imported address with `&function`
+would see them differ (nothing of ours does).
+
+*Tests* (`mac_counts::tests`, 11 under Wine, 9 natively): the stub's bytes; one counter and one stub per function bound twice;
+exact counts from 8 threads (also through a real stub: 160,000 calls, no loss); arguments (4 in registers, 3 on the stack, a float)
+and the result pass through a stub; the file is replaced whole and leaves no temporary file; the table is written when a child
+process leaves through the CRT `exit` and lists what the registry bound in it; a locked table is skipped on the exit path instead of
+hanging it. `tools/mac/wine-tests.sh -p victory-hle --lib mac_counts`.
+
+*Use.* A run through `tools/mac/run.sh` with `VICTORY_MAC_HLE_COUNTS=<path>` in the environment: the table is what the matrix rows
+`mac.hle.*` need for `freq` (rows with no entry yet: `net`, `media_bink`, `apu_acphal`, `xgameruntime_family`, `xasync`,
+`lifecycle`, `rpcrt4`, `audio_xaudio2`, `kernel_overrides`, `fidelityfx_xcrd` in the plan of 2026-11-28). *No game run has been made
+with it yet.* *Remove when* the frame-time work no longer needs call counts; nothing else depends on it.
+
 ### T1 — `victory-shader-dylib/tests/translate.rs`: corpus folders from the environment
 
 The test had two build-machine paths of the Windows team written in (`...\build\livetr-corpus`,
@@ -614,6 +763,34 @@ addresses, home-directory and drive paths, `*.local` e-mail addresses, the autho
 commits, a private word list kept outside the repository), binaries and game files. Also
 `.gitignore` entries for `tools/mac/privacy.local.txt`. Usage in `docs/mac/PUSH.md`. Pure Mac
 tooling, nothing to recycle; delete it if pushes to the fork stop.
+
+### M8 — heavy tasks: `tools/mac/heavy.sh`, `heavy-guard.sh` (a child of `run.sh`), `check.sh` and the other heavy scripts through it
+
+A machine-wide budget of job units (the number of cores; 1 while a game holds the game lock), nice 19, `SIGSTOP`/`SIGCONT` of the
+later jobs when a game starts, slots in `research/.heavy/`, nested calls free (`VICTORY_HEAVY_SLOT`). `heavy-guard.sh` renices (and, at
+load > 30, stops) heavy processes outside a slot, only while the game lock is held; it is started by `run.sh` (`heavy-guard.sh run --parent <run.sh pid>`, pid in
+the lock directory) once `run.sh` holds the lock and is ended by `run.sh`'s cleanup before the lock is let go, with SIGCONT of everything it stopped; it
+ends by itself (SIGCONT first) when its parent is gone (`run.sh` killed with SIGKILL, looked at every second) or the lock is not held any more. No launchd agent
+(macOS keeps a launchd job's bash out of `~/Documents`): `install`/`uninstall` are gone (they report 已改由 run.sh 托管). `check.sh`, `wine-tests.sh`, `rosetta-probe*.sh`,
+`census-*.sh` start with an `exec heavy.sh`; `rosetta-probe-wine.sh isa` keeps to `VICTORY_HEAVY_JOBS` probes; `push-check.sh` and the
+no-`check.sh` fallback of `sync-windows.sh` wrap their `cargo`. The old "nice 15 while the lock is held" block of `check.sh` is gone.
+Tests `test-heavy.sh`, `test-heavy-guard.sh`, and the guard-as-child cases in `test-run-lock.sh`; rules in `docs/mac/RUN.md` "Heavy tasks". Pure Mac tooling, nothing to recycle.
+
+### M9 — `run.sh --purpose "<map column>: <node id>,..."` is required (`tools/mac/purpose.sh`)
+
+Every run that starts the game says which column of the translation map (`freq`, `callstats`, `new-nodes`, `corpus`, `perf-hotspot`) it
+fills and for which nodes; without a fitting one `run.sh` refuses with exit status 7, before it touches anything (`--print-env` and `--help`
+need none). The text is the first line of `<out>/RUN.txt` and is kept in the game lock (`game-lock.sh status`, also for the queue).
+`play.sh`, `drop-ab.sh`, `rt-builder-accept.sh run` pass it on. Tests: `test-run-until.sh` (refusals: none, bad column, no node id, ...),
+`test-run-lock.sh`. A rule of the integration lead, not a technical need: delete it when runs for the picture are allowed again.
+
+### M10 — frame times marked against the load: `tools/mac/frametime-summary.sh`, the end of `run.sh`
+
+Only the end of `run.sh` (the summary) changed. The frames of `frametime.log` that fall into a 10-second stretch of `load.log` with a load
+average above 30 are invalid; `summary.txt` gets the median and p90 of the valid frames, the invalid share, and `数据无效：load 超过 30` as its
+first line when more than 20% are invalid. `frametime-annot.csv` has the marking per frame. `VICTORY_LOAD_LOG_INTERVAL` (test knob, default
+10 s) is the load.log interval. Test: `tools/mac/test-frametime-summary.sh` (made-up logs, and `run.sh` with a fake Wine and a fake `uptime`).
+Pure Mac tooling.
 
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
@@ -745,7 +922,7 @@ mode list (the fidelity profile only writes modes from the list). The first fide
 | internal size / dynamic resolution / TAA upscale | the title's, at 2/3 of 1280x720 = 853x480 | the title's own logic; expected 2/3 of 1440p = 1707x960 (`VICTORY_LOG_RENDER_SIZE`) |
 | render scale, upscaler overrides | allowed (`VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`) | refused |
 | pool check (+0x247af25) | skipped with the output patch | kept. If F0 stops there, `--pool-check skip` becomes a fixed part of the profile (rule below) |
-| data / cache directory | `victory-data-livetr-perf-<backend>` | `victory-data-livetr-fidelity-<backend>`; each cloned from the read-only seed `victory-data-livetr` on first use (`--fresh-data` clones again); the game directory is never written |
+| data / cache directory | `data/livetr-perf-<backend>` | `data/livetr-fidelity-<backend>`; each cloned from the read-only seed `data/livetr` on first use (`--fresh-data` clones again); the game directory is never written |
 
 The default stays **perf** until the 3D-missing question is settled and the owner says so; then the switch is one line,
 `profile="${VICTORY_MAC_PROFILE:-perf}"` -> `fidelity` in `run.sh`, plus (separately, as a loader change) making `VICTORY_OUTPUT=0` the
@@ -852,7 +1029,9 @@ saves 0 bytes for them. Frame-capture replay (`tools/metal/replay.sh`, `rec-a-f3
 ### S3 — the shared translator: wave64 compute programs on 32-lane host waves, the shadow-mask ray programs (`victory-shader`, 5 hooks)
 
 Census of the 31 compute programs the translator refused (2026-11-27, host wave 32): 26 "no wave32 lowering for this wave64 program",
-5 "a descriptor read only as data". After S3, 24 translate (20 wave64, 4 of the 5 shadow-mask programs); 7 stay refused (below).
+5 "a descriptor read only as data". After S3 as first committed, 24 translate (20 wave64, 4 of the 5 shadow-mask programs); 7 stay refused (below).
+
+**Update 2026-11-28 (`mac/wave-wide-off`): `VICTORY_WAVE_WIDE` is back to off by default; only the address table (item 1) stays on.** See "Wave-wide default off" below. Items 2-4 and the "24 translate" numbers describe the code with `VICTORY_WAVE_WIDE=1`; by default 4 translate (the shadow-mask programs) and the 20 wave64 programs are refused again.
 
 *What (all in `crates/victory-shader/src/emit/`, every changed line marked `mac S3`).*
 1. `mod.rs` `viewaddr_table()`: `VICTORY_VIEWADDR_TABLE` is on unless `=0` (was off). The shadow-mask ray programs
@@ -860,8 +1039,8 @@ Census of the 31 compute programs the translator refused (2026-11-27, host wave 
    pick a buffer view from the heap at a computed index and only walk the memory behind it: the address comes from the host's
    address table (`t251`/`t250`, which the host keeps always). They were refused as "a descriptor read only as data"; the code was
    upstream's, switched off. Only programs that were refused change.
-2. `mod.rs` `emit()`: `VICTORY_WAVE_WIDE` is on unless `=0` (was on for two digests, off otherwise). It acts only after every other form
-   failed (the retry ladder), so every program that translated before is byte-identical (census: 25 756 containers, same code hash).
+2. `mod.rs` `emit()`: `VICTORY_WAVE_WIDE` was on unless `=0` (upstream: on for two digests, off otherwise); **now reverted to upstream's rule** (`wide_branches_on`: `=1` turns it on, the two scene kernels keep their default). It was meant to act only after every other form
+   failed, but the 2026-11-28 census shows it also changes 36 containers that translated without it (a different, larger DXIL; see below).
    Wave-wide branches give 20 of the 26 wave64 programs (LDS read and written inside a lane branch, a 64-bit ballot, `v_readlane`/`v_mbcnt`
    across the halves), groups of 64 threads.
 3. `mod.rs` `widen()` and `lower.rs` `note_barrier`/`barrier_in_wide`/`lane_regions_of`: groups of several console waves are tried too;
@@ -889,10 +1068,243 @@ getMinMaxConstants"): 19 of the 24 build a pipeline.
 is the same across the console wave; the three BVH-builder first-lane programs `dc78c5de69c7c155`, `322ed4ad832bdea6`,
 `d441b097704ab616` translate without it, and with it the DXIL is byte-identical).
 
+*Wave-wide default off (2026-11-28, branch `mac/wave-wide-off`).* Why: with S3's default (wide on), the wide branch puts a
+group barrier in a divergent path. On an Apple GPU `ptfx_CS_lightAtlas_Sprite` (compute `8d74b76fb8c0cb8d`, container
+`2561af9577c47289`, a single-thread group) hangs for about 100 s per dispatch; in the prologue the long frames start around
+w54-70. With `VICTORY_WAVE_WIDE=0` the prologue ran to w200 and w300 with no long frame (`research/game-runs/20261128-fidperf/stall-g`,
+`stall-h`). The upstream comment (runs 121-124 lost an NVIDIA card) is the same cause. What changed: only the `wide_on` line in
+`emit()` (`mod.rs`, marked `mac S3`; helper `wide_branches_on`); `VICTORY_VIEWADDR_TABLE` stays on (the 4 shadow-mask programs
+need it). Tests: `s3_tests.rs` (`the_wave_wide_branch_is_off_by_default`; the wide case asks for `VICTORY_WAVE_WIDE=1` explicitly).
+Effect (census `victory-census translate`, whole package, host wave 32, 25 985 containers; data
+`research/census-widefix-20261128/{off,wide1}`): default 25 760 translate (225 refused); `VICTORY_WAVE_WIDE=1` 25 780 (205 refused). So the
+20 wave64 programs are refused again ("no wave32 lowering for this wave64 program": their dispatches are dropped, as before S3). The
+census also found that wide on changes the DXIL of 36 containers that translated without it (e.g. `2561af9577c47289`
+101 140 B -> 146 112 B, the non-wide and wide forms; `ptfx_CS_lightAtlas_Trail`, `CS_GenerateShadowMasks*`, `CS_DeferredFallback*`,
+`CS_IrradianceCache_*`, `CS_Gather*`): the earlier claim "programs that translated before are byte-identical" held for
+which programs translate, not for their code. By default those are back to the pre-S3 form.
+Wide stays available with `VICTORY_WAVE_WIDE=1` (the live-file switch) for experiments, never in a run that matters.
+*TODO (root fix):* the wide branch must not put a group barrier in a divergent path, or the decision must be made by the whole group
+(a flag in LDS, a group barrier, then an OR over all waves, so every wave takes the same path and the region's scalar results are
+selected by the wave's own decision).
+
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
 
-*Risk.* An upstream comment records that the wide form lost an NVIDIA card; a Windows host that wants to use this patch must first turn it off (`VICTORY_WAVE_WIDE=0`).
+*Risk.* An upstream comment records that the wide form lost an NVIDIA card, and on Apple GPUs it hangs single-thread groups (above): it is off by default here, and `VICTORY_WAVE_WIDE=1` is not safe until the root fix is in.
+
+### S1 — `GetAttributeAtVertex` without `attributeAtVertex`: the other vertices as flat inputs (`victory-shader` `emit/{vertex_flat,lower,mod,wire}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`, `mac/attribute_at_vertex.rs`)
+
+*What.* A new translator capability `attribute_at_vertex` (`victory_shader::emit::host_attribute_at_vertex()`, set with
+`set_host_attribute_at_vertex`; default **true**, which is the Windows line: its output stays what it was). victory-gpu
+sets it at host creation from `mac::attribute_at_vertex::host_has_it()`: **false** on the Metal chain and under Wine on
+a Mac (D3DMetal), true on Windows; `VICTORY_ATTRIBUTE_AT_VERTEX=0|1` overrides it (and is the default for tools that
+translate without a victory-gpu host: victory-census, the metal tests). It travels in `host_settings()` as bit 31 of the
+last word, so the shader cache and the live translator library (`victory-shader-dylib`) key on it. With it false:
+* a pixel program reads the three vertices of an attribute as flat inputs instead of `dx.op.attributeAtVertex`: vertex 0 is the
+  attribute's own constant input (the provoking vertex), vertices 1 and 2 are added per-primitive `u32` elements
+  `TEXCOORD 64+n` (four scalars each); the pixel `HostShader` lists them in the new field `vertex_reads`
+  (`emit/vertex_flat.rs`, stored in the VSH1 bytes after the views);
+* a mesh pipeline: victory-gpu translates the mesh shader again with the pixel shader's reads
+  (`emit::translate_with`, `Shader::translated_with`, `shader_cache::host_shader_with`, hook in `HostPipeline::new`): each lane writes the
+  read channels of its vertex into group memory, every exit of the program leaves through one epilogue block that
+  meets (barrier) and lane n writes primitive n's vertices 1 and 2 as primitive outputs; the added outputs count against
+  the 32 KiB mesh limit, group memory over 32 KiB refuses the translation;
+  the epilogue reads every exchanged value before it writes any output, and a 16-bit output is exchanged as its raw half
+  (converted after the read): Apple's GPU compiler crashes (MTLCompilerService SIGSEGV in AGX) on the interleaved form;
+  **known issue** (numbers from the Metal backend owner, 2026-11-28): there are 4834 real (mesh, pixel) pairs: 2170 build,
+  1261 are over 32 KiB in total, 1400 crash Apple's compiler (AGX; 1273 pairs after de-duplication, already in the
+  `mesh-pair-denylist`), 3 exceed the varying limit (2170 + 1261 + 1400 + 3 = 4834). The earlier figure of 1774 crashes was an
+  artefact of compiling 4 pairs at once; rerun one at a time it is 1400. Only 3 pairs crash without S1 too. See research/attr-vertex/agx-crash/;
+* a vertex pipeline: victory-gpu puts a geometry shader (`emit::vertex_pipeline_gs`: triangles in, the same triangle out
+  with vertices 1 and 2 as constant elements) in the slot of the rectangle list's stage; a rectangle list with such a pixel
+  shader, or a host that refuses the stage, gets no pipeline.
+Every hook line in an upstream file is marked `mac S1`. Tests: `emit/vertex_flat_tests.rs`, `emit/vertex_flat.rs`
+(victory-shader 209 -> 219), `mac/attribute_at_vertex.rs`; GPU pixel tests, the corpus test and the census on the `attr` branch
+(`metal/back/tests/gfx_attr_vertex.rs`, `metal/census/tests/attr_vertex_corpus.rs`, docs/metal/attribute-at-vertex.md).
+
+*Why not needed on Windows.* The Windows host (D3D12 with dxil.dll, the GPU driver) takes `GetAttributeAtVertex`. Metal Shader Converter 4.0.3
+and D3DMetal refuse it (error 7), so 4852 of the title's pixel programs, and with them most of its mesh pipelines (102 of the 103
+refused pipelines of one run), built no pipeline on a Mac. Native Metal has `vertex_value` only on Apple10 (M5+), and MSC does not emit it.
+
+*Remove when.* MSC translates `GetAttributeAtVertex` natively, or emits MSL's `vertex_value` and the lowest supported GPU has it: then
+drop the capability (the default true is then the only path), `vertex_flat.rs`, the field `vertex_reads` and the hooks (`grep 'mac S1'`).
+
+*Acceptance (2026-11-28).* Translator tests 219 passed in victory-shader (209 before), 78 in victory-gpu; GPU tests against a CPU
+reference (mesh, provoking vertex, VS + GS + PS) pass. Census with the capability off over the 25985 containers: no program emits `attributeAtVertex`;
+of the 4852 pixel programs (plus the one `atomicBinOp.i64`) 4832 build through MSC and a Metal pipeline, 20 fail on Metal's 124 varying
+scalars (126-127 with the added ones), 1 is the i64 atomic: **pixel programs refused for attributeAtVertex 4852 -> 0**; the 21 that remain fail for other reasons (20 over the varying limit, 1 i64 atomic). Mesh programs newly over 32 KiB by
+the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 primitives, 8245 under the limit now): D = 4: 324, D = 10
+(median): 853, D = 22 (p90): 2362, D = 38 (max): 4504. Replays (`tools/metal/replay.sh`): f300 byte-identical picture to the earlier build (blake3 `713c6b13b79d2de4`),
+world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
+the replays log nothing about pipelines, so that the aav pipelines of those frames draw was not observed directly.
+
+### S4 — geometry shaders on the Metal chain: clip distances of rectangle lists, and the title's own geometry shaders (`victory-shader` `gs.rs`, `io.rs`, `emit/{rect,lower,mod}.rs`, `victory-gpu` `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`)
+
+*What.* The translator's rectangle-list geometry stage (`emit::rect_list_gs`) used to be refused for the 29 vertex programs of the title
+that write `SV_ClipDistance` (of 2192; matrix S-M-003): Metal Shader Converter 4.0.3 cannot make the geometry emulation's mesh function
+of a pipeline whose geometry stage *writes* a clip distance ("Failed to materializeAll"; a stage that reads one but writes none is as bad,
+a plain interpolant is fine; checked 2026-11-28, `metal/back/tests/gfx_clip.rs`). Now, when the host is the Metal chain
+(`host_attribute_at_vertex()` false: the same marker S1 uses) and a rectangle list's vertex program writes a clip distance:
+* the vertex program is translated again with its clip distances as a plain output named `VICTORYCLIP`
+  (`emit::translate_variant(.., rect_clip = true)`, `emit::clip_as_varying`; `Shader::translated_as`, `shader_cache::host_shader_as`, a
+  separate cache key; hook in `HostPipeline::new`, `rect_clip`);
+* the rectangle stage reads those distances and writes none. It does the hardware's clipping itself: the rectangle is the parallelogram of its
+  corner and the other two vertices in the unit square `(u, v)`, every output is affine in it, so each plane is a line in the square; the
+  square is cut by each plane in turn (at most one vertex more each, up to four planes) and goes out as one triangle strip with every
+  output evaluated at its vertices. A triangle that is no rectangle is cut the same way. Pixels drawn are those where the interpolated
+  distance is not negative (D3D12's rule for `w > 0`, which a rectangle list has).
+If the host refuses the stage the pipeline is remade without it (as before), and its vertex program then clips nothing.
+Tests: `emit/rect.rs` `clip_distances_are_cut_by_the_stage_and_not_passed_on`; pixels against a CPU reference in `metal/back/tests/gfx_clip_rect.rs`.
+
+*Why not needed on Windows.* D3D12's geometry stages write clip distances; the default capability leaves everything as it was.
+
+*Remove when.* MSC makes a geometry emulation that writes `SV_ClipDistance` (rerun `gfx_clip.rs`'s refusal test: it then fails).
+
+*What, part two: the title's own geometry shaders (2026-11-28; plan S4, the 195 `GS_VoxelizeGeneric_*` containers).* The container of a
+geometry shader holds one program of the console's on-chip geometry stage (hardware stage `Gs`, wave64): one lane per input triangle, the
+vertex shader's outputs in the ESGS ring (LDS) and its own vertices written to an LDS slice per lane, sent out by `s_sendmsg`. `translate`
+refused it ("a container without a vertex, pixel, compute or mesh program") and `HostPipeline::new` refused every pipeline with a geometry
+stage. Now:
+* `victory-shader/src/gs.rs` takes the ring accesses apart. An evaluation of the integer arithmetic with offsets of its own for the
+  vertices (`vertex_offset`, `vertex_pair`: what `v0`/`v1` hold) says which vertex and which dword every `ds_read*` reads (dword `4 row +
+  channel` of the vertex shader's outputs); the lane's slice (`0xf0 * lane + base`, the slice size in bytes) says which vertex and dword
+  of the output every `ds_write*` writes (`slice / emitted vertices` dwords a vertex, four per output register). `prepare` removes what only
+  addressed them (including the loads of a ring-size table that trace to no root parameter, and the `s_bfm_b64 exec` setup: each host thread is one
+  primitive that runs).
+* `io.rs`: `Input::GsVertexPair`, `GsWaveInfo` for `v0`/`v1`/`s3`; `Io::gs` holds the analysis. `emit/lower.rs`: `gs_ring` turns a read into
+  `loadInput(element, row, column, vertex)`, `gs_message` turns `GS_OP_EMIT` into `storeOutput` of the vertex's dwords and `emitStream`,
+  `GS_OP_CUT` into `cutStream` (the shader declares triangles in, strips out, `max_vertices` = the emits); `v_mbcnt` is 0 in a geometry program (its lane is
+  its primitive). Straight-line programs, 32-bit ring accesses, stream 0 only; anything else is refused with its offset.
+* `HostPipeline::new` accepts vertex + geometry + pixel: the title's geometry shader is the last stage (visibility geometry, its own user data and descriptor
+  tables bound like any stage's by `draw`); a pipeline with one and a rectangle topology, or whose pixel shader reads other vertices (S1), is
+  refused; the host refusing it is a refusal of the pipeline (there is nothing to fall back to), logged as such in the drop statistics.
+Tests: `gs::tests` (4, hand-assembled program), `metal/back/tests/gfx_gs_voxel.rs` (the 195 programs lowered, HLSL vertex and pixel shaders, six
+triangles each facing one of the six directions, 1170 images against a CPU rasterisation of the triangle the program computes; the title's containers are
+read from `VICTORY_GS_CONTAINERS`, `SKIPPED` without). Census (`victory-census translate`, then `convert --kind tgs --isolate`): translate Gs 0 of 195 -> 195 of 195;
+Metal Shader Converter and Metal pipelines 195 of 195, 0 aborts.
+*Not observed in a run:* no frame the replays and runs so far (prologue to w300, world drops) reaches a pipeline with a title geometry stage, so the drop statistics
+see no difference (graphics-gs refusals 0 before and after); the host-side change is checked by the cross build and the GPU test only.
+*Remove when.* never needed on Windows (D3D12 takes the geometry stage as it is); the host side stays with the S4 patch.
+
+## Fixes taken from other lines (`git cherry-pick -x`, one `mac:` commit each)
+
+Taken because they close a node of the translation map; the source SHA is in each commit message. Drop one when mac/livetr
+takes a merge of its line.
+
+### X1 — BVH builder pipelines queued at creation (`victory-gpu` `pipeline.rs`, `pipeline/make.rs`, `host.rs`; Windows ec648b34)
+
+*What it is.* `builder_runs()` used to make every ray-tracing structure-builder pipeline on the recording thread at the first builder
+dispatch (`make::now()`); on a cold cache that frame passed the title's 30 s GPU watchdog. Now they are queued at creation
+(`make::prepare`), a dispatch looks at them without waiting (`make::state`) and skips while one is being made (frame line
+"dispatches/frame skipped while its pipelines are being made"); only one that cannot be made turns the builder off.
+`VICTORY_BVH_BUILDER_SYNC=1` restores the old behaviour. `BUILDER_MAKING` is `cfg(windows)` like its only other user (`host.rs`
+is a `cfg(windows)` module), so no extra gate was needed for the native build. Matrix: `shared.rt.bvh_build`,
+`mac.title.hang_watchdog` (unproven, 待运行验证: unit tests `pipeline::builder_verdict_tests` only).
+*Retire when:* mac/livetr merges the Windows line that has it.
+
+### X2 — divide-by-zero clamp in the upscaler (`victory-loader` `mac/resolution.rs`; origin 0cc44dc6, #615)
+
+*What it is.* When the resolution patch shrinks the output, the upscaler's round-robin `div dword [rdi+0x10c]` (title
++0x28f03e8) can divide by zero and trap (0xc0000094; the "known divide by zero" of `mac.res.fsr`, PR #278/#362). `DIV_ZERO` is
+replaced by a `call` to a 15-byte trampoline in `.text` padding (`DIV_TRAMP`, +0x5f40966) that clamps the divisor to 1. Both sites are
+compared byte for byte (build 1.0.2.1 only), written together or not at all. *Mac change:* upstream applies it always; here only
+when a resolution patch is asked (`VICTORY_OUTPUT` size, render scale, upscaler, pool check), so a fidelity run
+(`VICTORY_OUTPUT=0`) still patches nothing and logs no `resolution:` line. Matrix: `mac.loader.resolution`, `mac.res.fsr`
+(unproven, 待运行验证: unit test of the bytes only).
+*Retire when:* the title no longer reaches the divide with the output patch (never expected), or mac/livetr merges #615.
+
+### X3 — low-address guards with 2.75 GiB Wine slack, own views above 2 TiB (`victory-hle` `modules/xmem.rs`, `apps/victory/src/run.rs`; origin e68a2191, #398)
+
+*What it is.* Under Wine the host's own memory (D3DMetal/Metal heaps, caches) and Wine's bottom-up heap/stack searches compete with
+the title's 32-bit `XMemVirtualAlloc` requests for the space below 4 GiB. `xmem::low_guards::install()` (called at the start
+of `run` when executing) reserves the free space below 4 GiB as `PAGE_NOACCESS` guards, leaving the lowest 2.75 GiB
+(`WINE_SLACK`; 256 MB on native Windows) to the host, so about 1 GiB at the top stays for the title; a 32-bit request that
+finds no room releases guards (smallest that fits first) and retries (`low_guards::retry`). `VICTORY_LOW_GUARDS=0` turns it off.
+*Default (2026-11-28): off under Wine on macOS, on elsewhere.* On Windows the upstream default is unchanged (on). Under Wine on Darwin
+(`victory_gpu::mac::rosetta::rosetta()`) `install()` does nothing unless `VICTORY_LOW_GUARDS=1` (`true`, `on`); the log then says
+"space below 4 GiB left unguarded". Two reasons: (1) it changes the memory layout of every run (2.75 GiB left at the bottom, the top
+~1 GiB reserved) and has not run once under Wine; (2) its reason for being, `mac.hle.low_address_commit` "3 of 8 runs", does not hold: G7 found
+that the write of 0 at image+0x2215c35 is the title's own hang watchdog, not an allocation failure. Tests: `low_guards::tests::guards_are_off_by_default_under_wine_on_macos_only`
+(and the switch test). *To turn it on by default:* run once with `VICTORY_LOW_GUARDS=1` to w300; the log shows no allocation failure
+and no new crash; then flip `default_on` (xmem.rs) and update this entry and the matrix row. Our own views above 2 TiB (below) have their own switch.
+*14:30 run (2026-11-28):* both switches are off by default under Wine on macOS; verify with `VICTORY_LOW_GUARDS=1 VICTORY_OWN_VIEW_HIGH=1`
+to w300: no allocation failure and no new crash, then flip both defaults (`low_guards::default_on`, which `own_view_high_from` reuses) and update this entry and the matrix row.
+Our own views of a section (`Section::window`, the per-write `View::map`) start at or above 2 TiB under Wine (`map_own_view`,
+`MapViewOfFile3` with `LowestStartingAddress`, `OWN_VIEW_FLOOR`), so Wine's `try_map_free_area` does not step through the gigabytes
+of host mappings under `virtual_mutex`. *Default (2026-11-28): off under Wine on macOS, on elsewhere* (switch `VICTORY_OWN_VIEW_HIGH`,
+`1`/`true`/`on` enable, `0`/`false`/`off` disable; same parsing and platform default as `VICTORY_LOW_GUARDS`, `own_view_high` in xmem.rs):
+off, `map_own_view` is a plain `MapViewOfFile` as before e68a2191; it has not run once under Wine and moves every view of every run.
+On Windows `on_wine()` is false and the upstream behaviour is unchanged. Tests: `own_views_are_high_by_default_except_under_wine_on_macos`;
+the floor test checks the 2 TiB floor only when the switch is on. Reason it was taken (it was "not ported, wait for a run that needs it"): `mac.hle.low_address_commit`,
+the title got a NULL from an allocator and wrote 0 at image+0x2215c35, in **3 of 8** runs (run report 2026-11-27 crash 2).
+*Mac port.* mac/livetr's xmem.rs never had the #1009 guards the commit widens (only the docs paragraph in `macos.md`), so the module
+(`low_guards`, `FOUR_GIB`), its call in `run.rs` and the retry in `XMemVirtualAlloc` came along with it, in the form at e68a2191.
+Our `Section` keeps its own design (`window` + commit bitmap, `VICTORY_SECTION_WINDOW=0`), not upstream's `whole()`: `map_own_view`
+is used in `Section::window` and `View::map`; upstream's test of the shared whole view is not ported, its floor test is.
+
+*Allocation-failure log (11-28, `victory-hle/src/modules/alloc_fail.rs`, called from `xmem.rs`).* Every point where memory is refused to the
+title says so in one line, `xmem alloc failed: site=<where> n=<count at the site> size=0x... (N MiB) <detail>`, the first 32 per site and then each
+power of two (the count `n` is exact): `XMemVirtualAlloc` (host refused after the low-address retry; kind, flags, range, error),
+`XMemAlloc.hook(__XMemAllocationHooks__)` (**the title's own routine returned NULL**, with the attributes and the hook address),
+`XMemAllocDefault.32bit` / `.layout` / `.heap`, `XMemAllocatePhysicalPages.args` / `.section`, `XMemMapPhysicalPages.unknown_page` / `.host`,
+`XMemMapPhysicalPagesScatter`, `commit.physical_pages`. A run with none of these lines had no allocation failure at those points; so the
+matrix row `mac.hle.low_address_commit` is cleared into `mac.title.hang_watchdog` (G7) unless a line shows up. Tests (native, the module is not
+Windows-only): `alloc_fail::tests` (line format, the hook result with its attributes, per-site counts, logged-then-powers-of-two). The call
+sites in `xmem.rs` are Windows-only and compile for windows-gnullvm; they are not run under Wine yet.
+Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only, none run under Wine).
+*Retire when:* mac/livetr merges the line that has it.
+
+### S5 — a mesh program as a compute program and a fetch vertex program: the `VMCS` container part (`victory-shader` `emit/{mesh_cs,lower,shader,mod,host}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `mac/mesh_compute.rs`)
+
+*What.* The translator can make two more DXIL containers of a mesh program, for a host that cannot build the mesh pipeline
+(interface v1, `docs/metal/mesh-compute.md` section 8, owned by the Metal back):
+* the **compute form**: the same program as `cs_6_6` with the mesh program's `numthreads`; `setMeshOutputCounts`, `emitIndices` and
+  the vertex and primitive outputs become `rawBufferStore`s to a scratch buffer (UAV `u0`, space 4000000000); the group's slot in the
+  scratch is `g × group_stride` with `g = id.x + dim_x × (id.y + dim_y × id.z)`, the dimensions a root CBV (`b0`, same space, 16 bytes
+  `{x, y, z, 0}`, declared in the VS too, unread there); a lane writes only its own vertex and primitive, so the counts are the
+  declared maxima cut to the thread count; a culled primitive keeps indices 0 as in the mesh form;
+* the **fetch vertex program**: `vs_6_6` with only `SV_VertexID` (`3p + corner`) and `SV_InstanceID` (`g`); it reads the counts and
+  the primitive's index word from the scratch (SRV `t0`, same space), and a primitive past the count or with an index past the vertex count
+  returns zeros (a triangle without area); every vertex and primitive element is returned (per-primitive elements, S1's added ones too,
+  as constant); no cull-primitive element exists in the scratch.
+Both go, with the `vmcl 1` layout text, into a `VMCS` part (version 1, flags 0) appended to the mesh shader's own container (hash recomputed);
+the other parts, so the mesh pipeline, are byte for byte what they were (test `nothing_is_attached_unless_the_host_asks`). A program that
+cannot be lowered (payload or object stage, more than 256 vertices, not triangles, or anything the lowering refuses) gets no part and no error.
+Policy (host asks): `emit::set_host_mesh_compute(Off | Problem | All)` (tools: `VICTORY_MESH_COMPUTE=0|1|2`), default **Off**; Problem = only
+programs whose Metal mesh struct is over 32 KiB. It travels in `host_settings()` bits 29-30, so the shader cache and `victory-shader-dylib` key
+on it. `emit::translate_mesh_compute` returns the products without a mode (census, tests).
+*Host.* victory-gpu tells the translator at host creation (`mac/mesh_compute.rs`, one hook line in `host.rs` beside S1's): **Problem on the Metal chain when the back says it runs the part
+(`VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1`, exported by `tools/mac/run.sh` when the stage's `CAPS` file has a line `mesh_compute`), otherwise Off, and Off on
+D3DMetal**; `VICTORY_MESH_COMPUTE=0|1|2` overrides. Why the gate: the back's denylists (`msc-denylist`, `mesh-pair-denylist`) name a stage by the FNV hash of its whole
+container, which the `VMCS` part changes: 966 of the 1273 pairs of the pair denylist have a mesh that gets the part in Problem mode, so a back that does not
+hash without the part must not be given it (the converter itself ignores the part: 442 mesh containers built identically with and without it on the back before mc-back). The chain is known by `VICTORY_METAL_OUT`, which `tools/mac/run.sh --backend metal` exports to the title (nothing
+else the exe sees tells the two apart: S1's `host_attribute_at_vertex` is false on both). Tests: `mac::mesh_compute::tests`.
+*Not done (decided to wait for the performance phase).* Pruning the outputs the pixel program does not read: the translation of a mesh shader does not see its
+pixel shader, so it needs the host to pass the pixel program's (name, index) reads next to S1's `vertex_reads`, and the layout key `reads MASK` (not written now, meaning all).
+Hook lines in upstream files are marked `mac S5`. Tests: `emit/mesh_cs_tests.rs` (13 unit tests; hardware tests under Wine
+`the_compute_and_fetch_draw_is_the_mesh_pipelines_draw`, `mesh_compute_form_draws_flagged_triangles_and_drops_culled_ones`: the compute
+pass and the fetch draw give the same texels as the native mesh path, dispatch sizes 1x1x1, 2x1x1, 1x3x1, 2x2x2).
+
+*Why not needed on Windows.* D3D12 mesh pipelines have no output-size limit that matters; Metal's mesh stage has 32 KiB of output per group
+(1261 of the title's real mesh pipelines are over it; Apple's GPU compiler crashes on 1400 more, see S1), so the Metal back runs such a mesh shader
+as a compute pass and a vertex draw (docs/metal/mesh-compute.md).
+
+*Remove when.* Metal's mesh stage takes the title's meshes (size and compiler), or the back no longer emulates mesh pipelines: drop `mesh_cs.rs`, the
+`cs` form of `Parts` and the hooks (`grep 'mac S5'`).
+
+*Acceptance (2026-11-28).* Census (`victory-census mscs`, branch `mc/census-s5` of the Metal back at 242f1925 + this patch; data under `victory-data/census-s5/`):
+**A, every mesh program of the package (8765 containers, each translated alone, mode All)**: 8765 get a `VMCS` part; the fetch vertex
+program builds a Metal render pipeline (through MSC, with the default pixel shader) in 8765; the compute form builds a compute pipeline in
+7536 with the root signature the back makes today and in **8765 with the static samplers visible to all stages**: the 1229 others are all
+one error, `ResourceNotReferencedByRootSignature (SMP space 0 register 0)`, a fault of the back (`mesh_emu::extend_root` makes the
+parameters visible to the compute stage but leaves the static samplers at the mesh stage's visibility), not of the translator.
+Of the 520 mesh programs whose native mesh pipeline Metal refuses for the 32 KiB, all 520 have both forms and build (367 with today's root, the other 153 after the sampler fix).
+**B, the 9050 (mesh, pixel) pairs of the pipeline book** (mesh translated with the pixel program's S1 reads, the fetch vertex program paired with
+the real pixel program): compute 9050, fetch + pixel pipeline 9047; the 3 others (`06980160f6c5516f:2f3b5ef239a76315`, `52b873d99483b41b:81b24241b09514d6`,
+`ab008fdce9f216c6:81b24241b09514d6`) are pairs whose pixel program already crashes Apple's compiler on the native mesh path without S1 (the "3 that crash without S1"
+above), they crash in the vertex form too (XPC_ERROR_CONNECTION_INTERRUPTED, reproduced). The prototype sample was 200/200 and 199/200.
+Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass plus the fetch draw gives the texels of the native mesh pipeline
+(dispatch 1x1x1, 2x1x1, 1x3x1, 2x2x2) and the flagged-triangle / cull / out-of-range-index test passes.
 
 ## Not ported this round (decided with the Windows line as the reference)
 
@@ -901,12 +1313,14 @@ Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific 
 R32G32B32 views, 64-bit atomics, mesh limits, queue recovery, shader MD5 hash, wide indirect
 dispatch) because `host.rs`/`draw.rs` diverge by tens of thousands of lines; **G3**: the DXC
 helper (`VICTORY_HELPER_DXC`) is skipped in `victory.sh` until `victory-gpu/build.rs` has it;
-low-address guards (#398) and 2 TiB views, DirectStorage per-worker handles (#400), publish rename
+DirectStorage per-worker handles (#400), publish rename
 tolerance (this line's `publish.rs` already stages per writer), pipeline cache calls under Wine;
 the generic upstream PRs in the Mac history (not Mac specific). Each is a candidate for a later
 `mac:` commit once a run on the Mac shows the need.
 
+Taken later (no longer "not ported"): the low-address guards and 2 TiB views (#398, with the #1009 guards it builds on), see X3.
+
 ### M7 — `tools/mac/play.sh`: hand play wrapper
 
-*What.* A 20-line wrapper over `run.sh`: fidelity, no `VICTORY_KEYS`, no input replay, watchdog off (L5), 4 h limit; defaults `--exe` and
-`--prefix` to the main checkout's when this worktree has no build. Docs: RUN.md "Playing by hand". *Remove when.* run.sh grows a play preset.
+*What.* A 20-line wrapper over `run.sh`: perf (since 2026-11-28; `--fidelity` is an option), no `VICTORY_KEYS`, no input replay, watchdog off (L5), 4 h limit; defaults `--exe` and
+`--prefix` to the main checkout's when this worktree has no build. Docs: RUN.md "Playing by hand". `run.sh --worldsave` / `--new-game` and the refusal of a seed with a world save (2026-11-28): new game is the default, the world save is only on request. *Remove when.* run.sh grows a play preset.

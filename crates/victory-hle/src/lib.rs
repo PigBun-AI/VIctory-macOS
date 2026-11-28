@@ -12,6 +12,8 @@
 //! then the host if [`HostPolicy`] allows that DLL, then `Missing`.
 
 mod host;
+// Mac patch H3 (docs/mac/PATCHES.md): call counts of the HLE functions, `VICTORY_MAC_HLE_COUNTS`.
+pub mod mac_counts;
 #[cfg(windows)]
 mod image_watch;
 #[cfg(all(windows, feature = "diagnostics"))]

@@ -273,6 +273,12 @@ extern "system" fn check_feature_support(
     const FEATURE_LEVELS: u32 = 2;
     const FORMAT_SUPPORT: u32 = 3;
     const MULTISAMPLE: u32 = 4;
+    // mac G12: whether the title asks at all (the options it is told claim more than the Mac host has: matrix rows
+    // shared.device.options_{double,tiled,conservative}); once per feature id, at info level.
+    static ASKED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if feature < 32 && ASKED.fetch_or(1 << feature, std::sync::atomic::Ordering::Relaxed) & (1 << feature) == 0 {
+        tracing::info!(feature, size, "the title queries device feature (first time)");
+    }
     let expected = match feature {
         OPTIONS_QUERY => size_of_val(&OPTIONS),
         ARCHITECTURE => 16,

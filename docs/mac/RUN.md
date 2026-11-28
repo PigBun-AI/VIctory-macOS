@@ -5,9 +5,18 @@ selectable (`--backend d3dmetal`) as a reference only (see "Backends"). Both get
 `tools/mac/check.sh` builds (`target/x86_64-pc-windows-gnullvm/release/victory.exe`). Patch notes: `docs/mac/PATCHES.md` (M4).
 
 ```sh
-tools/mac/run.sh [options] [-- arguments for the title]
+tools/mac/run.sh --purpose "<map column>: <node id>,..." [options] [-- arguments for the title]
 tools/mac/run.sh --print-env [options]        # print what would be passed and the command; start nothing, change nothing
 ```
+
+**`--purpose` is required** for every run that starts the game (`--exec` too, `play.sh` too; not `--print-env`, not `--help`): which column of the
+translation map the run fills, and for which nodes. Rule of the integration lead: until the map is filled in, no run is made to look at the
+picture. The form is `<column>[,<column>...]: <node id>[,<node id>...]`; the column is one of `freq`, `callstats`, `new-nodes`, `corpus`,
+`perf-hotspot`; at least one node id (letters, digits, `.`, `_`, `-`) after the colon. Examples: `--purpose "freq: mac.isa.lock_cmpxchg_flags"`,
+`--purpose "callstats,freq: S-G-009,S-D-001"`. A missing or malformed purpose is refused before anything is touched with **exit status 7** (new:
+no other exit status of `run.sh` is 7; the others are in "Stop as soon as you have the data"). The text is kept as given: the first line of
+`<out>/RUN.txt`, and in the game lock (`tools/mac/game-lock.sh status` shows it for the holder and for every run in the queue). `play.sh`,
+`drop-ab.sh` and `rt-builder-accept.sh run` take `--purpose` and pass it to every `run.sh` they start.
 
 Nothing is written outside this checkout's `target/` and the data directories named below; the game directory is only read.
 
@@ -74,7 +83,7 @@ usable snapshot, kept by the Metal backend's owner):
 
 ```sh
 VICTORY_METAL_OUT="$HOME/Documents/GTA6Project/research/metal-stage/current"
-VICTORY_METAL_ARCHIVE="$HOME/Documents/GTA6Project/victory-data/metal-archive"   # read-only, fewer cold compiles
+VICTORY_METAL_ARCHIVE="$HOME/Documents/GTA6Project/data/shared/metal-archive"   # read-only, fewer cold compiles
 # VICTORY_GAME_LOCK=...   the place of the game lock (default below)
 ```
 
@@ -94,33 +103,111 @@ makes frame times meaningless.
 - The lock is let go when the run ends, hits `--timeout`, or is interrupted (`INT`, `TERM`: the game is stopped first, so it never
   outlives the lock). Only `kill -9` of `run.sh` leaves a lock behind, and that one is stale at once.
 - `tools/mac/game-lock.sh status` prints the holder and the queue; `held` is exit 0 if a live process holds it.
+- **Lock first, then any side effect.** `run.sh` changes nothing that belongs to a run until it holds the lock: the clone of a data directory
+  from the seed (first use, `--fresh-data`, `--new-game`, `--worldsave`), `settings.xml` (fidelity), the cache and `dxc` folders, the out folder,
+  the prefix (making it, the dlls put into its `system32`, `wineserver -k` of it) all come after `gl_acquire`; a run that queues for the lock has
+  written nothing but its queue entry (so two `--new-game` started together on one data directory no longer replace it under each other's feet:
+  the second one replaces `data/` only after the first one has finished). `--print-env` takes no lock and writes nothing. A clone is made beside
+  its place (`*.part.<pid>`) and renamed into it, and an interrupted run removes it, so no half-made data directory is left to be used.
+  `tools/mac/test-run-lock.sh` tests this with a fake Wine (two `--new-game` at once, interrupts, `--allow-concurrent`).
 - `--allow-concurrent` (runs without the lock) is only accepted together with `--i-have-approval` (or
   `VICTORY_MAC_CONCURRENT_APPROVED=1`): it needs the approval of the Mac integration lead. Without it `run.sh` stops with an error.
-- Heavy CPU jobs (builds, test runs, `cargo`) belong **between** runs, not during one: `tools/mac/check.sh` runs itself with
-  `nice -n 15` and `CARGO_BUILD_JOBS=4` while the lock is held and says so; other heavy jobs should do the same or wait.
+  **With it nothing protects the data directories: every concurrent run needs its own** (`--data`/`--cache` of its own, or a profile/backend
+  combination of its own, and its own `--prefix`); two concurrent runs on the same directory, above all with `--new-game` or `--fresh-data`,
+  replace it under each other's feet (that happened once: two `--new-game` replaced `data/livetr-perf-metal/data` at the same moment).
+- Heavy CPU jobs (builds, test runs, `cargo`, censuses, probes) go through `tools/mac/heavy.sh` and are limited to one job unit while a
+  game holds this lock: see "Heavy tasks" below.
 - Every run records the load average (`uptime`) at the start in `start.txt` and every 10 s in `<out>/load.log` (beside `frametime.log`),
   so a frame-time run on a busy machine can be told from a clean one.
 
+## Heavy tasks (`tools/mac/heavy.sh`, `heavy-guard.sh`)
+
+Why: a frame-time run is only worth something on a quiet machine (load reached 337 on 2026-11-28 11:00 and 600 the night before; the
+spoken rule "at most 4 jobs, nice 19" did not hold across hands). The rules are about the **game running**; with no game running the machine is
+not squeezed.
+
+1. **Every heavy task runs through `tools/mac/heavy.sh`** (a build, `cargo test`, `check.sh`, a census, a Rosetta probe, a batch of anything
+   that starts more than a light process): `tools/mac/heavy.sh [--jobs K] [--label TEXT] [--timeout SEC] [--run-timeout SEC] -- COMMAND ...`.
+   `heavy.sh status` shows slots, queue, paused jobs, the budget in force and the load. Both sides (every hand, every worktree) share one state
+   directory, `$VICTORY_HEAVY_DIR`, default `~/Documents/GTA6Project/research/.heavy/` (one slot file per job: pid, pgid, jobs, label, start,
+   cwd, state).
+2. **Budget: with no game running, the number of cores** (`sysctl -n hw.ncpu`; `VICTORY_HEAVY_BUDGET=N` overrides) in job units for all jobs
+   together. A job takes `--jobs K` units (default 1); it starts when the units in use plus K fit, otherwise it queues (first come, first
+   served, the queue is printed every 30 s; `--timeout SEC` gives up with exit 4). K above what is possible runs with the budget in force
+   (when nothing else runs), so it always starts. The command gets `nice -n 19`, `CARGO_BUILD_JOBS=K`, `RAYON_NUM_THREADS=K`,
+   `MAKEFLAGS=-jK`, `RUST_TEST_THREADS=max(K,2)`, `VICTORY_HEAVY_JOBS=K`, `VICTORY_HEAVY_SLOT=<id>`. nice 19 stays whatever the load.
+3. **A game running (the game lock held): the budget drops to 1.** The job that started first goes on; every other running job gets `SIGSTOP`
+   (its process group; `paused` in its slot file) from its own `heavy.sh` within 5 s, and `SIGCONT` when the lock is released. A paused job
+   still counts in the budget, so nothing new starts until the running one is done. A job ending, interrupted (`INT`, `TERM`, `HUP`) or
+   timed out (`--run-timeout`, exit 124) removes its slot and continues its group first: nothing stays stopped. A slot of a dead process is
+   reclaimed by the next job (also by `kill -9`: the kernel hangs up a stopped orphaned group).
+4. **Nested use is free**: inside a slot (`VICTORY_HEAVY_SLOT` set) `heavy.sh` just runs the command, so `check.sh` -> `cargo` -> a build
+   script that calls `heavy.sh` again cannot deadlock. A script that is a heavy task begins with
+   `[ -n "${VICTORY_HEAVY_SLOT:-}" ] || exec bash "$here/heavy.sh" --jobs N --label NAME -- sh "$0" "$@"`; `check.sh`, `wine-tests.sh`,
+   `rosetta-probe*.sh`, `census-title-*.sh`, `census-cmpxchg-flags.sh` do (`rosetta-probe-wine.sh isa` starts at most `VICTORY_HEAVY_JOBS`
+   `probe-wine.exe` at once), and `push-check.sh` (policy build), `sync-windows.sh` (the check fallback) wrap their `cargo`.
+5. **`run.sh` (the game) does not go through `heavy.sh`**: it takes the game lock (and must not be niced). So do the scripts that only drive
+   `run.sh` (`play.sh`, `drop-ab.sh` runs, `rt-builder-accept.sh run`, `accept-batch.sh`): their game runs are under the lock, their log
+   reading is light (`drop-ab.sh`'s report goes through `heavy.sh`).
+6. **The guard, `tools/mac/heavy-guard.sh`** (a scan every 10 s, one `ps`) catches what ignores the rule. **It is a child of `run.sh`**: once
+   `run.sh` holds the game lock it starts `heavy-guard.sh run --parent <run.sh's pid>` in the background, writes the guard's pid into the lock
+   directory (`<lock>/guard.pid`, `guard.pidstart`), and before it lets the lock go (normal end, `--until-*`, `--timeout`, INT, TERM) it sends the
+   guard SIGTERM, which sends SIGCONT to everything the guard stopped. So the guard lives exactly as long as the game run; there is no launchd
+   agent (macOS does not let a launchd job's `/bin/bash` read `~/Documents`, where the checkout, the lock and the state directory are), and
+   `heavy-guard.sh install|uninstall` only say "已改由 run.sh 托管" and exit 2. No guard is started with `--allow-concurrent` (no lock), when one is
+   running already (one in the lock directory, a hosted one of the state directory's `guard.pid`, or one started by hand with a plain `heavy-guard.sh
+   run`), or with `VICTORY_RUN_GUARD=0` (tests). Two `run.sh` queued for the lock: only the holder has a guard. **Nothing is left stopped if
+   `run.sh` is killed with SIGKILL**: the guard looks at its parent every second (`kill -0`, not a zombie, same start time), sends SIGCONT to
+   everything it stopped and ends (so at the latest a few seconds after the kill); it does the same when the game lock is not held any more.
+   `heavy-guard.sh resume` continues what the guard has stopped by hand. **Only while the game lock is held** it acts. It `renice`s to 19 every heavy process that is
+   not in a `heavy.sh` slot (command name `cargo rustc rustdoc victory-census victory-shader-exec probe-wine.exe clang clang++ cc1 cc1plus ld
+   ld64 ld64.lld lld rust-lld`, a cargo test binary; configurable: `VICTORY_GUARD_NAMES`, `VICTORY_GUARD_ARGS`, `<state dir>/guard.conf`), and
+   when the 1-minute load average is above 30 it sends them `SIGSTOP`, and `SIGCONT` when the lock is released or the load is under 20. It never
+   touches the game (`victory.exe run --execute`), `wineserver`, `winedevice`, any `run.sh` and what runs below one or below the lock holder,
+   never kills, and only continues what it stopped itself. Each action is a line of `<state dir>/guard.log` (time, pid, command, action, load,
+   lock); `heavy-guard.sh status` shows the guard, the mode and the last lines.
+7. **Frame times and load**: `run.sh` already logs the load average every 10 s (`load.log`); at the end it lines the frame times (`frametime.log`,
+   `--frametime-log`) up with it (`tools/mac/frametime-summary.sh`). A frame that falls into a 10-second stretch whose 1-minute load average is
+   above 30 is **invalid** (`frametime-annot.csv`: frame, frame_us, draws, time, load, valid). The median and p90 in `summary.txt` use the valid
+   frames only, together with the share of invalid frames; **when more than 20% are invalid the first line of `summary.txt` is
+   `数据无效：load 超过 30`**. (A frame has no clock time in the log: it is placed by adding the frame times up backwards from the last write
+   of `frametime.log`; a load line covers the 10 s after it. `VICTORY_LOAD_INVALID`, `VICTORY_INVALID_RATIO` change the limits.)
+
+Tests: `tools/mac/test-heavy.sh`, `tools/mac/test-heavy-guard.sh` (temp state directory and fake lock, only their own fake processes; the hosted guard with a fake parent), `tools/mac/test-run-lock.sh` (the guard as `run.sh`'s child: it runs, ends with `run.sh`, ends within 15 s of a `kill -9`, one guard for two queued runs, none with `--allow-concurrent`).
+
 ## Data directories
 
-Each profile and backend has its own: `<parent>/victory-data-livetr-<profile>-<backend>/{data,cache,dxc}` (for example
-`victory-data-livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
-directory, `victory-data-livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
-state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU).
+Each profile and backend has its own: `<GTA6 root>/data/livetr-<profile>-<backend>/{data,cache,dxc}` (for example
+`data/livetr-fidelity-metal`). On first use it is cloned (APFS `cp -c`, no extra space until written) from one **seed**
+directory, `data/livetr` (`--seed`). The seed is only read, never written, by `run.sh`; so two backends start from the same
+state every time and can run at the same time (a second `victory.exe` still needs `--allow-concurrent`, and two games share the GPU). The "another victory.exe is running" check looks for processes whose command line contains `victory.exe run --execute` (the title itself), so other `run.sh` instances waiting for the lock, whose command lines only carry `--exe …/victory.exe`, do not count (`VICTORY_MAC_EXE_PATTERN` overrides the pattern; the tests use it).
 `--fresh-data` replaces the run's directory with a new clone first (reproducible start; it also drops the translated-shader cache, so the
 run is a cold one). The fidelity profile then sets `video/resolutionFullscreen` in its clone's `settings.xml` (original kept once as
 `settings.xml.before-fidelity`). `--data`, `--cache` or `VICTORY_DATA_DIR` use that directory as it is (no cloning, no `--fresh-data`).
 Do not use a seed another game is writing at that moment if you need an exact state: the clone is taken from the files as they are.
 
+**New game versus world save.** The default seed `data/livetr` is a NEW-GAME seed: a profile (`Player`, `SettingsProfileSettings`) and no world
+save, so the title starts at the opening and the prologue (the path that runs to world frame 1000 and beyond on our back). `run.sh` refuses a
+seed that holds a world save (any `saves/*/*/SARC*` container) and says where world saves live. World saves are kept ONLY in
+`data/worldsave-seed` (a Windows save, read-only; never run the title on it) and are used only on request: **`--worldsave`** is
+`--seed data/worldsave-seed` plus its own directory `data/livetr-<profile>-<backend>-worldsave` (cloned from the seed on first use, made
+writable). The save world is very slow on our back (a GPU frame of ~100 s every few frames) and turns white: for watching progress only.
+Note that the title writes its OWN autosave (a `SARC0015` container) into the run's data directory while it plays the prologue; the next run on
+that directory then starts in the saved world (run.sh prints a `note:` line). **`--new-game`** replaces only the run's `data/` with a clone of
+the seed's (new game again) and keeps the warm `cache/` and `dxc/`; `--fresh-data` replaces everything (cold compile).
+
 ## Options
 
 | Option | Effect | Default |
 |---|---|---|
+| `--purpose "<column>: <node id>,..."` | **required** (see above): the map column(s) and nodes this run is for; exit status 7 without a fitting one | none |
 | `--exe PATH` | the `victory.exe` to run | `target/x86_64-pc-windows-gnullvm/release/victory.exe` |
 | `--out DIR` | logs go here | `target/mac-runs/<time>` |
 | `--timeout SEC` | stop the run after SEC seconds (0: no limit); with `--until-*` only the cap (not met by then: exit status 6) | 900 |
-| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `victory-data-livetr-<profile>-<backend>/{data,cache}` next to the checkout (below) |
-| `--seed DIR` | the read-only seed the data directories are cloned from | `victory-data-livetr` next to the checkout |
+| `--data DIR`, `--cache DIR` | the title's saves and the derived cache (`VICTORY_DATA_DIR` in the environment also works) | `data/livetr-<profile>-<backend>/{data,cache}` under the GTA6 root (below) |
+| `--seed DIR` | the read-only seed the data directories are cloned from | `data/livetr` under the GTA6 root |
+| `--worldsave` | start from the world save: `--seed data/worldsave-seed` and the own directory `data/livetr-<profile>-<backend>-worldsave`. Never implied. Very slow, turns white (known) | off (new game) |
+| `--new-game` | replace only the run's `data/` with a clone of the seed's (no world save, no autosave from an earlier run), keep `cache/` and `dxc/` | off |
 | `--fresh-data` | delete the run's own data directory and clone it from the seed again, so the run starts from the seed state (only with the default directory) | off |
 | `--prefix DIR` | the Wine prefix (`WINEPREFIX` also works) | by backend, see above |
 | `--keys SPEC`, `--no-keys` | `VICTORY_KEYS` | `8-3600/3:Enter` (Enter every 3 s from 8 s; patch I1) |
@@ -148,7 +235,7 @@ Do not use a seed another game is writing at that moment if you need an exact st
 | `--exec` | run `victory.exe ARGS` (the arguments after `--`, e.g. `-- warm --jobs 4`) in the foreground instead of the title, with the environment, prefix, DLLs, data and cache of a run; no keys, no time limit, no log folder, exit status is `victory.exe`'s | off |
 | `-- ARGS` | passed to `victory.exe run --execute <game>` after `--console` (with `--exec`: the whole `victory.exe` command line) | |
 
-Variables read: `GTA6_ROOT` (the parent of the checkouts and data, default: the checkout's parent), `GAME_DIR` / `VICTORY_GAME_DIR` (the game
+Variables read: `GTA6_ROOT` (the parent of the checkouts and data, default: the checkout's parent, or three levels up when the checkout is a worktree under `worktrees/mac/<name>`), `GAME_DIR` / `VICTORY_GAME_DIR` (the game
 directory, default `GTA6.Xbox.v1.0.2.1` in `GTA6_ROOT`), `VICTORY_MAC_WINE_DIR` (Wine, default `VIctory-macOS/target/wine-cx`), `WINEDEBUG`
 (default `-all`). Every other `VICTORY_*` / `WINE*` variable passes through unchanged and is listed by `--print-env`.
 
@@ -208,7 +295,7 @@ and `summary.txt`. The files `until-met.txt` / `until-failed.txt` in the out dir
 **Not met.** `--timeout` ran out (or the title ended by itself first, or the recorder failed): the run ends as before, the log says
 `until 未满足：<the conditions>: <why>`, and the exit status is **6** (the title's own status is in `end.txt`). Without any
 `--until-*` the run is exactly what it was: the title's status, no new lines, no new files. (Exit statuses of `run.sh`: 0 ok, 1 setup
-failed, 2 bad option, 3 another `victory.exe` is running, 4 lock wait ran out, 6 `--until-*` not met; otherwise the title's.)
+failed, 2 bad option, 3 another `victory.exe` is running, 4 lock wait ran out, 6 `--until-*` not met, 7 no or malformed `--purpose`; otherwise the title's.)
 `--until-*` with `--timeout 0` warns: nothing ends a run whose condition never comes. A bare `--capture-frames` or `--corpus` prints a
 hint to add `--until-capture`.
 
@@ -245,10 +332,10 @@ recording), `-present`, not met (exit 6), `--linger`, and that a run without `--
 
 ## What a run leaves in its out directory
 
-`stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
+`RUN.txt` (first line: the `--purpose`), `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
 hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` (the `--print-env` text of this run), `summary.txt`
 (status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, `load.log` (load average every 10 s), and as asked
-`mem.csv`, `frametime.log`, `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
+`mem.csv`, `frametime.log` (with it `frametime-summary.txt` and `frametime-annot.csv`: the valid/invalid marking against `load.log`, see "Heavy tasks" 7), `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
 
 Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env)`.
 
@@ -256,9 +343,12 @@ Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.
 
 ## Playing by hand: `tools/mac/play.sh`
 
-`tools/mac/play.sh [run.sh options]` is `run.sh --fidelity --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
+`tools/mac/play.sh --purpose "<column>: <node id>,..." [run.sh options]` (the purpose is required here too, as for every run) is `run.sh --perf --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
 game lock, data directories and checks are run.sh's). `--input none` matters: from world frame 1 the default neutral replay is exclusive
-and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on.
+and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on. The default is `--perf` (1280x720 output patch,
+non-fidelity; the UI comes out 3x too big because the title lays it out in 4K pixels) since fidelity GPU frames are 6-17 s each on our back;
+`play.sh --fidelity` brings the Series X profile back (a later option wins). `play.sh --worldsave` plays the Windows world save (see "Data
+directories"); `play.sh --new-game` starts a new game again.
 
 Keyboard (needs the title's window in focus; works together with any host pad, `VICTORY_ONE_PAD=0` separates them), from
 `crates/victory-hle/src/modules/gameinput.rs`: A Enter, B Backspace, X X, Y Y, left stick W/A/S/D, right stick I/J/K/L, LT Z, RT C,

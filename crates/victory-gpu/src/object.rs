@@ -11,6 +11,7 @@ pub type HRESULT = i32;
 pub const S_OK: HRESULT = 0;
 pub(crate) const S_FALSE: HRESULT = 1;
 pub(crate) const E_NOTIMPL: HRESULT = 0x8000_4001_u32 as i32;
+pub(crate) const E_FAIL: HRESULT = 0x8000_4005_u32 as i32; // mac G12
 pub(crate) const E_NOINTERFACE: HRESULT = 0x8000_4002_u32 as i32;
 pub(crate) const E_POINTER: HRESULT = 0x8000_4003_u32 as i32;
 pub(crate) const E_INVALIDARG: HRESULT = 0x8007_0057_u32 as i32;

@@ -14,7 +14,7 @@
 # - Its own Wine prefix, target/wineprefix-tests (WINEPREFIX overrides it). It never uses
 #   target/wineprefix-play, and it only stops the wineserver of the prefix it used: other
 #   prefixes may be running a game.
-# - Wine: VICTORY_MAC_WINE_DIR, else ../VIctory-macOS/target/wine-cx next to this checkout, else
+# - Wine: VICTORY_MAC_WINE_DIR, else VIctory-macOS/target/wine-cx under the GTA6 root, else
 #   what tools/macos/test-wine.sh finds.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,8 +22,13 @@ cd "$ROOT"
 # --rosetta-probe: not a cargo test. Cross-builds tools/mac/rosetta-probe/probe-wine.c and runs it with a vectored
 # exception handler in its own prefix target/wineprefix-probe (CPU only, no game); see tools/mac/rosetta-probe-wine.sh.
 if [ "${1:-}" = "--rosetta-probe" ]; then shift; exec sh tools/mac/rosetta-probe-wine.sh "$@"; fi
+# cargo test under Wine is a heavy job: only through tools/mac/heavy.sh (docs/mac/RUN.md "Heavy tasks")
+if [ -z "${VICTORY_HEAVY_SLOT:-}" ]; then
+    exec bash "$ROOT/tools/mac/heavy.sh" --jobs 2 --label wine-tests -- sh "$ROOT/tools/mac/wine-tests.sh" "$@"
+fi
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
-WDIR="${VICTORY_MAC_WINE_DIR:-$ROOT/../VIctory-macOS/target/wine-cx}"
+case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+WDIR="${VICTORY_MAC_WINE_DIR:-$_g/VIctory-macOS/target/wine-cx}"
 [ -x "$WDIR/bin/wine" ] || WDIR="$HOME/Library/Caches/victory-macos/target/wine-cx"
 [ -x "$WDIR/bin/wine" ] && export WINE="${WINE:-$WDIR/bin/wine}"
 export WINEPREFIX="${WINEPREFIX:-$ROOT/target/wineprefix-tests}"
