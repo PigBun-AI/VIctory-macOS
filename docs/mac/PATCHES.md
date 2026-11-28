@@ -852,7 +852,9 @@ saves 0 bytes for them. Frame-capture replay (`tools/metal/replay.sh`, `rec-a-f3
 ### S3 — the shared translator: wave64 compute programs on 32-lane host waves, the shadow-mask ray programs (`victory-shader`, 5 hooks)
 
 Census of the 31 compute programs the translator refused (2026-11-27, host wave 32): 26 "no wave32 lowering for this wave64 program",
-5 "a descriptor read only as data". After S3, 24 translate (20 wave64, 4 of the 5 shadow-mask programs); 7 stay refused (below).
+5 "a descriptor read only as data". After S3 as first committed, 24 translate (20 wave64, 4 of the 5 shadow-mask programs); 7 stay refused (below).
+
+**Update 2026-11-28 (`mac/wave-wide-off`): `VICTORY_WAVE_WIDE` is back to off by default; only the address table (item 1) stays on.** See "Wave-wide default off" below. Items 2-4 and the "24 translate" numbers describe the code with `VICTORY_WAVE_WIDE=1`; by default 4 translate (the shadow-mask programs) and the 20 wave64 programs are refused again.
 
 *What (all in `crates/victory-shader/src/emit/`, every changed line marked `mac S3`).*
 1. `mod.rs` `viewaddr_table()`: `VICTORY_VIEWADDR_TABLE` is on unless `=0` (was off). The shadow-mask ray programs
@@ -860,8 +862,8 @@ Census of the 31 compute programs the translator refused (2026-11-27, host wave 
    pick a buffer view from the heap at a computed index and only walk the memory behind it: the address comes from the host's
    address table (`t251`/`t250`, which the host keeps always). They were refused as "a descriptor read only as data"; the code was
    upstream's, switched off. Only programs that were refused change.
-2. `mod.rs` `emit()`: `VICTORY_WAVE_WIDE` is on unless `=0` (was on for two digests, off otherwise). It acts only after every other form
-   failed (the retry ladder), so every program that translated before is byte-identical (census: 25 756 containers, same code hash).
+2. `mod.rs` `emit()`: `VICTORY_WAVE_WIDE` was on unless `=0` (upstream: on for two digests, off otherwise); **now reverted to upstream's rule** (`wide_branches_on`: `=1` turns it on, the two scene kernels keep their default). It was meant to act only after every other form
+   failed, but the 2026-11-28 census shows it also changes 36 containers that translated without it (a different, larger DXIL; see below).
    Wave-wide branches give 20 of the 26 wave64 programs (LDS read and written inside a lane branch, a 64-bit ballot, `v_readlane`/`v_mbcnt`
    across the halves), groups of 64 threads.
 3. `mod.rs` `widen()` and `lower.rs` `note_barrier`/`barrier_in_wide`/`lane_regions_of`: groups of several console waves are tried too;
@@ -889,10 +891,29 @@ getMinMaxConstants"): 19 of the 24 build a pipeline.
 is the same across the console wave; the three BVH-builder first-lane programs `dc78c5de69c7c155`, `322ed4ad832bdea6`,
 `d441b097704ab616` translate without it, and with it the DXIL is byte-identical).
 
+*Wave-wide default off (2026-11-28, branch `mac/wave-wide-off`).* Why: with S3's default (wide on), the wide branch puts a
+group barrier in a divergent path. On an Apple GPU `ptfx_CS_lightAtlas_Sprite` (compute `8d74b76fb8c0cb8d`, container
+`2561af9577c47289`, a single-thread group) hangs for about 100 s per dispatch; in the prologue the long frames start around
+w54-70. With `VICTORY_WAVE_WIDE=0` the prologue ran to w200 and w300 with no long frame (`research/game-runs/20261128-fidperf/stall-g`,
+`stall-h`). The upstream comment (runs 121-124 lost an NVIDIA card) is the same cause. What changed: only the `wide_on` line in
+`emit()` (`mod.rs`, marked `mac S3`; helper `wide_branches_on`); `VICTORY_VIEWADDR_TABLE` stays on (the 4 shadow-mask programs
+need it). Tests: `s3_tests.rs` (`the_wave_wide_branch_is_off_by_default`; the wide case asks for `VICTORY_WAVE_WIDE=1` explicitly).
+Effect (census `victory-census translate`, whole package, host wave 32, 25 985 containers; data
+`research/census-widefix-20261128/{off,wide1}`): default 25 760 translate (225 refused); `VICTORY_WAVE_WIDE=1` 25 780 (205 refused). So the
+20 wave64 programs are refused again ("no wave32 lowering for this wave64 program": their dispatches are dropped, as before S3). The
+census also found that wide on changes the DXIL of 36 containers that translated without it (e.g. `2561af9577c47289`
+101 140 B -> 146 112 B, the non-wide and wide forms; `ptfx_CS_lightAtlas_Trail`, `CS_GenerateShadowMasks*`, `CS_DeferredFallback*`,
+`CS_IrradianceCache_*`, `CS_Gather*`): the earlier claim "programs that translated before are byte-identical" held for
+which programs translate, not for their code. By default those are back to the pre-S3 form.
+Wide stays available with `VICTORY_WAVE_WIDE=1` (the live-file switch) for experiments, never in a run that matters.
+*TODO (root fix):* the wide branch must not put a group barrier in a divergent path, or the decision must be made by the whole group
+(a flag in LDS, a group barrier, then an OR over all waves, so every wave takes the same path and the region's scalar results are
+selected by the wave's own decision).
+
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
 
-*Risk.* An upstream comment records that the wide form lost an NVIDIA card; a Windows host that wants to use this patch must first turn it off (`VICTORY_WAVE_WIDE=0`).
+*Risk.* An upstream comment records that the wide form lost an NVIDIA card, and on Apple GPUs it hangs single-thread groups (above): it is off by default here, and `VICTORY_WAVE_WIDE=1` is not safe until the root fix is in.
 
 ### S1 — `GetAttributeAtVertex` without `attributeAtVertex`: the other vertices as flat inputs (`victory-shader` `emit/{vertex_flat,lower,mod,wire}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`, `mac/attribute_at_vertex.rs`)
 
