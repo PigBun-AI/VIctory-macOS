@@ -494,11 +494,10 @@ fn absorb(w: &mut Window, p: &Pending) {
             .labels
             .iter()
             .any(|l| l.contains("execute-indirect graphics-gs"))
+        && let Some(n) = vis_last()
     {
-        if let Some(n) = vis_last() {
-            eprintln!("victory-metal gpuprof: visibility samples of the last counted GS draw: {n}");
-            eprintln!("victory-metal gpuprof: that draw read:{}", dump_text());
-        }
+        eprintln!("victory-metal gpuprof: visibility samples of the last counted GS draw: {n}");
+        eprintln!("victory-metal gpuprof: that draw read:{}", dump_text());
     }
     for (ns, label) in slow {
         let (head, snapped) = split_snap(label);
@@ -629,12 +628,12 @@ fn table(w: &Window, pending: usize) -> String {
             ));
         }
     }
-    if vis_enabled() {
-        if let Some(n) = vis_last() {
-            out.push_str(&format!(
-                "\n  visibility samples of the last counted GS draw: {n}"
-            ));
-        }
+    if vis_enabled()
+        && let Some(n) = vis_last()
+    {
+        out.push_str(&format!(
+            "\n  visibility samples of the last counted GS draw: {n}"
+        ));
     }
     out
 }
