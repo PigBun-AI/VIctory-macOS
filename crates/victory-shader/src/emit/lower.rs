@@ -564,7 +564,16 @@ fn lane_regions_of(st: &Structured, wide_only: bool) -> Option<Vec<(usize, Vec<b
 /// of them is a branch whose wave-wide meaning is not known ([`Structured::wave_any`]).
 pub(super) fn branches_around(st: &Structured, needs: &[usize]) -> Option<Vec<usize>> {
     let mut out = Vec::new();
-    for (d, region) in lane_regions(st)? {
+    for (d, mut region) in lane_regions(st)? {
+        // mac S3: a loop of one block closes on its own branch, and a block post-dominates itself,
+        // so the region left it out: the lanes still in the loop run that block, a turn each
+        // (a group barrier of it would wait for turns the other host wave does not take).
+        if let Some(LaneExit::Branch { taken, not_taken, .. }) = st.exits.get(d)
+            && (*taken == d || *not_taken == d)
+            && let Some(r) = region.get_mut(d)
+        {
+            *r = true;
+        }
         if needs.iter().any(|&b| region.get(b).copied().unwrap_or(false)) {
             st.wave_any.get(d).copied().flatten()?;
             out.push(d);

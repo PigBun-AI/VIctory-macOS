@@ -203,25 +203,20 @@ fn a_group_barrier_in_a_wave_wide_branch_of_several_console_waves_is_refused() {
 
 /// mac S3 (root fix): the skip around that loop stays, taken by the whole group, in every form the
 /// ladder takes after the skips are left out: with it gone, a group none of whose lanes is in the
-/// skip runs the loop to the lowering's bound, a group barrier per turn (`ptfx_CS_lightAtlas_*`: ~100 s
-/// of GPU time in the prologue). Counted by `SKIPS_KEPT`. Adversarial: a skip around no loop goes.
+/// skip runs the loop to the lowering's bound, group barriers in every turn (`ptfx_CS_lightAtlas_*`:
+/// ~100 s of GPU time in the prologue). `without_skips` finds nothing to leave out here (None).
+/// Adversarial: a skip around no loop goes (Some).
 #[test]
 fn a_skip_around_a_loop_that_never_ends_with_no_lane_left_is_kept() {
-    let kept = || ir::SKIPS_KEPT.load(std::sync::atomic::Ordering::Relaxed);
     let native = loop_behind_a_skip(64);
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
     for deep in [false, true] {
-        let before = kept();
-        let _ = ir::without_skips(&p, deep);
-        assert!(kept() > before, "deep={deep}: the skip around the loop is kept");
+        assert!(ir::without_skips(&p, deep).is_none(), "deep={deep}: the skip around the loop is kept");
     }
     let native = lds_in_a_lane_branch(64);
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
     for deep in [false, true] {
-        let before = kept();
-        let skipped = ir::without_skips(&p, deep);
-        assert_eq!(kept(), before, "deep={deep}: a skip around no loop is not kept");
-        assert!(skipped.is_some(), "deep={deep}: and it goes");
+        assert!(ir::without_skips(&p, deep).is_some(), "deep={deep}: a skip around no loop goes");
     }
 }
 
@@ -230,7 +225,10 @@ fn a_skip_around_a_loop_that_never_ends_with_no_lane_left_is_kept() {
 fn the_loop_behind_a_skip_translates_wide() {
     let native = loop_behind_a_skip(64);
     let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
-    emitted_with_wide(&native, &p, "1").expect("translates on a host of 32-lane waves");
+    let shader = emitted_with_wide(&native, &p, "1").expect("translates on a host of 32-lane waves");
+    if let Some(path) = std::env::var_os("S3_DUMP_DXIL") {
+        std::fs::write(path, &shader.dxil).unwrap();
+    }
 }
 
 /// Hardware: the same programs run on the device (waves of 32) and compared with the console's
