@@ -153,16 +153,16 @@ mod tests {
         let (site, stub) = (0x1_4000_0000usize, 0x1_3fff_0000usize);
         let j = site_jump(site, stub);
         assert_eq!(j[0], 0xE9);
-        assert_eq!(site + 5 + i32::from_le_bytes(j[1..5].try_into().unwrap()) as usize, stub);
+        assert_eq!((site + 5).wrapping_add(i32::from_le_bytes(j[1..5].try_into().unwrap()) as isize as usize), stub);
         let c = stub_code(stub, site, STOCK_MAXIMUM);
         assert_eq!(&c[..8], &STOCK_MAXIMUM);
-        assert_eq!(stub + 16 + i32::from_le_bytes(c[12..16].try_into().unwrap()) as usize, stub + SLOT);
-        assert_eq!(stub + 21 + i32::from_le_bytes(c[17..21].try_into().unwrap()) as isize as usize, site + 8);
+        assert_eq!((stub + 16).wrapping_add(i32::from_le_bytes(c[12..16].try_into().unwrap()) as isize as usize), stub + SLOT);
+        assert_eq!((stub + 21).wrapping_add(i32::from_le_bytes(c[17..21].try_into().unwrap()) as isize as usize), site + 8);
         // Run it: a site of the stock bytes then `ret`, the detour in, called with rsi at data
         // whose +0x90 is the minimum. Adversarial: without the detour the slot stays 0.
         use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc};
         unsafe {
-            let page = VirtualAlloc(std::ptr::null(), 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as usize;
+            let page = VirtualAlloc(0x1_5000_0000usize as *const _, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as usize;
             assert_ne!(page, 0);
             let base = page - MAXIMUM as usize + 0x100;
             std::ptr::copy_nonoverlapping(STOCK_MAXIMUM.as_ptr(), (page + 0x100) as *mut u8, 8);
