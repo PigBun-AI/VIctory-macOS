@@ -1,5 +1,5 @@
 //! mac S3: console wave64 compute programs on a host of 32-lane waves that stopped at "no
-//! wave32 lowering": LDS in a lane branch (taken wave-wide with `VICTORY_WAVE_WIDE=1`; off by default, mac S3), groups of several
+//! wave32 lowering": LDS in a lane branch (taken wave-wide by default; `VICTORY_WAVE_WIDE=0` only for A/B, mac S3), groups of several
 //! console waves, the first lane. The translation checks run everywhere; those that run on the
 //! hardware device (waves of 32) only under Windows.
 

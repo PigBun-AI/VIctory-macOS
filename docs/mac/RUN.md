@@ -368,6 +368,8 @@ defaults to the release build of `worktrees/mac/int` (an error if there is none)
 `research/accept/<yyyymmdd-hhmmss>-<short mac/livetr commit>/` (`--accept-dir` or `VICTORY_ACCEPT_DIR` change the place):
 `summary.md`, `summary.json`, `run/` (the run's logs and `dropstats/`), `run.sh.out`.
 
+Wave-wide translation is on by default. Leave `VICTORY_WAVE_WIDE` unset in normal runs; use `VICTORY_WAVE_WIDE=0` only for an A/B comparison. An unset value in the summary means the executable uses its default.
+
 `summary.md`: the version (mac/livetr commit, the stage with `current` resolved, exe sha, `VICTORY_WAVE_WIDE`, the denylist); alive or
 not and the highest world frame; time to world frame 1; frame-time median and p90 and the number of frames over 5 s in world
 frames 1..300 (and over the whole run); the load average; the shared layer's draws and dispatches, drop rate and top 10 reasons
