@@ -447,6 +447,12 @@ struct Lower<'a> {
 // shortcut: a genuine loop of more iterations than this is cut short too.
 pub(super) const LOOP_LIMIT: u32 = 1 << 20;
 
+/// `VICTORY_SCALAR_BOUNDS` (default on, =0 off; live; upstream 11-28 0745a5d): a one-dword
+/// scalar buffer load keeps its bounds check with wide loads.
+fn scalar_bounds_on() -> bool {
+    crate::emit::live::var_os("VICTORY_SCALAR_BOUNDS").is_none_or(|v| v != "0")
+}
+
 /// `VICTORY_DIV_FIXUP` (default on, =0 off; live; upstream 11-28 feb90ad): `v_div_fixup` takes
 /// zero and infinite operands before a NaN quotient, as the console does.
 fn div_fixup_on() -> bool {
@@ -7010,7 +7016,9 @@ impl<'a> Lower<'a> {
                 }
                 None => self.handle(site, src, false, (11, 0))?,
             };
-            if Self::wide_loads() {
+            // One dword keeps its bounds check below (a read past the record reads 0 on the
+            // console): `VICTORY_SCALAR_BOUNDS`, default on, =0 off; live.
+            if (count > 1 || !scalar_bounds_on()) && Self::wide_loads() {
                 for (k, x) in self.raw_dwords(h, addr, count).into_iter().enumerate() {
                     self.write(inst, Reg::S(code + k as u8), x, None);
                 }

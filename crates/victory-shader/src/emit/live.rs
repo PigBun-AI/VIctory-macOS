@@ -45,7 +45,8 @@ pub const WHITELIST: &[&str] = &[
     "VICTORY_SHADER_OPT",
     "VICTORY_VIEWADDR_TABLE",
     "VICTORY_SKIP_STALL", // mac S3 (from the Windows line 9da1676e)
-    "VICTORY_DIV_FIXUP", // mac H-win (from the Windows line 07f56f5a)
+    "VICTORY_DIV_FIXUP", // mac X4 (from the Windows line 07f56f5a)
+    "VICTORY_SCALAR_BOUNDS", // mac X5 (from the Windows line d040bcb3)
 ];
 
 /// One generation's values of the switches in [`WHITELIST`] (`None`: unset).

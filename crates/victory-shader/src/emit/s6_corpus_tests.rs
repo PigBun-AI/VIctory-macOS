@@ -68,3 +68,55 @@ fn skip_stall_keeps_the_water_programs_loop_skip() {
     let off = off.expect("translates without");
     assert_ne!(on.dxil, off.dxil, "the kept skip changes the translation");
 }
+
+/// Upstream 11-28 0745a5d (`VICTORY_SCALAR_BOUNDS`): with wide loads on (`VICTORY_SHADER_OPT`
+/// with WIDE; off by default, so the bug is latent there), over the first 300 corpus programs, the
+/// translation changes for some (their one-dword scalar loads keep the bounds check) and none
+/// fails either way; `=0` gives the old translation (adversarial).
+///
+/// mac: the corpus is the folder `VICTORY_LIVE_CORPUS` names (the upstream test read a fixed
+/// Windows path and returned silently on a Mac); without it the test prints "skipped: corpus not
+/// found" and returns, and it must not be read as a pass of the corpus check.
+#[test]
+fn one_dword_scalar_loads_keep_their_bounds() {
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dir) = std::env::var_os("VICTORY_LIVE_CORPUS").map(std::path::PathBuf::from) else {
+        eprintln!("skipped: corpus not found (VICTORY_LIVE_CORPUS not set)");
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        eprintln!("skipped: corpus not found ({} unreadable)", dir.display());
+        return;
+    };
+    let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with(".cdxil")).collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("skipped: corpus not found ({} has no .cdxil)", dir.display());
+        return;
+    }
+    let (mut differ, mut ok_on, mut ok_off, mut bad) = (0, 0, 0, Vec::new());
+    for f in files.iter().take(300) {
+        let bytes = std::fs::read(f).unwrap();
+        // Wide loads are off by default (`opt::DEFAULT`); the fix is for when they are on.
+        let wide = ("VICTORY_SHADER_OPT", "0xffffffff");
+        // Default options (wide loads off): the switch changes nothing (mac census: pass count and DXIL unchanged).
+        match (translate32(&bytes, &[]), translate32(&bytes, &[("VICTORY_SCALAR_BOUNDS", "0")])) {
+            (Ok(a), Ok(b)) => assert!(a.dxil == b.dxil, "{}: default translation changed", f.display()),
+            (Err(_), Err(_)) => {}
+            _ => panic!("{}: default translation passes on one side only", f.display()),
+        }
+        match (translate32(&bytes, &[wide]), translate32(&bytes, &[wide, ("VICTORY_SCALAR_BOUNDS", "0")])) {
+            (Ok(a), Ok(b)) => {
+                ok_on += 1;
+                ok_off += 1;
+                differ += usize::from(a.dxil != b.dxil);
+            }
+            (Err(e), Ok(_)) => bad.push(format!("{} {e}", f.display())),
+            (Ok(_), Err(_)) => ok_on += 1,
+            (Err(_), Err(_)) => {}
+        }
+    }
+    eprintln!("scalar bounds over {} programs: translate ok on {ok_on} / off {ok_off}; {differ} differ; failures {bad:?}", files.len().min(300));
+    assert!(bad.is_empty());
+    assert!(differ > 0);
+}

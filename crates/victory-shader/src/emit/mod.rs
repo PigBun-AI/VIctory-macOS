@@ -140,7 +140,7 @@ mod waterfall_tests;
 mod wave64_tests;
 #[cfg(test)]
 mod s3_tests; // mac S3
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac X5: its corpus tests skip without VICTORY_LIVE_CORPUS
 mod s6_corpus_tests;
 mod wave;
 
