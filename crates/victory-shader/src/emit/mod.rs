@@ -125,6 +125,8 @@ mod waterfall_tests;
 mod wave64_tests;
 #[cfg(test)]
 mod s3_tests; // mac S3
+#[cfg(all(test, windows))]
+mod s6_corpus_tests;
 mod wave;
 
 use crate::dxbc::{Container, FourCC};
