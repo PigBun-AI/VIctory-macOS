@@ -15,7 +15,7 @@
 # tools/mac/shader-hw-known.txt (an unlisted failure is "UNCLASSIFIED").
 # Exit 0 only when every failure is listed in the table as base / semantic
 # (a "bug" row is a translator bug handed over, and keeps the exit at 1).
-# Rules: cargo runs niced with 2 jobs (the machine is shared); no game.
+# Rules: cargo runs niced (19) with 1 job (the machine is shared); no game.
 set -u
 cd "$(dirname "$0")/../.."
 . tools/mac/env.sh || exit 1
@@ -30,15 +30,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$BACK" ] || { echo "shader-hw: name the metal/ directory with --back or VICTORY_METAL_DIR" >&2; exit 2; }
+# The game lock is held while a victory.exe runs: no compiling or testing then (the machine is shared).
+if [ -z "${SHADER_HW_IGNORE_LOCK:-}" ] && tools/mac/game-lock.sh held; then
+    echo "shader-hw: the game lock is held; not building or testing (SHADER_HW_IGNORE_LOCK=1 overrides)" >&2
+    exit 3
+fi
 echo "== build the executor ($BACK)"
-( cd "$BACK" && . ../tools/metal/env.sh && nice -n 15 cargo build -p victory-metal-shader-exec -j 2 ) || exit 2
+( cd "$BACK" && . ../tools/metal/env.sh && nice -n 19 cargo build -p victory-metal-shader-exec -j 1 ) || exit 2
 EXEC="$BACK/target/debug/victory-shader-exec"
 LOG="$(pwd)/${LOGS:-target/mac-logs}/shader-hw"
 mkdir -p "$LOG"
 rm -f "$LOG/exec.tsv"
 echo "== run the tests"
 VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec.tsv" \
-    nice -n 15 cargo test -p victory-shader --lib -j 2 -- $FILTER "$@" 2>&1 | tee "$LOG/test.txt" | grep -E '^test result|FAILED'
+    nice -n 19 cargo test -p victory-shader --lib -j 1 -- $FILTER "$@" 2>&1 | tee "$LOG/test.txt" | grep -E '^test result|FAILED'
 python3 tools/mac/shader-hw-tally.py "$LOG/test.txt" "$LOG/exec.tsv" tools/mac/shader-hw-known.txt
 rc=$?
 # The wide-load pass the test asks for (its doc comment): once with VICTORY_SHADER_OPT=127.
@@ -46,7 +51,7 @@ if [ -z "$FILTER" ]; then
     echo "== run scalar_buffer_loads with VICTORY_SHADER_OPT=127"
     rm -f "$LOG/exec127.tsv"
     VICTORY_SHADER_OPT=127 VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec127.tsv" \
-        nice -n 15 cargo test -p victory-shader --lib -j 2 -- scalar_buffer_loads 2>&1 | tee "$LOG/test127.txt" | grep -E '^test result|FAILED'
+        nice -n 19 cargo test -p victory-shader --lib -j 1 -- scalar_buffer_loads 2>&1 | tee "$LOG/test127.txt" | grep -E '^test result|FAILED'
     python3 tools/mac/shader-hw-tally.py "$LOG/test127.txt" "$LOG/exec127.tsv" tools/mac/shader-hw-known.txt @opt127 || rc=1
 fi
 exit $rc

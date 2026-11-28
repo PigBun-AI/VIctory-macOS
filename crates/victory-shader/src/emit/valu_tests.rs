@@ -112,17 +112,23 @@ pub(super) fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader
     words.extend_from_slice(body);
     words.extend_from_slice(&buffer_store_dword(0, 8, 0));
     words.push(S_ENDPGM);
+    build_words(&words, threads, lds_bytes, false, 8, 4)
+}
 
+/// mac S6: the tail of [`build_cs`] for a caller that writes its own program (the opcode
+/// oracle's lane programs): `words` as given, `vgprs` registers, `wave64` for a console wave of 64, `consts` root
+/// constant dwords in `s0..` (the descriptor table address follows them).
+pub(super) fn build_words(words: &[u32], threads: u32, lds_bytes: u32, wave64: bool, vgprs: u32, consts: u32) -> HostShader {
     let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let native = NativeProgram {
         stage: HwStage::Cs,
-        wave64: false,
-        vgprs: 8,
+        wave64,
+        vgprs,
         layout: vec![
             RootParam {
                 root: RootType::Constants,
                 table_offset_dwords: 0,
-                sgprs: 4,
+                sgprs: consts,
                 base_register: 0,
                 user_data: 0,
                 slot: 0,
@@ -132,7 +138,7 @@ pub(super) fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader
                 table_offset_dwords: 0,
                 sgprs: 1,
                 base_register: 0,
-                user_data: 4,
+                user_data: consts,
                 slot: 1,
             },
         ],
@@ -143,11 +149,11 @@ pub(super) fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader
             lower_bound: 0,
             stride: 0,
             dwords: 4,
-            user_data: 4,
+            user_data: consts,
             slot: 1,
         }],
         io: StageIo::Cs(ComputeIo {
-            rsrc2: (5 << 1) | ((lds_bytes / 512) << 15), // 5 user SGPRs: s0..s4
+            rsrc2: ((consts + 1) << 1) | ((lds_bytes / 512) << 15), // 5 user SGPRs: s0..s4
             threads: [threads, 1, 1],
         }),
         code,

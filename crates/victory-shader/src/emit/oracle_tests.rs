@@ -33,19 +33,40 @@ enum Want {
     Bits16(Vec<u32>),
     /// One of these floats, within `ulps` or `abs`.
     Float { cands: Vec<f32>, ulps: u32, abs: f32 },
+    /// The low half is one of these half patterns (`half_ok`: a NaN equals any NaN, a subnormal
+    /// equals zero or a subnormal). The upper half is not compared.
+    Half(Vec<u32>),
+    /// Both halves: one of these pairs [low, high], each half by `half_ok`.
+    Half2(Vec<[u32; 2]>),
+    /// One half (`hi`: the upper one) is one of `cands` by `half_ok`; the other is `old`'s, bit for bit.
+    HalfPart { cands: Vec<u32>, hi: bool, old: u32 },
+    /// The low half is within `ulps` half-steps of one of these exact values rounded to half.
+    HalfNear { cands: Vec<f64>, ulps: u32, abs: f64 },
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Ty {
     F32,
     U32,
+    /// mac S6 A batch: 16-bit floats in the low half (garbage above), 16-bit pairs and f32 mixed,
+    /// 64-bit integers as [lo, hi] pairs, finite f32, `v_cmp_class` operands, turns for sin/cos,
+    /// f64 as [lo, hi] pairs.
+    F16,
+    Mix,
+    U64,
+    /// four independent integers
+    Quad,
+    Fin,
+    Class,
+    Turn,
+    F64,
 }
 
 struct Row {
     name: &'static str,
     ty: Ty,
     args: usize,
-    want: Box<dyn Fn(&[u32; 3]) -> Want>,
+    want: Box<dyn Fn(&[u32; 4]) -> Want>,
 }
 
 // ---- encoders (the ones valu_tests has are reused) ----
@@ -188,6 +209,9 @@ fn random_float(r: &mut Rng) -> u32 {
 
 /// The input sets of a row: every pair of specials (or every special) and random ones.
 fn cases(ty: Ty, args: usize) -> Vec<[u32; 4]> {
+    if !matches!(ty, Ty::F32 | Ty::U32) {
+        return a::cases(ty, args);
+    }
     let sp = if ty == Ty::F32 { float_specials() } else { int_specials() };
     let mut r = Rng(0x9E37_79B9_7F4A_7C15);
     let mut rnd = |r: &mut Rng| match ty {
@@ -201,6 +225,7 @@ fn cases(ty: Ty, args: usize) -> Vec<[u32; 4]> {
                 _ => v,
             }
         }
+        _ => unreachable!(),
     };
     let mut out = Vec::new();
     match args {
@@ -273,7 +298,71 @@ fn matches(want: &Want, got: u32) -> bool {
         Want::Float { cands, ulps, abs } => cands
             .iter()
             .any(|&c| float_ok(f32::from_bits(got), c, *ulps, *abs)),
+        Want::Half(c) => c.iter().any(|&h| half_ok(got & 0xffff, h)),
+        Want::Half2(c) => c.iter().any(|h| half_ok(got & 0xffff, h[0]) && half_ok(got >> 16, h[1])),
+        Want::HalfPart { cands, hi, old } => {
+            let (kept, mine) = if *hi { (got & 0xffff == old & 0xffff, got >> 16) } else { (got >> 16 == old >> 16, got & 0xffff) };
+            kept && cands.iter().any(|&h| half_ok(mine, h))
+        }
+        Want::HalfNear { cands, ulps, abs } => {
+            let g = got & 0xffff;
+            cands.iter().any(|&x| {
+                let c = to_half64(x, false);
+                half_ok(g, c)
+                    || (!half_is_nan(g)
+                        && !half_is_nan(c)
+                        && (half_ordered(g).abs_diff(half_ordered(c)) <= u64::from(*ulps) || (f64::from(from_half(g)) - x).abs() <= *abs))
+            })
+        }
     }
+}
+
+fn half_is_nan(h: u32) -> bool {
+    h & 0x7fff > 0x7c00
+}
+fn half_ordered(h: u32) -> i64 {
+    if h & 0x8000 != 0 { -i64::from(h & 0x7fff) } else { i64::from(h & 0x7fff) }
+}
+/// A half result against a half reference: NaN equals any NaN, a subnormal equals zero or a
+/// subnormal (the console's denormal mode is open), else the same bits.
+fn half_ok(got: u32, cand: u32) -> bool {
+    let (got, cand) = (got & 0xffff, cand & 0xffff);
+    if half_is_nan(got) || half_is_nan(cand) {
+        return half_is_nan(got) && half_is_nan(cand);
+    }
+    let sub = |h: u32| h & 0x7c00 == 0 && h & 0x3ff != 0;
+    let zero = |h: u32| h & 0x7fff == 0;
+    if (sub(got) && (sub(cand) || zero(cand))) || (zero(got) && sub(cand)) {
+        return true;
+    }
+    got == cand
+}
+
+/// f64 to a half pattern, to nearest even or toward zero (the reference of the 16-bit rows).
+fn to_half64(x: f64, rtz: bool) -> u32 {
+    let sign = if x.is_sign_negative() { 0x8000 } else { 0 };
+    if x.is_nan() {
+        return sign | 0x7e00;
+    }
+    let abs = x.abs();
+    if abs.is_infinite() {
+        return sign | 0x7c00;
+    }
+    let round = |v: f64| if rtz { v.floor() } else { v.round_ties_even() };
+    if abs < 2f64.powi(-14) {
+        return sign | round(abs / 2f64.powi(-24)) as u32;
+    }
+    let e = ((abs.to_bits() >> 52) & 0x7ff) as i32 - 1023;
+    if e > 15 {
+        return sign | if rtz { 0x7bff } else { 0x7c00 };
+    }
+    let m = abs / 2f64.powi(e) - 1.0;
+    let q = round(m * 1024.0) as u32;
+    let (e, q) = if q == 1024 { (e + 1, 0) } else { (e, q) };
+    if e > 15 {
+        return sign | if rtz { 0x7bff } else { 0x7c00 };
+    }
+    sign | (((e + 15) as u32) << 10) | q
 }
 
 fn shown(want: &Want) -> String {
@@ -284,6 +373,17 @@ fn shown(want: &Want) -> String {
             .map(|c| format!("{c:e}/{:#x}", c.to_bits()))
             .collect::<Vec<_>>()
             .join("|"),
+        Want::Half(c) => c.iter().map(|b| format!("h{b:#06x}")).collect::<Vec<_>>().join("|"),
+        Want::Half2(c) => c.iter().map(|b| format!("h{:#06x}:{:#06x}", b[1], b[0])).collect::<Vec<_>>().join("|"),
+        Want::HalfPart { cands, hi, old } => format!(
+            "{} half {} (other kept from {old:#010x})",
+            if *hi { "upper" } else { "lower" },
+            cands.iter().map(|b| format!("{b:#06x}")).collect::<Vec<_>>().join("|")
+        ),
+        Want::HalfNear { cands, ulps, abs } => format!(
+            "~{} (+-{ulps} half steps or {abs:e})",
+            cands.iter().map(|c| format!("{c:e}->{:#06x}", to_half64(*c, false))).collect::<Vec<_>>().join("|")
+        ),
     }
 }
 
@@ -322,7 +422,7 @@ fn int(name: &'static str, args: usize, g: fn(&[u32; 3]) -> u32) -> Row {
         name,
         ty: Ty::U32,
         args,
-        want: Box::new(move |i| Want::Bits(vec![g(i)])),
+        want: Box::new(move |i| Want::Bits(vec![g(&[i[0], i[1], i[2]])])),
     }
 }
 
@@ -350,7 +450,7 @@ fn int_b(name: &'static str, g: impl Fn(&[u32; 3]) -> u32 + 'static) -> Row {
         name,
         ty: Ty::U32,
         args: 2,
-        want: Box::new(move |i| Want::Bits(vec![g(i)])),
+        want: Box::new(move |i| Want::Bits(vec![g(&[i[0], i[1], i[2]])])),
     }
 }
 
@@ -631,6 +731,9 @@ fn salu_cmp() -> Vec<Row> {
 
 /// The families of this round: name and rows. The rest of the census is planned in
 /// `docs/mac/opcode-oracle.md`.
+#[path = "oracle_a_tests.rs"]
+mod a; // mac S6 A batch: VALU remainder, exec and 64-bit scalar, transcendentals
+
 fn families() -> Vec<(&'static str, Vec<Row>)> {
     vec![
         ("valu_f32_arith", f32_arith()),
@@ -669,8 +772,16 @@ fn panic_text(e: Box<dyn std::any::Any + Send>) -> String {
 }
 
 fn run_row(row: &Row) -> Outcome {
-    let words = body(row.name);
-    let shader = match std::panic::catch_unwind(|| build_valu_cs(&words)) {
+    run_row_with(row, None)
+}
+
+/// `words`: the program of a row of the A batch (its own body, 16 registers); none: the
+/// program `body` makes of the row's name.
+fn run_row_with(row: &Row, words: Option<&[u32]>) -> Outcome {
+    let shader = match std::panic::catch_unwind(|| match words {
+        Some(w) => a::build_single(w),
+        None => build_valu_cs(&body(row.name)),
+    }) {
         Ok(s) => s,
         Err(e) => return Outcome::Untranslated(panic_text(e)),
     };
@@ -681,7 +792,7 @@ fn run_row(row: &Row) -> Outcome {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_cases(&shader, &inputs, |backend, _i, inp, got| {
             ran += 1;
-            let want = (row.want)(&[inp[0], inp[1], inp[2]]);
+            let want = (row.want)(&inp);
             if !matches(&want, got) {
                 bad += 1;
                 if examples.len() < 4 {
@@ -704,28 +815,37 @@ fn run_row(row: &Row) -> Outcome {
 }
 
 fn run_family(family: &str, rows: &[Row]) {
+    run_list(family, rows.iter().map(|r| (r, String::new(), None)).collect());
+}
+
+/// A row, its tag (`[imm]`, `#hi`: what makes it one of several rows of a mnemonic), and its
+/// own program when it has one.
+type Item<'a> = (&'a Row, String, Option<&'a [u32]>);
+
+fn run_list(family: &str, rows: Vec<Item>) {
     if Host::new(false).is_err() {
         eprintln!("{family}: no device; not run");
         return;
     }
     let mut failed = Vec::new();
-    for row in rows {
-        let (outcome, cases, detail) = match run_row(row) {
+    for (row, tag, words) in rows {
+        let label = format!("{}{tag}", row.name);
+        let (outcome, cases, detail) = match run_row_with(row, words) {
             Outcome::Passed(n) => ("pass", n, String::new()),
             Outcome::Mismatch { cases, bad, examples } => ("MISMATCH", cases, format!("{bad} of {cases}; {}", examples.join(" / "))),
             Outcome::Untranslated(t) => ("UNTRANSLATED", 0, t),
             Outcome::Refused(t) => ("refused", 0, t),
         };
-        let known = KNOWN.iter().find(|(n, _)| *n == row.name);
-        eprintln!("oracle {family:18} {:24} {outcome}{} {cases} {detail}", row.name, if known.is_some() { " (known)" } else { "" });
+        let known = KNOWN.iter().find(|(n, _)| *n == row.name || *n == label);
+        eprintln!("oracle {family:18} {label:24} {outcome}{} {cases} {detail}", if known.is_some() { " (known)" } else { "" });
         if let Some(path) = std::env::var_os("VICTORY_ORACLE_OUT") {
             use std::io::Write;
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(file, "{family}\t{}\t{outcome}{}\t{cases}\t{detail}", row.name, if known.is_some() { " (known)" } else { "" });
+                let _ = writeln!(file, "{family}\t{label}\t{outcome}{}\t{cases}\t{detail}", if known.is_some() { " (known)" } else { "" });
             }
         }
         if (outcome == "MISMATCH" || outcome == "UNTRANSLATED") && known.is_none() {
-            failed.push(format!("{}: {detail}", row.name));
+            failed.push(format!("{label}: {detail}"));
         }
     }
     assert!(failed.is_empty(), "{family}: {} rows differ from the reference:\n{}", failed.len(), failed.join("\n"));
@@ -780,4 +900,23 @@ fn oracle_f16_nearest_matches() {
         Outcome::Mismatch { examples, .. } => panic!("{examples:?}"),
         Outcome::Untranslated(t) => panic!("{t}"),
     }
+}
+
+/// mac S6 finding: in a program with a thread count (a compute shader), `s_mov_b32 vcc_lo, sN`
+/// reached `cross_lane` and tripped `debug_assert!(threads.is_none() || console_lanes)`.
+/// The mask is a plain scalar here: the lowering must give vcc the value in a register
+/// without asking the wave for it.
+#[test]
+fn a_scalar_move_into_vcc_translates_in_a_thread_limited_program() {
+    let cndmask = opcode_of("v_cndmask_b32").expect("v_cndmask_b32").1;
+    let shader = build_valu_cs(&[
+        sop1(0x03, 106, 2), // s_mov_b32 vcc_lo, s2
+        vop2(cndmask, 0, vgpr(1), 2),
+    ]);
+    // lane 0 of a 1-thread program: bit 0 of s2 picks v2, else v1
+    let inputs = [[10, 20, 0, 0], [10, 20, 1, 0], [10, 20, 2, 0], [10, 20, 3, 0]];
+    run_cases(&shader, &inputs, |backend, _i, inp, got| {
+        let want = if inp[2] & 1 != 0 { inp[1] } else { inp[0] };
+        assert_eq!(got, want, "{backend}: s2 = {}", inp[2]);
+    });
 }

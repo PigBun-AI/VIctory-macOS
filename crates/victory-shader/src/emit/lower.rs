@@ -1449,6 +1449,26 @@ pub(super) fn reads_mask_as_data(st: &Structured, i: &Inst) -> bool {
     })
 }
 
+/// mac S7: a select (`v_cndmask_b32`) whose lane mask is a plain number (vcc written by
+/// `s_mov_b32 vcc_lo, s2`, a root constant, a loaded dword ...) and no ballot or compare the
+/// structuring tracks. The lowering takes the lane's own bit of it, which is the console's
+/// lane only with console lanes: without them a thread-limited program asserted in
+/// `cross_lane` (debug) or read the bit of the host's lane number (release).
+pub(super) fn selects_by_number_mask(st: &Structured, i: &Inst) -> bool {
+    if !matches!(i.name(), "v_cndmask_b32") {
+        return false;
+    }
+    let Fields::Valu(v) = &i.fields else {
+        return false;
+    };
+    match v.src.get(2) {
+        Some(&Operand::Scalar { code, .. }) if code != NULL => i
+            .read(Reg::S(code))
+            .is_some_and(|m| !st.masks.contains_key(&m) && !st.highs.contains_key(&m)),
+        _ => false,
+    }
+}
+
 /// The parameters packing 16-bit rows two per dword and where each lays
 /// its elements out: (first row, [(dword, register, column, columns)]).
 ///
@@ -1681,6 +1701,7 @@ impl<'a> Lower<'a> {
                     || matches!(n, "v_readlane_b32" | "v_writelane_b32")
                     || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
                     || reads_mask_as_data(x.st, i)
+                    || selects_by_number_mask(x.st, i) // mac S7
             }) || lane_constant_masks(x.st)
                 // (a branch the wave takes together asks the wave)
                 || !x.st.wide.is_empty();
