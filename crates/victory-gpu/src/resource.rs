@@ -3310,6 +3310,13 @@ pub(crate) fn test_buffer(width: u64) -> This {
 }
 
 #[cfg(test)]
+#[path = "mac/prove/resource_footprints.rs"]
+mod prove_footprints; // mac G12
+#[cfg(test)]
+#[path = "mac/prove/resource_heaps.rs"]
+mod prove_heaps; // mac G12
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::object::slot;

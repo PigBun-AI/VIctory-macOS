@@ -10,7 +10,7 @@ use crate::resource::PAGEABLE_IIDS;
 #[cfg(windows)]
 mod behind;
 
-const QUEUE_IIDS: [Iid; 4] = [
+pub(crate) const QUEUE_IIDS: [Iid; 4] = [ // mac G12: pub(crate) for mac/prove
     guid(
         0x0ec870a6,
         0x5d7e,
@@ -25,10 +25,10 @@ const QUEUE_IIDS: [Iid; 4] = [
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct QueueDesc {
-    kind: u32,
-    priority: i32,
-    flags: u32,
-    nodes: u32,
+    pub(crate) kind: u32, // mac G12: pub(crate) fields for mac/prove
+    pub(crate) priority: i32,
+    pub(crate) flags: u32,
+    pub(crate) nodes: u32,
 }
 
 /// The title reads the list type right after the header.
@@ -1267,6 +1267,14 @@ const fn queue_table(newer: bool) -> [*const (); 36] {
 
 static FUNCTIONS: Table<36> = Table(queue_table(false));
 static NEWER_FUNCTIONS: Table<36> = Table(queue_table(true));
+
+/// Where a queue's Signal is called from (0x70, 0x80 in the newer layout): for the tests of mac/prove (mac G12).
+#[cfg(test)]
+pub(crate) fn signal_offset_for_tests(q: This) -> usize {
+    // SAFETY: one of our queues; its first field is the table.
+    let table = unsafe { *q.cast::<*const *const ()>() };
+    if table == NEWER_FUNCTIONS.0.as_ptr() { 0x80 } else { 0x70 }
+}
 
 #[cfg(test)]
 mod tests {

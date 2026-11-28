@@ -620,6 +620,17 @@ per-surface pipe-bank XOR) is worth writing.
 *Why not needed on Windows.* The Windows line has the same detiler and the same question; this is a measurement, not a fix. *Remove when*
 the census has been read and the answer is in the map row.
 
+### G12 — test-only hooks and a 3D UAV census for the shared-layer proofs (`victory-gpu/src/mac/prove/`, `#[path]` test modules in `descriptor.rs`, `descriptor/host.rs`, `resource.rs`; `pub(crate)` on `RESOURCE_IIDS`, `QUEUE_IIDS`, `ALLOCATOR_IIDS`, `QueueDesc` fields; `queue::signal_offset_for_tests`; `layout_stats::uav_3d` + 1 hook in `descriptor.rs` create_uav)
+
+*What.* Tests, nothing at run time: `descriptor_records` (CopyDescriptors/Simple, view records, increments), `descriptor_views` (GPU reads of SRV/UAV/cube/null/constant views on the host device against the D3D12 rules),
+`queue_fence` (fences, events, queue Signal/Wait), `resource_footprints` and `resource_heaps` (GetCopyableFootprints / GetResourceAllocationInfo against a model of the spec and the host device; placed/committed/Map rules). They are child
+modules (`#[path = "mac/prove/..."]`) so they reach private items; the visibility widening above is for the tests only. The one run-time part is the 3D unordered-access census (`VICTORY_MAC_LAYOUT_STATS=1`): counts the
+title's 3D UAVs with a first depth slice other than 0 or a size other than the rest (D3DMetal cannot make partial 3D views, finding F1 of C-V-012).
+
+*Why.* Map nodes C-V-012/014/017 and api.CreateConstantBufferView/Resource::Map were "used, not proven".
+
+*Why not needed on Windows.* The Windows line has its own tests of these modules; these add spec-referenced ones. *Remove when* the Windows line adopts equivalent proofs; the census when F1 is answered.
+
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 
 New `victory-hle/src/modules/mac.rs`, registered in `modules/mod.rs` **only when `rosetta()`**,

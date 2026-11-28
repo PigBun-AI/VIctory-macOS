@@ -1318,6 +1318,9 @@ pub(crate) extern "system" fn create_uav(
     handle: u64,
 ) {
     let view = View::Unordered(resource as usize, counter as usize, words(desc));
+    if let Some(w) = words(desc) {
+        crate::mac::layout_stats::uav_3d(&w); // mac G11
+    }
     record(handle, view);
 }
 

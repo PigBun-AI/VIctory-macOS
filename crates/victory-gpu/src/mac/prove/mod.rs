@@ -3,3 +3,6 @@
 
 #[cfg(all(test, windows))]
 pub(crate) mod rig;
+
+#[cfg(test)]
+mod queue_fence;

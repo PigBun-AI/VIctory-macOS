@@ -60,6 +60,32 @@ pub fn texture(dimension: u32, layout: u32, flags: u32, format: u32, mips: u16, 
     }
 }
 
+static UAV3D: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+/// A 3D unordered access view the title made (`words`: the description): counted as all, with a first depth slice
+/// other than 0, and with a size that is not "the rest" (`u32::MAX`). D3DMetal refuses partial views of a 3D texture
+/// (matrix row C-V-012, finding F1); this says whether the title makes any. Logged at the powers of two of the count.
+pub fn uav_3d(words: &[u32; 10]) {
+    if !*ENABLED || words[1] != 8 {
+        return;
+    }
+    // words: format, dimension, MipSlice, FirstWSlice, WSize
+    let n = UAV3D[0].fetch_add(1, Relaxed) + 1;
+    if words[3] != 0 {
+        UAV3D[1].fetch_add(1, Relaxed);
+    }
+    if words[4] != u32::MAX {
+        UAV3D[2].fetch_add(1, Relaxed);
+    }
+    if n.is_power_of_two() {
+        tracing::info!(
+            "layout stats: {n} 3D unordered access views, {} from a depth slice other than 0, {} with a size other than the rest",
+            UAV3D[1].load(Relaxed),
+            UAV3D[2].load(Relaxed)
+        );
+    }
+}
+
 /// The swizzle mode of a layout field, if it names one.
 fn mode(layout: u32) -> Option<u32> {
     (layout & !0xff == 0x100).then_some(layout & 0xff)

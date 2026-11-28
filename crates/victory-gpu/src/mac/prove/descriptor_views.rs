@@ -514,3 +514,38 @@ void main() {{
         crate::object::slot::<extern "system" fn(This) -> u32>(texture, 0x10)(texture);
     }
 }
+
+/// Constant buffer views (api.CreateConstantBufferView, 30,905 calls in the 370 s run): the view's size is rounded up
+/// to 256 bytes and held at 64 KiB (D3D12 `D3D12_CONSTANT_BUFFER_VIEW_DESC`: `SizeInBytes` a multiple of 256 and at most
+/// 65536 constants of 16 bytes), `BufferLocation` a multiple of 256 (else the view is not made: the slot reads zeros),
+/// and a shader reads the 16-byte constants from the location on.
+#[test]
+fn constant_buffer_views_read_the_constants_at_their_location() {
+    assert_eq!([0u32, 1, 255, 256, 257, 480, 65_536, 65_537, u32::MAX].map(constant_bytes), [0, 256, 256, 256, 512, 512, 65_536, 65_536, 65_536]);
+    let Some(mut rig) = Rig::new() else { return };
+    let Some(heap) = HostHeap::new(false, 64) else { return };
+    let (upload, at) = crate::host::host().unwrap().upload_buffer(1 << 16).expect("an upload buffer");
+    // 8 constants at offset 256 of the buffer, then others that must not be read
+    let words: Vec<u32> = (0..64u32).map(|i| 0xc0de_0000 + i).collect();
+    // SAFETY: the mapped upload buffer has 64 KiB.
+    unsafe {
+        std::ptr::write_bytes(at, 0, 1 << 16);
+        std::ptr::copy_nonoverlapping(words.as_ptr().cast::<u8>(), at.add(256), 256);
+    }
+    let slot = heap.dynamic(1).expect("a slot");
+    // SAFETY: a live upload buffer.
+    let gpu = unsafe { upload.GetGPUVirtualAddress() } + 256;
+    heap.constant_at(slot, &upload, gpu, 128);
+    let source = r#"#define RS "DescriptorTable(CBV(b0, numDescriptors = 1)), UAV(u0)"
+cbuffer C : register(b0) { uint4 c[8]; };
+RWByteAddressBuffer o : register(u0);
+[RootSignature(RS)]
+[numthreads(1, 1, 1)]
+void main() {
+    for (uint i = 0; i < 8; i++) o.Store4(i * 16, c[i]);
+}
+"#;
+    let out = rig.compute(source, &heap.heap, heap.gpu_handle(slot), 1, 32);
+    assert_eq!(&out[..32], &words[..32], "eight 16-byte constants from the location");
+    heap.release(slot, 1);
+}
