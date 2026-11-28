@@ -130,6 +130,8 @@ mod vertex_flat_tests; // mac S1
 mod probe_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod size_tests;
+#[cfg(test)]
+mod f2_tests; // mac F2
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod valu_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)

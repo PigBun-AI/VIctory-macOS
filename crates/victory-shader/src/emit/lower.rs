@@ -1185,6 +1185,22 @@ fn f16_nearest_on() -> bool { // mac F1
     f16_nearest_for(crate::emit::live::var("VICTORY_F16_NEAREST").as_deref())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`f2_read_first_on`], for its thread only.
+    pub(super) static TEST_F2_READ_FIRST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `VICTORY_F2_READ_FIRST` (mac F2): a 64-bit image atomic min/max that returns the original is
+/// lowered as a 64-bit load, then the atomic with its result unused. On unless exactly "0".
+fn f2_read_first_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_F2_READ_FIRST.get() {
+        return on;
+    }
+    !matches!(crate::emit::live::var("VICTORY_F2_READ_FIRST").as_deref().map(str::trim), Some("0"))
+}
+
 /// `VICTORY_F16_NATIVE` (mac F1): the nearest rounding of 16-bit results as one `fptrunc float to
 /// half` (native 16-bit types, SM 6.2) instead of [`Lower::f16_nearest`]'s dozen operations. Default:
 /// on for the Metal chain (the host takes no `attributeAtVertex`, [`host_attribute_at_vertex`]),
@@ -11603,11 +11619,31 @@ impl<'a> Lower<'a> {
                 )
             };
             let at = self.begin_guarded(guard);
+            // mac F2: MSC refuses a 64-bit atomic min/max whose original value is used
+            // (Apple GPUs do the atomic, not the return; docs/metal/dxop.md). The original is
+            // read first, as one 64-bit load, and the atomic's result is left unused: with
+            // another lane or group writing the texel between the two, the load is older than
+            // the atomic's own original, which a max (only upward) tolerates for its use here.
+            let read_first = cache.glc && wide && !compare && (4..=7).contains(&code) && f2_read_first_on();
+            let loaded = if read_first {
+                self.s.flags |= flags::TYPED_UAV_LOADS;
+                let i32t = self.s.t.i32;
+                let res = self.s.m.named_struct("dx.types.ResRet.i32", vec![i32t; 5]);
+                let (iu, h) = (self.s.m.undef(i32t), args[0]);
+                let mut largs = vec![h, iu];
+                largs.extend(&args[2..5]);
+                largs.extend([iu, iu, iu]);
+                let l = self.s.op(self.cur, "textureLoad.i32", Attr::ReadOnly, res, 66, &largs);
+                let (lo, hi) = (self.s.m.extract(self.cur, l, 0), self.s.m.extract(self.cur, l, 1));
+                Some(self.join64(lo, hi))
+            } else {
+                None
+            };
             let r = self
                 .s
                 .op(self.cur, intrinsic, Attr::NoUnwind, ty, opcode, &args);
             if cache.glc {
-                let old = self.end_guarded(at, &[(r, original)])[0];
+                let old = self.end_guarded(at, &[(loaded.unwrap_or(r), original)])[0];
                 if wide {
                     let (lo, hi) = self.split64(old);
                     self.write(inst, Reg::V(reg), lo, None);
