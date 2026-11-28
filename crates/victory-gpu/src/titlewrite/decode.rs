@@ -599,20 +599,25 @@ mod tests {
         // mov r11, rcx ; the address (its instruction takes [r11])
         // mov rax, r8 ; mov r10, r9 ; push r10 ; popfq ; <code> ; pushfq ; pop r10
         // mov rcx, [rsp+28h] ; mov [rcx], r10 ; mov [rcx+8], rdx ; mov [rcx+16], rax ; ret
-        let mut f = vec![0x49, 0x89, 0xcb, 0x4c, 0x89, 0xc0, 0x41, 0x51, 0x9d];
-        f.extend(code);
-        f.extend([0x9c, 0x41, 0x5a, 0x48, 0x8b, 0x4c, 0x24, 0x28]);
-        f.extend([0x4c, 0x89, 0x11, 0x48, 0x89, 0x51, 0x08, 0x48, 0x89, 0x41, 0x10, 0xc3]);
-        type F = unsafe extern "system" fn(*mut u64, u64, u64, u64, *mut [u64; 3]);
         let (there, operand, compared) = (spread(1), spread(2), if seed % 3 == 0 { spread(1) } else { spread(3) });
         let flags = 0x202 | (spread(4) & 0x8d5) as u32;
-        let (mut memory, mut out) = (there, [0; 3]);
-        // SAFETY: the code above, which keeps to the calling convention.
-        unsafe {
-            std::ptr::copy_nonoverlapping(f.as_ptr(), place as *mut u8, f.len());
-            let f: F = std::mem::transmute(place);
-            f(&mut memory, operand, compared, u64::from(flags), &mut out);
-        }
+        // What the processor makes of `code`: the word after it, then flags, rdx and rax.
+        let run = |code: &[u8]| -> (u64, [u64; 3]) {
+            let mut f = vec![0x49, 0x89, 0xcb, 0x4c, 0x89, 0xc0, 0x41, 0x51, 0x9d];
+            f.extend(code);
+            f.extend([0x9c, 0x41, 0x5a, 0x48, 0x8b, 0x4c, 0x24, 0x28]);
+            f.extend([0x4c, 0x89, 0x11, 0x48, 0x89, 0x51, 0x08, 0x48, 0x89, 0x41, 0x10, 0xc3]);
+            type F = unsafe extern "system" fn(*mut u64, u64, u64, u64, *mut [u64; 3]);
+            let (mut memory, mut out) = (there, [0; 3]);
+            // SAFETY: the code above, which keeps to the calling convention.
+            unsafe {
+                std::ptr::copy_nonoverlapping(f.as_ptr(), place as *mut u8, f.len());
+                let f: F = std::mem::transmute(place);
+                f(&mut memory, operand, compared, u64::from(flags), &mut out);
+            }
+            (memory, out)
+        };
+        let (memory, out) = run(code);
         let mut c = context();
         let mut ours = there;
         (c.R11, c.Rdx, c.Rax, c.EFlags) = (&raw mut ours as u64, operand, compared, flags);
@@ -623,10 +628,58 @@ mod tests {
         // SAFETY: our word.
         assert!(unsafe { store.run(&mut c, &raw mut ours as usize) });
         assert_eq!(ours, memory, "{code:x?} of {there:x} with {operand:x}");
-        assert_eq!((c.Rdx, c.Rax), (out[1], out[2]), "{code:x?} of {there:x} with {operand:x}, {compared:x}");
         // (`and`, `or` and `xor` leave AF as they like.)
         const SEEN: u32 = CF | PF | ZF | SF | OF;
-        assert_eq!(c.EFlags & SEEN, out[0] as u32 & SEEN, "{code:x?} of {there:x} with {operand:x}");
+        let Some(size) = cmpxchg_size(code) else {
+            assert_eq!((c.Rdx, c.Rax), (out[1], out[2]), "{code:x?} of {there:x} with {operand:x}, {compared:x}");
+            assert_eq!(c.EFlags & SEEN, out[0] as u32 & SEEN, "{code:x?} of {there:x} with {operand:x}");
+            return;
+        };
+        // `cmpxchg` (docs/mac/PATCHES.md, matrix mac.isa.lock_cmpxchg_flags): x86 sets the flags as
+        // `cmp accumulator, memory` whether it hits or misses. Rosetta gets ZF and the memory right
+        // but computes the other flags of a miss from `memory - accumulator` (100% of 114,699 misses
+        // in the probe), and clears bits 63:32 of rax on a 32-bit hit. So the decoder is held to
+        // what the processor makes of `cmp` (which it does right), and to the processor only where
+        // that agrees with x86: ZF and the low bits of rax always, the other flags and the whole of
+        // rax wherever the processor's own cmpxchg is architectural.
+        let cmp: &[u8] = match size {
+            1 => &[0x41, 0x3a, 0x03],       // cmp al, [r11]
+            2 => &[0x66, 0x41, 0x3b, 0x03], // cmp ax, [r11]
+            4 => &[0x41, 0x3b, 0x03],       // cmp eax, [r11]
+            _ => &[0x49, 0x3b, 0x03],       // cmp rax, [r11]
+        };
+        let arch = run(cmp).1[0] as u32;
+        assert_eq!(c.EFlags & SEEN, arch & SEEN, "decoder flags of {code:x?}, memory {there:x}, accumulator {compared:x}");
+        assert_eq!(c.EFlags & ZF, out[0] as u32 & ZF, "ZF of {code:x?} of {there:x}, accumulator {compared:x}");
+        assert_eq!(c.Rdx, out[1], "{code:x?}");
+        let m = if size == 8 { u64::MAX } else { (1 << (size * 8)) - 1 };
+        assert_eq!(c.Rax & m, out[2] & m, "{code:x?} of {there:x}, accumulator {compared:x}");
+        let hit = there & m == compared & m;
+        if hit {
+            // rax is left alone on a hit (the SDM); Rosetta zeroes bits 63:32 of it for 4 bytes
+            assert_eq!(c.Rax, compared, "{code:x?}");
+        } else if size >= 4 {
+            assert_eq!(c.Rax, out[2], "{code:x?}: rax is the memory, zero-extended");
+        }
+    }
+
+    /// The operand size of `cmpxchg` in `code` (prefixes, rex, 0f b0/b1), if it is one.
+    fn cmpxchg_size(code: &[u8]) -> Option<usize> {
+        let (mut word, mut wide, mut i) = (false, false, 0);
+        while let Some(&b) = code.get(i) {
+            match b {
+                0xf0 => {}
+                0x66 => word = true,
+                0x40..=0x4f => wide = b & 8 != 0,
+                _ => break,
+            }
+            i += 1;
+        }
+        match code.get(i..i + 2)? {
+            [0x0f, 0xb0] => Some(1),
+            [0x0f, 0xb1] => Some(if wide { 8 } else if word { 2 } else { 4 }),
+            _ => None,
+        }
     }
 
     #[test]

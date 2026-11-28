@@ -81,7 +81,7 @@
 | mac.fault.ntquery_class7 | NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder() | 1 | static-code | gap | stubbed |
 | mac.fault.xmem_no_write_watch | MEM_WRITE_WATCH left off the pools under Rosetta | 16 | log | unproven | stubbed |
 | mac.fault.files_overlapped_wait | overlapped ReadFile is waited for before the destination is guarded again (tracking on under Rosetta) | 2 | static-census | unproven | emulated |
-| mac.fault.titlewrite | decoder that emulates faulting title stores (what the store does to registers/flags/memory) | 0 | log | gap | emulated |
+| mac.fault.titlewrite | decoder that emulates faulting title stores (what the store does to registers/flags/memory) | 0 | log | proven | emulated |
 | mac.fault.shadow_inplace | shadow copies of title memory for the GPU (shadow.rs) and in-place views (inplace.rs) | 9 | log | unproven | emulated |
 | mac.fault.safecopy_asm | victory_safe_put / victory_safe_merge stores (vpmaskmovd) and their scalar twins | 3 | static-code | proven | translated |
 

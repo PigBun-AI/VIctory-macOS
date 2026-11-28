@@ -237,8 +237,11 @@ return: they pass without comparing anything.
   what_is_left_alone_is_no_known_hole}`: Wine's `NtQueryVirtualMemory` has no class 7
   (`MemoryRegionInformationEx`), so `watch::placeholder()` is never true (only matters with
   `VICTORY_FAULT_TRACKING=1`).
-- Rosetta: `titlewrite::decode::stores_do_what_the_processor_does` compares the flags of `lock cmpxchg [r11], dl`
-  with the decoder's (0x881 against Rosetta's 0x80): Rosetta does not compute them alike.
+- Rosetta (fixed 2026-11-28, `mac: T titlewrite ...`): `titlewrite::decode::stores_do_what_the_processor_does` compared the flags of
+  `lock cmpxchg [r11], dl` with the decoder's (0x881 against Rosetta's 0x80). The decoder was right (flags = accumulator - memory,
+  as x86); Rosetta computes the flags of a miss from memory - accumulator (ZF right) and clears bits 63:32 of rax on a 32-bit hit.
+  The test now holds the decoder to what the processor's own `cmp` gives (Rosetta does that right), and the processor's `cmpxchg`
+  only to ZF, memory, rdx and the low bits of rax. Passes under Wine; with the decoder's operands swapped it fails.
 - D3DMetal: `root::malformed_blobs_are_rejected_by_the_host` and
   `pipeline::library::a_rejected_blob_gives_an_empty_library` (it accepts malformed blobs),
   `descriptor::host::{views_are_made_beside_the_heap_and_copied_in, a_raw_view_is_moved_only_where_its_descriptor_says_where_it_is}`
