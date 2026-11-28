@@ -1352,6 +1352,20 @@ impl crate::record::CommandList {
             }
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
             let vis = crate::prof::GS_VIS.with(|c| c.get());
+            if vis && let Ok(v) = std::env::var("VICTORY_METAL_GS_SCISSOR") {
+                // `x,y,w,h`: a diagnostic scissor for the counted draw (where do its samples fall).
+                let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                if n.len() == 4 {
+                    let mut sc = MTLScissorRect {
+                        x: n[0],
+                        y: n[1],
+                        width: n[2],
+                        height: n[3],
+                    };
+                    // SAFETY: one rectangle.
+                    unsafe { enc.setScissorRects_count(std::ptr::NonNull::from(&mut sc), 1) };
+                }
+            }
             if vis {
                 // SAFETY: slot 0 of the visibility buffer the pass was made with.
                 unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Counting, 0) };
