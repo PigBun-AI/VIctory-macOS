@@ -136,7 +136,10 @@ unsafe fn patch_clzero(at: usize, code: &[u8]) -> bool {
         return false;
     };
     let mut stubs = STUBS.lock().unwrap_or_else(|e| e.into_inner());
-    if stubs.is_none() {
+    // The room is near the first site that asked; a site out of its reach (another image, or in a test
+    // another page that VirtualAlloc put far away) gets a room of its own, and the sites already
+    // patched keep their stubs where they are.
+    if stubs.is_none_or(|(place, _)| jump(at, place).is_none() || jump(at, place + STUBS_LEN).is_none()) {
         *stubs = near(at).map(|place| (place, 0));
     }
     let Some((place, used)) = stubs.as_mut() else {
