@@ -1190,10 +1190,15 @@ struct LaneRow {
     gk: Gen,
     /// the permute reads other lanes: all of them stay active (M0 is all ones)
     full: bool,
-    model: Box<dyn Fn(&[u32; 8]) -> [u32; 64]>,
+    /// a console wave of 64 (64 threads; the inputs are [M0, M1, P0, P1, A0, A1, B0, B1])
+    wave64: bool,
+    model: Box<dyn Fn(&[u32; 8]) -> Vec<u32>>,
 }
 
-fn lane_program(body: &[u32]) -> Vec<u32> {
+fn lane_program(body: &[u32], wave64: bool) -> Vec<u32> {
+    if wave64 {
+        return lane_program64(body);
+    }
     let (lshl, lshr, and, cnd, ne) = (o("v_lshlrev_b32"), o("v_lshrrev_b32"), o("v_and_b32"), o("v_cndmask_b32"), o("v_cmp_ne_u32"));
     let mut w = vec![s_mov_b32(9, 0x80)];
     w.extend_from_slice(&s_load_dwordx4(12, 8));
@@ -1216,9 +1221,36 @@ fn lane_program(body: &[u32]) -> Vec<u32> {
     w
 }
 
+/// The wave of 64: `s0..s7` = [M0, M1, P0, P1, A0, A1, B0, B1] (`v1..v8`); the exec mask is
+/// M, L (`v14:v15`) is B where the lane's bit of P is set, else A; the out words are 64 markers,
+/// then 64 aux words.
+fn lane_program64(body: &[u32]) -> Vec<u32> {
+    let (lshl, lshr, and, cnd, ne, le) = (o("v_lshlrev_b32"), o("v_lshrrev_b32"), o("v_and_b32"), o("v_cndmask_b32"), o("v_cmp_ne_u32"), o("v_cmp_le_u32"));
+    let mut w = vec![s_mov_b32(9, 0x80)];
+    w.extend_from_slice(&s_load_dwordx4(12, 8));
+    for i in 0..8u8 {
+        w.push(vop1(1, i + 1, u16::from(i)));
+    }
+    w.push(vop2(lshl, 9, 130, 0)); // v9 = tid * 4
+    w.extend([vop1(1, 20, 128), vop1(1, 21, 129), vop1(1, 22, 128), vop1(1, 23, 128)]);
+    w.extend_from_slice(&store_offen(20, 9, 12, 0));
+    w.extend_from_slice(&store_offen(20, 9, 12, 256));
+    // v12 = tid & 31; vcc = (tid >= 32); v13 = bit (tid & 31) of M0 or M1; exec = those lanes
+    w.extend([vop2(and, 12, 159, 0), vopc(le, 160, 0), vop2(cnd, 13, vgpr(1), 2), vop2(lshr, 13, vgpr(12), 13)]);
+    w.extend([vop2(and, 13, 129, 13), vopc(ne, 128, 13), 0xBEFE_046A]); // s_mov_b64 exec, vcc
+    // v14:v15 = bit (tid & 31) of P0 or P1 ? B : A
+    w.extend([vopc(le, 160, 0), vop2(cnd, 13, vgpr(3), 4), vop2(lshr, 13, vgpr(12), 13), vop2(and, 13, 129, 13), vopc(ne, 128, 13)]);
+    w.extend([vop2(cnd, 14, vgpr(5), 7), vop2(cnd, 15, vgpr(6), 8)]);
+    w.extend_from_slice(body);
+    w.extend_from_slice(&store_offen(21, 9, 12, 0));
+    w.extend_from_slice(&store_offen(22, 9, 12, 256));
+    w.push(S_ENDPGM);
+    w
+}
+
 /// The lanes that end active: (1, aux) each.
-fn lane_out(f: impl Fn(usize) -> Option<u32>) -> [u32; 64] {
-    let mut out = [0u32; 64];
+fn lane_out(f: impl Fn(usize) -> Option<u32>) -> Vec<u32> {
+    let mut out = vec![0u32; 64];
     for l in 0..32 {
         if let Some(aux) = f(l) {
             out[l] = 1;
@@ -1228,7 +1260,7 @@ fn lane_out(f: impl Fn(usize) -> Option<u32>) -> [u32; 64] {
     out
 }
 
-fn lane_cases(gk: Gen, full: bool) -> Vec<[u32; 8]> {
+fn lane_cases(gk: Gen, full: bool, wave64: bool) -> Vec<[u32; 8]> {
     let mut r = Rng(0x1357_9BDF_2468_ACE1);
     let masks = [u32::MAX, u32::MAX, 0x0000_ffff, 0xaaaa_aaaa, 0x5555_5555, 1, 0x8000_0000, 0, 0x00ff_ff00];
     let pats = [0u32, u32::MAX, 0xaaaa_aaaa, 0x0f0f_0f0f, 0x8000_0001, 0x5555_5555, 0xffff_0000];
@@ -1252,12 +1284,19 @@ fn lane_cases(gk: Gen, full: bool) -> Vec<[u32; 8]> {
             }
         };
         let (a, b) = (v(&mut r), v(&mut r));
-        out.push([m0, p, a[0], a[1], b[0], b[1], 0, 0]);
+        if wave64 {
+            // M and P are 64-bit now: two words each, the high one from the same sets
+            let m1 = if full { u32::MAX } else if n % 3 == 0 { r.next() } else { masks[r.next() as usize % masks.len()] };
+            let p1 = if n % 3 == 1 { r.next() } else { pats[r.next() as usize % pats.len()] };
+            out.push([m0, m1, p, p1, a[0], a[1], b[0], b[1]]);
+        } else {
+            out.push([m0, p, a[0], a[1], b[0], b[1], 0, 0]);
+        }
     }
     out
 }
 
-fn run_lane_cases(shader: &HostShader, cases: &[[u32; 8]], mut check: impl FnMut(&str, &[u32; 8], &[u32])) {
+fn run_lane_cases(shader: &HostShader, out_words: u32, cases: &[[u32; 8]], mut check: impl FnMut(&str, &[u32; 8], &[u32])) {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let mut ran = 0;
     for (label, warp) in [("hardware", false), ("warp", true)] {
@@ -1279,7 +1318,7 @@ fn run_lane_cases(shader: &HostShader, cases: &[[u32; 8]], mut check: impl FnMut
                 };
             }
             let out = host
-                .dispatch(&root, &pso, &Dispatch { roots: vec![(0, Root::Constants(ud))], views: &[View::RawUav(64)], samplers: &[], groups: [1, 1, 1] })
+                .dispatch(&root, &pso, &Dispatch { roots: vec![(0, Root::Constants(ud))], views: &[View::RawUav(out_words)], samplers: &[], groups: [1, 1, 1] })
                 .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
             check(label, inputs, &out[0]);
         }
@@ -1291,24 +1330,32 @@ fn run_lane_cases(shader: &HostShader, cases: &[[u32; 8]], mut check: impl FnMut
 }
 
 fn run_lane_row(row: &LaneRow) -> Outcome {
-    let words = lane_program(&row.body);
-    let shader = match std::panic::catch_unwind(|| build_words(&words, 32, 0, false, 24, 8)) {
+    let words = lane_program(&row.body, row.wave64);
+    let wave64 = row.wave64;
+    let threads = if wave64 { 64 } else { 32 };
+    let shader = match std::panic::catch_unwind(|| {
+        // a console wave of 64 on the host's waves of 32 (what the Mac has)
+        let was = super::super::lower::TEST_HOST_WAVE.replace(wave64.then_some(32));
+        let r = std::panic::catch_unwind(|| build_words(&words, threads, 0, wave64, 24, 8));
+        super::super::lower::TEST_HOST_WAVE.set(was);
+        r.unwrap_or_else(|e| std::panic::resume_unwind(e))
+    }) {
         Ok(s) => s,
         Err(e) => return Outcome::Untranslated(panic_text(e)),
     };
-    let inputs = lane_cases(row.gk, row.full);
+    let inputs = lane_cases(row.gk, row.full, row.wave64);
     let (mut bad, mut ran, mut examples) = (0usize, 0usize, Vec::new());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_lane_cases(&shader, &inputs, |backend, inp, got| {
+        run_lane_cases(&shader, 2 * threads, &inputs, |backend, inp, got| {
             ran += 1;
             let want = (row.model)(inp);
-            if got[..64] != want[..] {
+            if got[..want.len()] != want[..] {
                 bad += 1;
                 if examples.len() < 3 {
-                    let l = (0..64).find(|&l| got[l] != want[l]).unwrap_or(0);
+                    let l = (0..want.len()).find(|&l| got[l] != want[l]).unwrap_or(0);
                     examples.push(format!(
                         "{backend}: in M0 {:#010x} P {:#010x} A {:#x}:{:#x} B {:#x}:{:#x} -> {} {l} got {:#010x} want {:#010x}",
-                        inp[0], inp[1], inp[3], inp[2], inp[5], inp[4], if l < 32 { "active lane" } else { "aux of lane" }, got[l], want[l]
+                        inp[0], inp[1], inp[3], inp[2], inp[5], inp[4], if l < threads as usize { "active lane" } else { "aux of lane" }, got[l], want[l]
                     ));
                 }
             }
@@ -1368,6 +1415,7 @@ fn cmpx_rows() -> Vec<LaneRow> {
             body,
             gk,
             full: false,
+            wave64: false,
             model: Box::new(move |c| {
                 let (m0, p, a, b) = (c[0], c[1], [c[2], c[3]], [c[4], c[5]]);
                 let mut fin = 0u32;
@@ -1431,6 +1479,7 @@ fn exec_rows() -> Vec<LaneRow> {
             body: vec![set_vcc, sop1(o(name), 20, VCC_LO), smov_to_v(20, 22)],
             gk: Gen::I32,
             full: false,
+            wave64: false,
             model: Box::new(move |c| {
                 let new = if or { c[0] | c[1] } else { c[0] & c[1] };
                 lane_out(|l| (new >> l & 1 == 1).then_some(c[0]))
@@ -1444,6 +1493,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: vec![set_vcc, sop1(o("s_andn2_wrexec_b32"), 20, VCC_LO), smov_to_v(20, 22)],
         gk: Gen::I32,
         full: false,
+        wave64: false,
         model: Box::new(|c| {
             let new = c[1] & !c[0];
             lane_out(|l| (new >> l & 1 == 1).then_some(new))
@@ -1456,6 +1506,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: vec![set_vcc, sop1(o("s_andn2_wrexec_b32"), 20, VCC_LO)],
         gk: Gen::I32,
         full: false,
+        wave64: false,
         model: Box::new(|c| {
             let new = c[1] & !c[0];
             lane_out(|l| (new >> l & 1 == 1).then_some(0))
@@ -1468,6 +1519,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: vop3(o("v_mbcnt_lo_u32_b32"), 22, vgpr(3), vgpr(5), 128).to_vec(),
         gk: Gen::I32,
         full: false,
+        wave64: false,
         model: Box::new(|c| lane_out(|l| (c[0] >> l & 1 == 1).then(|| (c[2] & ((1u32 << l) - 1)).count_ones().wrapping_add(c[4])))),
     });
     rows.push(LaneRow {
@@ -1476,6 +1528,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: vop3(o("v_mbcnt_hi_u32_b32"), 22, vgpr(3), vgpr(5), 128).to_vec(),
         gk: Gen::I32,
         full: false,
+        wave64: false,
         model: Box::new(|c| lane_out(|l| (c[0] >> l & 1 == 1).then_some(c[4]))),
     });
     // ISA: lane S1[4:0] of the destination takes the scalar S0; the others keep their value (the tid)
@@ -1487,6 +1540,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: w,
         gk: Gen::I32,
         full: false,
+        wave64: false,
         model: Box::new(|c| lane_out(|l| (c[0] >> l & 1 == 1).then(|| if l as u32 == c[4] & 31 { c[2] } else { l as u32 }))),
     });
     // ISA 12.12: each lane of a row of 16 reads the lane its nibble of {S2, S1} names in the other row
@@ -1498,6 +1552,7 @@ fn exec_rows() -> Vec<LaneRow> {
         body: w,
         gk: Gen::I32,
         full: true,
+        wave64: false,
         model: Box::new(|c| {
             let sel = u64::from(c[3]) << 32 | u64::from(c[2]);
             lane_out(|l| {
@@ -1507,6 +1562,114 @@ fn exec_rows() -> Vec<LaneRow> {
             })
         }),
     });
+    rows
+}
+
+/// The same for a console wave of 64: 128 words (64 markers, 64 aux).
+fn lane_out64(f: impl Fn(usize) -> Option<u32>) -> Vec<u32> {
+    let mut out = vec![0u32; 128];
+    for l in 0..64 {
+        if let Some(aux) = f(l) {
+            out[l] = 1;
+            out[64 + l] = aux;
+        }
+    }
+    out
+}
+
+/// `exec` forms of a wave of 64, on the host's 32 lanes (the lowering of `wave64_tests`): the
+/// `_b64` compares into exec, the `_b64` saveexec/wrexec, the 64-bit logic written to exec.
+fn exec64_rows() -> Vec<LaneRow> {
+    let mut rows = Vec::new();
+    let m64 = |c: &[u32; 8]| u64::from(c[1]) << 32 | u64::from(c[0]);
+    let p64 = |c: &[u32; 8]| u64::from(c[3]) << 32 | u64::from(c[2]);
+    // vcc = P (s[2:3]); s[20:21] = EXEC read as data into v22
+    let set_vcc = sop1(o("s_mov_b64"), 106, 2);
+    let read_exec = [sop1(o("s_mov_b64"), 20, 126), smov_to_v(20, 22)];
+    for (name, or) in [("s_and_saveexec_b64", false), ("s_or_saveexec_b64", true)] {
+        let mut body = vec![set_vcc, sop1(o(name), 20, 106)];
+        body.push(smov_to_v(20, 22)); // the saved exec's low dword
+        rows.push(LaneRow {
+            name,
+            tag: "[wave64]".into(),
+            body,
+            gk: Gen::I32,
+            full: false,
+            wave64: true,
+            model: Box::new(move |c| {
+                let new = if or { m64(c) | p64(c) } else { m64(c) & p64(c) };
+                lane_out64(|l| (new >> l & 1 == 1).then_some(c[0]))
+            }),
+        });
+    }
+    // ISA: EXEC = S0 & ~EXEC (the lanes the old mask lacked), D = the new EXEC
+    rows.push(LaneRow {
+        name: "s_andn2_wrexec_b64",
+        tag: "[wave64 exec only]".into(),
+        body: vec![set_vcc, sop1(o("s_andn2_wrexec_b64"), 20, 106)],
+        gk: Gen::I32,
+        full: false,
+        wave64: true,
+        model: Box::new(move |c| {
+            let new = p64(c) & !m64(c);
+            lane_out64(|l| (new >> l & 1 == 1).then_some(0))
+        }),
+    });
+    type F = fn(u64, u64) -> u64;
+    for (name, f) in [
+        ("s_and_b64", (|e, v| e & v) as F),
+        ("s_or_b64", |e, v| e | v),
+        ("s_xor_b64", |e, v| e ^ v),
+        ("s_andn2_b64", |e, v| e & !v),
+        ("s_orn2_b64", |e, v| e | !v),
+    ] {
+        rows.push(LaneRow {
+            name,
+            tag: "[exec, exec, vcc]".into(),
+            body: vec![set_vcc, sop2(o(name), EXEC_LO, EXEC_LO, VCC_LO)],
+            gk: Gen::I32,
+            full: false,
+            wave64: true,
+            model: Box::new(move |c| {
+                let new = f(m64(c), p64(c));
+                lane_out64(|l| (new >> l & 1 == 1).then_some(0))
+            }),
+        });
+    }
+    // `v_cmpx_*` writes the 64-bit EXEC; L is B or A per lane
+    let mut cmpx = |name: &'static str, gk: Gen, cmp: Cmp| {
+        let mut body = vec![vopc(o(name), vgpr(5), 14)];
+        body.extend(read_exec);
+        rows.push(LaneRow {
+            name,
+            tag: "[wave64]".into(),
+            body,
+            gk,
+            full: false,
+            wave64: true,
+            model: Box::new(move |c| {
+                let (a, b) = ([c[4], c[5]], [c[6], c[7]]);
+                let mut fin = 0u64;
+                for l in 0..64 {
+                    if m64(c) >> l & 1 == 1 && cmp(a, if p64(c) >> l & 1 == 1 { b } else { a }) {
+                        fin |= 1 << l;
+                    }
+                }
+                lane_out64(|l| (fin >> l & 1 == 1).then_some(fin as u32))
+            }),
+        });
+    };
+    let fc = |g: fn(f32, f32) -> bool| -> Cmp { Box::new(move |a, b| g(f32::from_bits(a[0]), f32::from_bits(b[0]))) };
+    cmpx("v_cmpx_lt_f32", Gen::F32, fc(|a, b| a < b));
+    cmpx("v_cmpx_ge_f32", Gen::F32, fc(|a, b| a >= b));
+    cmpx("v_cmpx_neq_f32", Gen::F32, fc(|a, b| !(a == b)));
+    let ic = |g: fn(u32, u32) -> bool| -> Cmp { Box::new(move |a, b| g(a[0], b[0])) };
+    cmpx("v_cmpx_gt_u32", Gen::I32, ic(|a, b| a > b));
+    cmpx("v_cmpx_lt_i32", Gen::I32, ic(|a, b| (a as i32) < b as i32));
+    cmpx("v_cmpx_eq_u32", Gen::I32, ic(|a, b| a == b));
+    let wc = |g: fn(u64, u64) -> bool| -> Cmp { Box::new(move |a, b| g(u64::from(a[1]) << 32 | u64::from(a[0]), u64::from(b[1]) << 32 | u64::from(b[0]))) };
+    cmpx("v_cmpx_lt_u64", Gen::U64, wc(|a, b| a < b));
+    cmpx("v_cmpx_eq_u64", Gen::U64, wc(|a, b| a == b));
     rows
 }
 
@@ -1526,7 +1689,7 @@ fn families() -> Vec<Family> {
 }
 
 fn lane_families() -> Vec<(&'static str, Vec<LaneRow>)> {
-    vec![("a_lane_cmpx", cmpx_rows()), ("a_lane_exec", exec_rows())]
+    vec![("a_lane_cmpx", cmpx_rows()), ("a_lane_exec", exec_rows()), ("a_lane_exec64", exec64_rows())]
 }
 
 fn run_a(family: &str) {
@@ -1576,6 +1739,10 @@ fn oracle_a_lane_cmpx() {
     run_lane_family("a_lane_cmpx", &cmpx_rows());
 }
 #[test]
+fn oracle_a_lane_exec64() {
+    run_lane_family("a_lane_exec64", &exec64_rows());
+}
+#[test]
 fn oracle_a_lane_exec() {
     run_lane_family("a_lane_exec", &exec_rows());
 }
@@ -1593,7 +1760,7 @@ fn every_a_row_is_a_gfx10_mnemonic() {
     for (family, rows) in lane_families() {
         for r in rows {
             assert!(opcode_of(r.name).is_some(), "{family}: {}", r.name);
-            let _ = lane_program(&r.body);
+            let _ = lane_program(&r.body, r.wave64);
         }
     }
     // the half converter against the older f32 one, and toward zero below it
