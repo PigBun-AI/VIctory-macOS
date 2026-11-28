@@ -35,8 +35,7 @@ priority = log10(freq + 1) × max(five scores) ÷ cost
 * freq: the `freq` column. Words only or unknown counts as 1 (`freq=unknown`); a row tagged `freq=floor` and with no number counts
   as 10,000. No separate P0 list: everything is sorted by this one formula.
 * cost: below 0.25 counts as 0.25.
-* Ranked: rows with used ≠ no, status ≠ proven, not tagged `closed` or `summary`, and not marked 仅参照（D3DMetal）. The rest are listed
+* Ranked: rows with used neither `no` nor `unlikely`, status ≠ proven, not tagged `closed` or `summary`, and not marked 仅参照（D3DMetal）. The rest are listed
   at the end of the view with the reason.
 * plan.tsv view (research/map-plan/plan-ranked.tsv): the same formula over the plan's nodes; a node with no scored row gets a family estimate marked 估; `待估(≥1 d)` costs 8估; `并入 X` takes X's cost; the first 20 are in `plan-ranked.md`.
-* Mac rows: the Mac file's own columns when it has them; until then `docs/metal/symptom-overlay-mac.tsv.txt` (the Mac lead's scores of
-  2026-11-28). On the same id the Mac row wins, and so does its score.
+* Mac rows: read `symptom` and `cost` directly from the Mac matrix. On the same id its whole row wins, including the score.
