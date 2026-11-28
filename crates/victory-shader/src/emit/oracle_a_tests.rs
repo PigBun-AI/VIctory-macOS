@@ -1694,26 +1694,30 @@ fn lane_families() -> Vec<(&'static str, Vec<LaneRow>)> {
 
 fn run_a(family: &str) {
     let (name, specs) = families().into_iter().find(|(n, _)| *n == family).unwrap();
-    // the 16-bit float rows are exact only with the console's rounding (VICTORY_F16_NEAREST=1)
-    let nearest = family == "a_valu_f16_packed" || family == "a_trans_misc";
-    if nearest {
-        super::super::lower::TEST_F16_NEAREST.set(Some(true));
-    }
     let items = || specs.iter().map(|s| (&s.row, s.tag.clone(), Some(s.words.as_slice()))).collect();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_list(name, items())));
-    super::super::lower::TEST_F16_NEAREST.set(None);
-    if let Err(e) = result {
-        std::panic::resume_unwind(e);
+    run_list(name, items());
+    // the 16-bit float families again by the other way the default rounds: the sequence of
+    // operations (D3DMetal, `VICTORY_F16_NATIVE=0`) where the first run was one `fptrunc`
+    if family == "a_valu_f16_packed" || family == "a_trans_misc" {
+        super::super::lower::TEST_F16_NATIVE.set(Some(false));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_list(name, items())));
+        super::super::lower::TEST_F16_NATIVE.set(None);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
     }
 }
 
-/// The same 16-bit rows with the host's default rounding: reports the differences (toward zero:
-/// the last place of a result that is not exact is one lower), never fails.
+/// The same 16-bit rows with the switch off (`VICTORY_F16_NEAREST=0`: the host's conversion,
+/// toward zero on the Mac): reports the differences (the last place of a result that is not
+/// exact is one lower), never fails.
 #[test]
-fn oracle_a_f16_default_rounding_report() {
+fn oracle_a_f16_switch_off_report() {
     super::TOLERATE.set(true);
+    super::super::lower::TEST_F16_NEAREST.set(Some(false));
     let (name, specs) = families().into_iter().find(|(n, _)| *n == "a_valu_f16_packed").unwrap();
     run_list(name, specs.iter().map(|s| (&s.row, s.tag.clone(), Some(s.words.as_slice()))).collect());
+    super::super::lower::TEST_F16_NEAREST.set(None);
     super::TOLERATE.set(false);
 }
 

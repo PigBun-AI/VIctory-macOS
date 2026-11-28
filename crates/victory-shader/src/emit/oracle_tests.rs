@@ -760,10 +760,6 @@ fn families() -> Vec<(&'static str, Vec<Row>)> {
 /// Differences that are known and not translator bugs, or bugs handed over: (mnemonic, reason).
 const KNOWN: &[(&str, &str)] = &[
     (
-        "v_cvt_f16_f32",
-        "shortcut, documented: by default the translator takes the host's f32->f16 conversion, which rounds toward zero (lower.rs f16_nearest_on); with VICTORY_F16_NEAREST=1 it matches (oracle_f16_nearest_matches)",
-    ),
-    (
         "v_add_f64",
         "refused by design: the Metal device has no 64-bit floats (5 programs, all compute); v_cvt_f32_f64 translates by integer arithmetic",
     ),
@@ -846,6 +842,13 @@ thread_local! {
 type Item<'a> = (&'a Row, String, Option<&'a [u32]>);
 
 fn run_list(family: &str, rows: Vec<Item>) {
+    // the executor is our own Metal chain: the translation is the one `VICTORY_METAL_OUT` asks for
+    let was = super::lower::TEST_METAL_CHAIN.replace(Some(true));
+    run_list_inner(family, rows);
+    super::lower::TEST_METAL_CHAIN.set(was);
+}
+
+fn run_list_inner(family: &str, rows: Vec<Item>) {
     if Host::new(false).is_err() {
         eprintln!("{family}: no device; not run");
         return;
@@ -911,16 +914,28 @@ fn every_row_is_a_gfx10_mnemonic() {
     let _ = (sgpr(0), vgpr(0));
 }
 
-/// The console's rounding of `v_cvt_f16_f32`, which `VICTORY_F16_NEAREST=1` asks for, is exact.
+/// The console's rounding of `v_cvt_f16_f32` (nearest even, the default since S7) is exact on both paths.
 #[test]
 fn oracle_f16_nearest_matches() {
     if Host::new(false).is_err() {
         return;
     }
     let row = cvt().into_iter().find(|r| r.name == "v_cvt_f16_f32").unwrap();
-    super::lower::TEST_F16_NEAREST.set(Some(true));
+    // the default path, on our Metal chain (one `fptrunc`), and the sequence of operations (D3DMetal, `VICTORY_F16_NATIVE=0`)
+    super::lower::TEST_METAL_CHAIN.set(Some(true));
     let outcome = run_row(&row);
-    super::lower::TEST_F16_NEAREST.set(None);
+    super::lower::TEST_F16_NATIVE.set(Some(false));
+    let sequence = run_row(&row);
+    super::lower::TEST_F16_NATIVE.set(None);
+    super::lower::TEST_METAL_CHAIN.set(None);
+    for outcome in [outcome, sequence] {
+        match outcome {
+            Outcome::Passed(_) | Outcome::Refused(_) => {}
+            Outcome::Mismatch { examples, .. } => panic!("{examples:?}"),
+            Outcome::Untranslated(t) => panic!("{t}"),
+        }
+    }
+    let outcome = Outcome::Passed(0);
     match outcome {
         Outcome::Passed(_) | Outcome::Refused(_) => {}
         Outcome::Mismatch { examples, .. } => panic!("{examples:?}"),
