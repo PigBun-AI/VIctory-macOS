@@ -1,4 +1,4 @@
-//! Mac patches of the loader (docs/mac/PATCHES.md, patches L1-L6), kept apart
+//! Mac patches of the loader (docs/mac/PATCHES.md, patches L1-L7), kept apart
 //! from the Windows line's files: edits to patch the title's code that
 //! exist only because the Windows exe runs on Wine + Rosetta 2 on a Mac.
 //! Ported from VIctory-macOS (origin/main 7772921b); nothing here runs unless
@@ -13,11 +13,14 @@
 //!   under Rosetta).
 //! - [`cmpxchg16`]: a diagnostic for 16-bit `lock cmpxchg` at addresses = 15 mod 16
 //!   (L6; off by default, `VICTORY_MAC_CMPXCHG16_CHECK=1`).
+//! - [`int3dump`]: a dump of the pool at the title's own `int3` assertions (L7; off by default,
+//!   `VICTORY_MAC_INT3_DUMP=<rva>[,<rva>...]`).
 //! - [`watchdog`]: the title's hang watchdog turned off (L5; off by default,
 //!   `VICTORY_MAC_NO_WATCHDOG=1`).
 
 pub mod clwb;
 pub mod cmpxchg16;
+pub mod int3dump;
 pub mod masked;
 pub mod resolution;
 pub mod watchdog;

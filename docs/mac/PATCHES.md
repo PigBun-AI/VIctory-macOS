@@ -605,6 +605,53 @@ a 32-bit load. Three remain which the linear analysis could not decide (RVAs `0x
 CAS loops whose eax comes from a 32-bit `mov eax,[..]`, the third `cmpxchg [rcx+0x14], edx` followed by `vmovd xmm1, eax`, which
 reads only EAX): no exposure found, no patch.
 
+### L7 — a dump of the machine at the title's own `int3` assertions: `VICTORY_MAC_INT3_DUMP=<rva>[,<rva>...]` (`victory-loader/src/mac/int3dump.rs`, 7 lines in `crash.rs`; `tools/mac/collect-title-crash.sh`, 1 line in `tools/mac/run.sh`)
+
+*Class: **diagnostic, not fidelity, off by default.** It only reads memory and prints; the title's path after the trap is the one it had
+(the vectored handler still returns `EXCEPTION_CONTINUE_SEARCH`).*
+
+*Question (`mac.title.int3_self_exit_r6`, `mac.title.srl_prestream_stall`).* The title's BUILDING pool (22500 slots) is full at
+image+0x5149aec in about one long run in four, 350-490 s after the start. Is the pool full because its nodes are **held** (a leak, or a
+Prestream that never finishes), or because its **free list was damaged** (e.g. a `lock cmpxchg` update lost under Rosetta, see L1, L2, L6)?
+The title's own crash.log gives the use counts only, and `--new-game` replaces the data directory (and the log with it).
+
+*The switch.* `VICTORY_MAC_INT3_DUMP=0x5149aec` (hex RVAs, `0x` optional, comma separated; an item that is not hex is named and ignored;
+unset or empty = off). The vectored handler, after printing its usual first-chance report, checks a breakpoint exception (`0x80000003`):
+if its address (or the context's `rip`, or `rip-1`) is `module base + a listed RVA`, up to **4 dumps per process** are printed to stderr and
+appended to the loader's crash log, every line starting `VIctory int3-dump:` (`grep 'int3-dump' stderr.log`):
+
+1. all general registers, `rip` and `eflags`;
+2. `[rcx-0x40, rcx+0x100)` as qwords in hex, four to a line with the offset from `rcx` (`????????????????` for a qword that cannot be read);
+3. the pool at `rcx`: header (base `[rcx]`, step `[rcx+8]`, capacity `[rcx+0xc]`, used counter `[rcx+0x10]`, head `[rcx+0x20]`, next array `[rcx+0x28]`,
+   allocated mark `[rcx+0x30]`); the first 64 nodes (`base + i*step`, 32 bytes each, with their next entry); the free list from the head, at most
+   64 steps listed and the whole chain counted (stopping, with the reason, at a cycle, an index >= capacity, or a node marked allocated);
+   a census of the whole next array (slots marked allocated / not / outside the pool / unreadable) and a **verdict line**;
+4. the `rip` of every thread (suspended one at a time just long enough to read its context, into room made beforehand; named as `module+rva`),
+   the trapping one marked.
+
+*Where the free list's `next` is* (confirmed in the disassembly of `Alloc` 0x145149980, its constructor 0x1416cbe00 and `Free` 0x1451f2801 of
+build 1.0.2.1): **not in the node.** `next[i]` is a `u32` array at `[rcx+0x28]`; `Alloc` pops `head & 0x1ffff = i`, writes `head = (head & 0xffffffff00000000) | next[i] & 0x1ffff`
+(`lock cmpxchg [rcx+0x20]`), `lock inc [rcx+0x10]` and ors `[rcx+0x30]` (0x1ffff) into `next[i]`: **an index field of 0x1ffff in `next[]` means "allocated"**, 0x1fffe ends
+the list and is the head's "empty". `Free` puts the old head index into `next[i]` (the bits above the index are a counter), `lock dec [rcx+0x10]`.
+The trap at 0x145149aec is also reached when `[rcx] == 0` (no node memory); the dump says so.
+
+*Reading the verdict:* `EXHAUSTED` (head empty, every slot marked allocated, used counter = capacity) = the nodes are held: look for who does not give them back
+(the Prestream node, `mac.title.srl_prestream_stall`); `FREE LIST LOST` (head empty, K slots not marked allocated) = a damaged list, then the next runs are with
+`VICTORY_MAC_CMPXCHG16_CHECK=1` (L6) and without the 256-bit store patches (L1, L2) to see which one does it; `LIST INTACT` / `LIST BROKEN` = the head is not empty
+(trap from `[rcx]==0` or a free after the trap) / the chain is not the set of unmarked slots. The dump is not atomic: frees from other threads that land during it show as small differences (counter vs marks).
+
+*Tests* (`cargo test -p victory-loader --lib mac::int3dump`, native): the RVA list (prefix, duplicates, bad items), the hit test, the register and memory formatting (offsets, unreadable
+qwords, `rcx` near 0), the pool analysis on **fake memory buffers** (exhausted pool, lost free list, whole list with counters above the index, a 200-node list walked 64 steps but counted
+whole, cycle, index outside the pool, held node on the list, `[rcx] == 0`, implausible header, a missing part of the next array), the thread lines, and the order of the whole dump.
+Two Windows-only tests (`windows_tests`: the process reading its own memory and refusing unmapped addresses; a pool built in memory) compile with the cross build and are for `tools/mac/wine-tests.sh -p victory-loader --lib mac::int3dump` (not run yet).
+Memory is read with `ReadProcessMemory` on the own process, so an unreadable address is a `false`, not a second fault in the handler; a thread that traps inside the dump does not start another.
+
+*`tools/mac/collect-title-crash.sh DATA OUT [SINCE]`.* `run.sh` calls it once after `end.txt` is written: it looks for the title's own crash log under the run's data directory
+(`grep -rla 'Game State'`, newer than `start.txt`) and copies it to `$out/title-crash/`, so BUILDING/OBJECT/INSTANCE_LIST use, the SRL state and `Streaming Requests` survive the next `--new-game`.
+It never fails the run.
+
+*Remove when* `mac.title.int3_self_exit_r6` and `mac.title.srl_prestream_stall` are closed (the cause is found and fixed or the node is proved harmless); the module is self-contained.
+
 ### G11 — `VICTORY_MAC_LAYOUT_STATS=1`: which texture layouts the title creates (`victory-gpu/src/mac/layout_stats.rs`, 1 hook in `resource.rs` `hand_out_resource`)
 
 *What.* Counts every texture the title creates by dimension, layout field (`0x100 | swizzle mode`), render-target/depth flags,

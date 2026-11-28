@@ -641,6 +641,7 @@ wait $pid; st=$?
 "$SERVER" -k 2>/dev/null
 end=$(date +%s)
 { date +%FT%T; echo "exit $st"; } >"$out/end.txt"
+"$ROOT/tools/mac/collect-title-crash.sh" "$data" "$out" "$out/start.txt"   # mac L7: the title's own crash.log into $out/title-crash/ (survives --new-game)
 # --until-*: met (exit 0) or not (exit 6), said in the logs and next to the run's settings
 final_st=$st; until_msg=""
 if [ "$until_on" = 1 ]; then
