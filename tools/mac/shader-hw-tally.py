@@ -10,17 +10,18 @@ known.tsv: test <TAB> class <TAB> reason; class is base | semantic | bug.
 import re, sys, collections
 
 test_txt, exec_tsv, known_tsv = sys.argv[1:4]
+suffix = sys.argv[4] if len(sys.argv) > 4 else ""  # a pass with other settings, e.g. @opt127
 status = {}
 for line in open(test_txt, errors="replace"):
     m = re.match(r"test (\S+) \.\.\. (ok|FAILED|ignored)", line)
     if m:
-        status[m.group(1)] = m.group(2)
+        status[m.group(1) + suffix] = m.group(2)
 dev = collections.defaultdict(lambda: collections.Counter())
 try:
     for line in open(exec_tsv, errors="replace"):
         p = line.rstrip("\n").split("\t")
         if len(p) >= 3:
-            dev[p[2]][p[0]] += 1
+            dev[p[2] + suffix][p[0]] += 1
 except FileNotFoundError:
     pass
 known = {}

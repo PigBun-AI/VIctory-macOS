@@ -2606,7 +2606,7 @@ mod tests {
     /// are 0, the others are read). On the software adapter only: run the
     /// test once plain and once with `VICTORY_SHADER_OPT=127`.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6
     fn scalar_buffer_loads_read_the_same_dwords_one_call_or_four() {
         // (first register, dwords) of the three loads, in order.
         const LOADS: [(u32, u32); 3] = [(16, 8), (24, 4), (32, 16)];
@@ -2700,7 +2700,8 @@ mod tests {
             v.validate(&mut dxil).unwrap();
         }
         let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-        let Ok(host) = super::host::Host::new(true) else {
+        // mac S6: no software adapter on macOS, the device itself runs it.
+        let Ok(host) = super::host::Host::new(cfg!(not(target_os = "macos"))) else {
             eprintln!("no software adapter; the dispatch is skipped");
             return;
         };

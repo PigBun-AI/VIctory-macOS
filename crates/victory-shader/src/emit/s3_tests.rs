@@ -233,7 +233,7 @@ fn the_loop_behind_a_skip_translates_wide() {
 
 /// Hardware: the same programs run on the device (waves of 32) and compared with the console's
 /// results. They return where there is no device or it does not take the program.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))] // mac S6: the host of host_exec.rs
 mod hardware {
     use super::*;
     use crate::emit::host::{Dispatch, Host, Root, View};
