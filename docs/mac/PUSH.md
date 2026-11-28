@@ -22,6 +22,7 @@ have. `git fetch fork` first so the range is not larger than it should be. Exit 
 | (c) | RFC 1918 addresses (10/8, 172.16/12, 192.168/16); user-home paths under `/Users/<name>/` and `C:\Users\<name>` (generic names such as Shared or placeholders such as `<name>` pass); Windows drive project paths (a drive letter followed by a folder such as project, GTA6, work, src, Documents); `*.local` e-mail addresses; words from the private word list (in file contents, file names and commit messages) | BLOCK |
 | (c) | `mac:` commits whose author or committer is not `PigBun-AI <261591371+PigBun-AI@users.noreply.github.com>` (Windows-line commits are not checked for authorship) | BLOCK |
 | (d) | added/changed binary files, blobs over 1 MB, game-file extensions (`.rpf`, `.ytd`, `.xvd`, `.bik`, `.cdxil`, ...) | BLOCK |
+| (e) | class **nda-gdkx** (`push-check-nda.py`, run first and by `--nda-only`; the pre-push hook runs it): NDA SDK header names (`d3d12_x*.h`, `xg*.h`, `XGame*.h`, `*_xs.h`, ...), `gdkx`/`gxdk` directories, `private/` path segments | BLOCK always: no REVIEW, no waiver, no flag turns it off; see `docs/mac/RUN.md` "GDKX (NDA)" |
 
 Findings are printed as `<commit> <file>:<line>`, and the line with the matched text replaced by
 `<match>`, `<private-word>` or `<redacted>`: the private word or the secret is never printed, open

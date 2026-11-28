@@ -368,3 +368,24 @@ directories"); `play.sh --new-game` starts a new game again.
 Keyboard (needs the title's window in focus; works together with any host pad, `VICTORY_ONE_PAD=0` separates them), from
 `crates/victory-hle/src/modules/gameinput.rs`: A Enter, B Backspace, X X, Y Y, left stick W/A/S/D, right stick I/J/K/L, LT Z, RT C,
 LB Q, RB E, L3 F, R3 H, D-pad arrows, Menu Esc, View Tab. XInput pads reach the title through Wine's SDL (`docs/mac/macos.md`, "Game controllers").
+
+## GDKX (NDA)
+
+The user holds a Microsoft-authorised GDKX under an NDA. It sits on this Mac outside every repository
+(`~/Documents/GTA6Project/private/`). This repository is public (`fork`). The rules:
+
+1. **Use it freely as a local reference**: look up what an API means, read how structures are laid out, generate oracles with a compiler
+   from it. Constants and structure definitions the implementation needs may be written into our code directly.
+2. **The one thing not allowed**: committing a whole header or a whole document of it, as it is, into the repository.
+   Where a comment takes something from it, prefer our own words and the note 「依据本机 GDKX 参照」.
+3. **Enforced simply, by path.** `tools/mac/push-check.sh` has the class **nda-gdkx** (`tools/mac/push-check-nda.py`; run first, always, never
+   REVIEW, no waiver, no option turns it off; `--nda-only` runs only it). It blocks (exit status 1) a commit that adds or changes
+   - a header named `d3d12_x*.h`, `d3d12x*.h`, `xg*.h`, `xg*.hpp`, `XGame*.h`, `*_xs.h`, `pix3_xbox.h`, `dstorage_xs.h` (any case; headers only:
+     `d3d12_x.dll` modules, `xg.rs`, `xgame.rs`, `dstorage.rs` are fine);
+   - a file under a directory whose name contains `gdkx` or `gxdk`, or under any `private/` path segment.
+   Nothing looks at file contents, messages or history.
+4. **The pre-push hook runs that check** for every worktree: `tools/mac/install-hooks.sh` (safe to run again; `--check` reports) puts a managed
+   block at the top of `<git common dir>/hooks/pre-push` and a copy of `push-check-nda.py` into `<git common dir>/gdkx-guard/`. A pre-push script that
+   was there stays below the block. A push that adds such paths is refused; so is a push when the engine is missing. After changing
+   `push-check-nda.py` run `install-hooks.sh` again. `git push --no-verify` skips every hook: do not use it.
+5. Test: `tools/mac/test-push-check-nda.sh` (throw-away repository).
