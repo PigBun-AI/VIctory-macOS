@@ -9,212 +9,210 @@ priority = log10(freq + 1) x max(symptom) / cost. symptom = what a wrong node do
 | 3 | S-W-U2b | shared | unproven | 25,756 | geom0 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 3.308 | a table-driven test of v_div_fixup over {0, 1, Inf, NaN, -x} for n, d, q on Metal, from the ISA rule, then fix |
 | 4 | S-M-002 | metal | gap | 12,067 | geom3 color1 flicker0 slow0 crash0 | 3 | 4估 | 3.061 | see S-G-002 |
 | 5 | mac.title.srl_prestream_stall | mac | gap | 10,000 (floor 1e4) | geom1 color0 flicker0 slow2 crash3 freq=floor | 3 | 4估 | 3.000 | Compare intro vs leadout by actual SRL ID/key, not the cached label. For always-false keys join the failed gra |
-| 6 | metal.post.auto_exposure | metal | gap | 10,000 (floor 1e4) | geom0 color3 flicker1 slow0 crash0 freq=floor | 3 | 4估 | 3.000 | Metal backend owner is fixing the statistic (average, not minimum); then a per-frame exposure test over a repl |
+| 6 | metal.post.auto_exposure | metal | unproven | 10,000 (floor 1e4) | geom0 color3 flicker1 slow0 crash0 freq=floor | 3 | 4估 | 3.000 | Compare upstream scene HDR/indoor lighting at a matched camera; correlate shared.drop.cbv_unaligned with these |
 | 7 | C-F-060 | metal | unproven | 565,363 | geom3 color0 flicker0 slow0 crash0 估 | 3 | 6 | 2.876 | — |
-| 8 | shared.drop.cbv_unaligned | shared | gap | 357,134 | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 2.776 | count every hit by reason (planned counter: silent descriptor.cbv:unaligned), read the counts of the next fore |
-| 9 | S-G-002 | shared | gap | 4,852 | geom3 color1 flicker0 slow0 crash0 | 3 | 4估 | 2.765 | Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / DXIL rewrite before MS |
-| 10 | mac.isa.adx | mac | gap | 2,678 | geom0 color0 flicker0 slow0 crash3 | 3 | 4估 | 2.571 | Do not advertise ADX or patch L1. If an unguarded entry is confirmed prefer redirecting its dispatch to the ex |
-| 11 | S-G-011 | shared | unproven | 1,168 | geom0 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 2.301 | see shared.rt.bvh_build (steps, cost); compare builder output with a CPU build of the same geometry using bvh. |
-| 12 | shared.rt.bvh_build | shared | unproven | 1,168 | geom0 color3 flicker1 slow0 crash0 | 3 | 4估 | 2.301 | 1) one run of mac/livetr with VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 to read 'stays off ... which=[has |
-| 13 | S-D-008 | metal | gap | 12,429 | geom0 color2 flicker1 slow0 crash0 估 | 2 | 4估 | 2.047 | None needed now: the translator only uses its own IsHelperLane and quad reads of pre-discard values (lower.rs  |
-| 14 | C-W-M2 | shared | unproven | 11,591 | geom1 color1 flicker2 slow0 crash0 估 | 2 | 4估 | 2.032 | read victory-gpu's format map for D16S8, add it to C-F-073/C-B-021 text, add one front test per stage (create, |
-| 15 | shader.mesh.output_size_32k | shared | gap | 8,765 | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 1.971 | For the 143: split meshlets on the Metal side (raise the mesh limit; see shared.draw.no_host_pipeline). Back k |
-| 16 | C-W-M5 | shared | unproven | 175,860 | geom0 color1 flicker3 slow0 crash0 估 | 3 | 8估 | 1.967 | count writes to heap-buffer ranges after the frame's pass (a "refreshed then written" counter in the pass), ad |
-| 17 | C-B-022 | metal | gap | 3,567 | geom2 color0 flicker0 slow0 crash0 估 | 2 | 4估 | 1.776 | Expand the indirect arguments on the GPU and draw the GS through the mesh path as the direct ones do (m5-gs.md |
-| 18 | mac.isa.tso_ordering | mac | unproven | 2,665 | geom0 color0 flicker2 slow0 crash2 | 2 | 4 | 1.713 | — |
-| 19 | C-W-P1 | shared | unproven | 1,296 | geom1 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 1.556 | log the PresentX argument words once per run; if the source rect is not the whole buffer, crop in the present  |
-| 20 | C-X-004 | mac | gap | 1,296 | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2 | 1.556 | The Mac integration lead is changing the default to ON (tracking under Rosetta with masked/wide-store patches, |
-| 21 | S-W-S9 | shared | unproven | 12,067 | geom0 color3 flicker2 slow0 crash0 估 | 3 | 8估 | 1.531 | census of pixel programs that can export NaN/Inf (division, rcp of 0, 0*Inf), a replay count of non-finite tar |
-| 22 | S-W-S21 | shared | gap | 8,717 | geom0 color3 flicker2 slow0 crash0 | 3 | 8估 | 1.478 | implement Atom::Quad with quadReadLaneAt/quadOp over the lane's bit (three reads, one OR) behind a switch; cen |
-| 23 | C-B-023 | metal | gap | 72 | geom3 color0 flicker0 slow0 crash0 | 3 | 4估 | 1.397 | S-G-002 (attributeAtVertex). Name the reason in the refusal ("pipeline missing") so dropstats can group it. |
-| 24 | C-B-024 | metal | unproven | 252 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 1.202 | Confirm in the next game run: grep "block stopped" in stderr.log gives none of these. |
-| 25 | S-I-006 | shared | unproven | 25,756 | geom1 color2 flicker0 slow0 crash1 估 | 2 | 8 | 1.103 | — |
-| 26 | S-I-012 | shared | unproven | 25,756 | geom0 color2 flicker0 slow0 crash0 估 | 2 | 8 | 1.103 | Range-reduce in the translator before the host sin/cos (fract of turns in f32 with an extra correction term);  |
-| 27 | S-I-017 | shared | unproven | 25,756 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8 | 1.103 | 待细化 |
-| 28 | shared.drop.buffer_view_refused | shared | gap | 132 | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 1.062 | count every hit by reason (planned counter: silent descriptor.buffer_view:off_element ; drop-stats 行加 REFUSED_ |
-| 29 | shared.rt.resolve | shared | gap | 570 | geom1 color3 flicker2 slow0 crash0 | 3 | 8估 | 1.034 | returns with shared.rt.bvh_build (left_out is off when VICTORY_BVH_BUILDER=1, make.rs:66-69); no separate work |
-| 30 | S-G-001 | shared | unproven | 12,067 | geom1 color3 flicker0 slow0 crash0 估 | 3 | 12 | 1.020 | — |
-| 31 | C-B-011 | metal | gap | 330 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.945 | Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / rewrite the DXIL befor |
-| 32 | mac.title.hang_watchdog | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow3 crash3 | 3 | 1 | 0.903 | Keep L5 as the non-fidelity workaround; the fidelity fix is frames fast enough that the watchdog stays quiet ( |
-| 33 | C-V-016 | shared | unproven | 3,487 | geom0 color0 flicker0 slow2 crash0 | 2 | 8 | 0.886 | Keep the translated-DXIL + MSC metallib in an MTL4 archive / MTL4PipelineDataSetSerializer so reloads skip com |
-| 34 | S-G-004 | shared | unproven | 2,192 | geom3 color1 flicker0 slow0 crash0 估 | 3 | 12 | 0.835 | 待细化 |
-| 35 | C-V-010 | shared | gap | 136 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.801 | attributeAtVertex: lower in the translator to per-vertex data passed from the vertex/mesh stage and compute ba |
-| 36 | C-B-105 | metal | gap | 10 | geom3 color0 flicker0 slow0 crash0 | 3 | 4估 | 0.781 | Metal back owner: size arena using observed demand or split records across bounded chunks without CPU readback |
+| 8 | S-G-002 | shared | gap | 4,852 | geom3 color1 flicker0 slow0 crash0 | 3 | 4估 | 2.765 | Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / DXIL rewrite before MS |
+| 9 | mac.isa.adx | mac | gap | 2,678 | geom0 color0 flicker0 slow0 crash3 | 3 | 4估 | 2.571 | Do not advertise ADX or patch L1. If an unguarded entry is confirmed prefer redirecting its dispatch to the ex |
+| 10 | S-G-011 | shared | unproven | 1,168 | geom0 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 2.301 | see shared.rt.bvh_build (steps, cost); compare builder output with a CPU build of the same geometry using bvh. |
+| 11 | shared.rt.bvh_build | shared | unproven | 1,168 | geom0 color3 flicker1 slow0 crash0 | 3 | 4估 | 2.301 | 1) one run of mac/livetr with VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 to read 'stays off ... which=[has |
+| 12 | S-D-008 | metal | gap | 12,429 | geom0 color2 flicker1 slow0 crash0 估 | 2 | 4估 | 2.047 | None needed now: the translator only uses its own IsHelperLane and quad reads of pre-discard values (lower.rs  |
+| 13 | C-W-M2 | shared | unproven | 11,591 | geom1 color1 flicker2 slow0 crash0 估 | 2 | 4估 | 2.032 | read victory-gpu's format map for D16S8, add it to C-F-073/C-B-021 text, add one front test per stage (create, |
+| 14 | shader.mesh.output_size_32k | shared | gap | 8,765 | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 1.971 | For the 143: split meshlets on the Metal side (raise the mesh limit; see shared.draw.no_host_pipeline). Back k |
+| 15 | C-W-M5 | shared | unproven | 175,860 | geom0 color1 flicker3 slow0 crash0 估 | 3 | 8估 | 1.967 | count writes to heap-buffer ranges after the frame's pass (a "refreshed then written" counter in the pass), ad |
+| 16 | C-B-022 | metal | gap | 3,567 | geom2 color0 flicker0 slow0 crash0 估 | 2 | 4估 | 1.776 | Expand the indirect arguments on the GPU and draw the GS through the mesh path as the direct ones do (m5-gs.md |
+| 17 | mac.isa.tso_ordering | mac | unproven | 2,665 | geom0 color0 flicker2 slow0 crash2 | 2 | 4 | 1.713 | — |
+| 18 | C-W-P1 | shared | unproven | 1,296 | geom1 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 1.556 | log the PresentX argument words once per run; if the source rect is not the whole buffer, crop in the present  |
+| 19 | C-X-004 | mac | gap | 1,296 | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2 | 1.556 | The Mac integration lead is changing the default to ON (tracking under Rosetta with masked/wide-store patches, |
+| 20 | S-W-S9 | shared | unproven | 12,067 | geom0 color3 flicker2 slow0 crash0 估 | 3 | 8估 | 1.531 | census of pixel programs that can export NaN/Inf (division, rcp of 0, 0*Inf), a replay count of non-finite tar |
+| 21 | S-W-S21 | shared | gap | 8,717 | geom0 color3 flicker2 slow0 crash0 | 3 | 8估 | 1.478 | implement Atom::Quad with quadReadLaneAt/quadOp over the lane's bit (three reads, one OR) behind a switch; cen |
+| 22 | C-B-023 | metal | gap | 72 | geom3 color0 flicker0 slow0 crash0 | 3 | 4估 | 1.397 | S-G-002 (attributeAtVertex). Name the reason in the refusal ("pipeline missing") so dropstats can group it. |
+| 23 | C-B-024 | metal | unproven | 252 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 1.202 | Confirm in the next game run: grep "block stopped" in stderr.log gives none of these. |
+| 24 | S-I-006 | shared | unproven | 25,756 | geom1 color2 flicker0 slow0 crash1 估 | 2 | 8 | 1.103 | — |
+| 25 | S-I-012 | shared | unproven | 25,756 | geom0 color2 flicker0 slow0 crash0 估 | 2 | 8 | 1.103 | Range-reduce in the translator before the host sin/cos (fract of turns in f32 with an extra correction term);  |
+| 26 | S-I-017 | shared | unproven | 25,756 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8 | 1.103 | 待细化 |
+| 27 | shared.drop.buffer_view_refused | shared | gap | 132 | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 1.062 | count every hit by reason (planned counter: silent descriptor.buffer_view:off_element ; drop-stats 行加 REFUSED_ |
+| 28 | shared.rt.resolve | shared | gap | 570 | geom1 color3 flicker2 slow0 crash0 | 3 | 8估 | 1.034 | returns with shared.rt.bvh_build (left_out is off when VICTORY_BVH_BUILDER=1, make.rs:66-69); no separate work |
+| 29 | S-G-001 | shared | unproven | 12,067 | geom1 color3 flicker0 slow0 crash0 估 | 3 | 12 | 1.020 | — |
+| 30 | C-B-011 | metal | gap | 330 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.945 | Four routes under investigation: MSC switch / Metal-native per-vertex fragment inputs / rewrite the DXIL befor |
+| 31 | mac.title.hang_watchdog | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow3 crash3 | 3 | 1 | 0.903 | Keep L5 as the non-fidelity workaround; the fidelity fix is frames fast enough that the watchdog stays quiet ( |
+| 32 | C-V-016 | shared | unproven | 3,487 | geom0 color0 flicker0 slow2 crash0 | 2 | 8 | 0.886 | Keep the translated-DXIL + MSC metallib in an MTL4 archive / MTL4PipelineDataSetSerializer so reloads skip com |
+| 33 | S-G-004 | shared | unproven | 2,192 | geom3 color1 flicker0 slow0 crash0 估 | 3 | 12 | 0.835 | 待细化 |
+| 34 | C-V-010 | shared | gap | 136 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.801 | attributeAtVertex: lower in the translator to per-vertex data passed from the vertex/mesh stage and compute ba |
+| 35 | C-B-105 | metal | gap | 10 | geom3 color0 flicker0 slow0 crash0 | 3 | 4估 | 0.781 | Metal back owner: size arena using observed demand or split records across bounded chunks without CPU readback |
+| 36 | shared.drop.cbv_unaligned | shared | unproven | 35 | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.778 | Metal sentinel draws then next forensic batch residue/PSO and wall luminance |
 | 37 | shared.drop.copy_self | shared | gap | 34 | geom0 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.772 | count every hit by reason (planned counter: silent list.copy:self_copy（并入 SELF_COPIES）), read the counts of th |
 | 38 | S-W-S1 | shared | unproven | 1,182 | geom0 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.768 | census: count the programs whose loop bound can exceed the caps (static trip counts and the data-dependent one |
 | 39 | mac.isa.amd_only | mac | unproven | 33 | geom0 color0 flicker0 slow1 crash2 | 2 | 4 | 0.766 | Real mwaitx wake-up semantics could be given by a futex-style park on the monitored address in the emulator (A |
 | 40 | S-G-003 | shared | unproven | 12,067 | geom1 color3 flicker0 slow0 crash0 估 | 3 | 16 | 0.765 | Emulate stencil-ref export with a second stencil pass per ref value (MTLStencil clear/replace) or a compute fi |
 | 41 | S-G-005 | shared | unproven | 8,765 | geom3 color0 flicker0 slow0 crash0 估 | 3 | 16 | 0.739 | Split work across more groups or pack outputs in the translator (paired pruning and alignment repacking exist: |
-| 42 | S-I-005 | shared | unproven | 25,756 | geom1 color2 flicker0 slow0 crash1 估 | 2 | 12 | 0.735 | 待细化 |
-| 43 | S-I-009 | shared | unproven | 25,756 | geom0 color2 flicker0 slow0 crash0 估 | 2 | 12 | 0.735 | 待细化 |
-| 44 | S-I-024 | shared | unproven | 25,756 | geom1 color2 flicker1 slow0 crash1 估 | 2 | 12 | 0.735 | 待细化 |
-| 45 | S-D-012 | metal | gap | 679 | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.708 | 1 program only: read the 64-bit texel, then the 64-bit InterlockedMax without the original (MSC and Metal acce |
-| 46 | S-I-020 | shared | gap | 679 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 8 | 0.708 | Route heap-based i64 atomics to buffer/texture forms with explicit resource selection (waterfall) before MSC;  |
-| 47 | C-F-063 | metal | unproven | 17,039 | geom0 color0 flicker0 slow0 crash1 估 | 1 | 6 | 0.705 | MTL4 pushDebugGroup / label (MTL4CommandEncoder.h) 可行; 待细化 |
-| 48 | C-F-029 | metal | gap | 22 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 4 | 0.681 | Metal has no conservative raster state (no symbol in headers, 2026-11-27). Emulate: expand the triangle in the |
-| 49 | C-F-017 | metal | gap | 6,670 | geom2 color1 flicker1 slow0 crash0 估 | 2 | 12 | 0.637 | — |
-| 50 | mac.hle.dstorage.queue1 | mac | gap | 17 | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.628 | implement per-queue policy |
-| 51 | C-B-012 | metal | gap | 14 | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.588 | Split the mesh shader (more groups, fewer outputs per group) or repack in the translator; cap is a Metal fact: |
-| 52 | S-G-007 | shared | unproven | 2,763 | geom1 color2 flicker1 slow0 crash1 估 | 2 | 12 | 0.574 | — |
-| 53 | mac.isa.avx.vpsllvq_count_high | mac | gap | 112 | geom1 color0 flicker0 slow0 crash1 | 1 | 4估 | 0.513 | No L1 change: no known title path to an affected count at either remaining site. Keep the architectural deviat |
-| 54 | mac.fault.shadow_inplace | mac | unproven | 9 | geom1 color1 flicker1 slow2 crash0 | 2 | 4 | 0.500 | See mac.hle.zero_copy_alias. |
-| 55 | C-W-U5 | shared | gap | 1 | geom0 color0 flicker0 slow3 crash0 | 3 | 2估 | 0.452 | port the upstream change (VICTORY_WARM_ONLY_MADE, default on, ~10 lines: write the done line only when the pip |
-| 56 | mac.title.int3_31f50 | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash3 | 3 | 2 | 0.452 | Dump arena state (+0x77ae340/+0x77ae260/+0x77ae310) and all thread stacks on the next occurrence; if a thread  |
-| 57 | S-W-S8 | shared | unproven | 48 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 8估 | 0.423 | add a census counter at lower.rs:9448 (programs per branch: exchange, own, refused); then the mac-shader-harne |
-| 58 | S-W-S18 | shared | unproven | 40 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.403 | census with VICTORY_STRICT_JOINS=1 vs off on the corpus: programs whose DXIL differs and programs refused; dec |
-| 59 | S-I-010 | shared | unproven | 5 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 4估 | 0.389 | Emulate f64 with double-single f32 pairs in the translator only if programs with f64 appear (scan needed); exa |
-| 60 | mac.isa.x86.ptest_pf_af | mac | gap | 29 | geom0 color0 flicker0 slow0 crash1 | 1 | 4估 | 0.369 | — |
-| 61 | S-I-022 | shared | unproven | 25,756 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 24 | 0.368 | 待细化 |
-| 62 | mac.audio.client_timer_thread_leak | mac | gap | 4 | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.349 | Find why audio streams are created repeatedly (log every stream create/close in the HLE audio path) and releas |
-| 63 | C-F-027 | metal | gap | 4,807 | geom0 color2 flicker0 slow1 crash0 估 | 2 | 24 | 0.307 | Metal has no depth bounds test (no symbol in Metal.framework headers, grep depthBounds/conservative, SDK 27.2, |
-| 64 | C-R-005 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 1 | 0.301 | — |
-| 65 | C-W-D4 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | same counter as C-W-D2. |
-| 66 | C-W-D5 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | log the largest DispatchMesh x per run (one counter); if it is above the cut, send the whole count (one dimens |
-| 67 | C-W-Y3 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker2 slow0 crash1 估 | 2 | 2估 | 0.301 | log the distribution of codes seen (one counter); confirm the code table against the title's own call sites (s |
-| 68 | S-W-S19 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | census: programs whose export list carries a layer or viewport index in the corpus; one msc_gpu test if any. |
-| 69 | mac.hle.dbghelp_minidump | mac | unproven | 1 | geom0 color0 flicker0 slow0 crash1 | 1 | 1 | 0.301 | Remove the stub when Wine's dbghelp parses Rust DWARF without crashing (retest after a Wine bump from 26.3). |
-| 70 | mac.hle.display_audio_misc | mac | unproven | 4 | geom0 color1 flicker0 slow0 crash0 | 1 | 3 | 0.233 | Per item: HDR via CAMetalLayer EDR (Metal backend); DSP convolution/FFT in software (the code says it needs th |
-| 71 | C-B-101 | metal | gap | 1 (unknown=1) | geom2 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.pass.colour_attachment.{no_view\|no_spec}), read the counts  |
-| 72 | C-B-103 | metal | gap | 1 (unknown=1) | geom0 color0 flicker3 slow1 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.present.no_drawable（并入 PresentStats.dropped）), read the cou |
-| 73 | C-F-101 | metal | gap | 1 (unknown=1) | geom3 color2 flicker2 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.queue.execute_lists.{null_array\|null_entry\|bad_cast\|not_clo |
-| 74 | C-F-102 | metal | gap | 1 (unknown=1) | geom2 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.target_view.{null\|unknown}; silent.clear.no_view), read the |
-| 75 | C-V-013 | shared | gap | 3 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.226 | Run with the DXC helper (D3DMetal libdxcompiler via tools/macos/dxc-d3dmetal.sh, docs/mac/PATCHES.md G3/G4) so |
-| 76 | C-W-D6 | shared | gap | 1 (unknown=1) | geom3 color0 flicker0 slow0 crash0 估 | 3 | 4估 | 0.226 | grep the warning in the last runs' logs; if it shows, route the call through the indirect mesh path used by Ex |
-| 77 | C-W-R5 | shared | unproven | 1 (unknown=1) | geom0 color3 flicker0 slow0 crash0 估 | 3 | 4估 | 0.226 | a front/back test: create RGBA8_UNORM_TYPELESS, view as _SRGB, sample a mid-grey and compare with the sRGB dec |
-| 78 | C-W-U3b | shared | unproven | 1 (unknown=1) | geom3 color0 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count splits and slots in use per frame in the 5 s line; port SPLIT_SLOTS if slots grow. |
-| 79 | mac.loader.scanout_reservation | mac | unproven | 1 | geom0 color0 flicker0 slow0 crash3 | 3 | 4估 | 0.226 | first native run: no int3 at +0x247af25 and no 'resolution: ... 0x247af25' line |
-| 80 | shared.drop.movie_plane | shared | gap | 1 (unknown=1) | geom0 color3 flicker0 slow0 crash0 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent texture.movie_plane:no_upload_buffer\|copy_failed), read the |
-| 81 | mac.hle.audio_timer_leak | mac | gap | 20 | geom0 color0 flicker0 slow0 crash1 | 1 | 6 | 0.220 | Find why a thread survives each timer period (create/cancel pairing in victory-hle), reuse one thread (thread- |
-| 82 | C-R-002 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 1.5 | 0.201 | Fidelity phase: keep the title's own internal resolution and DRS untouched, with the output size at the title' |
-| 83 | mac.res.drs | mac | gap | 1 (unknown=1) | geom0 color1 flicker1 slow2 crash0 | 2 | 3 | 0.201 | First prove whether the controller moves: VICTORY_SCALE_WATCH (X13, on with the native 1440p image) with the m |
-| 84 | S-I-025 | shared | gap | 5 | geom2 color0 flicker0 slow0 crash0 | 2 | 8 | 0.195 | Teach resource.rs to keep a descriptor that is only copied/read as data as plain dwords (translator work; firs |
-| 85 | S-W-S26 | shared | unproven | 4 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.175 | add a harness test: wave64 program, dispatch of 70 threads, count the stores by lane; make the upper half leav |
-| 86 | mac.fault.files_overlapped_wait | mac | unproven | 2 | geom0 color0 flicker0 slow2 crash1 | 2 | 6 | 0.159 | Restore async by reading into a bounce buffer and copying after completion (no kernel write to guarded pages); |
-| 87 | C-B-102 | metal | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.barrier.empty_mask.{after\|before}), read the counts of the  |
-| 88 | C-F-103 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.cbv.create_failed), read the counts of the next forensic ru |
-| 89 | C-F-104 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.copy_descriptors.{error\|null_start\|zero_inc}), read the cou |
-| 90 | C-F-105 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.view.{srv\|uav\|rtv\|dsv}.failed ; silent.uav.buffer_no_desc), |
-| 91 | C-F-106 | metal | gap | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.sampler.{null_desc\|create_failed}), read the counts of the  |
-| 92 | C-R-001 | mac | gap | 1 | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2 | 0.151 | Fidelity phase: run the title unpatched at its own size (VICTORY_OUTPUT=0/none already exists) and make the tr |
-| 93 | C-R-003 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 2 | 0.151 | Fidelity phase: both upscalers run as the title ships them through the translated shaders (no substitute). Ser |
-| 94 | C-V-011 | shared | gap | 3 | geom2 color0 flicker0 slow0 crash0 | 2 | 8估 | 0.151 | Wave64 over two host wave32 halves is already built for structured programs (emit/wave.rs, wave64_tests); exte |
-| 95 | C-W-D1 | shared | unknown | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 估 | 2 | 4估 | 0.151 | fid-gpuprof is checking the truncation on the back path; then either make widest() take the wider answer for t |
-| 96 | C-W-D8 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | a back test of a direct dispatch of 70,000 groups with a per-group counter. |
-| 97 | C-W-D9 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | a back test: indirect draw of a rectangle list through the stage vs the direct draw (the C-B-010 test shape);  |
-| 98 | C-W-M1 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | grep the warning count in the 5 s logs of the last runs (map-refresh); implement via a format-converting compu |
-| 99 | C-W-M10 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | read the segment arithmetic in host.rs (the Windows commit 30df9eb4 is a short diff), write a test with a 4 Ki |
-| 100 | C-W-M8 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | count UpdateTileMappings (tiles.rs), if 0 mark dormant. |
-| 101 | C-W-M9 | shared | unproven | 1 | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | grep the warning and its kind in the last runs' logs; add the kind to C-F-001/C-V-005 text. |
-| 102 | C-W-P3 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow1 crash0 估 | 1 | 2估 | 0.151 | one counter of nonzero offsets. |
-| 103 | C-W-R1 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | read the front's heap limit (front/src/descriptor.rs), add the warning count to the 5 s summary, run once. |
-| 104 | C-W-R6 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | count title-placed textures with UAV usage and a CPU read after a GPU write (watch counters, host.rs); test wi |
-| 105 | C-W-R7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | count unknown-kind slots in the descriptor pass; if 0, mark dormant. |
-| 106 | C-W-R9 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | test: a root SRV at an offset with a read past the title's intended end. |
-| 107 | C-W-U1 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash2 估 | 2 | 4估 | 0.151 | count arena failures per run; port the retry guard from the upstream commit if any. |
-| 108 | C-W-U4 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash2 估 | 2 | 4估 | 0.151 | one long run (w1000+) with the table size in the memory line; port the cap if it grows. |
-| 109 | C-W-Y2 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow0 crash1 估 | 2 | 4估 | 0.151 | test: a dispatch followed by a bottom write, a second queue waits on the value and reads the dispatch result. |
-| 110 | C-W-Y5 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash1 估 | 2 | 4估 | 0.151 | read the present path for pending waits; one run with a pending-wait counter at present. |
-| 111 | C-W-Y7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | one counter of nonzero arguments to these three slots (map-refresh), then decide. |
-| 112 | C-W-Y8 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | review the declared-write bookkeeping against one batch run with VICTORY_FETCH_CHECK (the counter exists in th |
-| 113 | S-W-S13 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | census the dmask values of image_store in the corpus; a back/msc_gpu test of a partial store if any. |
-| 114 | S-W-S15 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | count cube-array SRVs and the programs that declare them (callstats + census), then a test sampling a cube-arr |
-| 115 | S-W-S16 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | read the lowering's default for the dimension field and the census counter of unknown types (S-I-022 neighbour |
-| 116 | S-W-U2c | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash2 估 | 2 | 4估 | 0.151 | read memory_smem for the 1-dword path; add an out-of-range test in the harness. |
-| 117 | mac.gpu.indirect_wide | mac | unproven | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | — |
-| 118 | mac.gpu.native_frontend_viewport | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | first native run: the log line appears or not; if the hint bar (mac.res.ui_scale) is 403x36 instead of 604x54, |
-| 119 | mac.hle.dstorage.codec_ext | mac | gap | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash1 | 2 | 4估 | 0.151 | count by mode then implement with byte oracle |
-| 120 | mac.hle.dstorage.gpu_visible | mac | unproven | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | validate final consumer before signalling |
-| 121 | mac.hle.globalmemorystatus | mac | unproven | 1 | geom1 color0 flicker1 slow1 crash1 估 | 1 | 2 | 0.151 | Override in victory-hle kernel overrides (host_lookups_by_name_get_our_overrides) with the console budget; tes |
-| 122 | mac.hle.low_early_reserve | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.151 | Count failed arena requests in the log first (shared layer, Metal-additions list); if non-zero, reserve a low- |
-| 123 | mac.hle.suspendthread | mac | unproven | 1 | geom0 color0 flicker1 slow0 crash1 | 1 | 2 | 0.151 | — |
-| 124 | mac.hle.xasync_pending_with | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.151 | Give the worker shared ownership and bind completion to the original call identity. Test cancellation, late re |
-| 125 | mac.hle.xmem_page_wrap | mac | gap | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash2 | 2 | 4估 | 0.151 | Use checked arithmetic and bounded allocation of free IDs; never recycle a live ID, fail on exhaustion. Test n |
-| 126 | mac.loader.output_chain | mac | unproven | 1 | geom1 color0 flicker0 slow2 crash1 | 2 | 4估 | 0.151 | run once per profile: stdout has 'output chain: native 1440p on (the perf profile's default)' (perf) and 'outp |
-| 127 | mac.loader.temporal_scale_controller | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | see mac.res.drs: minimum 0.667 unpinned, read the watch lines |
-| 128 | mac.loader.temporal_scale_min | mac | unproven | 1 | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | first native run with --log-render-size: internal 2560x1440 at 1.0 |
-| 129 | mac.loader.title_frame_rate_loads | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | only useful above 30 fps on our side; not planned before that |
-| 130 | mac.pipeline.warm_only_made | mac | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | — |
-| 131 | mac.res.internal | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | none separate; follows mac.res.output; run with --log-render-size once at native 1440p: expect 2560x1440 (scal |
-| 132 | mac.res.native_1440p_switch | mac | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | Run native with 4K reported and compare uncapped source sizes against stock and default native; log the actual |
-| 133 | mac.res.output | mac | unproven | 1 | geom1 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | none for fidelity (stays the title's 4K; the host shows at most 2560x1440). Where the title takes 3840x2160 fr |
-| 134 | mac.res.ui_scale | mac | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | run plan (X13): perf native 1440p, Metal back, no keys, no input replay, VICTORY_METAL_DUMP_PRESENT=288,320@<o |
-| 135 | mac.run.relay_default | mac | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow2 crash0 估 | 2 | 4估 | 0.151 | Check effective relay stage in retained logs; compare unset vs explicit 0, not unset vs 2 (normally equivalent |
-| 136 | shared.descriptor.partial_3d_uav | shared | gap | 1 (unknown=1) | geom2 color1 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | Scheduled: the census counter layout_stats::uav_3d (G12, VICTORY_MAC_LAYOUT_STATS=1) says whether the title ma |
-| 137 | shared.device.options_tiled | shared | gap | 1 (unknown=1) | geom2 color1 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | Not changed (as above). Scheduled: same G12 log; if the title queries it, make it 2 and run to see whether 3D  |
-| 138 | shared.drop.clear_lost | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.clear:no_record\|no_host_texture\|null_color), read the  |
-| 139 | shared.drop.copy_no_pair | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.copy_resource:no_pair ; silent list.copy_texture_regio |
-| 140 | shared.drop.dispatch_mesh_yz | shared | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.dispatch_mesh:yz_ignored), read the counts of the next |
-| 141 | shared.drop.list_ran_again | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables_done:ran_again), read the counts of the next fo |
-| 142 | shared.drop.memory_by_address | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent memory.by_address:no_number\|page_limit), read the counts of |
-| 143 | shared.drop.present_planes | shared | gap | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent queue.present:extra_planes), read the counts of the next fo |
-| 144 | shared.drop.root_unset | shared | gap | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.user_value:table_outside_heaps\|root_unset ; silent dra |
-| 145 | shared.drop.set_targets_skipped | shared | gap | 1 (unknown=1) | geom2 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.set_targets:no_rtv_record ; silent draw.set_targets:no |
-| 146 | shared.drop.table_entry_null | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables:entry_without_view), read the counts of the nex |
-| 147 | shared.drop.table_span | shared | gap | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables:span_exceeded), read the counts of the next for |
-| 148 | shared.drop.texture_not_uploaded | shared | gap | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent texture.upload:no_layout\|xor_mode), read the counts of the  |
-| 149 | shared.drop.tile_mapping | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent queue.tile_mapping:failed), read the counts of the next for |
-| 150 | shared.drop.topology_as_list | shared | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.topology:fan_loop_quad), read the counts of the next f |
-| 151 | shared.drop.value_wait_met | shared | gap | 1 (unknown=1) | geom1 color1 flicker2 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.value_wait:unknown_compare\|unmapped), read the counts  |
-| 152 | shared.drop.view_not_allowed | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent descriptor.view_ok:not_allowed\|format_family), read the cou |
-| 153 | shared.drop.vtable_missing | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash2 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent object.missing.KIND.SLOT（按槽累加，5 s 汇总）), read the counts of  |
-| 154 | shared.drop.wait_moved | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.cut:no_fresh_list), read the counts of the next forens |
-| 155 | shared.list.upload_growth | shared | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow1 crash2 | 2 | 4估 | 0.151 | record reserve errors and the caller arguments before attributing the invalid parameter to VA exhaustion |
-| 156 | shared.sync.xqueue_word | shared | unproven | 1 (unknown=1) | geom1 color1 flicker2 slow2 crash1 | 2 | 4估 | 0.151 | trace producer submission and retire plus consumer compare at the same address |
-| 157 | S-G-006 | shared | unproven | 195 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 32 | 0.143 | Run a frame that draws a voxelization pass and compare; conservative rasterization (C-F-029) is separate. docs |
-| 158 | S-I-016 | shared | gap | 26 | geom2 color0 flicker0 slow0 crash0 | 2 | 20 | 0.143 | The census translates these 26 only when the host runs wave 64 (translated_with_host_wave64=26; the Apple GPU  |
-| 159 | mac.hle.commit_quota | mac | unproven | 5 | geom0 color0 flicker1 slow1 crash1 | 1 | 6 | 0.130 | Account title commits in the HLE (sum of committed MEM_COMMIT) and refuse past the console budget, as the Xbox |
-| 160 | C-V-004 | shared | gap | 9 | geom1 color2 flicker1 slow0 crash0 | 2 | 16 | 0.125 | Track per-page writes (watch.rs already knows pages) and detile only those; give directly indexed views a cont |
-| 161 | C-F-075 | metal | unproven | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 6 | 0.100 | write the three read-back tests; logic ops by shader emulation if the title ever enables them |
-| 162 | C-V-005 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 6 | 0.100 | — |
-| 163 | C-V-006 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 估 | 2 | 6 | 0.100 | Keep ignoring; verify no title code reads RT memory as DCC (capture the title memory view of an RT). Feasibili |
-| 164 | C-V-007 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 6 | 0.100 | Detect: scan title DXIL/ISA for reads of the htile surface address; if present, rebuild the summary from the h |
-| 165 | shader.rt.builder_first_lane_scan | shared | unproven | 3 | geom0 color1 flicker1 slow0 crash0 估 | 1 | 6 | 0.100 | No separate work: correctness of the builder output is checked as a whole by shared.rt.bvh_build step 4 (compa |
-| 166 | shared.descriptor.heaps | shared | unproven | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash1 | 2 | 6 | 0.100 | Restore through the Metal backend argument-buffer model (descriptor words decoded to MTLResourceID); see Metal |
-| 167 | shared.resource.heaps_at_addresses | shared | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow2 crash1 | 2 | 6 | 0.100 | See mac.hle.zero_copy_alias. |
-| 168 | shared.rt.activate_rays | shared | unproven | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 | 2 | 6 | 0.100 | returns with shared.rt.bvh_build; test the two apart only if the builder stays off for long |
-| 169 | C-B-104 | metal | gap | 1 (unknown=1) | geom1 color0 flicker1 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.emu.touched.{slot\|heap\|key}_unknown), read the counts of th |
-| 170 | C-F-006 | metal | gap | 1 (unknown=1) | geom2 color1 flicker0 slow0 crash0 估 | 2 | 8估 | 0.075 | R32G32B32: MTLPixelFormatRGB32Float/Uint/Sint exist for texture buffers (read-only, macOS 27.0; MTLPixelFormat |
-| 171 | C-F-107 | metal | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.discard.{unknown_resource\|partial}), read the counts of the |
-| 172 | C-F-108 | metal | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.timestamp.never_written), read the counts of the next foren |
-| 173 | C-F-109 | metal | gap | 1 (unknown=1) | geom0 color1 flicker1 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.root_constants.{null\|zero} ; silent.resource_barrier.null), |
-| 174 | C-F-110 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.lenient.skipped（always）), read the counts of the next foren |
-| 175 | C-W-D2 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | add the two overflow counts to the clamp's 5 s summary and read them in the next batch run; if 0, keep as a do |
-| 176 | C-W-G1 | shared | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | log the extension field words that are nonzero (16 words per call are already logged for 0x218), one run. |
-| 177 | S-G-012 | shared | gap | 3 | geom1 color0 flicker0 slow0 crash0 | 1 | 8估 | 0.075 | Not a translator gap by the census's own wording (research/census/opcodes.md: "3 without native programs (SM5- |
-| 178 | S-W-S5 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.075 | a back test: a 2D group (16x2, 8x8, 32x2) writing the lane id the translated program computes, compared with t |
-| 179 | S-W-S7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | static scan of the 6,278 programs for a bpermute reachable under a narrowed EXEC (the planned opcode-oracle se |
-| 180 | S-W-U2a | shared | unproven | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.075 | read the halves path for mask tests, port the test from the upstream change, run it in the harness. |
-| 181 | mac.fault.ntquery_class7 | mac | gap | 1 | geom0 color0 flicker0 slow1 crash1 | 1 | 4 | 0.075 | High fidelity and cheap: our own registry knows every placeholder we create (xmem.rs placeholder branch), answ |
-| 182 | mac.hle.drop.net_proxy | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent net.proxy:ignored), read the counts of the next forensic ru |
-| 183 | mac.hle.drop.package_noop | mac | gap | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent xpackage.uninstall\|enumerate ; silent xgame.write_event), r |
-| 184 | mac.hle.dstorage.errors | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash1 | 1 | 4估 | 0.075 | independent per-queue error interval |
-| 185 | mac.hle.working_set_statistics | mac | unproven | 1 | geom1 color0 flicker1 slow1 crash1 | 1 | 4 | 0.075 | Count the title's own heaps/mapped pages and per class in the XMem hooks; return those. |
-| 186 | mac.loader.display_mode_record | mac | unproven | 1 | geom1 color0 flicker0 slow1 crash0 | 1 | 4估 | 0.075 | first native run: source frame 2560x1440 at present 320 (mac.res.output) |
-| 187 | mac.loader.settings_preview_viewport | mac | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 | 1 | 4估 | 0.075 | open the Settings screen in a native 1440p run and compare the preview panel size (not planned: no map reason) |
-| 188 | shared.device.options_conservative | shared | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | Not changed. Scheduled: G12 log; also read the rasterizer subobject in the graphics state (C-V-009 test reads  |
-| 189 | shared.device.options_double | shared | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | Not changed: no sign the title branches on it (console hardware is fixed, a title does not usually test it). S |
-| 190 | shared.draw.no_host_pipeline | shared | gap | 1 | geom2 color1 flicker1 slow0 crash0 | 2 | 8估 | 0.075 | Metal side: implement attributeAtVertex (MSC), raise mesh limit by splitting meshlets; shared side: wait for t |
-| 191 | shared.drop.compute_x_ext | shared | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent pipeline.compute_x:extensions_ignored), read the counts of  |
-| 192 | shared.drop.list_named_twice | shared | gap | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash0 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent list.detach_parts:second_naming_dropped), read the counts o |
-| 193 | shared.drop.resolve_queries | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent list.resolve_queries:no_buffer\|out_of_range), read the coun |
-| 194 | shared.object.unknown_method | shared | gap | 1 | geom1 color0 flicker0 slow0 crash2 | 2 | 8估 | 0.075 | Implement slot 0xb8 of the queue (identify via D3D12 vtable: likely a queue method added in a newer interface) |
-| 195 | shared.pipeline.untranslated_shader | shared | gap | 1 | geom2 color1 flicker1 slow0 crash0 | 2 | 8估 | 0.075 | Lower wave64 ops to wave32 (shader owner; 18 permlane/quad failing tests listed in PATCHES.md). S3: the correc |
-| 196 | C-R-004 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow1 crash0 估 | 1 | 6 | 0.050 | — |
-| 197 | C-R-006 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker1 slow1 crash0 估 | 1 | 6 | 0.050 | — |
-| 198 | C-V-002 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash1 估 | 1 | 6 | 0.050 | 待细化 (check by running with a call logger for the X list methods; if the host holds plain textures the correct  |
-| 199 | C-F-014 | metal | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | Back the view by a mirror and copy back after the pass (inverse of the SRV mirror) or require MTLTextureUsage. |
-| 200 | C-F-015 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | Emulate the counter with a 32-bit atomic in a side buffer (Metal atomics are native) and implement append/cons |
-| 201 | C-F-074 | metal | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 8估 | 0.038 | emulate in the shader (translator) or sample 4 taps; border: pick nearest preset |
-| 202 | S-M-005 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | 待细化 |
-| 203 | mac.hle.drop.apu_commands | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent apu.command:unhandled（按命令码）), read the counts of the next f |
-| 204 | mac.hle.drop.input_ignored | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent gameinput.rumble:trigger_motors ; silent gameinput.register |
-| 205 | mac.hle.drop.xma_overlap | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent audio.xma:overlap_ignored), read the counts of the next for |
-| 206 | mac.hle.xmem_map_partial_view | mac | gap | 0 | geom1 color0 flicker2 slow0 crash1 | 2 | 4估 | 0.000 | 1) Done: the count. xmem.rs unmap() says 'unmapping part of a view unmapped all of it and mapped the rest agai |
-| 207 | mac.input.scripted_pad_sticks | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | — |
-| 208 | shared.device.feature_query | shared | unproven | 0 | geom0 color0 flicker0 slow0 crash1 | 1 | 6 | 0.000 | Answer additional features from the host device (options1..21, shader model, GPU VA); feasibility high. |
-| 209 | shared.draw.descriptor_drops | shared | unproven | 0 | geom2 color0 flicker1 slow0 crash0 | 2 | 6 | 0.000 | Raise slots dynamically; feasibility high; no occurrence yet. |
+| 42 | S-I-009 | shared | unproven | 25,756 | geom0 color2 flicker0 slow0 crash0 估 | 2 | 12 | 0.735 | 待细化 |
+| 43 | S-I-024 | shared | unproven | 25,756 | geom1 color2 flicker1 slow0 crash1 估 | 2 | 12 | 0.735 | 待细化 |
+| 44 | S-D-012 | metal | gap | 679 | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.708 | 1 program only: read the 64-bit texel, then the 64-bit InterlockedMax without the original (MSC and Metal acce |
+| 45 | S-I-020 | shared | gap | 679 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 8 | 0.708 | Route heap-based i64 atomics to buffer/texture forms with explicit resource selection (waterfall) before MSC;  |
+| 46 | C-F-063 | metal | unproven | 17,039 | geom0 color0 flicker0 slow0 crash1 估 | 1 | 6 | 0.705 | MTL4 pushDebugGroup / label (MTL4CommandEncoder.h) 可行; 待细化 |
+| 47 | C-F-029 | metal | gap | 22 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 4 | 0.681 | Metal has no conservative raster state (no symbol in headers, 2026-11-27). Emulate: expand the triangle in the |
+| 48 | C-F-017 | metal | gap | 6,670 | geom2 color1 flicker1 slow0 crash0 估 | 2 | 12 | 0.637 | — |
+| 49 | mac.hle.dstorage.queue1 | mac | gap | 17 | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.628 | implement per-queue policy |
+| 50 | C-B-012 | metal | gap | 14 | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.588 | Split the mesh shader (more groups, fewer outputs per group) or repack in the translator; cap is a Metal fact: |
+| 51 | S-G-007 | shared | unproven | 2,763 | geom1 color2 flicker1 slow0 crash1 估 | 2 | 12 | 0.574 | — |
+| 52 | mac.isa.avx.vpsllvq_count_high | mac | gap | 112 | geom1 color0 flicker0 slow0 crash1 | 1 | 4估 | 0.513 | No L1 change: no known title path to an affected count at either remaining site. Keep the architectural deviat |
+| 53 | mac.fault.shadow_inplace | mac | unproven | 9 | geom1 color1 flicker1 slow2 crash0 | 2 | 4 | 0.500 | See mac.hle.zero_copy_alias. |
+| 54 | C-W-U5 | shared | gap | 1 | geom0 color0 flicker0 slow3 crash0 | 3 | 2估 | 0.452 | port the upstream change (VICTORY_WARM_ONLY_MADE, default on, ~10 lines: write the done line only when the pip |
+| 55 | mac.title.int3_31f50 | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash3 | 3 | 2 | 0.452 | Dump arena state (+0x77ae340/+0x77ae260/+0x77ae310) and all thread stacks on the next occurrence; if a thread  |
+| 56 | S-W-S8 | shared | unproven | 48 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 8估 | 0.423 | add a census counter at lower.rs:9448 (programs per branch: exchange, own, refused); then the mac-shader-harne |
+| 57 | S-W-S18 | shared | unproven | 40 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.403 | census with VICTORY_STRICT_JOINS=1 vs off on the corpus: programs whose DXIL differs and programs refused; dec |
+| 58 | S-I-010 | shared | unproven | 5 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 4估 | 0.389 | Emulate f64 with double-single f32 pairs in the translator only if programs with f64 appear (scan needed); exa |
+| 59 | mac.isa.x86.ptest_pf_af | mac | gap | 29 | geom0 color0 flicker0 slow0 crash1 | 1 | 4估 | 0.369 | — |
+| 60 | S-I-022 | shared | unproven | 25,756 | geom1 color2 flicker0 slow0 crash0 估 | 2 | 24 | 0.368 | 待细化 |
+| 61 | mac.audio.client_timer_thread_leak | mac | gap | 4 | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.349 | Find why audio streams are created repeatedly (log every stream create/close in the HLE audio path) and releas |
+| 62 | C-F-027 | metal | gap | 4,807 | geom0 color2 flicker0 slow1 crash0 估 | 2 | 24 | 0.307 | Metal has no depth bounds test (no symbol in Metal.framework headers, grep depthBounds/conservative, SDK 27.2, |
+| 63 | C-R-005 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 1 | 0.301 | — |
+| 64 | C-W-D4 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | same counter as C-W-D2. |
+| 65 | C-W-D5 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | log the largest DispatchMesh x per run (one counter); if it is above the cut, send the whole count (one dimens |
+| 66 | C-W-Y3 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker2 slow0 crash1 估 | 2 | 2估 | 0.301 | log the distribution of codes seen (one counter); confirm the code table against the title's own call sites (s |
+| 67 | S-W-S19 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 2估 | 0.301 | census: programs whose export list carries a layer or viewport index in the corpus; one msc_gpu test if any. |
+| 68 | mac.hle.dbghelp_minidump | mac | unproven | 1 | geom0 color0 flicker0 slow0 crash1 | 1 | 1 | 0.301 | Remove the stub when Wine's dbghelp parses Rust DWARF without crashing (retest after a Wine bump from 26.3). |
+| 69 | mac.hle.display_audio_misc | mac | unproven | 4 | geom0 color1 flicker0 slow0 crash0 | 1 | 3 | 0.233 | Per item: HDR via CAMetalLayer EDR (Metal backend); DSP convolution/FFT in software (the code says it needs th |
+| 70 | C-B-101 | metal | gap | 1 (unknown=1) | geom2 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.pass.colour_attachment.{no_view\|no_spec}), read the counts  |
+| 71 | C-B-103 | metal | gap | 1 (unknown=1) | geom0 color0 flicker3 slow1 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.present.no_drawable（并入 PresentStats.dropped）), read the cou |
+| 72 | C-F-101 | metal | gap | 1 (unknown=1) | geom3 color2 flicker2 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.queue.execute_lists.{null_array\|null_entry\|bad_cast\|not_clo |
+| 73 | C-F-102 | metal | gap | 1 (unknown=1) | geom2 color3 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent.target_view.{null\|unknown}; silent.clear.no_view), read the |
+| 74 | C-V-013 | shared | gap | 3 | geom3 color0 flicker0 slow0 crash0 | 3 | 8估 | 0.226 | Run with the DXC helper (D3DMetal libdxcompiler via tools/macos/dxc-d3dmetal.sh, docs/mac/PATCHES.md G3/G4) so |
+| 75 | C-W-D6 | shared | gap | 1 (unknown=1) | geom3 color0 flicker0 slow0 crash0 估 | 3 | 4估 | 0.226 | grep the warning in the last runs' logs; if it shows, route the call through the indirect mesh path used by Ex |
+| 76 | C-W-R5 | shared | unproven | 1 (unknown=1) | geom0 color3 flicker0 slow0 crash0 估 | 3 | 4估 | 0.226 | a front/back test: create RGBA8_UNORM_TYPELESS, view as _SRGB, sample a mid-grey and compare with the sRGB dec |
+| 77 | C-W-U3b | shared | unproven | 1 (unknown=1) | geom3 color0 flicker1 slow0 crash0 估 | 3 | 4估 | 0.226 | count splits and slots in use per frame in the 5 s line; port SPLIT_SLOTS if slots grow. |
+| 78 | mac.loader.scanout_reservation | mac | unproven | 1 | geom0 color0 flicker0 slow0 crash3 | 3 | 4估 | 0.226 | first native run: no int3 at +0x247af25 and no 'resolution: ... 0x247af25' line |
+| 79 | shared.drop.movie_plane | shared | gap | 1 (unknown=1) | geom0 color3 flicker0 slow0 crash0 | 3 | 4估 | 0.226 | count every hit by reason (planned counter: silent texture.movie_plane:no_upload_buffer\|copy_failed), read the |
+| 80 | mac.hle.audio_timer_leak | mac | gap | 20 | geom0 color0 flicker0 slow0 crash1 | 1 | 6 | 0.220 | Find why a thread survives each timer period (create/cancel pairing in victory-hle), reuse one thread (thread- |
+| 81 | C-R-002 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 1.5 | 0.201 | Fidelity phase: keep the title's own internal resolution and DRS untouched, with the output size at the title' |
+| 82 | mac.res.drs | mac | gap | 1 (unknown=1) | geom0 color1 flicker1 slow2 crash0 | 2 | 3 | 0.201 | First prove whether the controller moves: VICTORY_SCALE_WATCH (X13, on with the native 1440p image) with the m |
+| 83 | S-I-025 | shared | gap | 5 | geom2 color0 flicker0 slow0 crash0 | 2 | 8 | 0.195 | Teach resource.rs to keep a descriptor that is only copied/read as data as plain dwords (translator work; firs |
+| 84 | S-W-S26 | shared | unproven | 4 | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.175 | add a harness test: wave64 program, dispatch of 70 threads, count the stores by lane; make the upper half leav |
+| 85 | mac.fault.files_overlapped_wait | mac | unproven | 2 | geom0 color0 flicker0 slow2 crash1 | 2 | 6 | 0.159 | Restore async by reading into a bounce buffer and copying after completion (no kernel write to guarded pages); |
+| 86 | C-B-102 | metal | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.barrier.empty_mask.{after\|before}), read the counts of the  |
+| 87 | C-F-103 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.cbv.create_failed), read the counts of the next forensic ru |
+| 88 | C-F-104 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.copy_descriptors.{error\|null_start\|zero_inc}), read the cou |
+| 89 | C-F-105 | metal | gap | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.view.{srv\|uav\|rtv\|dsv}.failed ; silent.uav.buffer_no_desc), |
+| 90 | C-F-106 | metal | gap | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent.sampler.{null_desc\|create_failed}), read the counts of the  |
+| 91 | C-R-001 | mac | gap | 1 | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2 | 0.151 | Fidelity phase: run the title unpatched at its own size (VICTORY_OUTPUT=0/none already exists) and make the tr |
+| 92 | C-R-003 | mac | unproven | 1 | geom0 color1 flicker0 slow1 crash0 估 | 1 | 2 | 0.151 | Fidelity phase: both upscalers run as the title ships them through the translated shaders (no substitute). Ser |
+| 93 | C-V-011 | shared | gap | 3 | geom2 color0 flicker0 slow0 crash0 | 2 | 8估 | 0.151 | Wave64 over two host wave32 halves is already built for structured programs (emit/wave.rs, wave64_tests); exte |
+| 94 | C-W-D1 | shared | unknown | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 估 | 2 | 4估 | 0.151 | fid-gpuprof is checking the truncation on the back path; then either make widest() take the wider answer for t |
+| 95 | C-W-D8 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | a back test of a direct dispatch of 70,000 groups with a per-group counter. |
+| 96 | C-W-D9 | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | a back test: indirect draw of a rectangle list through the stage vs the direct draw (the C-B-010 test shape);  |
+| 97 | C-W-M1 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | grep the warning count in the 5 s logs of the last runs (map-refresh); implement via a format-converting compu |
+| 98 | C-W-M10 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | read the segment arithmetic in host.rs (the Windows commit 30df9eb4 is a short diff), write a test with a 4 Ki |
+| 99 | C-W-M8 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | count UpdateTileMappings (tiles.rs), if 0 mark dormant. |
+| 100 | C-W-M9 | shared | unproven | 1 | geom1 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | grep the warning and its kind in the last runs' logs; add the kind to C-F-001/C-V-005 text. |
+| 101 | C-W-P3 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow1 crash0 估 | 1 | 2估 | 0.151 | one counter of nonzero offsets. |
+| 102 | C-W-R1 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | read the front's heap limit (front/src/descriptor.rs), add the warning count to the 5 s summary, run once. |
+| 103 | C-W-R6 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | count title-placed textures with UAV usage and a CPU read after a GPU write (watch counters, host.rs); test wi |
+| 104 | C-W-R7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | count unknown-kind slots in the descriptor pass; if 0, mark dormant. |
+| 105 | C-W-R9 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker1 slow0 crash0 估 | 1 | 2估 | 0.151 | test: a root SRV at an offset with a read past the title's intended end. |
+| 106 | C-W-U1 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash2 估 | 2 | 4估 | 0.151 | count arena failures per run; port the retry guard from the upstream commit if any. |
+| 107 | C-W-U4 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash2 估 | 2 | 4估 | 0.151 | one long run (w1000+) with the table size in the memory line; port the cap if it grows. |
+| 108 | C-W-Y2 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow0 crash1 估 | 2 | 4估 | 0.151 | test: a dispatch followed by a bottom write, a second queue waits on the value and reads the dispatch result. |
+| 109 | C-W-Y5 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash1 估 | 2 | 4估 | 0.151 | read the present path for pending waits; one run with a pending-wait counter at present. |
+| 110 | C-W-Y7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | one counter of nonzero arguments to these three slots (map-refresh), then decide. |
+| 111 | C-W-Y8 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow0 crash0 估 | 2 | 4估 | 0.151 | review the declared-write bookkeeping against one batch run with VICTORY_FETCH_CHECK (the counter exists in th |
+| 112 | S-W-S13 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | census the dmask values of image_store in the corpus; a back/msc_gpu test of a partial store if any. |
+| 113 | S-W-S15 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 4估 | 0.151 | count cube-array SRVs and the programs that declare them (callstats + census), then a test sampling a cube-arr |
+| 114 | S-W-S16 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 2估 | 0.151 | read the lowering's default for the dimension field and the census counter of unknown types (S-I-022 neighbour |
+| 115 | S-W-U2c | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash2 估 | 2 | 4估 | 0.151 | read memory_smem for the 1-dword path; add an out-of-range test in the harness. |
+| 116 | mac.gpu.indirect_wide | mac | unproven | 1 (unknown=1) | geom2 color2 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | — |
+| 117 | mac.gpu.native_frontend_viewport | shared | unproven | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | first native run: the log line appears or not; if the hint bar (mac.res.ui_scale) is 403x36 instead of 604x54, |
+| 118 | mac.hle.dstorage.codec_ext | mac | gap | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash1 | 2 | 4估 | 0.151 | count by mode then implement with byte oracle |
+| 119 | mac.hle.dstorage.gpu_visible | mac | unproven | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | validate final consumer before signalling |
+| 120 | mac.hle.globalmemorystatus | mac | unproven | 1 | geom1 color0 flicker1 slow1 crash1 估 | 1 | 2 | 0.151 | Override in victory-hle kernel overrides (host_lookups_by_name_get_our_overrides) with the console budget; tes |
+| 121 | mac.hle.low_early_reserve | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.151 | Count failed arena requests in the log first (shared layer, Metal-additions list); if non-zero, reserve a low- |
+| 122 | mac.hle.suspendthread | mac | unproven | 1 | geom0 color0 flicker1 slow0 crash1 | 1 | 2 | 0.151 | — |
+| 123 | mac.hle.xasync_pending_with | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash2 | 2 | 4估 | 0.151 | Give the worker shared ownership and bind completion to the original call identity. Test cancellation, late re |
+| 124 | mac.hle.xmem_page_wrap | mac | gap | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash2 | 2 | 4估 | 0.151 | Use checked arithmetic and bounded allocation of free IDs; never recycle a live ID, fail on exhaustion. Test n |
+| 125 | mac.loader.output_chain | mac | unproven | 1 | geom1 color0 flicker0 slow2 crash1 | 2 | 4估 | 0.151 | run once per profile: stdout has 'output chain: native 1440p on (the perf profile's default)' (perf) and 'outp |
+| 126 | mac.loader.temporal_scale_controller | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | see mac.res.drs: minimum 0.667 unpinned, read the watch lines |
+| 127 | mac.loader.temporal_scale_min | mac | unproven | 1 | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | first native run with --log-render-size: internal 2560x1440 at 1.0 |
+| 128 | mac.loader.title_frame_rate_loads | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | only useful above 30 fps on our side; not planned before that |
+| 129 | mac.pipeline.warm_only_made | mac | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | — |
+| 130 | mac.res.internal | mac | unproven | 1 (unknown=1) | geom0 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | none separate; follows mac.res.output; run with --log-render-size once at native 1440p: expect 2560x1440 (scal |
+| 131 | mac.res.native_1440p_switch | mac | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow2 crash0 | 2 | 4估 | 0.151 | Run native with 4K reported and compare uncapped source sizes against stock and default native; log the actual |
+| 132 | mac.res.output | mac | unproven | 1 | geom1 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | none for fidelity (stays the title's 4K; the host shows at most 2560x1440). Where the title takes 3840x2160 fr |
+| 133 | mac.res.ui_scale | mac | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | run plan (X13): perf native 1440p, Metal back, no keys, no input replay, VICTORY_METAL_DUMP_PRESENT=288,320@<o |
+| 134 | mac.run.relay_default | mac | unproven | 1 (unknown=1) | geom0 color1 flicker2 slow2 crash0 估 | 2 | 4估 | 0.151 | Check effective relay stage in retained logs; compare unset vs explicit 0, not unset vs 2 (normally equivalent |
+| 135 | shared.device.options_tiled | shared | gap | 1 (unknown=1) | geom2 color1 flicker0 slow0 crash1 估 | 2 | 4估 | 0.151 | Not changed (as above). Scheduled: same G12 log; if the title queries it, make it 2 and run to see whether 3D  |
+| 136 | shared.drop.clear_lost | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.clear:no_record\|no_host_texture\|null_color), read the  |
+| 137 | shared.drop.copy_no_pair | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.copy_resource:no_pair ; silent list.copy_texture_regio |
+| 138 | shared.drop.dispatch_mesh_yz | shared | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.dispatch_mesh:yz_ignored), read the counts of the next |
+| 139 | shared.drop.list_ran_again | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables_done:ran_again), read the counts of the next fo |
+| 140 | shared.drop.memory_by_address | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent memory.by_address:no_number\|page_limit), read the counts of |
+| 141 | shared.drop.present_planes | shared | gap | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent queue.present:extra_planes), read the counts of the next fo |
+| 142 | shared.drop.root_unset | shared | gap | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.user_value:table_outside_heaps\|root_unset ; silent dra |
+| 143 | shared.drop.set_targets_skipped | shared | gap | 1 (unknown=1) | geom2 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.set_targets:no_rtv_record ; silent draw.set_targets:no |
+| 144 | shared.drop.table_entry_null | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables:entry_without_view), read the counts of the nex |
+| 145 | shared.drop.table_span | shared | gap | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.tables:span_exceeded), read the counts of the next for |
+| 146 | shared.drop.texture_not_uploaded | shared | gap | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent texture.upload:no_layout\|xor_mode), read the counts of the  |
+| 147 | shared.drop.tile_mapping | shared | gap | 1 (unknown=1) | geom1 color2 flicker2 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent queue.tile_mapping:failed), read the counts of the next for |
+| 148 | shared.drop.topology_as_list | shared | gap | 1 (unknown=1) | geom2 color0 flicker0 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent draw.topology:fan_loop_quad), read the counts of the next f |
+| 149 | shared.drop.value_wait_met | shared | gap | 1 (unknown=1) | geom1 color1 flicker2 slow0 crash1 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.value_wait:unknown_compare\|unmapped), read the counts  |
+| 150 | shared.drop.view_not_allowed | shared | gap | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent descriptor.view_ok:not_allowed\|format_family), read the cou |
+| 151 | shared.drop.vtable_missing | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash2 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent object.missing.KIND.SLOT（按槽累加，5 s 汇总）), read the counts of  |
+| 152 | shared.drop.wait_moved | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow2 crash0 | 2 | 4估 | 0.151 | count every hit by reason (planned counter: silent list.cut:no_fresh_list), read the counts of the next forens |
+| 153 | shared.list.upload_growth | shared | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow1 crash2 | 2 | 4估 | 0.151 | record reserve errors and the caller arguments before attributing the invalid parameter to VA exhaustion |
+| 154 | shared.sync.xqueue_word | shared | unproven | 1 (unknown=1) | geom1 color1 flicker2 slow2 crash1 | 2 | 4估 | 0.151 | trace producer submission and retire plus consumer compare at the same address |
+| 155 | S-G-006 | shared | unproven | 195 | geom2 color1 flicker0 slow0 crash0 估 | 2 | 32 | 0.143 | Run a frame that draws a voxelization pass and compare; conservative rasterization (C-F-029) is separate. docs |
+| 156 | S-I-016 | shared | gap | 26 | geom2 color0 flicker0 slow0 crash0 | 2 | 20 | 0.143 | The census translates these 26 only when the host runs wave 64 (translated_with_host_wave64=26; the Apple GPU  |
+| 157 | mac.hle.commit_quota | mac | unproven | 5 | geom0 color0 flicker1 slow1 crash1 | 1 | 6 | 0.130 | Account title commits in the HLE (sum of committed MEM_COMMIT) and refuse past the console budget, as the Xbox |
+| 158 | C-V-004 | shared | gap | 9 | geom1 color2 flicker1 slow0 crash0 | 2 | 16 | 0.125 | Track per-page writes (watch.rs already knows pages) and detile only those; give directly indexed views a cont |
+| 159 | C-F-075 | metal | unproven | 1 (unknown=1) | geom0 color2 flicker0 slow0 crash0 估 | 2 | 6 | 0.100 | write the three read-back tests; logic ops by shader emulation if the title ever enables them |
+| 160 | C-V-005 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker0 slow0 crash0 估 | 2 | 6 | 0.100 | — |
+| 161 | C-V-006 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 估 | 2 | 6 | 0.100 | Keep ignoring; verify no title code reads RT memory as DCC (capture the title memory view of an RT). Feasibili |
+| 162 | C-V-007 | shared | unproven | 1 (unknown=1) | geom0 color2 flicker2 slow0 crash0 估 | 2 | 6 | 0.100 | Detect: scan title DXIL/ISA for reads of the htile surface address; if present, rebuild the summary from the h |
+| 163 | shader.rt.builder_first_lane_scan | shared | unproven | 3 | geom0 color1 flicker1 slow0 crash0 估 | 1 | 6 | 0.100 | No separate work: correctness of the builder output is checked as a whole by shared.rt.bvh_build step 4 (compa |
+| 164 | shared.descriptor.heaps | shared | unproven | 1 (unknown=1) | geom2 color2 flicker1 slow0 crash1 | 2 | 6 | 0.100 | Restore through the Metal backend argument-buffer model (descriptor words decoded to MTLResourceID); see Metal |
+| 165 | shared.resource.heaps_at_addresses | shared | unproven | 1 (unknown=1) | geom1 color0 flicker1 slow2 crash1 | 2 | 6 | 0.100 | See mac.hle.zero_copy_alias. |
+| 166 | shared.rt.activate_rays | shared | unproven | 1 (unknown=1) | geom0 color2 flicker1 slow0 crash0 | 2 | 6 | 0.100 | returns with shared.rt.bvh_build; test the two apart only if the builder stays off for long |
+| 167 | C-B-104 | metal | gap | 1 (unknown=1) | geom1 color0 flicker1 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.emu.touched.{slot\|heap\|key}_unknown), read the counts of th |
+| 168 | C-F-006 | metal | gap | 1 (unknown=1) | geom2 color1 flicker0 slow0 crash0 估 | 2 | 8估 | 0.075 | R32G32B32: MTLPixelFormatRGB32Float/Uint/Sint exist for texture buffers (read-only, macOS 27.0; MTLPixelFormat |
+| 169 | C-F-107 | metal | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.discard.{unknown_resource\|partial}), read the counts of the |
+| 170 | C-F-108 | metal | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.timestamp.never_written), read the counts of the next foren |
+| 171 | C-F-109 | metal | gap | 1 (unknown=1) | geom0 color1 flicker1 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.root_constants.{null\|zero} ; silent.resource_barrier.null), |
+| 172 | C-F-110 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent.lenient.skipped（always）), read the counts of the next foren |
+| 173 | C-W-D2 | shared | unproven | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | add the two overflow counts to the clamp's 5 s summary and read them in the next batch run; if 0, keep as a do |
+| 174 | C-W-G1 | shared | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | log the extension field words that are nonzero (16 words per call are already logged for 0x218), one run. |
+| 175 | S-G-012 | shared | gap | 3 | geom1 color0 flicker0 slow0 crash0 | 1 | 8估 | 0.075 | Not a translator gap by the census's own wording (research/census/opcodes.md: "3 without native programs (SM5- |
+| 176 | S-W-S5 | shared | unproven | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.075 | a back test: a 2D group (16x2, 8x8, 32x2) writing the lane id the translated program computes, compared with t |
+| 177 | S-W-S7 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | static scan of the 6,278 programs for a bpermute reachable under a narrowed EXEC (the planned opcode-oracle se |
+| 178 | S-W-U2a | shared | unproven | 1 (unknown=1) | geom1 color2 flicker1 slow0 crash0 估 | 2 | 8估 | 0.075 | read the halves path for mask tests, port the test from the upstream change, run it in the harness. |
+| 179 | mac.fault.ntquery_class7 | mac | gap | 1 | geom0 color0 flicker0 slow1 crash1 | 1 | 4 | 0.075 | High fidelity and cheap: our own registry knows every placeholder we create (xmem.rs placeholder branch), answ |
+| 180 | mac.hle.drop.net_proxy | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent net.proxy:ignored), read the counts of the next forensic ru |
+| 181 | mac.hle.drop.package_noop | mac | gap | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent xpackage.uninstall\|enumerate ; silent xgame.write_event), r |
+| 182 | mac.hle.dstorage.errors | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash1 | 1 | 4估 | 0.075 | independent per-queue error interval |
+| 183 | mac.hle.working_set_statistics | mac | unproven | 1 | geom1 color0 flicker1 slow1 crash1 | 1 | 4 | 0.075 | Count the title's own heaps/mapped pages and per class in the XMem hooks; return those. |
+| 184 | mac.loader.display_mode_record | mac | unproven | 1 | geom1 color0 flicker0 slow1 crash0 | 1 | 4估 | 0.075 | first native run: source frame 2560x1440 at present 320 (mac.res.output) |
+| 185 | mac.loader.settings_preview_viewport | mac | unproven | 1 (unknown=1) | geom1 color0 flicker0 slow0 crash0 | 1 | 4估 | 0.075 | open the Settings screen in a native 1440p run and compare the preview panel size (not planned: no map reason) |
+| 186 | shared.device.options_conservative | shared | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | Not changed. Scheduled: G12 log; also read the rasterizer subobject in the graphics state (C-V-009 test reads  |
+| 187 | shared.device.options_double | shared | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | Not changed: no sign the title branches on it (console hardware is fixed, a title does not usually test it). S |
+| 188 | shared.draw.no_host_pipeline | shared | gap | 1 | geom2 color1 flicker1 slow0 crash0 | 2 | 8估 | 0.075 | Metal side: implement attributeAtVertex (MSC), raise mesh limit by splitting meshlets; shared side: wait for t |
+| 189 | shared.drop.compute_x_ext | shared | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent pipeline.compute_x:extensions_ignored), read the counts of  |
+| 190 | shared.drop.list_named_twice | shared | gap | 1 (unknown=1) | geom1 color1 flicker1 slow0 crash0 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent list.detach_parts:second_naming_dropped), read the counts o |
+| 191 | shared.drop.resolve_queries | shared | gap | 1 (unknown=1) | geom0 color0 flicker0 slow1 crash0 | 1 | 4估 | 0.075 | count every hit by reason (planned counter: silent list.resolve_queries:no_buffer\|out_of_range), read the coun |
+| 192 | shared.object.unknown_method | shared | gap | 1 | geom1 color0 flicker0 slow0 crash2 | 2 | 8估 | 0.075 | Implement slot 0xb8 of the queue (identify via D3D12 vtable: likely a queue method added in a newer interface) |
+| 193 | shared.pipeline.untranslated_shader | shared | gap | 1 | geom2 color1 flicker1 slow0 crash0 | 2 | 8估 | 0.075 | Lower wave64 ops to wave32 (shader owner; 18 permlane/quad failing tests listed in PATCHES.md). S3: the correc |
+| 194 | C-R-004 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker0 slow1 crash0 估 | 1 | 6 | 0.050 | — |
+| 195 | C-R-006 | shared | unproven | 1 (unknown=1) | geom0 color1 flicker1 slow1 crash0 估 | 1 | 6 | 0.050 | — |
+| 196 | C-V-002 | shared | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash1 估 | 1 | 6 | 0.050 | 待细化 (check by running with a call logger for the X list methods; if the host holds plain textures the correct  |
+| 197 | C-F-014 | metal | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | Back the view by a mirror and copy back after the pass (inverse of the SRV mirror) or require MTLTextureUsage. |
+| 198 | C-F-015 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | Emulate the counter with a 32-bit atomic in a side buffer (Metal atomics are native) and implement append/cons |
+| 199 | C-F-074 | metal | gap | 1 (unknown=1) | geom0 color1 flicker0 slow0 crash0 估 | 1 | 8估 | 0.038 | emulate in the shader (translator) or sample 4 taps; border: pick nearest preset |
+| 200 | S-M-005 | metal | gap | 1 (unknown=1) | geom1 color1 flicker0 slow0 crash1 估 | 1 | 8估 | 0.038 | 待细化 |
+| 201 | mac.hle.drop.apu_commands | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent apu.command:unhandled（按命令码）), read the counts of the next f |
+| 202 | mac.hle.drop.input_ignored | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent gameinput.rumble:trigger_motors ; silent gameinput.register |
+| 203 | mac.hle.drop.xma_overlap | mac | gap | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | count every hit by reason (planned counter: silent audio.xma:overlap_ignored), read the counts of the next for |
+| 204 | mac.hle.xmem_map_partial_view | mac | gap | 0 | geom1 color0 flicker2 slow0 crash1 | 2 | 4估 | 0.000 | 1) Done: the count. xmem.rs unmap() says 'unmapping part of a view unmapped all of it and mapped the rest agai |
+| 205 | mac.input.scripted_pad_sticks | mac | unproven | 1 (unknown=1) | geom0 color0 flicker0 slow0 crash0 | 0 | 4估 | 0.000 | — |
+| 206 | shared.device.feature_query | shared | unproven | 0 | geom0 color0 flicker0 slow0 crash1 | 1 | 6 | 0.000 | Answer additional features from the host device (options1..21, shader model, GPU VA); feasibility high. |
+| 207 | shared.draw.descriptor_drops | shared | unproven | 0 | geom2 color0 flicker1 slow0 crash0 | 2 | 6 | 0.000 | Raise slots dynamically; feasibility high; no occurrence yet. |
 
-ranked: 209; not ranked (closed, summary, used=no, reference only): 59; rows without a parsable symptom: 0
+ranked: 207; not ranked (closed, summary, used=no, reference only): 60; rows without a parsable symptom: 0
 
 ## Not ranked
 
@@ -261,6 +259,7 @@ ranked: 209; not ranked (closed, summary, used=no, reference only): 59; rows wit
 | api.GraphicsCommandList4::EndRenderPass | gap | used=no |
 | api.GraphicsCommandList4::DispatchRays | gap | used=no |
 | api.GraphicsCommandList::BeginQuery | gap | used=no |
+| shared.descriptor.partial_3d_uav | gap | used=unlikely |
 | mac.isa.rdtsc | unproven | used=no |
 | mac.isa.avx_general | unproven | summary row (its parts are rows) |
 | mac.res.fsr | unproven | used=no |
