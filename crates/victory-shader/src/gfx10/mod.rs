@@ -208,35 +208,128 @@ fn far_jump<'a>(
 // mac S6: resolve direct PC-relative calls before SSA. Preserve original code offsets: the
 // trampoline materializes this call's return address, runs a copy of its straight-line VALU
 // callee, then rejoins its own continuation. Never guess a dynamic destination.
-pub(crate) fn local_calls(code: &[u8], list: &[Instruction], stage: Option<crate::HwStage>) -> Result<Option<Vec<u8>>, ShaderError> {
+pub(crate) fn local_calls(
+    code: &[u8],
+    list: &[Instruction],
+    stage: Option<crate::HwStage>,
+) -> Result<Option<Vec<u8>>, ShaderError> {
     let mut out = None;
     let branch = |from: usize, to: usize| {
-        i16::try_from((to as i64 - from as i64 - 4) / 4).map(|d| 0xbf82_0000 | u32::from(d as u16)).map_err(|_| isa(from, "local call beyond branch range"))
+        i16::try_from((to as i64 - from as i64 - 4) / 4)
+            .map(|d| 0xbf82_0000 | u32::from(d as u16))
+            .map_err(|_| isa(from, "local call beyond branch range"))
     };
-    for (k, call) in list.iter().enumerate().filter(|(_,i)| i.name() == Some("s_swappc_b64")) {
+    for (k, call) in list
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.name() == Some("s_swappc_b64"))
+    {
         let w = call.words[0];
         let src = w & 255;
         let link = (w >> 16) & 127;
         // The two external vertex-fetch ABI prologues. The IA supplies their VGPR results.
-        if src == link && match (stage,call.offset,src) {
-            (Some(crate::HwStage::Vs),24,4) => k==2 && list[..2].iter().all(|p|p.name()==Some("v_nop")),
-            (Some(crate::HwStage::Es),60,12) => k>=3 && list[k-3..k].iter().map(Instruction::name).eq([Some("s_cselect_b64"),Some("s_mov_b32"),Some("s_and_b32")]),
-            _=>false
-        } { continue; }
+        if src == link
+            && match (stage, call.offset, src) {
+                (Some(crate::HwStage::Vs), 24, 4) => {
+                    k == 2 && list[..2].iter().all(|p| p.name() == Some("v_nop"))
+                }
+                (Some(crate::HwStage::Es), 60, 12) => {
+                    k >= 3
+                        && list[k - 3..k].iter().map(Instruction::name).eq([
+                            Some("s_cselect_b64"),
+                            Some("s_mov_b32"),
+                            Some("s_and_b32"),
+                        ])
+                }
+                _ => false,
+            }
+        {
+            continue;
+        }
         let bad = || isa(call.offset, "unresolved s_swappc_b64 call");
-        let pre = list.get(k.checked_sub(3).ok_or_else(bad)?..k).ok_or_else(bad)?;
-        if link > 100 || link % 2 != 0 || src > 100 || src % 2 != 0 || pre[0].words != [0xbe80_1f00 | src << 16] || pre[1].name()!=Some("s_add_u32") || pre[1].words.len()!=2 || pre[1].words[0] & 0x7f_ffff != src << 16 | 0xff00 | src || pre[2].name()!=Some("s_addc_u32") || pre[2].words[0] & 0x7f_ffff != (src+1)<<16 | 0x8000 | (src+1) || pre[0].offset+16!=call.offset || pre[1].offset!=pre[0].offset+4 || pre[2].offset!=call.offset-4 {return Err(bad());}
+        let pre = list
+            .get(k.checked_sub(3).ok_or_else(bad)?..k)
+            .ok_or_else(bad)?;
+        if link > 100
+            || link % 2 != 0
+            || src > 100
+            || src % 2 != 0
+            || pre[0].words != [0xbe80_1f00 | src << 16]
+            || pre[1].name() != Some("s_add_u32")
+            || pre[1].words.len() != 2
+            || pre[1].words[0] & 0x7f_ffff != src << 16 | 0xff00 | src
+            || pre[2].name() != Some("s_addc_u32")
+            || pre[2].words[0] & 0x7f_ffff != (src + 1) << 16 | 0x8000 | (src + 1)
+            || pre[0].offset + 16 != call.offset
+            || pre[1].offset != pre[0].offset + 4
+            || pre[2].offset != call.offset - 4
+        {
+            return Err(bad());
+        }
         // The base calculation has to dominate the call; refuse incoming edges in its interior.
-        for i in list { if let Flow::Jump(t)|Flow::Branch(t)=control(i,code.len(),|a|list[..list.partition_point(|p|p.offset<a)].last())? {if t>pre[0].offset && t<=call.offset{return Err(bad());}} }
-        let mut at = (pre[0].offset+4).checked_add(pre[1].words[1] as usize).filter(|a|a%4==0 && *a<code.len()).ok_or_else(bad)?;
-        let start=at;
-        loop {let i=instruction(code,at)?; if i.name()==Some("s_setpc_b64") && i.words[0]&255==link {break;} if !matches!(i.encoding, Encoding::Vop1|Encoding::Vop2|Encoding::Vopc) {return Err(bad());} at+=4*i.words.len();}
-        let dst=out.get_or_insert_with(||code.to_vec()); let end=dst.len();
-        dst[call.offset..call.offset+4].copy_from_slice(&branch(call.offset,end)?.to_le_bytes());
-        for word in [0xbe80_03ff | link<<16, (call.offset+4) as u32, 0xbe80_0380 | (link+1)<<16] { dst.extend(word.to_le_bytes()); }
-        dst.extend_from_slice(&code[start..at]); dst.extend(branch(dst.len(), call.offset+4)?.to_le_bytes());
+        for i in list {
+            if let Flow::Jump(t) | Flow::Branch(t) = control(i, code.len(), |a| {
+                list[..list.partition_point(|p| p.offset < a)].last()
+            })? {
+                if t > pre[0].offset && t <= call.offset {
+                    return Err(bad());
+                }
+            }
+        }
+        let mut at = (pre[0].offset + 4)
+            .checked_add(pre[1].words[1] as usize)
+            .filter(|a| a % 4 == 0 && *a < code.len())
+            .ok_or_else(bad)?;
+        let start = at;
+        loop {
+            let i = instruction(code, at)?;
+            if i.name() == Some("s_setpc_b64") && i.words[0] & 255 == link {
+                break;
+            }
+            if !matches!(i.encoding, Encoding::Vop1 | Encoding::Vop2 | Encoding::Vopc)
+                || i.name().is_none()
+                || i.name() == Some("v_readfirstlane_b32")
+            {
+                return Err(bad());
+            }
+            at += 4 * i.words.len();
+        }
+        let dst = out.get_or_insert_with(|| code.to_vec());
+        let end = dst.len();
+        dst[call.offset..call.offset + 4].copy_from_slice(&branch(call.offset, end)?.to_le_bytes());
+        for word in [
+            0xbe80_03ff | link << 16,
+            (call.offset + 4) as u32,
+            0xbe80_0380 | (link + 1) << 16,
+        ] {
+            dst.extend(word.to_le_bytes());
+        }
+        dst.extend_from_slice(&code[start..at]);
+        dst.extend(branch(dst.len(), call.offset + 4)?.to_le_bytes());
     }
     Ok(out)
+}
+
+#[cfg(test)]
+#[test]
+fn unresolved_local_calls_never_fall_through() {
+    // A dynamic call with no fetch ABI; a statically addressed callee that overwrites the link.
+    for words in [
+        vec![0xbe82_2104u32, 0xbf81_0000],
+        vec![
+            0xbe84_1f00,
+            0x8004_ff04,
+            20,
+            0x8205_8005,
+            0xbe82_2104,
+            0xbf81_0000,
+            0x7e04_0500,
+            0xbe80_2002,
+        ],
+    ] {
+        let code: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert!(local_calls(&code, &decode(&code).unwrap(), Some(crate::HwStage::Ps)).is_err());
+    }
 }
 
 fn instruction(code: &[u8], offset: usize) -> Result<Instruction, ShaderError> {

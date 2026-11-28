@@ -309,6 +309,9 @@ fn run_case(host: &Host, c: &Case) -> Outcome {
         Err(e) if e.contains("unsupported") => return Outcome::Refused(e),
         Err(e) => return Outcome::Mismatch { bad: 1, examples: vec![format!("draw: {e}")] },
     };
+    if texels.len() != SIZE * SIZE {
+        return Outcome::Mismatch { bad: 1, examples: vec![format!("expected {} texels; got {}", SIZE * SIZE, texels.len())] };
+    }
     let (mut bad, mut examples) = (0, Vec::new());
     for (n, texel) in texels.iter().enumerate() {
         let (col, row) = (n % SIZE, n / SIZE);
@@ -353,7 +356,8 @@ fn run_family(family: &str, cases: &[Case]) {
                 let _ = writeln!(file, "{family}\t{names}\t{outcome}{tag}\t{n}\t{detail}");
             }
         }
-        if (outcome == "MISMATCH" || outcome == "UNTRANSLATED") && known.is_none() {
+        let required = names.starts_with("s_swappc_b64") || names.starts_with("exp mrt0 compr");
+        if (required && outcome != "pass") || ((outcome == "MISMATCH" || outcome == "UNTRANSLATED") && known.is_none()) {
             failed.push(format!("{names}: {detail}"));
         }
     }
