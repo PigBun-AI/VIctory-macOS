@@ -85,6 +85,22 @@ fn address_range(flags: u64) -> (usize, usize) {
     (1 << 32, (1 << bits) - 1)
 }
 
+/// The allocation type of a reservation the title asks for at an address of our choice
+/// (`constrained`): a reservation, and, with fault tracking on (`tracking`, on by default; Mac patch
+/// G2), `MEM_WRITE_WATCH`, so that the GPU side copies only the pages the title wrote since its last
+/// copy (`victory_gpu`, decision 0007). Placeholders cannot be watched (their physical-page views
+/// are copied whole), and a reservation at the title's own address is left as it asks.
+fn pool_kind(kind: u32, constrained: bool, tracking: bool) -> u32 {
+    let mut kind = kind;
+    if constrained {
+        kind |= MEM_RESERVE;
+        if kind & MEM_RESERVE_PLACEHOLDER == 0 && tracking {
+            kind |= MEM_WRITE_WATCH;
+        }
+    }
+    kind
+}
+
 pub extern "system" fn XMemVirtualAlloc(
     base: *mut c_void,
     size: usize,
@@ -129,16 +145,7 @@ pub extern "system" fn XMemVirtualAlloc(
     parameter.Anonymous2.Pointer = (&raw mut requirements).cast();
     // Address requirements apply to reservations at an address of our choice.
     let constrained = base.is_null();
-    if constrained {
-        kind |= MEM_RESERVE;
-        // The GPU side copies only the pages the title wrote since its last
-        // copy (`victory_gpu`, decision 0007); placeholders cannot be
-        // watched (their physical-page views are copied whole).
-        // (Not under Rosetta unless asked: Mac patch G2.)
-        if kind & MEM_RESERVE_PLACEHOLDER == 0 && victory_gpu::mac::rosetta::fault_tracking() {
-            kind |= MEM_WRITE_WATCH;
-        }
-    }
+    kind = pool_kind(kind, constrained, victory_gpu::mac::rosetta::fault_tracking());
     // SAFETY: the title's own arguments, cleaned of console bits; the
     // parameter points at `requirements`, which outlives the call.
     let allocate = |parameter: &mut MEM_EXTENDED_PARAMETER| unsafe {
@@ -2034,6 +2041,40 @@ mod tests {
         let process = unsafe { GetCurrentProcess() };
         assert_eq!(XMemVirtualQuery(process, address, &mut info), 1);
         info
+    }
+
+    #[test]
+    fn pools_are_watched_for_writes_when_tracking_runs() {
+        let plain = MEM_COMMIT;
+        // Tracking on (the default, also under Rosetta): a pool of our choosing is watched.
+        assert_eq!(pool_kind(plain, true, true), MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH);
+        // Tracking off (VICTORY_FAULT_TRACKING=0): reserved, not watched.
+        assert_eq!(pool_kind(plain, true, false), MEM_COMMIT | MEM_RESERVE);
+        // A placeholder is never watched; a reservation at the title's own address is left as it is.
+        let placeholder = MEM_RESERVE | MEM_RESERVE_PLACEHOLDER;
+        assert_eq!(pool_kind(placeholder, true, true), placeholder);
+        assert_eq!(pool_kind(plain, false, true), plain);
+        // And on this host (tracking is on unless VICTORY_FAULT_TRACKING=0 was set for the run) a pool the title
+        // gets answers GetWriteWatch, one reserved plainly does not.
+        use windows_sys::Win32::System::Memory::{GetWriteWatch, VirtualFree};
+        let watched = |at: *mut c_void| {
+            let (mut found, mut count, mut granularity) = ([std::ptr::null_mut::<c_void>(); 4], 4usize, 0u32);
+            // SAFETY: the pool just allocated, 64 KiB; the arrays are as long as `count` says.
+            unsafe { GetWriteWatch(0, at, 64 * 1024, found.as_mut_ptr(), &mut count, &mut granularity) == 0 }
+        };
+        let pool = XMemVirtualAlloc(std::ptr::null_mut(), 64 * 1024, MEM_RESERVE | MEM_COMMIT, 0, PAGE_READWRITE);
+        assert!(!pool.is_null());
+        assert_eq!(watched(pool), victory_gpu::mac::rosetta::fault_tracking(), "a pool and GetWriteWatch");
+        // SAFETY: the title's pool, ours to release.
+        unsafe { VirtualFree(pool, 0, 0x8000) };
+        // SAFETY: a plain allocation of our own, released below.
+        let plain_pool = unsafe {
+            windows_sys::Win32::System::Memory::VirtualAlloc(std::ptr::null(), 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
+        };
+        assert!(!plain_pool.is_null());
+        assert!(!watched(plain_pool), "a reservation without MEM_WRITE_WATCH is not watched");
+        // SAFETY: as above.
+        unsafe { VirtualFree(plain_pool, 0, 0x8000) };
     }
 
     #[test]
