@@ -772,6 +772,16 @@ hanging it. `tools/mac/wine-tests.sh -p victory-hle --lib mac_counts`.
 `lifecycle`, `rpcrt4`, `audio_xaudio2`, `kernel_overrides`, `fidelityfx_xcrd` in the plan of 2026-11-28). *No game run has been made
 with it yet.* *Remove when* the frame-time work no longer needs call counts; nothing else depends on it.
 
+### H4 — DirectStorage completion markers and COM call counts
+
+`victory-hle/src/modules/dstorage.rs` and `dstorage/{abi,notify}.rs`. FactoryX2 returns exact QueueX/X1/X2 views (12/13/14 slots) of one refcounted queue; QI for IUnknown is canonical. Unimplemented methods have typed, counted stubs. The queue error event returns null and the error record reports zero failures: not a functioning error channel. Candidate: maintain a separate per-queue error interval, retain the earliest failing command's parameters, and set/reset a duplicated error event independently of status retirement.
+
+`VICTORY_DSTORAGE_NOTIFY` defaults on. At the ordered retirement frontier a worker claims a fence/event marker, drops the scheduler lock, signals the held D3D12 fence via its COM `Signal` (including waiter wakeup) or sets a duplicated Win32 event. One publisher per queue; later statuses cannot overtake it. Closing drops queued work and waits for in-flight publication. `=0` ignores fence/event calls but **does not** reinstall an unsafe short vtable or turn off status updates/diagnostics. Auto-submit policy is unchanged.
+
+On stderr, `dstorage.method` / `dstorage.marker` sample powers of two. `dstorage.snapshot` on title/CRT exit and L7 int3 gives `dstorage.summary` by interface and slot, `dstorage.hr.summary`, `dstorage.queue` (enqueue/submit/depth/oldest outstanding seq), `dstorage.marker.summary` and `dstorage.unpublished` (queue, seq, kind, epoch ms). `lanes=busy` means unavailable, not zero. Closed queues are retained as counts, not live handles. A published status failure means its slot was written with the first failing HRESULT; distinguish it from a fence/event publication failure. An unsubmitted or cancelled marker is not an active missing signal. Match to the same SRL key/waiter and BUILDING release before attributing the stall.
+
+Wine: `tools/mac/wine-tests.sh -p victory-hle --lib dstorage`, repeated with `VICTORY_DSTORAGE_NOTIFY=0`. Includes an actual FactoryX2 -> QueueX1 all-slot walk, ordered A/B/marker/C retirement, real fence + registered event waiter at a 64-bit value, manual/auto events, exact counters and a CRT-exit subprocess. No title run or GPU resource-visibility claim. Remove once equivalent upstream ABI/retirement and per-method/queue forensics are available.
+
 ### T1 — `victory-shader-dylib/tests/translate.rs`: corpus folders from the environment
 
 The test had two build-machine paths of the Windows team written in (`...\build\livetr-corpus`,

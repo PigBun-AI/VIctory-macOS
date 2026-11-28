@@ -334,6 +334,8 @@ fn flush_inner(reason: &str, wait: bool) {
 /// Writes the table now (a no-op when the switch is off). The paths that end the
 /// process call it before they go: a normal exit, `abort`, `TerminateProcess`.
 pub fn flush(reason: &str) {
+    #[cfg(windows)]
+    crate::modules::dstorage::snapshot(reason);
     flush_inner(reason, false);
 }
 

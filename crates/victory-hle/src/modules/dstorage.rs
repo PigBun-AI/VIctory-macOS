@@ -32,7 +32,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use victory_formats::bcpack::{self, Tables};
 
 use super::xasync::{E_INVALIDARG, E_NOTIMPL, E_PENDING};
-use super::xgameruntime::{Guid, HRESULT, Methods, Object, S_OK, add_ref, missing, put};
+use super::xgameruntime::{Guid, HRESULT, Methods, Object, S_OK, put};
 use crate::{HleModule, hle_export};
 
 /// The factory interface the title asks for.
@@ -54,6 +54,10 @@ type Out = *mut *mut c_void;
 static FACTORY_OBJECT: Object = Object::new("dstorage factory", &FACTORY_VTABLE);
 
 pub extern "system" fn DStorageGetFactory(iid: *const Guid, out: Out) -> HRESULT {
+    abi::init();
+    if put(out, std::ptr::null_mut()) != S_OK {
+        return E_INVALIDARG;
+    }
     // SAFETY: the title passes a GUID (null tolerated).
     match unsafe { iid.as_ref() } {
         Some(&iid) if iid == FACTORY => {
@@ -122,6 +126,12 @@ extern "system" fn open_file(_: Factory, path: *const u16, iid: *const Guid, out
     const GENERIC_READ: u32 = 0x8000_0000;
     const FILE_SHARE_READ: u32 = 1;
     const OPEN_EXISTING: u32 = 3;
+    if put(out, std::ptr::null_mut()) != S_OK {
+        return E_INVALIDARG;
+    }
+    if unsafe { iid.as_ref() } != Some(&abi::FILE) {
+        return E_NOINTERFACE;
+    }
     if path.is_null() {
         return E_INVALIDARG;
     }
@@ -166,6 +176,12 @@ extern "system" fn create_status_array(
     iid: *const Guid,
     out: Out,
 ) -> HRESULT {
+    if put(out, std::ptr::null_mut()) != S_OK {
+        return E_INVALIDARG;
+    }
+    if unsafe { iid.as_ref() } != Some(&abi::ARRAY) {
+        return E_NOINTERFACE;
+    }
     tracing::info!(
         capacity,
         name = text(name),
@@ -198,6 +214,16 @@ extern "system" fn create_queue(
     iid: *const Guid,
     out: Out,
 ) -> HRESULT {
+    if put(out, std::ptr::null_mut()) != S_OK {
+        return E_INVALIDARG;
+    }
+    let Some(iface) = abi::QIDS
+        .iter()
+        .position(|q| Some(q) == unsafe { iid.as_ref() })
+        .map(|k| k + 1)
+    else {
+        return E_NOINTERFACE;
+    };
     // SAFETY: the title passes its description (null tolerated).
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
@@ -218,13 +244,11 @@ extern "system" fn create_queue(
     let mut lanes = scheduler.lock();
     let id = lanes.next_id;
     lanes.next_id += 1;
-    let lane = Lane::new(desc.priority, desc.capacity);
+    let mut lane = Lane::new(desc.priority, desc.capacity);
+    lane.id = id;
     lanes.lanes.insert(id, lane);
     drop(lanes);
-    put(
-        out,
-        Instance::create(Object::new("dstorage queue", &QUEUE_VTABLE), Queue { id }),
-    )
+    put(out, QueueGroup::create(id, iface))
 }
 
 /// The title asks for 32 MiB and stops if this fails. Give PC worker threads
@@ -255,24 +279,10 @@ fn text(name: *const c_char) -> String {
         .into_owned()
 }
 
-static FACTORY_VTABLE: Methods<16> = Methods([
-    missing::<0> as *const (),
-    add_ref as *const (),
-    add_ref as *const (),
-    missing::<3> as *const (),            // 0x18 (2020: queue creation)
-    open_file as *const (),               // 0x20
-    create_status_array as *const (),     // 0x28
-    missing::<6> as *const (),            // 0x30 (2020: CPU affinity)
-    missing::<7> as *const (),            // 0x38 (2020: debug flags)
-    set_staging_buffer_size as *const (), // 0x40
-    missing::<9> as *const (),
-    create_queue as *const (), // 0x50
-    missing::<11> as *const (),
-    missing::<12> as *const (),
-    missing::<13> as *const (),
-    missing::<14> as *const (),
-    missing::<15> as *const (),
-]);
+mod abi;
+mod notify;
+use abi::{FACTORY_VTABLE, FILE_VTABLE, STATUS_VTABLE};
+use notify::{External, enqueue_event, enqueue_signal};
 
 // Files.
 
@@ -457,17 +467,6 @@ fn read_direct(file: &std::fs::File, out: &mut [u8], offset: u64) -> std::io::Re
     })
 }
 
-static FILE_VTABLE: Methods<8> = Methods([
-    missing::<0> as *const (),
-    add_ref_instance::<File> as *const (),
-    release::<File> as *const (),
-    missing::<3> as *const (),
-    missing::<4> as *const (),
-    missing::<5> as *const (),
-    missing::<6> as *const (),
-    missing::<7> as *const (),
-]);
-
 // Status arrays.
 
 struct StatusArray {
@@ -503,28 +502,59 @@ extern "system" fn is_complete(this: Array, index: u32) -> bool {
     done
 }
 
-static STATUS_VTABLE: Methods<5> = Methods([
-    missing::<0> as *const (),
-    add_ref_instance::<StatusArray> as *const (),
-    release::<StatusArray> as *const (),
-    is_complete as *const (),   // 0x18
-    status_result as *const (), // 0x20
-]);
-
 // Queues.
 
 /// A queue object: its lane in the scheduler.
 struct Queue {
     id: u64,
+    iface: usize,
 }
 
-impl Drop for Queue {
-    fn drop(&mut self) {
-        close_lane(self.id);
+#[repr(C)]
+struct QueueView {
+    base: Object,
+    state: Queue,
+}
+#[repr(C)]
+struct QueueGroup {
+    views: [QueueView; 3],
+    refs: AtomicU32,
+}
+type QueueRef = *const QueueView;
+impl QueueGroup {
+    fn create(id: u64, iface: usize) -> *mut c_void {
+        let group = Box::new(Self {
+            views: std::array::from_fn(|i| QueueView {
+                base: abi::queue_object(i + 1),
+                state: Queue { id, iface: i + 1 },
+            }),
+            refs: AtomicU32::new(1),
+        });
+        let group = Box::into_raw(group);
+        // SAFETY: views are the leading contiguous array, and iface came from QIDS.
+        unsafe { group.cast::<QueueView>().add(iface - 1).cast() }
+    }
+    fn owner(view: QueueRef) -> *mut Self {
+        // SAFETY: every COM queue pointer is one of this allocation's three views.
+        unsafe { view.sub((*view).state.iface - 1).cast_mut().cast() }
+    }
+    fn view(view: QueueRef, index: usize) -> *mut c_void {
+        unsafe { Self::owner(view).cast::<QueueView>().add(index).cast() }
+    }
+    fn reference(view: QueueRef, add: bool) -> u32 {
+        let ptr = Self::owner(view);
+        let refs = unsafe { &(*ptr).refs };
+        if add {
+            return refs.fetch_add(1, Ordering::Relaxed) + 1;
+        }
+        let left = refs.fetch_sub(1, Ordering::AcqRel) - 1;
+        if left == 0 {
+            close_lane(unsafe { (*view).state.id });
+            drop(unsafe { Box::from_raw(ptr) });
+        }
+        left
     }
 }
-
-type QueueRef = *const Instance<Queue>;
 
 /// Every queue's requests, run by a pool of workers.
 struct Scheduler {
@@ -544,7 +574,9 @@ const STAGING: u64 = 32 << 20;
 struct Lanes {
     lanes: HashMap<u64, Lane>,
     next_id: u64,
-    /// Submission order over all queues.
+    archives: Vec<notify::Archive>,
+    external_waiting: usize,
+    /// Enqueue order over all queues.
     next_seq: u64,
     /// Bytes of staging held by running requests, and the limit.
     staged: u64,
@@ -577,7 +609,14 @@ struct Lane {
     /// Submitted, by sequence number: reads not started, status entries
     /// not written, reads running, and failures not yet reported.
     reads: VecDeque<(u64, Read)>,
-    statuses: VecDeque<(u64, Status)>,
+    statuses: VecDeque<(u64, Command)>,
+    publishing: Option<(u64, usize, u64)>,
+    id: u64,
+    enqueues: u64,
+    submits: u64,
+    markers: [[u64; 3]; 3], // kind x (enqueued, published ok, published failure)
+    queued_seq: VecDeque<u64>,
+    history: Vec<(u64, usize, u64, &'static str)>,
     running: BTreeSet<u64>,
     failures: BTreeMap<u64, HRESULT>,
     closed: bool,
@@ -602,8 +641,8 @@ unsafe impl Send for Job {}
 
 /// The scheduler, with its workers started on first use; `None` if not
 /// even one worker could start.
+static SCHEDULER: OnceLock<Option<Scheduler>> = OnceLock::new();
 fn scheduler() -> Option<&'static Scheduler> {
-    static SCHEDULER: OnceLock<Option<Scheduler>> = OnceLock::new();
     static STARTED: std::sync::Once = std::sync::Once::new();
     let scheduler = SCHEDULER
         .get_or_init(|| {
@@ -612,6 +651,8 @@ fn scheduler() -> Option<&'static Scheduler> {
                     lanes: HashMap::new(),
                     next_id: 0,
                     next_seq: 0,
+                    archives: Vec::new(),
+                    external_waiting: 0,
                     staged: 0,
                     staging: STAGING,
                     starved: false,
@@ -776,6 +817,28 @@ pub(crate) mod stream_log {
 fn work(scheduler: &'static Scheduler) {
     let mut lanes = scheduler.lock();
     loop {
+        if lanes.external_waiting != 0
+            && let Some((id, seq, m)) = lanes
+                .lanes
+                .iter_mut()
+                .find_map(|(&id, l)| l.take_external().map(|(seq, m)| (id, seq, m)))
+        {
+            lanes.external_waiting -= 1;
+            drop(lanes);
+            let k = m.kind();
+            let ok = m.publish();
+            drop(m);
+            lanes = scheduler.lock();
+            let lane = lanes.lanes.get_mut(&id).unwrap();
+            let (_, _, at) = lane.publishing.take().unwrap();
+            if !ok {
+                lane.history.push((seq, k, at, "publish-failed"));
+            }
+            lane.count_marker(k, if ok { 1 } else { 2 }, seq);
+            lane.flush();
+            scheduler.finished.notify_all();
+            continue;
+        }
         let Some(job) = lanes.start() else {
             lanes = scheduler.work.wait(lanes).unwrap_or_else(|e| e.into_inner());
             continue;
@@ -902,16 +965,26 @@ impl Lanes {
         if lane.reads.is_empty() {
             lane.clock = lane.clock.max(self.lane_now[class]);
         }
+        lane.submits += 1;
+        if lane.submits.is_power_of_two() {
+            lane.line(id, "submit");
+        }
         trace_batch(id, &lane.unsubmitted, early);
         for command in std::mem::take(&mut lane.unsubmitted) {
-            let seq = self.next_seq;
-            self.next_seq += 1;
+            let seq = lane.queued_seq.pop_front().unwrap_or_else(|| {
+                let n = self.next_seq;
+                self.next_seq += 1;
+                n
+            });
             match command {
                 Command::Read(mut read) => {
                     read.note.submitted(&read.request, early);
                     lane.reads.push_back((seq, read));
                 }
-                Command::Status(status) => lane.statuses.push_back((seq, status)),
+                marker => {
+                    self.external_waiting += usize::from(matches!(marker, Command::External(_)));
+                    lane.statuses.push_back((seq, marker));
+                }
             }
         }
         lane.flush();
@@ -927,6 +1000,13 @@ impl Lane {
             unsubmitted: Vec::new(),
             reads: VecDeque::new(),
             statuses: VecDeque::new(),
+            publishing: None,
+            id: 0,
+            enqueues: 0,
+            submits: 0,
+            markers: [[0; 3]; 3],
+            queued_seq: VecDeque::new(),
+            history: Vec::new(),
             running: BTreeSet::new(),
             failures: BTreeMap::new(),
             closed: false,
@@ -935,17 +1015,25 @@ impl Lane {
 
     /// Requests and status entries held, submitted or not.
     fn entries(&self) -> usize {
-        self.unsubmitted.len() + self.reads.len() + self.statuses.len() + self.running.len()
+        self.unsubmitted.len()
+            + self.reads.len()
+            + self.statuses.len()
+            + self.running.len()
+            + usize::from(self.publishing.is_some())
     }
 
     /// Writes the status entries whose earlier reads have all finished.
     fn flush(&mut self) {
-        while let Some(&(seq, _)) = self.statuses.front() {
+        while let Some((seq, Command::Status(_))) = self.statuses.front() {
+            if self.publishing.is_some() {
+                return;
+            }
+            let seq = *seq;
             let waiting = self.reads.front().map(|r| r.0);
             if waiting.into_iter().chain(self.running.first().copied()).any(|s| s < seq) {
                 return;
             }
-            let Some((_, status)) = self.statuses.pop_front() else {
+            let Some((_, Command::Status(status))) = self.statuses.pop_front() else {
                 return;
             };
             let later = self.failures.split_off(&seq);
@@ -960,6 +1048,7 @@ impl Lane {
             status
                 .entry()
                 .store(first.unwrap_or(S_OK), Ordering::Release);
+            self.count_marker(0, if first.is_some() { 2 } else { 1 }, seq);
         }
     }
 }
@@ -987,16 +1076,36 @@ fn close_lane(id: u64) {
         return;
     };
     lane.closed = true;
-    lane.unsubmitted.clear();
+    lane.remember_cancelled();
+    let discard = (
+        std::mem::take(&mut lane.unsubmitted),
+        std::mem::take(&mut lane.statuses),
+    );
+    lane.queued_seq.clear();
     lane.reads.clear();
-    lane.statuses.clear(); // releases their arrays
-    while lanes.lanes.get(&id).is_some_and(|l| !l.running.is_empty()) {
+    lanes.external_waiting -= discard
+        .1
+        .iter()
+        .filter(|(_, c)| matches!(c, Command::External(_)))
+        .count();
+    drop(lanes);
+    drop(discard); // external Release must not run under the scheduler lock
+    lanes = scheduler.lock();
+    while lanes
+        .lanes
+        .get(&id)
+        .is_some_and(|l| !l.running.is_empty() || l.publishing.is_some())
+    {
         lanes = scheduler
             .finished
             .wait(lanes)
             .unwrap_or_else(|e| e.into_inner());
     }
-    lanes.lanes.remove(&id);
+    if let Some(lane) = lanes.lanes.remove(&id) {
+        let archived = notify::Archive::from(lane);
+        archived.dump("close");
+        lanes.archives.push(archived);
+    }
     scheduler.finished.notify_all();
 }
 
@@ -1038,6 +1147,7 @@ const PAGE: usize = 64 * 1024;
 enum Command {
     Read(Read),
     Status(Status),
+    External(External),
 }
 
 /// An enqueued request, and what the trace knows of it.
@@ -1121,7 +1231,7 @@ fn trace_batch(queue: u64, commands: &[Command], early: bool) {
     let reads = || {
         commands.iter().filter_map(|c| match c {
             Command::Read(read) => Some(read),
-            Command::Status(_) => None,
+            Command::Status(_) | Command::External(_) => None,
         })
     };
     let (mut to_pages, mut filled, mut empty) = (0, 0, 0);
@@ -1268,6 +1378,7 @@ impl Status {
 extern "system" fn enqueue_request(this: QueueRef, request: *const Request) {
     // SAFETY: the title passes its request (null tolerated).
     let Some(&request) = (unsafe { request.as_ref() }) else {
+        abi::reject(unsafe { &*this }.state.iface, 3);
         return;
     };
     let note = Note::enqueued(&request);
@@ -1277,9 +1388,11 @@ extern "system" fn enqueue_request(this: QueueRef, request: *const Request) {
 extern "system" fn enqueue_status(this: QueueRef, array: Array, index: u32) {
     // SAFETY: the title passes an array we created (null tolerated).
     let Some(entries) = (unsafe { array.as_ref() }).map(|a| &a.state.entries) else {
+        abi::reject(unsafe { &*this }.state.iface, 4);
         return;
     };
     let Some(entry) = entries.get(index as usize) else {
+        abi::reject(unsafe { &*this }.state.iface, 4);
         tracing::warn!(index, "dstorage: status entry out of range");
         return;
     };
@@ -1317,6 +1430,13 @@ fn queue(this: QueueRef, command: Command) {
     let mut lanes = scheduler.lock();
     loop {
         let Some(lane) = lanes.lanes.get(&id).filter(|l| !l.closed) else {
+            let slot = match command.marker() {
+                None => 3,
+                Some((0, _)) => 4,
+                Some((1, _)) => 5,
+                _ => 12,
+            };
+            abi::reject(unsafe { &*this }.state.iface, slot);
             return; // closed: dropped (a status releases its array)
         };
         // One slot stays free, as the console's count of empty slots says.
@@ -1338,10 +1458,18 @@ fn queue(this: QueueRef, command: Command) {
             .wait(lanes)
             .unwrap_or_else(|e| e.into_inner());
     }
-    let Some(lane) = lanes.lanes.get_mut(&id) else {
-        return;
-    };
+    let seq = lanes.next_seq;
+    lanes.next_seq += 1;
+    let lane = lanes.lanes.get_mut(&id).unwrap();
+    lane.queued_seq.push_back(seq);
+    if let Some((k, _)) = command.marker() {
+        lane.count_marker(k, 0, seq);
+    }
     lane.unsubmitted.push(command);
+    lane.enqueues += 1;
+    if lane.enqueues.is_power_of_two() {
+        lane.line(id, "enqueue");
+    }
     if half_submits() && lane.unsubmitted.len() >= (lane.capacity / 2).max(1) {
         lanes.submit(id, true);
         scheduler.work.notify_all();
@@ -1359,7 +1487,11 @@ extern "system" fn submit(this: QueueRef) {
         return;
     };
     let mut lanes = scheduler.lock();
-    let pending = lanes.lanes.get(&id).map_or(0, |l| l.unsubmitted.len());
+    let Some(lane) = lanes.lanes.get(&id).filter(|l| !l.closed) else {
+        abi::reject(unsafe { &*this }.state.iface, 6);
+        return;
+    };
+    let pending = lane.unsubmitted.len();
     tracing::debug!(commands = pending, "dstorage: submit");
     lanes.submit(id, false);
     scheduler.work.notify_all();
@@ -1737,22 +1869,24 @@ fn page_list(list: *const usize, offset: usize, len: usize) -> Vec<usize> {
     pages
 }
 
-/// Slots by the 2020 order, which the argument shapes at
-/// the title's call sites match (0x18, 0x20, 0x30 and 0x40 are called).
-static QUEUE_VTABLE: Methods<12> = Methods([
-    missing::<0> as *const (),
-    add_ref_instance::<Queue> as *const (),
-    release::<Queue> as *const (),
-    enqueue_request as *const (), // 0x18
-    enqueue_status as *const (),  // 0x20
-    missing::<5> as *const (),    // 0x28 (2020: fence signal)
-    submit as *const (),          // 0x30
-    missing::<7> as *const (),    // 0x38 (2020: cancel by tag)
-    close as *const (),           // 0x40
-    missing::<9> as *const (),    // 0x48 (2020: error event)
-    missing::<10> as *const (),   // 0x50 (2020: error record)
-    missing::<11> as *const (),   // 0x58 (2020: queue info)
-]);
+/// Non-blocking snapshot: safe if the assertion interrupted a lane owner.
+pub fn snapshot(reason: &str) {
+    eprintln!("dstorage.snapshot reason={reason} notify={}", notify::enabled());
+    abi::dump();
+    if let Some(Some(s)) = SCHEDULER.get() {
+        match s.lanes.try_lock() {
+            Ok(l) => {
+                for (id, q) in &l.lanes {
+                    q.dump(*id, reason);
+                }
+                for a in &l.archives {
+                    a.dump(reason);
+                }
+            }
+            Err(_) => eprintln!("dstorage.snapshot lanes=busy"),
+        }
+    }
+}
 
 pub(crate) fn module() -> HleModule {
     HleModule {
@@ -1775,6 +1909,10 @@ mod tests {
         method(unsafe { &*object.cast::<Object>() }, slot)
     }
 
+    mod completion {
+        include!("dstorage/completion_tests.rs");
+    }
+
     fn factory() -> *mut c_void {
         let mut factory = std::ptr::null_mut();
         assert_eq!(DStorageGetFactory(&FACTORY, &mut factory), S_OK);
@@ -1786,10 +1924,7 @@ mod tests {
         let open: extern "system" fn(*mut c_void, *const u16, *const Guid, Out) -> HRESULT =
             call(factory(), 0x20);
         let mut file = std::ptr::null_mut();
-        assert_eq!(
-            open(factory(), wide.as_ptr(), std::ptr::null(), &mut file),
-            S_OK
-        );
+        assert_eq!(open(factory(), wide.as_ptr(), &abi::FILE, &mut file), S_OK);
         file
     }
 
@@ -1804,7 +1939,7 @@ mod tests {
         let mut array = std::ptr::null_mut();
         let name = c"test".as_ptr();
         assert_eq!(
-            create(factory(), capacity, name, std::ptr::null(), &mut array),
+            create(factory(), capacity, name, &abi::ARRAY, &mut array),
             S_OK
         );
         array
@@ -1821,7 +1956,7 @@ mod tests {
             unknown: 1,
         };
         let mut queue = std::ptr::null_mut();
-        assert_eq!(create(factory(), &desc, std::ptr::null(), &mut queue), S_OK);
+        assert_eq!(create(factory(), &desc, &abi::QIDS[1], &mut queue), S_OK);
         queue
     }
 
@@ -2045,7 +2180,7 @@ mod tests {
             unknown: 1,
         };
         let mut queue = std::ptr::null_mut();
-        assert_eq!(create(factory(), &desc, std::ptr::null(), &mut queue), S_OK);
+        assert_eq!(create(factory(), &desc, &abi::QIDS[1], &mut queue), S_OK);
         let array = status_array(1);
         let mut outs = [[0u8; 16]; 4];
         for out in &mut outs[..2] {
@@ -2209,6 +2344,8 @@ mod tests {
             lanes: HashMap::new(),
             next_id: 0,
             next_seq: 0,
+            archives: Vec::new(),
+            external_waiting: 0,
             staged: 0,
             staging,
             starved: false,

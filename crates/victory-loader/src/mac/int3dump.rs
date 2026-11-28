@@ -36,6 +36,8 @@
 
 /// The environment variable that turns the dump on.
 pub const ENV: &str = "VICTORY_MAC_INT3_DUMP";
+/// Optional HLE diagnostic registered by the storage factory (no loader -> HLE dependency).
+pub static STORAGE_SNAPSHOT: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
 
 /// The index field of a head or a next entry.
 pub const INDEX_MASK: u32 = 0x1ffff;
@@ -687,6 +689,7 @@ mod hook {
                 return;
             }
             *dumps += 1;
+            if let Some(snapshot) = super::STORAGE_SNAPSHOT.get() { snapshot("L7-int3"); }
             #[cfg(target_arch="x86_64")]
             if trap - base as u64 == 0x5149aec { crate::mac::prestream::summary("5149aec"); } // mac L8
             let regs = Regs {
