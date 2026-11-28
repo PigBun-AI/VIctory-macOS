@@ -7,7 +7,7 @@ MSC 4.0.3, 2026-11-28. Matrix rows: `S-D-002` .. `S-D-015` (docs/metal/translati
 
 Tests: `metal/back/tests/dxop_{alu,wave,tex,pixel,mesh,atomic,atomic64,int64,typed_uav,rov}.rs`, rig `common_dxop/mod.rs`
 (root constants `K`, SRV `I`, UAV `O`; a pixel rig and a mesh rig; every program is checked to declare the dx.op it is meant
-to prove). Without `VICTORY_HELPER_DXC` / `DXC_LIB` they print SKIPPED and pass. 45 tests.
+to prove). Without `VICTORY_HELPER_DXC` / `DXC_LIB` they print SKIPPED and pass. 44 tests.
 
 ## Closed (spec + GPU)
 
@@ -73,7 +73,7 @@ Support, dated 2026-11-28:
   min/max without the original on texture 1D/2D/array/3D, typed buffer, structured buffer, byte-address buffer, bound or heap: accepted;
   and/or/xor/add/exchange and any original-value form: refused `UnsupportedInstruction (dx.op.atomicBinOp.i64)`; compare-exchange:
   converted, then Metal refuses ("unlowered function call to air.atomic_compare_exchange_weak_explicit_texture_2d").
-  (`msc.md` says heap-buffer 64-bit atomics are refused: with the 4.0.3 here a byte-address heap buffer `InterlockedMax64` builds; the earlier probe was a different form with the original returned.)
+  (`msc.md` says heap-buffer 64-bit atomics are refused: with the 4.0.3 here a byte-address heap buffer `InterlockedMax64` builds; the earlier probe `atomic64_heap` used `InterlockedAdd64`, an operation MSC refuses on any resource, so the refusal is about the operation, not the heap.)
 * Of the 679, MSC CLI: 616 stop first on attributeAtVertex (owned by the S1 lane; lowered in docs/metal/attribute-at-vertex.md, after which that doc
   measured exactly 1 program still failing on i64), 62 convert, **1 refused**: `PS_Weather_Particle_Prepass_74a7a22c_Wrapped`
   (shaders.rpf@0xbd6ee06, a single `umax`). Probable cause: the returned original (GLC); not confirmed.
