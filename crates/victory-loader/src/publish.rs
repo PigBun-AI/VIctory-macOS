@@ -27,10 +27,29 @@ pub fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::process::id()
     ));
     std::fs::write(&staging, bytes)?;
-    if let Err(error) = std::fs::rename(&staging, path) {
+    let mut renamed = std::fs::rename(&staging, path);
+    // Replacing a file that another publisher has just replaced, or is reading to see whether it is
+    // there already, can be refused for that moment (access denied, a sharing violation: the old
+    // file is open without the right to be replaced). The publisher whose name stays is not owed an
+    // error: once the file holds these bytes, it is published, whoever did it.
+    for _ in 0..50 {
+        let Err(error) = &renamed else { break };
+        if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+            renamed = Ok(());
+            break;
+        }
+        if !matches!(error.kind(), std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ResourceBusy) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        renamed = std::fs::rename(&staging, path);
+    }
+    if let Err(error) = renamed {
         let _ = std::fs::remove_file(&staging);
         return Err(error);
     }
+    // (If another publisher's file won, ours is still there: gone.)
+    let _ = std::fs::remove_file(&staging);
     Ok(())
 }
 
