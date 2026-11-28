@@ -729,6 +729,14 @@ need none). The text is the first line of `<out>/RUN.txt` and is kept in the gam
 `play.sh`, `drop-ab.sh`, `rt-builder-accept.sh run` pass it on. Tests: `test-run-until.sh` (refusals: none, bad column, no node id, ...),
 `test-run-lock.sh`. A rule of the integration lead, not a technical need: delete it when runs for the picture are allowed again.
 
+### M10 — frame times marked against the load: `tools/mac/frametime-summary.sh`, the end of `run.sh`
+
+Only the end of `run.sh` (the summary) changed. The frames of `frametime.log` that fall into a 10-second stretch of `load.log` with a load
+average above 30 are invalid; `summary.txt` gets the median and p90 of the valid frames, the invalid share, and `数据无效：load 超过 30` as its
+first line when more than 20% are invalid. `frametime-annot.csv` has the marking per frame. `VICTORY_LOAD_LOG_INTERVAL` (test knob, default
+10 s) is the load.log interval. Test: `tools/mac/test-frametime-summary.sh` (made-up logs, and `run.sh` with a fake Wine and a fake `uptime`).
+Pure Mac tooling.
+
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
 *What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is

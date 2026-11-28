@@ -157,6 +157,13 @@ not squeezed.
    touches the game (`victory.exe run --execute`), `wineserver`, `winedevice`, any `run.sh` and what runs below one or below the lock holder,
    never kills, and only continues what it stopped itself. Each action is a line of `<state dir>/guard.log` (time, pid, command, action, load,
    lock). `heavy-guard.sh install|uninstall|status`; install refuses if an agent of that label is already loaded.
+7. **Frame times and load**: `run.sh` already logs the load average every 10 s (`load.log`); at the end it lines the frame times (`frametime.log`,
+   `--frametime-log`) up with it (`tools/mac/frametime-summary.sh`). A frame that falls into a 10-second stretch whose 1-minute load average is
+   above 30 is **invalid** (`frametime-annot.csv`: frame, frame_us, draws, time, load, valid). The median and p90 in `summary.txt` use the valid
+   frames only, together with the share of invalid frames; **when more than 20% are invalid the first line of `summary.txt` is
+   `数据无效：load 超过 30`**. (A frame has no clock time in the log: it is placed by adding the frame times up backwards from the last write
+   of `frametime.log`; a load line covers the 10 s after it. `VICTORY_LOAD_INVALID`, `VICTORY_INVALID_RATIO` change the limits.)
+
 Tests: `tools/mac/test-heavy.sh`, `tools/mac/test-heavy-guard.sh` (temp state directory and fake lock, only their own fake processes).
 
 ## Data directories
@@ -319,7 +326,7 @@ recording), `-present`, not met (exit 6), `--linger`, and that a run without `--
 `RUN.txt` (first line: the `--purpose`), `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
 hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` (the `--print-env` text of this run), `summary.txt`
 (status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, `load.log` (load average every 10 s), and as asked
-`mem.csv`, `frametime.log`, `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
+`mem.csv`, `frametime.log` (with it `frametime-summary.txt` and `frametime-annot.csv`: the valid/invalid marking against `load.log`, see "Heavy tasks" 7), `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
 
 Comparing two setups: `diff <(tools/mac/run.sh --print-env --backend d3dmetal) <(tools/mac/run.sh --print-env)`.
 

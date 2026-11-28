@@ -625,7 +625,7 @@ fi
 (
     while kill -0 $pid 2>/dev/null; do
         echo "$(date +%FT%T) load average: $(uptime | sed 's/.*load averages*: //')" >>"$out/load.log"
-        sleep 10
+        sleep "${VICTORY_LOAD_LOG_INTERVAL:-10}"   # (10 s; the knob is for the tests)
     done
 ) 2>/dev/null &
 ld=$!
@@ -661,7 +661,13 @@ if [ "$until_on" = 1 ]; then
     echo "$until_msg" >>"$out/start.txt"; echo "# $until_msg" >>"$out/run-env.txt"; echo "until: $until_msg" >>"$out/end.txt"
     echo "$until_msg"
 fi
+# frame times against load.log: frames in a stretch with load average > 30 are invalid; the statistics use the valid ones only
+# (tools/mac/frametime-summary.sh; docs/mac/RUN.md). More than 20% invalid: the first line of summary.txt says 数据无效：load 超过 30.
+if [ -s "$out/frametime.log" ]; then
+    bash "$ROOT/tools/mac/frametime-summary.sh" "$out" >"$out/frametime-summary.txt" 2>/dev/null || : >"$out/frametime-summary.txt"
+fi
 {
+    [ ! -s "$out/frametime-summary.txt" ] || grep -m1 '^数据无效' "$out/frametime-summary.txt"
     echo "backend $backend, profile $profile, $((end - start)) s (limit $tmo), exit status $st"
     [ -z "$until_msg" ] || echo "$until_msg (run.sh exit status $final_st)"
     for pat in 'non-fidelity' '^resolution:' 'presenting to a window' 'display mode reported' 'VICTORY_PRESENT_MAX' 'render size:' 'world frame 1'; do
@@ -671,6 +677,7 @@ fi
     grep -a -h 'ms/frame' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | tail -2
     echo "GPU errors (kIOGPU/Hang/SubmissionsIgnored/device removed): $(grep -a -ci 'kIOGPU\|hang\|SubmissionsIgnored\|device removed\|DXGI_ERROR_DEVICE' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
     [ "$backend" != metal ] || echo "victory-metal lines: $(grep -a -c '^victory-metal' "$out/stderr.log")"
+    [ ! -s "$out/frametime-summary.txt" ] || grep -v '^数据无效' "$out/frametime-summary.txt"
 } >"$out/summary.txt"
 cat "$out/summary.txt"
 echo "logs in $out (exit $final_st)"
