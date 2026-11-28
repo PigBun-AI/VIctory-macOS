@@ -116,7 +116,7 @@ fn voxelize(p: [V3; 3], scale: V3) -> (u32, [V3; 3], V3) {
 fn triangle(axis: usize) -> [V3; 3] {
     let flat = [(-0.6, -0.5), (0.7, -0.3), (0.1, 0.65)];
     let depth = |p: f64, q: f64| 0.1 + 0.1 * p - 0.05 * q;
-    let positive = axis % 2 == 0;
+    let positive = axis.is_multiple_of(2);
     let corners: Vec<(f64, f64)> = if positive {
         flat.to_vec()
     } else {
@@ -475,16 +475,16 @@ fn the_voxelisation_stage_puts_each_triangle_on_the_plane_of_its_dominant_axis()
                 "the reference of triangle {axis} is nearly empty"
             );
             for i in 0..(W * H) as usize {
-                if let Some(w) = want[i] {
-                    if !close(got[i], w, 4) {
-                        bad.push(format!(
-                            "{hash}, triangle {axis}: pixel ({},{}) is {:#010x}, wanted {w:#010x}",
-                            i as u32 % W,
-                            i as u32 / W,
-                            got[i]
-                        ));
-                        break;
-                    }
+                if let Some(w) = want[i]
+                    && !close(got[i], w, 4)
+                {
+                    bad.push(format!(
+                        "{hash}, triangle {axis}: pixel ({},{}) is {:#010x}, wanted {w:#010x}",
+                        i as u32 % W,
+                        i as u32 / W,
+                        got[i]
+                    ));
+                    break;
                 }
             }
         }

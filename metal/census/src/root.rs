@@ -148,6 +148,7 @@ mod tests {
             root_srvs: vec![2, SLOT_MEMORY],
             root_uavs: vec![3, SLOT_FAULTS],
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(),
         }
     }
 
