@@ -93,7 +93,15 @@ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, t
                                 println!("{count} of {}, {:.0} s", all.len(), began.elapsed().as_secs_f64());
                             }
                             drop(state);
-                            let _ = writeln!(lock(&done_out), "{fingerprint} {}", keys[n]);
+                            // One with no host pipeline was left out (a
+                            // pipeline the run's switches leave out, such as
+                            // `CS_RaytracingResolve` without the structure
+                            // builder) or refused: not done, so that a warm
+                            // with other switches still makes it.
+                            // `VICTORY_WARM_ONLY_MADE=0`: every one written down, as before.
+                            if there || std::env::var_os("VICTORY_WARM_ONLY_MADE").is_some_and(|v| v == "0") {
+                                let _ = writeln!(lock(&done_out), "{fingerprint} {}", keys[n]);
+                            }
                         });
                         rest = &rest[made.min(rest.len())..];
                         match (ended, rest.split_first()) {
