@@ -280,6 +280,7 @@ mod tests {
                 byte_offset: 32,
                 shift: 5,
             }],
+            vertex_reads: Vec::new(), // mac S1
         }
     }
 
