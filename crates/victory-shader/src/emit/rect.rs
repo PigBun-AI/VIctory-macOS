@@ -791,6 +791,7 @@ mod tests {
                     stride: 32,
                     size: (8, 8),
                     mesh_groups: 0,
+                    scratch: None, // mac S5
                 };
                 host.draw(&root, &pso, &d).unwrap()
             };

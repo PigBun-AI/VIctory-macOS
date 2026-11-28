@@ -168,6 +168,7 @@ fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     })
     .expect("lower");
 
@@ -1906,6 +1907,7 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     })
     .expect("lower");
 
@@ -2236,6 +2238,7 @@ fn build_table_typed_cs(body: &[u32], used: Vec<UsedResource>) -> HostShader {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     })
     .expect("lower");
     let shader = HostShader {
