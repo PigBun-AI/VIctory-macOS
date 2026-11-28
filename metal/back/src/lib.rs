@@ -55,6 +55,7 @@ pub mod m0;
 #[cfg(target_vendor = "apple")]
 pub mod memory;
 pub mod mesh_compute;
+#[cfg(target_vendor = "apple")]
 pub mod mesh_emu;
 #[cfg(target_vendor = "apple")]
 pub mod mesh_fit;
