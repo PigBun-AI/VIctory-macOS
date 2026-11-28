@@ -90,6 +90,9 @@ avx_move:*vmovd_ avx_move:*vmovq_ avx_move:*vmovlp avx_move:*vmovhp avx_move:*vm
 avx_fparith:*vaddp avx_fparith:*vadds avx_fparith:*vsubp avx_fparith:*vsubs avx_fparith:*vmulp avx_fparith:*vmuls avx_fparith:*vdivp avx_fparith:*vdivs avx_fparith:*vmaxp avx_fparith:*vmaxs avx_fparith:*vminp avx_fparith:*vmins avx_fparith:*vsqrtps_xmm avx_fparith:*vsqrtps_ymm avx_fparith:*vsqrtpd avx_fparith:*vsqrts
 x86_int_alu:add_* x86_int_alu:sub_* x86_int_alu:adc_* x86_int_alu:sbb_* x86_int_alu:and_* x86_int_alu:or_* x86_int_alu:xor_* x86_int_alu:cmp_* x86_int_alu:test_* x86_int_alu:inc_* x86_int_alu:dec_* x86_int_alu:neg_* x86_int_alu:not_*
 x86_int_move:mov_* x86_int_move:movabs* x86_int_move:movz* x86_int_move:movs* x86_int_move:xchg_* x86_int_move:cmov* x86_int_move:set* x86_int_move:j* x86_int_move:lea_*
+avx_logic:v*
+avx_int_arith:*
+avx_convert:*
 "
     [ -n "${PROBE_LIST:-}" ] && LIST="$PROBE_LIST"   # e.g. PROBE_LIST="cvt_f2i:*_mem cvt_i2f:*_mem" to rerun a subset
     {
