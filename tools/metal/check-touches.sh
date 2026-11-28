@@ -201,6 +201,8 @@ self_test() {
 }
 
 if [ "${1:-}" = "--self-test" ]; then
+    # the scratch repos have their own base: a BASE_REF of the caller (a branch not yet merged into mac/livetr) is not theirs
+    unset BASE_REF
     self_test
     exit $?
 fi
