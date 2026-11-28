@@ -350,7 +350,7 @@ recording), `-present`, not met (exit 6), `--linger`, and that a run without `--
 After each merged block, one command, no one watching, and the numbers are ready to send:
 
 ```sh
-tools/mac/accept-batch.sh [--exe PATH] [--stage DIR|NAME] [--label TEXT] [--world N] [--timeout SEC]
+tools/mac/accept-batch.sh --purpose "<column>: <node id>,..." [--exe PATH] [--stage DIR|NAME] [--label TEXT] [--world N] [--timeout SEC]
 tools/mac/accept-batch.sh --summarize RUN_DIR --out DIR      # summary of a finished run, no game
 ```
 

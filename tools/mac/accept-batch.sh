@@ -3,7 +3,7 @@
 # through tools/mac/run.sh and write the numbers that go to the lead: did it live, how far did it get, frame times, where the
 # draws went (drop-stats), and the difference to the last acceptance. Docs: docs/mac/RUN.md ("Batch acceptance").
 #
-#   tools/mac/accept-batch.sh [--exe PATH] [--stage DIR|NAME] [--label TEXT] [--world N] [--timeout SEC]
+#   tools/mac/accept-batch.sh --purpose "<column>: <node id>,..." [--exe PATH] [--stage DIR|NAME] [--label TEXT] [--world N] [--timeout SEC]
 #                             [--accept-dir DIR] [--lock-timeout SEC] [--no-compare]
 #   tools/mac/accept-batch.sh --summarize RUN_DIR --out DIR [--label TEXT] [--world N]   (no game: summarise a finished run)
 #
@@ -38,7 +38,8 @@ die() { echo "tools/mac/accept-batch.sh: $*" >&2; exit 2; }
 usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 exe=""; stage="current"; label=""; world=300; tmo=720; accept="${VICTORY_ACCEPT_DIR:-$G/research/accept}"; lock_tmo=0
-compare=1; summarize=""; out=""
+source "$ROOT/tools/mac/purpose.sh"
+compare=1; summarize=""; out=""; purpose=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --exe) exe=${2:?--exe PATH}; shift ;; --stage) stage=${2:?--stage DIR|NAME}; shift ;;
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
         --timeout) tmo=${2:?--timeout SEC}; shift ;; --accept-dir) accept=${2:?--accept-dir DIR}; shift ;;
         --lock-timeout) lock_tmo=${2:?--lock-timeout SEC}; shift ;; --no-compare) compare=0 ;;
         --summarize) summarize=${2:?--summarize RUN_DIR}; shift ;; --out) out=${2:?--out DIR}; shift ;;
+        --purpose) [ $# -gt 1 ] || { purpose_check ''; exit "$PURPOSE_EXIT"; }; purpose=$2; shift ;;
         -h|--help) usage ;;
         *) echo "unknown option $1" >&2; usage ;;
     esac
@@ -65,6 +67,7 @@ if [ -n "$summarize" ]; then
     exe_used=""; stage_real=""
 else
     [ -z "$out" ] || die "--out is for --summarize (the result folder is made under --accept-dir)"
+    purpose_check "$purpose" || exit "$PURPOSE_EXIT"
     # the exe: given, or the latest release build of the integration worktree
     [ -n "$exe" ] || exe="$G/worktrees/mac/int/target/x86_64-pc-windows-gnullvm/release/victory.exe"
     [ -f "$exe" ] || die "no exe $exe (--exe PATH; the default is the release build of worktrees/mac/int, tools/mac/check.sh builds it)"
@@ -85,7 +88,7 @@ else
     export VICTORY_MAC_DROP_STATS="${VICTORY_MAC_DROP_STATS:-2}"
     export VICTORY_METAL_DROPSTATS="$RUN/dropstats"
     export VICTORY_METAL_OUT="$stage_real"
-    "$ROOT/tools/mac/run.sh" --backend metal --perf --new-game --no-watchdog --frametime-log \
+    "$ROOT/tools/mac/run.sh" --purpose "$purpose" --backend metal --perf --new-game --no-watchdog --frametime-log \
         --exe "$exe" --out "$RUN" --until-world "$world" --timeout "$tmo" --lock-timeout "$lock_tmo" \
         >"$out/run.sh.out" 2>&1
     rc=$?

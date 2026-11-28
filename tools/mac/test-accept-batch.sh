@@ -53,10 +53,12 @@ ok() { n=$((n + 1)); echo "ok $n - $1"; }
 bad() { n=$((n + 1)); fails=$((fails + 1)); echo "NOT OK $n - $1"; }
 expect() { if eval "$2"; then ok "$1"; else bad "$1   [$2]"; fi; }
 AB="$ROOT/tools/mac/accept-batch.sh"
+purpose='perf-hotspot: mac.fault.tracking_decision'
+batch() { bash "$AB" --purpose "$purpose" "$@"; }
 last_out() { ls -1d "$T"/accept/*/ | sed 's:/$::' | LC_ALL=C sort | tail -n 1; }
 
 echo "== a round that reaches the target"
-FAKE_MODE=ok bash "$AB" --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 --label "first" >"$T/r1.out" 2>&1; rc=$?
+FAKE_MODE=ok batch --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 --label "first" >"$T/r1.out" 2>&1; rc=$?
 d1="$(last_out)"
 expect "exit 0" '[ $rc = 0 ]'
 expect "folder named <time>-<short commit>" "basename $d1 | grep -Eq '^[0-9]{8}-[0-9]{6}-[0-9a-f]{7,}$'"
@@ -78,7 +80,7 @@ expect "perf profile, metal backend" "grep -q 'backend metal  profile perf' $d1/
 sleep 1
 
 echo "== a second round: compared with the first"
-FAKE_MODE=ok FAKE_BASE_US=20000 FAKE_DROP=40 FAKE_RAN=60 WAVE=1 VICTORY_WAVE_WIDE=1 bash "$AB" --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 >"$T/r2.out" 2>&1; rc=$?
+FAKE_MODE=ok FAKE_BASE_US=20000 FAKE_DROP=40 FAKE_RAN=60 WAVE=1 VICTORY_WAVE_WIDE=1 batch --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 >"$T/r2.out" 2>&1; rc=$?
 d2="$(last_out)"
 expect "second: exit 0, a new folder" '[ $rc = 0 ] && [ "$d2" != "$d1" ]'
 expect "second: compares with the first folder" "grep -q 'Last: \`$(basename $d1)\`' $d2/summary.md"
@@ -88,7 +90,7 @@ expect "second: WAVE_WIDE=1 shown" "grep -q 'VICTORY_WAVE_WIDE.=1' $d2/summary.m
 sleep 1
 
 echo "== a round where the title dies"
-FAKE_MODE=die bash "$AB" --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 >"$T/r3.out" 2>&1; rc=$?
+FAKE_MODE=die batch --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 60 >"$T/r3.out" 2>&1; rc=$?
 d3="$(last_out)"
 expect "died: exit 1" '[ $rc = 1 ]'
 expect "died: said so, with the status" "grep -q 'DIED before the world' $d3/summary.md"
@@ -96,7 +98,7 @@ expect "died: crash line shown" "grep -q 'Unhandled exception' $d3/summary.md"
 sleep 1
 
 echo "== a round that is alive but too slow for the cap"
-FAKE_MODE=slow bash "$AB" --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 5 --no-compare >"$T/r4.out" 2>&1; rc=$?
+FAKE_MODE=slow batch --exe "$T/victory-fake-accept-test.exe" --stage "$T/stage" --world 12 --timeout 5 --no-compare >"$T/r4.out" 2>&1; rc=$?
 d4="$(last_out)"
 expect "slow: exit 1" '[ $rc = 1 ]'
 expect "slow: alive at the cap, world frame 4 reached" "grep -q 'alive at the cap, reached world frame 4 of 12' $d4/summary.md"
@@ -104,10 +106,13 @@ expect "slow: no comparison with --no-compare" "grep -q 'first (baseline)' $d4/s
 expect "slow: the cap stopped it in about 5 s, lock free" "! pgrep -f 'victory-fake-accept-test\.exe' >/dev/null && ! [ -d $T/game.lock ]"
 
 echo "== guards"
-expect "no exe: exit 2" "bash $AB --exe $T/nonexistent.exe --stage $T/stage >/dev/null 2>&1; [ \$? = 2 ]"
-expect "no stage: exit 2" "bash $AB --exe $T/victory-fake-accept-test.exe --stage $T/nostage >/dev/null 2>&1; [ \$? = 2 ]"
+expect "purpose recorded verbatim" 'grep -Fq -- "$purpose" "$d1/run/RUN.txt"'
+expect "missing purpose: exit 7" 'bash "$AB" >/dev/null 2>&1; [ $? = 7 ]'
+expect "malformed purpose: exit 7" 'bash "$AB" --purpose nope >/dev/null 2>&1; [ $? = 7 ]'
+expect "no exe: exit 2" "batch --exe $T/nonexistent.exe --stage $T/stage >/dev/null 2>&1; [ \$? = 2 ]"
+expect "no stage: exit 2" "batch --exe $T/victory-fake-accept-test.exe --stage $T/nostage >/dev/null 2>&1; [ \$? = 2 ]"
 expect "bad --world: exit 2" "bash $AB --world x >/dev/null 2>&1; [ \$? = 2 ]"
-expect "default exe missing: exit 2 with the path named" "bash $AB 2>&1 | grep -q 'worktrees/mac/int/target'"
+expect "default exe missing: exit 2 with the path named" "batch 2>&1 | grep -q 'worktrees/mac/int/target'"
 expect "--summarize of an earlier run makes a summary" "bash $AB --summarize $d1/run --out $T/again --world 12 --no-compare >/dev/null 2>&1; grep -q 'Result: OK' $T/again/summary.md"
 expect "five folders in the acceptance folder? no: four rounds" "[ \$(ls -1d $T/accept/*/ | wc -l) = 4 ]"
 echo
