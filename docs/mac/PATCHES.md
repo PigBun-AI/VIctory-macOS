@@ -1112,6 +1112,17 @@ Data `research/census-widefix-20261128/{fix1,fix-off}`. Prologue with `VICTORY_W
 (`research/widefix-20261128/run-w300-fixed2`): world frame 300 at 172 s, no frame over 5 s (the longest, 4.4 s, is the world-frame-1 load),
 no `a scope took`, `2561af9577c47289` bound at present 1220. Before: 4 of 4 runs with ~100 s frames from w54-70 on. The default stays OFF
 (the owner decides when it comes back).
+Semantics of the 36 changed containers (local branch `mac/widefix-equiv`, not for push: `equiv_tests.rs` + `tools/mac/equiv-plan.py`, on the Mac GPU,
+40 fixed-seed input sets each, wide form against the form the translator picks without it): 15 of the 36 have a plan the harness can bind
+(the others index views from memory, or use 1D/3D/array textures the executor cannot bind). Of the 56 containers (36 changed + 20 newly translated), 36
+have a form without wide and 20 have none; 51 of the 56 wide forms pass Metal Shader Converter and Metal on the executor (`equiv_compile`), and 5 of the 20 new ones
+are refused for double precision (MSC 4.0.3 cannot convert it: the back must keep stopping them before MSC).
+Of the 15: 6 identical in every run (2 of them never store: no coverage), 4 identical except 1 ulp in a denormal (8 dwords, `0x8f7` vs `0x8f6`),
+2 not run (no store happens), 3 differ (`CS_ClusterLights`-class `55d2bce91ec9abcc` and its twin `d3e5b737ea7cc150`: wide has every bit the other has plus the other
+half-wave's; `8dd8d739047fe557`: a whole-wave prefix sum + atomic allocation, the other form's two halves each scan alone and
+overlap, 16 342-16 406 non-zero dwords against 16 374-16 438). Those three are programs for which the other form is the "APPROXIMATE, any mask" local-waves
+form, so the difference is the other form's error, not the wide form's; there is no exact reference form for them (that is why the wide form exists).
+Not proven: no GFX10 interpreter exists here to give the console's own result. Results: `research/widefix-20261128/equiv/containers/*.result`.
 
 *Remove when* the Windows line takes `VICTORY_WAVE_WIDE` on by itself and the address table is default there (then the two defaults
 are upstream's).
