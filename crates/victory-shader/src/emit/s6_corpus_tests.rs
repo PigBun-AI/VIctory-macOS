@@ -120,3 +120,51 @@ fn one_dword_scalar_loads_keep_their_bounds() {
     assert!(bad.is_empty());
     assert!(differ > 0);
 }
+
+/// mac census check for `VICTORY_DIV_FIXUP` (07f56f5a): over the corpus programs (the first
+/// `VICTORY_CORPUS_LIMIT`, default 300; every `.cdxil`, all stages) the number that translate is the
+/// same with the switch on and off (the fix only reorders a select); how many translations change is
+/// printed (the effect itself is proven by the oracle row `v_div_fixup_f32`). Skips (printing "skipped: corpus not found") without `VICTORY_LIVE_CORPUS`.
+#[test]
+fn div_fixup_keeps_the_translation_pass_count() {
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(dir) = std::env::var_os("VICTORY_LIVE_CORPUS").map(std::path::PathBuf::from) else {
+        eprintln!("skipped: corpus not found (VICTORY_LIVE_CORPUS not set)");
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        eprintln!("skipped: corpus not found ({} unreadable)", dir.display());
+        return;
+    };
+    let limit: usize = std::env::var("VICTORY_CORPUS_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let mut files: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with(".cdxil")).collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("skipped: corpus not found ({} has no .cdxil)", dir.display());
+        return;
+    }
+    let (mut n, mut ok_on, mut ok_off, mut differ, mut only_one) = (0, 0, 0, 0, Vec::new());
+    for f in files.iter().take(limit) {
+        let bytes = std::fs::read(f).unwrap();
+        n += 1;
+        match (translate32(&bytes, &[("VICTORY_DIV_FIXUP", "1")]), translate32(&bytes, &[("VICTORY_DIV_FIXUP", "0")])) {
+            (Ok(a), Ok(b)) => {
+                ok_on += 1;
+                ok_off += 1;
+                differ += usize::from(a.dxil != b.dxil);
+            }
+            (Ok(_), Err(_)) => {
+                ok_on += 1;
+                only_one.push(f.display().to_string());
+            }
+            (Err(_), Ok(_)) => {
+                ok_off += 1;
+                only_one.push(f.display().to_string());
+            }
+            (Err(_), Err(_)) => {}
+        }
+    }
+    eprintln!("div_fixup census of {n} programs: translate ok on {ok_on} / off {ok_off}; {differ} translations change; passing on one side only: {only_one:?}");
+    assert_eq!(ok_on, ok_off);
+    assert!(only_one.is_empty());
+}
