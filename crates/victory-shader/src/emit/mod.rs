@@ -113,6 +113,12 @@ mod mesh_cs_tests; // mac S5
 mod own_bits;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod oracle_tests; // mac S6: the per-mnemonic opcode oracle (docs/mac/opcode-oracle.md)
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: the opcode oracle, batch B: memory
+mod oracle_mem_tests;
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: the opcode oracle, batch B: LDS and buffer atomics
+mod oracle_ds_tests;
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: the opcode oracle, batch B: images
+mod oracle_img_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod permlane_tests;
 mod rect;

@@ -778,7 +778,7 @@ const KNOWN: &[(&str, &str)] = &[
     ),
 ];
 
-enum Outcome {
+pub(super) enum Outcome {
     Passed(usize),
     Mismatch { cases: usize, bad: usize, examples: Vec<String> },
     /// The translator refused the program or panicked.
@@ -787,7 +787,7 @@ enum Outcome {
     Refused(String),
 }
 
-fn panic_text(e: Box<dyn std::any::Any + Send>) -> String {
+pub(super) fn panic_text(e: Box<dyn std::any::Any + Send>) -> String {
     e.downcast_ref::<String>()
         .cloned()
         .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_owned()))
@@ -887,6 +887,49 @@ fn run_list_inner(family: &str, rows: Vec<Item>) {
         }
     }
     assert!(failed.is_empty(), "{family}: {} rows differ from the reference:\n{}", failed.len(), failed.join("\n"));
+}
+
+/// Prints and records the rows of a family computed elsewhere and fails when a row is a mismatch
+/// or untranslated without an entry in [`KNOWN`] (the memory and image families of
+/// `oracle_mem_tests`, `oracle_ds_tests`, `oracle_img_tests` and `oracle_flat_tests` report
+/// through here). Those tests translate on our own Metal chain like [`run_list`]: they hold a
+/// [`MetalChain`] guard while they build their rows.
+pub(super) fn report_family(family: &str, results: Vec<(String, Outcome)>) {
+    let mut failed = Vec::new();
+    for (name, outcome) in results {
+        let (outcome, cases, detail) = match outcome {
+            Outcome::Passed(n) => ("pass", n, String::new()),
+            Outcome::Mismatch { cases, bad, examples } => ("MISMATCH", cases, format!("{bad} of {cases}; {}", examples.join(" / "))),
+            Outcome::Untranslated(t) => ("UNTRANSLATED", 0, t),
+            Outcome::Refused(t) => ("refused", 0, t),
+        };
+        let known = KNOWN.iter().find(|(n, _)| *n == name);
+        eprintln!("oracle {family:18} {name:24} {outcome}{} {cases} {detail}", if known.is_some() { " (known)" } else { "" });
+        if let Some(path) = std::env::var_os("VICTORY_ORACLE_OUT") {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(file, "{family}\t{name}\t{outcome}{}\t{cases}\t{detail}", if known.is_some() { " (known)" } else { "" });
+            }
+        }
+        if (outcome == "MISMATCH" || outcome == "UNTRANSLATED") && known.is_none() {
+            failed.push(format!("{name}: {detail}"));
+        }
+    }
+    assert!(failed.is_empty(), "{family}: {} rows differ from the reference:\n{}", failed.len(), failed.join("\n"));
+}
+
+/// While alive, this thread's translations are the ones our own Metal chain asks for
+/// (`VICTORY_METAL_OUT`), as in [`run_list`].
+pub(super) struct MetalChain(Option<bool>);
+
+pub(super) fn metal_chain() -> MetalChain {
+    MetalChain(super::lower::TEST_METAL_CHAIN.replace(Some(true)))
+}
+
+impl Drop for MetalChain {
+    fn drop(&mut self) {
+        super::lower::TEST_METAL_CHAIN.set(self.0);
+    }
 }
 
 macro_rules! family_test {

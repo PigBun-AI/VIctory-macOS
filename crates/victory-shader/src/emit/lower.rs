@@ -6912,6 +6912,36 @@ impl<'a> Lower<'a> {
         })
     }
 
+    /// mac S7: the dwords of a vector load of the raw view `h` from byte `byte` on, with those
+    /// the view does not reach read as 0. D3D12 returns 0 for each 32-bit component that is out of
+    /// bounds; the Metal Shader Converter's `BOUNDS_CHECK` tests the first only (a load that
+    /// starts inside the view and ends past it returns the memory behind it). `xs[0]` is as read;
+    /// the others are selected on `byte + 4 * k + 4 <= size` (and no wrap of the address).
+    fn zero_past_end(&mut self, h: V, byte: V, xs: Vec<V>) -> Vec<V> {
+        if xs.len() < 2 {
+            return xs;
+        }
+        let c = self.cur;
+        let i32t = self.s.t.i32;
+        let dims = self.s.m.named_struct("dx.types.Dimensions", vec![i32t; 4]);
+        let undef = self.s.m.undef(i32t);
+        let d = self
+            .s
+            .op(c, "getDimensions", Attr::ReadOnly, dims, 72, &[h, undef]);
+        let size = self.s.m.extract(c, d, 0);
+        let zero = self.s.m.i32(0);
+        let mut out = vec![xs[0]];
+        for (k, &x) in xs.iter().enumerate().skip(1) {
+            let step = self.s.m.i32(4 * k as u32 + 4);
+            let end = self.s.m.bin(c, Bin::Add, byte, step);
+            let fits = self.s.m.cmp(c, pred::IULE, end, size);
+            let no_wrap = self.s.m.cmp(c, pred::IULT, byte, end);
+            let ok = self.s.m.bin(c, Bin::And, fits, no_wrap);
+            out.push(self.s.m.select(c, ok, x, zero));
+        }
+        out
+    }
+
     /// Whether the dwords of one console load are read by one call for up
     /// to four of them (`bitcode::opt::WIDE` of `VICTORY_SHADER_OPT`), not
     /// by a call each.
@@ -6945,10 +6975,13 @@ impl<'a> Lower<'a> {
                 139,
                 &[h, a, u, mask, al],
             );
-            for k in 0..n {
-                let x = self.s.m.extract(c, r, k);
-                out.push(self.as_int(x));
-            }
+            let chunk: Vec<V> = (0..n)
+                .map(|k| {
+                    let x = self.s.m.extract(c, r, k);
+                    self.as_int(x)
+                })
+                .collect();
+            out.extend(self.zero_past_end(h, a, chunk));
         }
         out
     }
@@ -7648,12 +7681,14 @@ impl<'a> Lower<'a> {
                 139,
                 &[h, at, u, mask, align],
             );
-            (0..n)
+            let xs: Vec<V> = (0..n)
                 .map(|k| {
                     let x = l.s.m.extract(c, r, k);
                     l.as_int(x)
                 })
-                .collect()
+                .collect();
+            // mac S7: the dwords past the view's end read 0
+            l.zero_past_end(h, at, xs)
         };
         let words = if total < 32 {
             // A byte or half inside the dword that holds it.
@@ -11840,6 +11875,9 @@ impl<'a> Lower<'a> {
                     67,
                     &args,
                 );
+                // mac S7: Metal does not order one thread's texture write against its later
+                // texture atomics on the texel; the fence makes the store land first.
+                self.memory_fence();
                 self.end_guarded(at, &[]);
                 return Ok(());
             }
@@ -12891,6 +12929,8 @@ impl<'a> Lower<'a> {
             }
             return Ok(());
         }
+        // The raw view and byte address of a plain vector load (mac S7).
+        let mut span: Option<(V, V)> = None;
         let r = if typed {
             if *offen || matches!(off, V::Inst(_)) || *offset != 0 {
                 return Err("a typed buffer load at an offset");
@@ -12916,6 +12956,7 @@ impl<'a> Lower<'a> {
                 Some(index) if used.is_some_and(|u| u.stride == 1) => {
                     let byte = self.s.m.bin(c, Bin::Add, index, off);
                     let h = self.handle(site, src, false, (11 | u, 0))?;
+                    span = Some((h, byte));
                     self.s.op(
                         c,
                         "rawBufferLoad.f32",
@@ -12942,6 +12983,7 @@ impl<'a> Lower<'a> {
                 }
                 None => {
                     let h = self.handle(site, src, false, (11 | u, 0))?;
+                    span = Some((h, off));
                     self.s.op(
                         c,
                         "rawBufferLoad.f32",
@@ -12987,9 +13029,16 @@ impl<'a> Lower<'a> {
             }
             return Ok(());
         }
+        let mut xs = Vec::new();
         for k in 0..count {
             let x = self.s.m.extract(c, r, k);
-            let x = self.as_int(x);
+            xs.push(self.as_int(x));
+        }
+        // mac S7: the dwords of a vector load past the view's end read 0
+        if let Some((h, byte)) = span {
+            xs = self.zero_past_end(h, byte, xs);
+        }
+        for (k, x) in xs.into_iter().enumerate() {
             self.write(inst, Reg::V(reg + k as u8), x, guard);
         }
         Ok(())

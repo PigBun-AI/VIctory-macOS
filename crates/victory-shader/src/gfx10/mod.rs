@@ -343,7 +343,7 @@ fn name(encoding: Encoding, opcode: u16) -> Option<&'static str> {
 #[cfg(test)]
 pub(crate) fn opcode_of(mnemonic: &str) -> Option<(Encoding, u16)> {
     use opcodes as t;
-    let tables: [(Encoding, &[(u16, &str)]); 9] = [
+    let tables: [(Encoding, &[(u16, &str)]); 16] = [
         (Encoding::Sop2, t::SOP2),
         (Encoding::Sopk, t::SOPK),
         (Encoding::Sop1, t::SOP1),
@@ -353,6 +353,13 @@ pub(crate) fn opcode_of(mnemonic: &str) -> Option<(Encoding, u16)> {
         (Encoding::Vopc, t::VOPC),
         (Encoding::Vop3, t::VOP3),
         (Encoding::Vop3p, t::VOP3P),
+        (Encoding::Smem, t::SMEM),
+        (Encoding::Ds, t::DS),
+        (Encoding::Mubuf, t::MUBUF),
+        (Encoding::Mtbuf, t::MTBUF),
+        (Encoding::Mimg, t::MIMG),
+        (Encoding::Flat, t::FLAT),
+        (Encoding::Global, t::GLOBAL),
     ];
     tables.iter().find_map(|&(enc, table)| {
         table
