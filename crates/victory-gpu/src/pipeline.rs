@@ -977,7 +977,7 @@ pub(crate) struct StreamDesc {
 /// A subobject type's size (type included), and the stage it is if it is a
 /// shader. The console numbers amplification and mesh shaders 23 and 24
 /// (PC: 24 and 25); its own types from 25 on are not sized yet.
-fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
+pub(crate) fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
     let stage = |name| Some((24, Some(name)));
     match kind {
         1 => stage("vertex"),
@@ -1002,6 +1002,22 @@ fn subobject(kind: u32) -> Option<(usize, Option<&'static str>)> {
     }
 }
 
+/// Walks a stream's subobjects (mac G12: was inline in `create_stream`, taken out so a test can drive it): `each` gets
+/// the subobject's type, where it starts and the stage if it is a shader; stops at a type of unknown size.
+pub(crate) fn walk_stream(size: usize, stream: *const u8, mut each: impl FnMut(u32, *const u8, Option<&'static str>)) {
+    let mut at = 0;
+    while at + 8 <= size {
+        // SAFETY: inside the stream the title passes.
+        let kind = unsafe { stream.add(at).cast::<u32>().read_unaligned() };
+        let Some((len, stage)) = subobject(kind) else {
+            tracing::warn!(kind, at, "pipeline subobject of unknown size; the rest is ignored");
+            break;
+        };
+        each(kind, unsafe { stream.add(at) }, stage);
+        at += len;
+    }
+}
+
 /// Device method: a pipeline from a stream; the shaders are kept, and the
 /// graphics state for the host pipeline.
 pub(crate) extern "system" fn create_stream(
@@ -1021,30 +1037,20 @@ pub(crate) extern "system" fn create_stream(
     let mut shaders = Vec::new();
     #[cfg(windows)]
     let mut graphics = host::GraphicsState::default();
-    let mut at = 0;
-    while at + 8 <= desc.size {
-        // SAFETY: inside the stream the title passes.
-        let kind = unsafe { desc.stream.add(at).cast::<u32>().read_unaligned() };
-        let Some((size, stage)) = subobject(kind) else {
-            tracing::warn!(
-                kind,
-                at,
-                "pipeline subobject of unknown size; the rest is ignored"
-            );
-            break;
-        };
+    walk_stream(desc.size, desc.stream, |kind, whole, stage| {
         if let Some(stage) = stage {
             // SAFETY: a shader subobject has its bytecode at +8.
-            let code = unsafe { &*desc.stream.add(at + 8).cast::<Bytecode>() };
+            let code = unsafe { &*whole.add(8).cast::<Bytecode>() };
             shaders.extend(copy(stage, code));
         }
         #[cfg(windows)]
-        // SAFETY: a whole subobject of this kind lies at `at`.
+        // SAFETY: a whole subobject of this kind lies at `whole`.
         unsafe {
-            graphics.read(kind, desc.stream.add(at))
+            graphics.read(kind, whole)
         };
-        at += size;
-    }
+        #[cfg(not(windows))]
+        let _ = kind;
+    });
     hand_out(
         shaders,
         #[cfg(windows)]
@@ -1132,6 +1138,10 @@ pub(crate) fn test_pipeline() -> This {
 pub(crate) fn test_host_address(this: This) -> usize {
     Arc::as_ptr(pipeline(this).host_now()) as usize
 }
+
+#[cfg(all(test, windows))]
+#[path = "mac/prove/pipeline_stream.rs"]
+mod prove_stream; // mac G12
 
 #[cfg(test)]
 mod tests {
