@@ -82,15 +82,22 @@ fn fptrunc_to_half_is_nearest_even_for_a_wide_input_set() {
            half h = (half)f;\n\
            O.Store(t.x*4, (uint)asuint16(h)); }\n",
     ) else {
-        eprintln!("SKIPPED fptrunc: set VICTORY_HELPER_DXC16 (a DXC helper with -enable-16bit-types) and DXC_LIB");
+        eprintln!(
+            "SKIPPED fptrunc: set VICTORY_HELPER_DXC16 (a DXC helper with -enable-16bit-types) and DXC_LIB"
+        );
         return;
     };
     let ops = declared_dxops(&dxil);
-    assert!(!ops.contains("dx.op.legacyF32ToF16"), "the cast went through the legacy op: {ops:?}");
+    assert!(
+        !ops.contains("dx.op.legacyF32ToF16"),
+        "the cast went through the legacy op: {ops:?}"
+    );
     let p = rig.prog_from(&dxil);
     // every 4096th f32 pattern (a sweep of the 2^32 space), the neighbours of every half
     // rounding boundary of its exponent, and edge values
-    let mut input: Vec<u32> = (0..(1u32 << 20)).map(|i| i << 12 | (i.wrapping_mul(2654435761) & 0xfff)).collect();
+    let mut input: Vec<u32> = (0..(1u32 << 20))
+        .map(|i| i << 12 | (i.wrapping_mul(2654435761) & 0xfff))
+        .collect();
     for h in 0..=0xffffu32 {
         // the exact midpoint between half h and h+1 (a tie), and one f32 step each side
         let lo = (h & 0x7fff) as u16;
@@ -100,14 +107,29 @@ fn fptrunc_to_half_is_nearest_even_for_a_wide_input_set() {
         let wide = |hh: u32| {
             let m = (hh & 0x3ff) as f64;
             let e = ((hh >> 10) & 31) as i32;
-            let v = if e == 0 { m * 2f64.powi(-24) } else { (1.0 + m / 1024.0) * 2f64.powi(e - 15) };
+            let v = if e == 0 {
+                m * 2f64.powi(-24)
+            } else {
+                (1.0 + m / 1024.0) * 2f64.powi(e - 15)
+            };
             if hh >> 15 == 1 { -v } else { v }
         };
         let mid = ((wide(h) + wide(h + 1)) / 2.0) as f32;
         let b = mid.to_bits();
         input.extend_from_slice(&[b.wrapping_sub(1), b, b.wrapping_add(1)]);
     }
-    input.extend_from_slice(&[0x477f_f000, 0x477f_efff, 0x7f7f_ffff, 0x7f80_0000, 0xff80_0000, 0x8000_0000, 0, 0x3300_0000, 0x3380_0000, 0x33c0_0000]);
+    input.extend_from_slice(&[
+        0x477f_f000,
+        0x477f_efff,
+        0x7f7f_ffff,
+        0x7f80_0000,
+        0xff80_0000,
+        0x8000_0000,
+        0,
+        0x3300_0000,
+        0x3380_0000,
+        0x33c0_0000,
+    ]);
     while !input.len().is_multiple_of(64) {
         input.push(0);
     }
@@ -116,11 +138,26 @@ fn fptrunc_to_half_is_nearest_even_for_a_wide_input_set() {
     let mut bad = Vec::new();
     for (i, (&x, &g)) in input.iter().zip(&got).enumerate() {
         let f = f32::from_bits(x);
-        let ok = if f.is_nan() { (g as u16 & 0x7fff) > 0x7c00 } else if x & 0x7f80_0000 == 0 { g as u16 & 0x7fff == 0 } else { g == u32::from(rne(x)) };
+        let ok = if f.is_nan() {
+            (g as u16 & 0x7fff) > 0x7c00
+        } else if x & 0x7f80_0000 == 0 {
+            g as u16 & 0x7fff == 0
+        } else {
+            g == u32::from(rne(x))
+        };
         if !ok {
             bad.push((i, x, g));
         }
     }
-    eprintln!("fptrunc: {n} inputs, {} differ from nearest-even; first {:x?}", bad.len(), &bad[..bad.len().min(6)]);
-    assert!(bad.is_empty(), "{} differ: {:x?}", bad.len(), &bad[..bad.len().min(6)]);
+    eprintln!(
+        "fptrunc: {n} inputs, {} differ from nearest-even; first {:x?}",
+        bad.len(),
+        &bad[..bad.len().min(6)]
+    );
+    assert!(
+        bad.is_empty(),
+        "{} differ: {:x?}",
+        bad.len(),
+        &bad[..bad.len().min(6)]
+    );
 }
