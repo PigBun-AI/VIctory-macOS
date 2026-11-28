@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+# generates tools/mac/rosetta-probe/isa-sse.h : legacy (non-VEX) SSE integer/logic/shuffle forms checked against the VEX models
+import sys
+E={1:'EK_I8',2:'EK_I16',4:'EK_I32',8:'EK_I64'}
+ents=[]   # dict(name,model,p,form,es,ek,extra)
+def A(name,model,p,form,ek,**kw): ents.append(dict(name=name,model=model,p=p,form=form,ek=ek,**kw))
+def ia(kind,es,opt=0,es2=0): return f'(II_{kind}|({es}<<8)|({opt}<<16)|({es2}<<24))'
+# binary integer
+for n,k,es in [('paddb','ADD',1),('paddw','ADD',2),('paddd','ADD',4),('paddq','ADD',8),('psubb','SUB',1),('psubw','SUB',2),('psubd','SUB',4),('psubq','SUB',8),
+ ('paddsb','ADDS',1),('paddsw','ADDS',2),('paddusb','ADDUS',1),('paddusw','ADDUS',2),('psubsb','SUBS',1),('psubsw','SUBS',2),('psubusb','SUBUS',1),('psubusw','SUBUS',2),
+ ('pminsb','MINS',1),('pminsw','MINS',2),('pminsd','MINS',4),('pminub','MINU',1),('pminuw','MINU',2),('pminud','MINU',4),
+ ('pmaxsb','MAXS',1),('pmaxsw','MAXS',2),('pmaxsd','MAXS',4),('pmaxub','MAXU',1),('pmaxuw','MAXU',2),('pmaxud','MAXU',4),
+ ('pavgb','AVG',1),('pavgw','AVG',2),('pcmpeqb','CMPEQ',1),('pcmpeqw','CMPEQ',2),('pcmpeqd','CMPEQ',4),('pcmpeqq','CMPEQ',8),
+ ('pcmpgtb','CMPGT',1),('pcmpgtw','CMPGT',2),('pcmpgtd','CMPGT',4),('pcmpgtq','CMPGT',8),
+ ('pmullw','MULLO',2),('pmulld','MULLO',4),('pmulhw','MULHS',2),('pmulhuw','MULHU',2),('pmulhrsw','MULHRSW',2),('pmuldq','MULDQ',8),('pmuludq','MULUDQ',8),
+ ('pmaddwd','MADDWD',4),('pmaddubsw','MADDUBSW',2),('psadbw','SADBW',8),('psignb','SIGN',1),('psignw','SIGN',2),('psignd','SIGN',4)]:
+    A(n,'m_ia',ia(k,es),'rr',E[es] if k not in('MULDQ','MULUDQ','MADDWD','SADBW') else 'EK_I8')
+for n,k,es in [('pabsb','ABS',1),('pabsw','ABS',2),('pabsd','ABS',4)]: A(n,'m_ia',ia(k,es),'un',E[es])
+# shifts by imm (operand is the destination) and by xmm count
+for n,es,d in [('psllw',2,'SH_L'),('pslld',4,'SH_L'),('psllq',8,'SH_L'),('psrlw',2,'SH_R'),('psrld',4,'SH_R'),('psrlq',8,'SH_R'),('psraw',2,'SH_A'),('psrad',4,'SH_A')]:
+    A(n+'_imm','m_ia',ia('SHI',es,0)[:-1]+f'|({d}<<16)'+')' if False else f'(II_SHI|({es}<<8)|({d}<<16))','shs',E[es])
+    A(n+'_xmm','m_ia',f'(II_SHX|({es}<<8)|({d}<<16))','rr',E[es],mnem=n)
+A('pslldq','m_ia','(II_SHDQ|(1<<8)|(SH_L<<16))','shs','EK_I8'); A('psrldq','m_ia','(II_SHDQ|(1<<8)|(SH_R<<16))','shs','EK_I8')
+# pmovsx/zx : source is a register or a partial memory operand
+for sg,sn in [(1,'sx'),(0,'zx')]:
+    for s,(se,de) in {'bw':(1,2),'bd':(1,4),'bq':(1,8),'wd':(2,4),'wq':(2,8),'dq':(4,8)}.items():
+        A(f'pmov{sn}{s}','m_ia',f'(II_MOVX|({de}<<8)|({sg}<<16)|({se}<<24))','mov',E[se],srcbytes=16//de*se)
+A('phminposuw','m_ia','(II_HMINPOS|(2<<8))','un','EK_I16')
+# logic
+for n,k in [('pand','LG_AND'),('pandn','LG_ANDN'),('por','LG_OR'),('pxor','LG_XOR'),('andps','LG_AND'),('andnps','LG_ANDN'),('orps','LG_OR'),('xorps','LG_XOR'),('andpd','LG_AND'),('andnpd','LG_ANDN'),('orpd','LG_OR'),('xorpd','LG_XOR')]:
+    A(n,'m_logic',k,'rr','EK_I8')
+# shuffles
+def sh(kind,es=0,opt=0): return f'(S_{kind}|({es}<<8)|({opt}<<16))'
+for n,es,o in [('punpcklbw',1,0),('punpckhbw',1,1),('punpcklwd',2,0),('punpckhwd',2,1),('punpckldq',4,0),('punpckhdq',4,1),('punpcklqdq',8,0),('punpckhqdq',8,1),('unpcklps',4,0),('unpckhps',4,1),('unpcklpd',8,0),('unpckhpd',8,1)]:
+    A(n,'m_shuf',sh('UNPCK',es,o),'rr',E[es])
+for n,es,o,ek in [('packssdw',2,0,'EK_I32'),('packsswb',1,1,'EK_I16'),('packuswb',1,2,'EK_I16'),('packusdw',2,3,'EK_I32')]: A(n,'m_shuf',sh('PACK',es,o),'rr',ek)
+A('pshufb','m_shuf',sh('PSHUFB',1),'rr','EK_I8')
+for n,es,o in [('phaddw',2,0),('phsubw',2,1),('phaddsw',2,2),('phsubsw',2,3),('phaddd',4,0),('phsubd',4,1)]: A(n,'m_shuf',sh('PHADD',es,o),'rr',E[es])
+for n,es,o,ek in [('haddps',4,0,'EK_F32'),('hsubps',4,1,'EK_F32'),('haddpd',8,0,'EK_F64'),('hsubpd',8,1,'EK_F64')]: A(n,'m_shuf',sh('HADD',es,o),'rr',ek,flt=1)
+A('pshufd','m_shuf',sh('PSHUFD',4),'imm1','EK_I32'); A('pshufhw','m_shuf',sh('PSHUFHW',2),'imm1','EK_I16'); A('pshuflw','m_shuf',sh('PSHUFLW',2),'imm1','EK_I16')
+A('palignr','m_shuf',sh('PALIGNR',1),'imm3','EK_I8'); A('shufps','m_shuf',sh('SHUFPS',4),'imm3','EK_I32'); A('shufpd','m_shuf',sh('SHUFPD',8),'imm3','EK_I64')
+A('blendps','m_shuf',sh('BLENDI',4),'imm3','EK_I32'); A('blendpd','m_shuf',sh('BLENDI',8),'imm3','EK_I64'); A('pblendw','m_shuf',sh('BLENDI',2),'imm3','EK_I16')
+# ptest : flags
+A('ptest','m_ia','(II_PTEST|(1<<8))','flags','EK_I32')
+out=[]; W=out.append
+W('''// Family x86_sse_legacy: the non-VEX (legacy-encoded) SSE/SSSE3/SSE4 integer, logic and shuffle instructions, two-operand form (destination = first source): register, destination==source and
+// 16-byte-aligned memory source; immediate forms for all 256 values. Checked against the VEX models of the same operation (isa-model-iarith.h / -logic.h / -shuf.h) with the destination
+// written in the low 128 bits and the upper 128 bits of ymm preserved (the legacy encoding does not clear them), using the same kernels/stubs ABI as the VEX families.
+// Generated by the table in this file's header comment (see isa-sse.h itself; edit the generator, not this file).
+#ifndef ISA_SSE_H
+#define ISA_SSE_H
+#include "isa-iarith.h"
+#include "isa-model-logic.h"
+typedef struct { MF m; intptr_t p; int self; } LegDesc;
+static LegDesc g_leg[512]; static int g_nleg;
+static void m_leg(const Ctx *c, const IRec *r, Out *o) {
+    const LegDesc *d = &g_leg[(intptr_t)c->op->p]; IRec t = *r; int al = c->op->alias;
+    if (al == AL_DA || d->self) memcpy(t.b, t.a, 32); else if (al == AL_MEM) memcpy(t.b, msrc(r, c->op), 32);
+    Op iop = *c->op; iop.p = (void *)d->p; iop.alias = AL_DD; iop.memoff = 0; Ctx ic = {&iop, 16, c->imm, c->mx}; memset(o, 0, sizeof *o); d->m(&ic, &t, o);
+    if (c->op->cr) memcpy(o->r + 16, r->a + 16, 16);
+}
+// ---- kernels''')
+seen=set()
+for e in ents:
+    n=e['name']; mn=e.get('mnem',n); f=e['form']; k='L_'+n
+    if f in('rr','un','flags'):
+        if f=='flags': pass
+        if f=='flags':
+            W(f'FLKI(k_{k}_dd, "{mn} %%xmm2,%%xmm1") FLKI(k_{k}_da, "{mn} %%xmm1,%%xmm1") FLKI(k_{k}_mm, "{mn} 64(%0),%%xmm1")')
+        else:
+            W(f'KRN(k_{k}_dd, "{mn} %%xmm2,%%xmm1", ST1) KRN(k_{k}_da, "{mn} %%xmm1,%%xmm1", ST1) KRN(k_{k}_mm, "{mn} 64(%0),%%xmm1", ST1)')
+    elif f=='mov':
+        W(f'KRN(k_{k}_dd, "{mn} %%xmm2,%%xmm1", ST1) KRN(k_{k}_da, "{mn} %%xmm1,%%xmm1", ST1) KRN(k_{k}_mm, "{mn} 64(%0),%%xmm1", ST1) KRN(k_{k}_m3, "{mn} 67(%0),%%xmm1", ST1)')
+    elif f=='shs':
+        W(f'STUB(isa_L_{n}_dd, "{mn.replace("_imm","")} $\\\\I,%xmm1", S_ST1)')
+    elif f=='imm1':
+        W(f'STUB(isa_L_{n}_dd, "{mn} $\\\\I,%xmm2,%xmm1", S_ST1) STUB(isa_L_{n}_da, "{mn} $\\\\I,%xmm1,%xmm1", S_ST1) STUB(isa_L_{n}_mm, "{mn} $\\\\I,64(%rcx),%xmm1", S_ST1)')
+    elif f=='imm3':
+        W(f'STUB(isa_L_{n}_dd, "{mn} $\\\\I,%xmm2,%xmm1", S_ST1) STUB(isa_L_{n}_da, "{mn} $\\\\I,%xmm1,%xmm1", S_ST1) STUB(isa_L_{n}_mm, "{mn} $\\\\I,64(%rcx),%xmm1", S_ST1)')
+W('// ---- registration')
+W('''static Op *rleg(const char *name, KF k, const char *kimm, MF m, intptr_t p, int self, int ek, int alias, int memoff, int sz, int al, int flags, int flt) {
+    if (g_nleg >= 512) { say("too many legacy descriptors\\n"); exit(3); }
+    g_leg[g_nleg] = (LegDesc){m, p, self}; Op *o = newop(name, k, m_leg, 32, ek); o->p = (void *)(intptr_t)g_nleg++; o->kimm = kimm; o->alias = alias; o->memoff = memoff; o->sz = sz; o->al = al; o->nsrc = 2; o->flt = flt;
+    if (flags) { const char *e = getenv("PROBE_FLM"); o->cr = 0; o->xm[1] = e ? strtoull(e, NULL, 16) : (FL_ZF | FL_CF | FL_SF | FL_OF); } return o; }   // PF/AF are the known vptest gap (mac.isa.avx.vptest_pf_af): PROBE_FLM=<hex> compares them too
+static void reg_sse_ops(void) {
+    Op *o; (void)o;''')
+for e in ents:
+    n=e['name']; f=e['form']; k='L_'+n; P=e['p']; M=e['model']; ek=e['ek']; flt=e.get('flt',0)
+    if f in ('rr','un'):
+        W(f'    rleg("{n}", k_{k}_dd, NULL, {M}, {P}, 0, {ek}, AL_DD, 0, 16, 0, 0, {flt}); rleg("{n}_da", k_{k}_da, NULL, {M}, {P}, 0, {ek}, AL_DA, 0, 16, 0, 0, {flt}); rleg("{n}_mem", k_{k}_mm, NULL, {M}, {P}, 0, {ek}, AL_MEM, 0, 16, 16, 0, {flt});')
+    elif f=='flags':
+        W(f'    rleg("{n}", k_{k}_dd, NULL, {M}, {P}, 0, {ek}, AL_DD, 0, 16, 0, 1, 0); rleg("{n}_da", k_{k}_da, NULL, {M}, {P}, 0, {ek}, AL_DA, 0, 16, 0, 1, 0); rleg("{n}_mem", k_{k}_mm, NULL, {M}, {P}, 0, {ek}, AL_MEM, 0, 16, 16, 1, 0);')
+    elif f=='mov':
+        sb=e['srcbytes']
+        W(f'    rleg("{n}", k_{k}_dd, NULL, {M}, {P}, 0, {ek}, AL_DD, 0, 16, 0, 0, 0); rleg("{n}_da", k_{k}_da, NULL, {M}, {P}, 0, {ek}, AL_DA, 0, 16, 0, 0, 0); rleg("{n}_mem", k_{k}_mm, NULL, {M}, {P}, 0, {ek}, AL_MEM, 0, {sb}, 0, 0, 0); rleg("{n}_mem_o3", k_{k}_m3, NULL, {M}, {P}, 0, {ek}, AL_MEM, 3, {sb}, 0, 0, 0);')
+    elif f=='shs':
+        W(f'    rleg("{n}", NULL, isa_tab_isa_L_{n}_dd, {M}, {P}, 1, {ek}, AL_DD, 0, 16, 0, 0, 0);')
+    else:
+        W(f'    rleg("{n}", NULL, isa_tab_isa_L_{n}_dd, {M}, {P}, 0, {ek}, AL_DD, 0, 16, 0, 0, {flt}); rleg("{n}_da", NULL, isa_tab_isa_L_{n}_da, {M}, {P}, 0, {ek}, AL_DA, 0, 16, 0, 0, {flt}); rleg("{n}_mem", NULL, isa_tab_isa_L_{n}_mm, {M}, {P}, 0, {ek}, AL_MEM, 0, 16, 16, 0, {flt});')
+W('}')
+W('''static int plan_sse(const Op *o) {
+    int fl = 0; int dd = o->alias == AL_DD; long n = o->kimm ? (dd ? (2L << 20) : (1L << 20)) : (dd ? (6L << 20) : (2L << 20));
+    fl += run_stream_op(o, 0x1F80, n, 0, NULL);
+    if (o->flt) { fl += run_stream_op(o, 0x1F80 | (1 << 13), n / 8, 0, NULL); fl += run_stream_op(o, 0x1F80 | 0x40, n / 8, 0, NULL); }
+    if (o->alias == AL_MEM && o->al == 0) fl += run_straddle(o);
+    return fl;
+}
+#endif''')
+open(sys.argv[1],'w').write('\n'.join(out)+'\n')
+print(len(ents),'entries')
