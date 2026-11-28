@@ -93,6 +93,7 @@ x86_int_move:mov_* x86_int_move:movabs* x86_int_move:movz* x86_int_move:movs* x8
 avx_logic:v*
 avx_compare:*
 avx_shuffle:*
+x86_control_flow:*
 x86_int_shift_mul_div:*
 x86_sse_legacy:*
 "
