@@ -633,7 +633,147 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes:  hand: map-refresh (counter). Windows ledger P3.
 
-## 64. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
+## 64. C-F-101 — silent drop: QueueObj::x_ExecuteCommandLists: 列表指针空 / 条目空 / 强转失败 / closed_items() 为 None（列表未 Close 或 Close 失败）→ 整个调用 return，同批有效列表也不提交
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/objects.rs:28-52 QueueObj::x_ExecuteCommandLists: 列表指针空 / 条目空 / 强转失败 / closed_items() 为 None（列表未 Close 或 Close 失败）→ 整个调用 return，同批有效列表也不提交
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.queue.execute_lists.{null_array|null_entry|bad_cast|not_closed}（extras 列）；每次丢的列表数另计), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #1. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 65. C-F-102 — silent drop: target_view / clear_render_target / clear_depth_stencil / OMSetRenderTargets: 描述符为空或未知 → target_view 返回 None：槽不绑；清除 return「nothing to clear」
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: device.rs:696 → render.rs:292,319; shell/list.rs:446 target_view / clear_render_target / clear_depth_stencil / OMSetRenderTargets: 描述符为空或未知 → target_view 返回 None：槽不绑；清除 return「nothing to clear」
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.target_view.{null|unknown}; silent.clear.no_view), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #9. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 66. C-B-101 — silent drop: render pass colour attachments: 视图为 None 或规格里该槽颜色为 None → continue，该附件不入 pass 描述
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: draw.rs:568 render pass colour attachments: 视图为 None 或规格里该槽颜色为 None → continue，该附件不入 pass 描述
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.pass.colour_attachment.{no_view|no_spec}), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #10. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 67. C-B-103 — silent drop: present (nextDrawable): nextDrawable() 为 None → dropped += 1，return Ok(())，本帧丢；PresentStats 有计数，不入 dropstats
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: present.rs:360-363 present (nextDrawable): nextDrawable() 为 None → dropped += 1，return Ok(())，本帧丢；PresentStats 有计数，不入 dropstats
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.present.no_drawable（并入 PresentStats.dropped）), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #15. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 68. C-F-103 — silent drop: x_CreateConstantBufferView: create_cbv 的错误被 `let _ =` 吞掉
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/device.rs:493 x_CreateConstantBufferView: create_cbv 的错误被 `let _ =` 吞掉
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.cbv.create_failed), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #20. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 69. C-F-104 — silent drop: x_CopyDescriptorsSimple / x_CopyDescriptors: 错误被 `let _ =` 吞掉；CopyDescriptors 在增量为 0 或起点指针空时整个返回
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/device.rs:699,711 x_CopyDescriptorsSimple / x_CopyDescriptors: 错误被 `let _ =` 吞掉；CopyDescriptors 在增量为 0 或起点指针空时整个返回
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.copy_descriptors.{error|null_start|zero_inc}), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #21. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 70. C-F-105 — silent drop: view_result (CreateShaderResourceView / UnorderedAccessView / RenderTargetView / DepthStencilView): 视图创建失败：只在 VICTORY_METAL_LOG 下写日志，调用方不知道 (+1 more site of the same kind)
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/device.rs:1121 view_result (CreateShaderResourceView / UnorderedAccessView / RenderTargetView / DepthStencilView): 视图创建失败：只在 VICTORY_METAL_LOG 下写日志，调用方不知道 | shell/device.rs:575 x_CreateUnorderedAccessView: 缓冲 UAV 没有描述 → return
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.view.{srv|uav|rtv|dsv}.failed ; silent.uav.buffer_no_desc), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #22,#50. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 71. C-B-102 — silent drop: BarrierState::barrier (ResourceBarrier / enhanced Barrier MEMORY class): after == 0 或 before == 0（状态转换映射不到阶段掩码）→ return，屏障丢
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: barrier.rs:169; exec/stream.rs:1460 BarrierState::barrier (ResourceBarrier / enhanced Barrier MEMORY class): after == 0 或 before == 0（状态转换映射不到阶段掩码）→ return，屏障丢
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.barrier.empty_mask.{after|before}), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #37. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 72. C-F-106 — silent drop: x_CreateSampler: require(pdesc) 为空即返回；create 错误被 `let _ =` 吞掉
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/device.rs:676 x_CreateSampler: require(pdesc) 为空即返回；create 错误被 `let _ =` 吞掉
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.sampler.{null_desc|create_failed}), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #45. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 73. C-B-104 — silent drop: touched() (mesh emulation pre-scan): 槽 / 堆 / 键未知 → continue，触及集可能不全
+
+- owner / chain / hop: metal / command / 5 back->Metal 4
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: exec/emu.rs:116-181 touched() (mesh emulation pre-scan): 槽 / 堆 / 键未知 → continue，触及集可能不全
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.emu.touched.{slot|heap|key}_unknown), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #51. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 74. C-F-110 — silent drop: unsupported_call: 宽容模式下跳过调用（仅在 notimpl 日志打开时才有记录）
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/list.rs:63 unsupported_call: 宽容模式下跳过调用（仅在 notimpl 日志打开时才有记录）
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.lenient.skipped（always）), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #52. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 75. C-F-109 — silent drop: SetCompute/GraphicsRoot32BitConstants: 数据指针空或 n == 0 → return（无效用法） (+1 more site of the same kind)
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/list.rs:390,664 SetCompute/GraphicsRoot32BitConstants: 数据指针空或 n == 0 → return（无效用法） | shell/list.rs:280 x_ResourceBarrier: pbarriers 为空 → return
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.root_constants.{null|zero} ; silent.resource_barrier.null), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #55,#57. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 76. C-F-107 — silent drop: x_DiscardResource: 资源未知，或区域指针非空（局部丢弃）→ return
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: shell/list.rs:598 x_DiscardResource: 资源未知，或区域指针非空（局部丢弃）→ return
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.discard.{unknown_resource|partial}), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #58. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 77. C-F-108 — silent drop: ResolveQueryData (timestamps): 没写过的时间戳 → heap.get(..).unwrap_or(0)，读到 0
+
+- owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
+- freq: not measured (none); used=unknown; status=gap
+- Xbox hardware / driver does: the call or state is honoured on the console
+- deviation: dropped without a count in the shared or Metal drop statistics: timestamps.rs:194 ResolveQueryData (timestamps): 没写过的时间戳 → heap.get(..).unwrap_or(0)，读到 0
+- restore_plan (how to break through): count every hit by reason (planned counter: silent.timestamp.never_written), read the counts of the next forensic run, then fix the drop or prove it harmless
+- tests: —
+- notes: found by the silent-drop audit 2026-11-28; research/silent-drops/LIST.md rows #59. 下一次取证运行补频次（计数器在 metal/silent-drops 分支加，未合入前尚无）
+
+## 78. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
 
 - owner / chain / hop: mac / command / victory-gpu mac/rosetta.rs fault_tracking()
 - freq: not measured (unknown); used=yes; status=proven
@@ -643,7 +783,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::rosetta::tests::the_variable_decides_and_tests_track (native + Wine: pass)
 - notes: Decision proven by test; its cost is measured in logs. 0x140456fe2 hang (tracking on) was in victory.exe safecopy (G6).
 
-## 65. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
+## 79. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
 
 - owner / chain / hop: mac / command / Mac fork #204 alias.rs NOT ported (PATCHES.md "Not ported")
 - freq: not measured (unknown); used=unknown; status=gap
@@ -653,7 +793,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none in this tree (alias.rs absent)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Fidelity: removes the copy latency/race window; correctness impact today unknown (copies hold). | used=unknown: alias.rs is not in this tree and no log line mentions mach_vm_remap, so a frequency cannot be estimated
 
-## 66. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
+## 80. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -663,7 +803,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Marked here because the shared layer relays the capability.
 
-## 67. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
+## 81. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=gap
@@ -673,7 +813,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
 
-## 68. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
+## 82. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
 
 - owner / chain / hop: mac / command / title code: hang watchdog thread (+0x2215c35 -> +0x23cf683)
 - freq: not measured (log); used=yes; status=unproven
@@ -683,7 +823,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: victory-loader mac::watchdog on a synthetic image (L5); victory-gpu pipeline::builder_verdict_tests (3, the BVH builder making path, ec648b34); not run on the exe
 - notes: A hang that is real hangs for good with L5 on: always give such runs a wall-clock limit (RUN.md). Corpus captures (research/captures/INDEX.md) all ran with the watchdog off, so they are non-fidelity. | 2026-11-28: one cause of a >30 s frame is fixed in code: cold-cache BVH builder pipelines were made on the recording thread at the first builder dispatch (title died at +0x23cf683 about 77 s after start, 2026-11-26 run with VICTORY_BVH_BUILDER=1). ec648b34 (source: Windows fix/sun-clamp, gpu/cf-*) queues them at creation and skips the dispatch while one is being made; mac: cherry-pick, unit tests only, 待运行验证 (cold-cache run). Status gap -> unproven for that cause only; slow frames of the Metal fidelity path are still metal.gpu.fidelity_slow_frame and L5 stays the non-fidelity workaround.
 
-## 69. shared.device.options_double — CheckFeatureSupport OPTIONS: DoublePrecisionFloatShaderOps = 1 (console), host 0
+## 83. shared.device.options_double — CheckFeatureSupport OPTIONS: DoublePrecisionFloatShaderOps = 1 (console), host 0
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
@@ -693,7 +833,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
 - notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
 
-## 70. shared.device.options_tiled — CheckFeatureSupport OPTIONS: TiledResourcesTier = 3 (console), host 2
+## 84. shared.device.options_tiled — CheckFeatureSupport OPTIONS: TiledResourcesTier = 3 (console), host 2
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
@@ -703,7 +843,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
 - notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
 
-## 71. shared.device.options_conservative — CheckFeatureSupport OPTIONS: ConservativeRasterizationTier = 3 (console), host 0
+## 85. shared.device.options_conservative — CheckFeatureSupport OPTIONS: ConservativeRasterizationTier = 3 (console), host 0
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
