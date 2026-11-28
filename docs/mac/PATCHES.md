@@ -1366,6 +1366,10 @@ Windows `feat/live-translator` `8e3de411` (`victory-hle/src/modules/gameinput.rs
 
 *What.* `indirect::widest` kept 65,535 groups for a card it does not know, and the Metal chain's adapter (Apple, 0x106B) is one. The title's tile lists are 67,440 and 47,760 groups at 2560x1440, so the first lost its last 1,905 tiles (the lowest band of the picture). On the Metal chain (`VICTORY_METAL_OUT` set; `mac::on_metal_chain`) the bound is 2^20, the clamp's own bound on the total; `VICTORY_INDIRECT_WIDE=0` keeps 65,535. *Why safe.* The back passes the record to `dispatchThreadgroupsWithIndirectBuffer` as it is and Metal takes 32-bit counts: `metal/back/tests/exec_indirect_wide.rs` runs 65,535, 67,440, 2^20 and 3,000,000 groups on an M5 Max and counts every group. Nothing between victory-gpu and the back clamps (front, bridge, back checked, 2026-11-28). *Test.* `mac::indirect_wide::tests`. The D3DMetal path is not touched (no `VICTORY_METAL_OUT`).
 
+### X12 — count DispatchMeshX (slot 98) argument shapes without changing playback
+
+With `VICTORY_MAC_DROP_STATS=1`, record flags, destination presence and payload presence per present. A nonzero destination is still dropped, never read as already prepared dispatch arguments. The slot test checks both destination cases and direct dispatch. Source: `mac/dispatch-mesh-x` at `34691f12`. Retire when the producer and payload have a verified implementation with equivalent telemetry.
+
 ### S5 — a mesh program as a compute program and a fetch vertex program: the `VMCS` container part (`victory-shader` `emit/{mesh_cs,lower,shader,mod,host}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `mac/mesh_compute.rs`)
 
 *What.* The translator can make two more DXIL containers of a mesh program, for a host that cannot build the mesh pipeline

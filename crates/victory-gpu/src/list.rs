@@ -21,6 +21,8 @@ use crate::resource::PAGEABLE_IIDS;
 #[cfg(windows)]
 pub(crate) mod thin;
 
+mod mesh_x;
+
 pub(crate) const ALLOCATOR_IIDS: [Iid; 4] = [ // mac G12
     guid(
         0x6102dee4,
@@ -1803,20 +1805,22 @@ mod state {
         }
         with_state(this, |list, s| s.dispatch_mesh(list, x));
     }
-    /// `DispatchMeshX(x, flags, indirect arguments, payload)`.
-    /// shortcut: dispatches whose group count is in GPU memory (indirect)
-    /// are dropped; make them ExecuteIndirect when the title uses them.
+    /// `DispatchMeshX(x, flags, indirect arguments, payload)` (the Xbox Series
+    /// extension, slot 98). Every call is counted by shape (`super::mesh_x`),
+    /// into the drop statistics when they are on and into a log line at each
+    /// power of two of a shape's count; the shapes the host does not run are
+    /// dropped as before. A direct dispatch (`flags` 0, no indirect pointer)
+    /// is a `DispatchMesh(x)`.
     pub(super) extern "system" fn dispatch_mesh_x(
         this: This,
         x: u32,
-        _flags: u64,
+        flags: u64,
         indirect: u64,
-        _payload: u64,
+        payload: u64,
     ) {
         super::count_draw();
-        if indirect != 0 {
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| tracing::warn!("indirect mesh dispatches dropped"));
+        let shape = super::mesh_x::note(x, flags, indirect, payload);
+        if !shape.runs_as_direct() {
             return;
         }
         with_state(this, |list, s| s.dispatch_mesh(list, x));

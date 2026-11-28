@@ -116,6 +116,7 @@ struct Counts {
     ran: u64,
     drops: HashMap<Key, u64>,
     notimpl: [u64; 2],
+    mesh_x: std::collections::BTreeMap<(u64, bool, bool), u64>,
 }
 
 impl Counts {
@@ -231,6 +232,11 @@ pub(crate) fn recorded(dispatch: bool) {
             s.frame.draws += 1;
         }
     });
+}
+
+/// Slot 98 has an argument destination and a payload pointer, but no count buffer.
+pub(crate) fn mesh_x(flags: u64, dest: bool, payload: bool) {
+    if enabled() { with(|s| *s.frame.mesh_x.entry((flags, dest, payload)).or_default() += 1); }
 }
 
 /// A draw or dispatch was dropped.
@@ -398,6 +404,9 @@ pub(crate) fn on_present(present: u64) {
     with(|s| {
         s.presents = present;
         let frame = std::mem::take(&mut s.frame);
+        for ((flags, dest, payload), calls) in &frame.mesh_x {
+            tracing::info!("drop-stats mesh-x present={present} world_frame={world} flags={flags:#x} args_dest={dest} payload={payload} calls={calls}");
+        }
         let kinds = frame.by_kind();
         let mut psoran = String::new();
         if verbose() {
