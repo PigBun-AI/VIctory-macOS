@@ -650,6 +650,45 @@ impl CommandList {
         Ok(())
     }
 
+    /// `VICTORY_METAL_GPUPROF_ARGS` for a geometry-shader `ExecuteIndirect` record: two snapshots
+    /// (consecutive ring entries) of what the expansion wrote at `action_va`: the draw's first
+    /// three words (vertex or index count, instance count, start) and the mesh threadgroup
+    /// counts the draw reads (`GS_GROUPS_AT`). The table sums them per pipeline.
+    pub(crate) fn snap_gs_record(&mut self, action_va: u64) -> Result<()> {
+        if self.prof.is_none()
+            || !std::env::var_os("VICTORY_METAL_GPUPROF_ARGS").is_some_and(|v| v != "0")
+        {
+            return Ok(());
+        }
+        let Some(sn) = crate::prof::snap(&self.queue.device().clone()) else {
+            return Ok(());
+        };
+        // The kernel reads what the expansion wrote.
+        self.barrier(DISPATCH, DISPATCH, VIS_DEVICE)?;
+        let (first, d0) = sn.take();
+        let (_, d1) = sn.take();
+        for (src, dst) in [
+            (action_va, d0),
+            (action_va + crate::indirect::GS_GROUPS_AT, d1),
+        ] {
+            let params = self.alloc_constants(16, 16)?;
+            params.write_u32s(
+                0,
+                &[
+                    src as u32,
+                    (src >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                ],
+            )?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(&sn.pipeline, [1, 1, 1], [1, 1, 1])?;
+        }
+        self.keep_buffers.push(sn.ring.clone());
+        self.last_snap = Some(first);
+        Ok(())
+    }
+
     /// `Dispatch`: `groups` threadgroups of `threads` threads.
     pub fn dispatch(
         &mut self,

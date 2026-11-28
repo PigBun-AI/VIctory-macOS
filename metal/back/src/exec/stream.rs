@@ -158,6 +158,8 @@ pub(super) struct Bound {
     pub(super) graphics: Side,
     pub(super) pso: Option<Arc<Pso>>,
     pub(super) gpso: Option<Arc<Pso>>,
+    /// The protocol id of `gpso` (for the profiler's pipeline labels).
+    gpso_id: u32,
     /// `Some(true)`: the argument table's slot 2 holds the graphics arguments.
     owner: Option<bool>,
 }
@@ -811,7 +813,10 @@ impl Run<'_> {
         let (_, bound) = self.list()?;
         match pso.body {
             PsoBody::Compute { .. } => bound.pso = Some(pso),
-            PsoBody::Graphics(_) => bound.gpso = Some(pso),
+            PsoBody::Graphics(_) => {
+                bound.gpso = Some(pso);
+                bound.gpso_id = c.pso.0;
+            }
         }
         Ok(())
     }
@@ -1058,7 +1063,24 @@ impl Run<'_> {
         // the draws and dispatches read the one the list has, written as for
         // a direct one.
         let replaced = spec.replaces_root_arguments();
+        // `VICTORY_METAL_SKIP_GS_INDIRECT=<hash>[,<hash>...]` skips the indirect geometry-shader
+        // draws of those pipelines (the hash as the GPU time table prints it; needs GPUPROF on).
+        let gpso_id = bound.gpso_id;
+        let skip_gs = matches!(&pso.body, PsoBody::Graphics(g) if g.kind() == crate::render::Kind::Geometry)
+            && std::env::var("VICTORY_METAL_SKIP_GS_INDIRECT").is_ok_and(|v| {
+                let label = crate::prof::pipeline_label(gpso_id);
+                v != "0"
+                    && v != "1"
+                    && v.split(',')
+                        .any(|h| !h.trim().is_empty() && label.contains(h.trim()))
+            });
         let r = match (&pso.body, action) {
+            (PsoBody::Graphics(_), a) if skip_gs && a != Action::Dispatch => {
+                crate::dropstats::skip(
+                    "indirect GS draw skipped (VICTORY_METAL_SKIP_GS_INDIRECT=<hash>)",
+                );
+                Ok(())
+            }
             (PsoBody::Compute { pipeline, threads }, Action::Dispatch) => {
                 list.execute_indirect(kernels, pipeline, *threads, &spec)
             }

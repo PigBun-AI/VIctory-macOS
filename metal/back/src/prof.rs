@@ -271,6 +271,10 @@ struct Row {
     ns: u64,
     count: u64,
     max_ns: u64,
+    /// Geometry-shader indirect draws with a snapshot (`VICTORY_METAL_GPUPROF_ARGS`): how many,
+    /// and the sums of the draw's count, instances, mesh threadgroups (x*y*z), the largest
+    /// threadgroup count.
+    gs: [u64; 5],
 }
 
 #[derive(Default)]
@@ -440,6 +444,24 @@ fn absorb(w: &mut Window, p: &Pending) {
             row.ns += part;
             row.count += 1;
             row.max_ns = row.max_ns.max(part);
+            if let (Some(i), Some(sn)) = (
+                split_snap(&p.prof.labels[k]).1,
+                SNAP.get().and_then(|s| s.as_ref()),
+            ) && split_snap(&p.prof.labels[k])
+                .0
+                .starts_with("execute-indirect graphics-gs")
+            {
+                let a = sn.read(i);
+                let b = sn.read((i + 1) % SNAP_ENTRIES as u32);
+                if a.len() >= 3 && b.len() >= 3 {
+                    let groups = u64::from(b[0]) * u64::from(b[1]) * u64::from(b[2]);
+                    row.gs[0] += 1;
+                    row.gs[1] += u64::from(a[0]);
+                    row.gs[2] += u64::from(a[1]);
+                    row.gs[3] += groups;
+                    row.gs[4] = row.gs[4].max(groups);
+                }
+            }
             w.scoped_ns += part;
             if part >= SLOW_NS {
                 slow.push((part, &p.prof.labels[k]));
@@ -470,6 +492,11 @@ fn absorb(w: &mut Window, p: &Pending) {
     for (ns, label) in slow {
         let (head, snapped) = split_snap(label);
         let args = match (snapped, SNAP.get().and_then(|s| s.as_ref())) {
+            (Some(i), Some(sn)) if head.contains("graphics-gs") => format!(
+                " GS draw words (count, instances, start) {:?}, mesh threadgroups {:?}",
+                sn.read(i),
+                sn.read((i + 1) % SNAP_ENTRIES as u32)
+            ),
             (Some(i), Some(sn)) => {
                 format!(" dispatch arguments (now in the ring) {:?}", sn.read(i))
             }
@@ -575,6 +602,17 @@ fn table(w: &Window, pending: usize) -> String {
             r.max_ns as f64 / 1e6,
             r.ns as f64 / 1e6 / r.count.max(1) as f64,
         ));
+        if r.gs[0] > 0 {
+            let n = r.gs[0] as f64;
+            out.push_str(&format!(
+                "\n        GS draws with args: {:.1}/frame; per draw avg count {:.0}, instances {:.1}, mesh threadgroups {:.0} (max {})",
+                n / frames,
+                r.gs[1] as f64 / n,
+                r.gs[2] as f64 / n,
+                r.gs[3] as f64 / n,
+                r.gs[4]
+            ));
+        }
     }
     out
 }
