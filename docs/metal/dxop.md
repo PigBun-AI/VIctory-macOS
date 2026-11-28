@@ -83,7 +83,7 @@ Support, dated 2026-11-28:
   D3DMetal, on the DXIL the translator makes, hash 64974027a11daa59): `%old = atomicBinOp.i64(umax, RWTexture2D<U64>, x, y, (lo | depth << 32))`,
   then `lshr 32`, `trunc`, bitcast to float, `fcmp ult depth, old_high`; the result feeds the branch that ends in `discard` (a weather particle
   depth test: the pixel is discarded when it is behind the stored depth). So the original cannot be dropped, and no `mac:` patch removes it.
-  Plan, with a test: read the 64-bit texel, then `InterlockedMax` without the original. A max only grows, so the value read before is never
+  Delivered as mac patch F2 (branch `mac/f16-nearest`; the census converts the program with it). Plan, with a test: read the 64-bit texel, then `InterlockedMax` without the original. A max only grows, so the value read before is never
   above what the atomic would return; "depth < old" can then only be missed under a race (a pixel drawn that would have been discarded),
   never wrongly taken. MSC and Metal take the 64-bit texel read; test `a_64_bit_texel_read_then_max_gives_the_value_before_and_the_max`
   (read = initial value, texel = max; without a race). Not yet in the translator (one program of 26177); left as the S-D-012 plan.
@@ -110,7 +110,13 @@ Checks (Apple M5 Max, MSC 4.0.3, 2026-11-28):
 * MSC and pipeline on a 20 % sample of the changed programs (2325): cs 198/198, vs 165/165, ps 104/1028, ms 917/934, the same programs on and off. Pipeline build
   time of the sample, on a loaded machine: cs +57 %, vs +17 %, ps +59 %, ms +43 %. GPU run time of the extra ~12 operations per result: not measured.
 
-Result: correct, pass counts unchanged, cost is DXIL size and pipeline build time (not zero). Delivered as `mac: F1` on branch `mac/f16-nearest` (default on, `=0` off).
+The 12-operation sequence is correct but costs DXIL size and pipeline build time. The cheaper form: DXIL `fptrunc float to half` is LLVM's, round to nearest even
+(native 16-bit types, SM 6.2, `-enable-16bit-types`; the module needs `f16:16` in its data layout and the Native16 flag, `SFI0` bit 42). Through MSC and Metal
+(`metal/back/tests/dxop_fptrunc.rs`, 1,239,104 inputs: 1 M spread over the f32 space and the tie of every half pair +-1 ulp, plus the edge values; skipped without a DXC helper built with
+`-enable-16bit-types`, `VICTORY_HELPER_DXC16`): 0 differences from nearest-even, the call is not `legacyF32ToF16`. In the translator (mac F1): the same hardware proof as above with
+this form: 0 differences; census: DXIL -0.04 % over the 11,621 changed programs (median -0.05 %, p90 +0.1 %, max +2.4 %), pass counts unchanged, pipeline build time of the sample
+cs 166 s / vs 5.8 s / ps 33 s / ms 56 s against 174 / 4.9 / 27 / 62 with the switch off. So F1 uses `fptrunc` on the Metal chain and keeps the sequence for other hosts.
+Delivered as `mac: F1` on branch `mac/f16-nearest` (default on, `=0` off).
 
 ## Typed UAV additional formats, ROV
 
