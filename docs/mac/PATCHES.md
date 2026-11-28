@@ -756,6 +756,22 @@ when it is unset the container test returns with a "skipped" message instead of 
 the old behaviour on the Windows machine, set `VICTORY_LIVE_CORPUS` to the two folders. Remove this
 patch if the Windows line makes the same change.
 
+### T2 — the Wine run of the victory-hle and victory-loader tests: what failed there and what was changed (2026-11-28, branch `mac/wine-test-fixes`)
+
+Four tests failed under Wine on Rosetta (`tools/mac/wine-tests.sh -p victory-hle -p victory-loader`); a fifth group of flakes showed once they were
+repeated. Report: `GTA6-Mac集成/reports/2026-11-28-wine-fail.md`. One `mac:` commit each, `git log --oneline mac/livetr..mac/wine-test-fixes`.
+
+| test | cause | change |
+|---|---|---|
+| `write_sites::changed_moves_and_vector_stores_do_what_they_did` | Rosetta hides AVX (cpuid leaf 1 ecx bit 28 and OSXSAVE 0, leaf 7 ebx 0) unless `ROSETTA_ADVERTISE_AVX=1` is set; the game runs set it, the test runs did not, so `is_x86_feature_detected!("avx2")` was false and the vector stub (correctly) was not made | `tools/macos/test-wine.sh` exports it (default 1); the test says so in its assert. Also turns on the avx2 paths of `victory-gpu` `torn.rs` and `shadow.rs` in Wine runs |
+| `net::only_loopback_is_reachable` | environment: CrossOver Wine's ws2_32 lacks `WSAConnectByList` and `GetAddrInfoExA`, winhttp lacks `WinHttpGetProxySettingsEx`; the title imports none of them (0 call sites in the import census) | the test allows exactly those three on Wine, lists all missing names otherwise |
+| `xgamesave::a_kept_blob_past_the_link_limit_is_copied` | environment: the temp folder is APFS, which has no 1024-link limit, so the premise (the 1025th link is refused) cannot be made | `link_or_copy` is a function; `a_link_that_fails_is_copied` tests the copy on every host; the NTFS test skips where the host has no limit |
+| `xmem::a_title_thread_goes_on_using_the_rest_of_a_view` | a defect of Wine's view replacement (shown with no code of ours: `tools/mac/view-replace-probe.sh`), not of the HLE bookkeeping | the test keeps the fault-resume assert everywhere and counts lost data on Wine only; `xmem.rs` says (1st, 2nd, 4th.. time) when `unmap()` cut a view, the exposure count of `mac.hle.xmem_map_partial_view` (5 lines, `cut_a_view`) |
+| `console_insn::a_clzero_loop_becomes_plain_stores` (11 of 15 suite runs) | the stub room was kept near the first site that asked; a site out of `jmp rel32` reach of it silently was not patched | a site out of reach gets a room of its own (`near()` call in `patch_clzero`, real code, also in the game) |
+| `publish::concurrent_publishers...` (1 in 60), `crash::memory_at_names_what_an_access_hit` (1 in 25), `xgameui::dialogs_end_with_what_was_typed` (1 in 40), `files::long_title_paths_work_on_the_host` (1 in 37), `load_probe::loads_binds_and_calls_probe` (always) | a rename refused for the moment; a freed address reserved again by a neighbouring test; `XAsyncGetStatus(wait)` between `complete_call` removing the call and publishing the status (a race on Windows too); a sharing violation after fclose (Wine); cargo spawned from Wine | retry of the rename (`publish.rs`, real code); tolerant test; wait for the status (`xasync.rs`, real code); retry in the test; the fixture DLL that `test-wine.sh` already built is used |
+
+*Retire when:* the Windows line makes the same changes (the two `victory-loader` and one `xasync` code changes are not Mac specific and can go upstream).
+
 ### M6 — `tools/mac/push-check.sh`, `docs/mac/PUSH.md`
 
 The check before a push to the public `fork`: policy, credential scan, privacy scan (internal
@@ -1352,6 +1368,51 @@ above), they crash in the vertex form too (XPC_ERROR_CONNECTION_INTERRUPTED, rep
 Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass plus the fetch draw gives the texels of the native mesh pipeline
 (dispatch 1x1x1, 2x1x1, 1x3x1, 2x2x2) and the flagged-triangle / cull / out-of-range-index test passes.
 
+### S6 — victory-shader's hardware proofs run on the Mac GPU (`victory-shader/src/emit/{host_exec,validator_none}.rs`, hooks in `emit/{mod,host,valu_tests,permlane_tests,waterfall_tests,cube_lod_tests}.rs`, `tools/mac/shader-hw*.{sh,py,tsv}`)
+
+*What.* The tests of `valu`, `wave64`, `permlane`, `waterfall`, `intersect`, `size`, `cube_lod` were written for the D3D12 host (`emit/host.rs`, Windows only), so on a Mac they did not exist. On macOS (test builds only) `emit::host` is now `host_exec.rs`: the same `Host` API (`new`, `compute_pipeline`, `compute_pipeline_with`, `dispatch`, `Dispatch/View/Root/Stride`, the `api` names of D3D12/DXGI) that sends the DXIL and the bindings over a pipe to the executor `victory-shader-exec` (`metal/shader-exec` of the Metal back, branch `harness-back`; DXIL -> Metal Shader Converter -> Metal 4 compute -> read back) named by `VICTORY_SHADER_EXEC`. No executor: `Host::new` fails and every test skips, so `tools/mac/check.sh` is unchanged. This crate names no Metal symbol and depends on no `victory-metal-*` crate (layering); the pipe protocol (`wire`, version 1) is duplicated on both sides and pinned by one golden vector each. Hooks in shared code: the `#[cfg(windows)]` gates of the compute test modules become `any(windows, macos)`; the tests ask the device through `Host::caps()` (wave sizes, AMD, mesh) instead of `host.device.CheckFeatureSupport` (the Windows host got the same `caps()` and `api` module); a hardware `compute_pipeline` error that starts with "unsupported" skips (f64). `tools/mac/shader-hw.sh --back <metal/ dir>` builds the executor, runs the lib tests and tallies passed / failed / skipped; `shader-hw-known.txt` classes the known failures (base / semantic / bug). The per-mnemonic opcode oracle (`emit/oracle_tests.rs`, `gfx10::opcode_of`, helper visibility in `valu_tests.rs`; `docs/mac/opcode-oracle.md`) is on the same host: 140 table rows in ten families against a CPU reference, run on whatever device the tests have. The executor also draws (vertex/geometry/mesh + pixel pipelines through the back's `graphics_pipeline_for_host`; `Host::{pipeline,pipeline_with_gs,mesh_pipeline_with,draw}`), so `rectangles_are_drawn_whole`, the mesh edge-flag tests and `quad_neighbours_…` run on the Mac GPU. `View::Depth` (a D32_FLOAT texture read as R32_FLOAT) is the binding for a comparison sampler (`image_sample_c*`); the test `comparison_sampler_reads_a_depth_texture`.
+*Why not needed on Windows.* Windows has D3D12 and the DXIL validator; the tests run there as they were.
+*Remove when.* A Windows-independent device for the proofs exists upstream (or the Windows host is rebuilt on the same pipe).
+
+### S7 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/{lower,bitcode,shader,live,mod}.rs`, `victory-shader-dylib/src/lib.rs`, `victory-gpu` `host.rs`, `shader_cache.rs`, `mac/metal_chain.rs`)
+
+*Formerly called F1.* The environment variable names are unchanged (`VICTORY_F16_NEAREST`, `VICTORY_F16_NATIVE`); the hook lines in the source are marked `mac S7` (they were `mac F1`).
+
+*What.* The translator's `VICTORY_F16_NEAREST` (round the result of a 16-bit float operation to nearest even, `Lower::f16_nearest`) is **on by
+default**; `VICTORY_F16_NEAREST=0` turns it off. It now covers every result rounding of the title's code: `v_cvt_f16_f32`, the VOP f16 arithmetic
+(`v_add/sub/mul/fma/fmac/mad/min/max/med3/rcp... _f16`, `v_pk_*_f16`), `v_fma_mixlo/mixhi_f16` and `v_interp_p2_f16` (these last three used the host's
+plain `legacyF32ToF16`; one helper, `Lower::f16_result`, is now the only place that picks). Not touched: `v_cvt_pkrtz_f16_f32` (round toward zero on
+the console too, `f16_toward_zero`), the format conversions of d16 stores, and the wave sum of halves (already exact). The shader cache key holds the
+effective state (`emit::f16_nearest()`), as for `VICTORY_EXPORT_F16_SAT`, so a default flip or a `=0` run never reuses the other's translations.
+
+*One `fptrunc` on our own Metal chain (`VICTORY_F16_NATIVE`, default on only there).* "Our own Metal chain" is decided as S5 decides it: `VICTORY_METAL_OUT` set and not empty (`run.sh` exports it on `--backend metal` only; `victory-gpu` `mac/metal_chain.rs`, told to the translator at host creation by `set_host_metal_chain`, and to the live translator library in bit 28 of the last `host_settings()` word, so the shader cache keys on it; a tool that translates offline without a host falls back to reading `VICTORY_METAL_OUT` itself). It is not the test "the host has no `attributeAtVertex`" (the first form of this patch): D3DMetal has no `attributeAtVertex` either, and D3DMetal is the reference path, so its translation stays as it was (the sequence); `VICTORY_F16_NATIVE=1` forces the native form there by hand. Unit tests `lower::tests::f16_native_is_on_by_default_on_the_metal_chain_only`, `f16_native_follows_the_chain_the_host_says`, `mac::metal_chain::tests`. The
+nearest rounding is not the dozen-operation sequence there but one `fptrunc float to half` of a native 16-bit module: LLVM's `fptrunc` rounds to nearest
+even, and MSC compiles it to Metal's `half(x)`. The writer got a `half` type, the `fptrunc` cast (opcode 7), the data layout DXC writes for native
+16-bit modules (`f16:16`, `i16:16`, `i8:8`), and the Native16 feature (shader flag 1<<23, `SFI0` bit 42) which a module with a `half` sets. The
+sequence stays for the other hosts (a D3D12 host without native 16-bit shader ops would refuse the module) and for `VICTORY_F16_NATIVE=0`. Why it was
+worth it: the sequence costs +4.4 % DXIL and +17..59 % pipeline build time on the 11,621 changed programs; the `fptrunc` costs **-0.04 %** DXIL (median
+-0.05 %, p90 +0.1 %, max +2.4 %) and the pipeline build time is the same as with the switch off (sample of 2,325: cs 166 s vs 174 s off, ps 33 s vs 27 s, ms 56 s vs 62 s,
+vs 5.8 s vs 4.9 s; noisy machine). Pass counts unchanged (25,760 translated; sample cs 198/198, vs 165/165, ps 104/1,028, ms 917/934). Hardware: the same tests as
+below, with the `fptrunc` path: 0 differences in 134 M-input samples and in 755 M inputs of each of the three instructions (`fptrunc` of f32 to half, 1.24 M inputs
+around every rounding tie of all halves also exact in `metal/back/tests/dxop_fptrunc.rs` on the metal line).
+
+*Why not needed on Windows.* The Windows line keeps the switch off (exact but untried in a game run; the upstream comment: the host's `f32tof16` is also
+toward zero on NVIDIA); there it is a choice, not a fix. On the Mac, Metal Shader Converter's `f32tof16` is round toward zero (D3D11.3 Functional Spec 3.2.2
+allows it) with a double rounding for half denormals: a result that is not exact is 1 ULP (2^-10 relative) lower than the console's, in
+about 37 % of f32 inputs (measured: 50,329,600 of 134,217,728 sampled inputs differ from nearest). 11,642 of 26,177 translated programs (44 %)
+have such a rounding (11,621 of the 25,756 translated census programs change by it).
+
+*Remove when.* The Windows line turns the same switch on (merge conflict at the `mac S7` lines) or MSC rounds to nearest.
+
+*Evidence (2026-11-28).* Hardware proof on the Mac GPU (Apple M5 Max, macOS 27.2.1, MSC 4.0.3, through the S6 executor; test
+`emit::f16_hw_tests`, branch `mac/f16-hw-proof` over `mac/shader-harness`): the real translator output of `v_cvt_f16_f32`, `v_fma_mixlo_f16`
+(f32 operands) and `v_add_f16` against the exact CPU nearest-even rounding, 1.87 billion inputs of each (111 of the 256 chunks of 2^24: every
+exponent range of both signs, denormals, 65520, Inf, NaN, -0): **0 differences**, NaN gives NaN, an f32 denormal input may give either zero; the same programs with the switch off differ in 37 % of inputs, so the test can fail. Census (`victory-census translate`, 25,985
+containers): translated 25,760 on and off, failed 225 on and off, the same programs; 11,621 translations change; DXIL bytes of those +4.4 % in
+total (median +6 %, 90th percentile +14 %, largest 2.9x). MSC/Metal on a 20 % sample of the changed programs (2,325): cs 198/198, vs 165/165,
+ps 104/1,028, ms 917/934 on **and** off, the same programs; with the 12-operation sequence the pipeline build time of the sample (a loaded machine, noisy) is cs +57 %, vs +17 %,
+ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
@@ -1365,6 +1426,27 @@ the generic upstream PRs in the Mac history (not Mac specific). Each is a candid
 `mac:` commit once a run on the Mac shows the need.
 
 Taken later (no longer "not ported"): the low-address guards and 2 TiB views (#398, with the #1009 guards it builds on), see X3.
+
+### S8 — a 64-bit image atomic max that returns the original: read first, atomic without its result (`victory-shader` `emit/lower.rs`, `emit/live.rs`, `victory-gpu` `shader_cache.rs`)
+
+*Formerly called F2.* The environment variable name is unchanged (`VICTORY_F2_READ_FIRST`); the hook lines in the source are marked `mac S8` (they were `mac F2`).
+
+*What.* `image_atomic_{s,u}{min,max}` of two channels (an R32G32 view as one 64-bit texel) with GLC lowers as a `textureLoad.i32` of the texel, joined
+to 64 bits, then the `atomicBinOp.i64` whose result is not used; the load's value is the register result. Other 64-bit atomics are as before.
+`VICTORY_F2_READ_FIRST=0` turns it off (a key of the shader cache).
+
+*Why not needed on Windows.* D3D12 drivers return the original of a 64-bit atomic. MSC refuses the instruction with its result used
+(`UnsupportedInstruction: dx.op.atomicBinOp.i64`) and takes it without; Apple GPUs do 64-bit min/max natively (measured on the M5 Max, `docs/metal/dxop.md`
+on the metal line). Between the load and the atomic another lane can raise the texel: the load is then older than the atomic's own original. The title's only
+program that uses the return (`PS_Weather_Particle_Prepass_74a7a22c`) takes the high half as a depth for a `discard` against its own depth (a max only goes up):
+a stale load can only miss a discard that a later pixel would make anyway. That is a reading of the program, not a measurement.
+
+*Remove when.* MSC returns the original of a 64-bit min/max, or Metal does.
+
+*Evidence (2026-11-28).* Unit test `emit::f2_tests` (the load is there with GLC, not without or with the switch off). Census of the 679 programs that declare a
+64-bit atomic (677 ps, 2 cs), translated and converted with MSC 4.0.3 with the switch on and off: ps 61 ok / 616 refused on, 60 / 617 off (the 616 are the
+`attributeAtVertex` refusals, which S1 handles on the host; the census converts without it), cs 2/2 both; the program that flips is 64974027a11daa59, the weather prepass. The read-then-max form
+itself ran on Metal in `metal/back/tests/dxop_atomic64.rs` (the metal line). The translated program's run (62 convert) is the mac-host-harness line's.
 
 ### M7 — `tools/mac/play.sh`: hand play wrapper
 

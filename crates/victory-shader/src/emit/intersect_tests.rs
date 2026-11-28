@@ -596,7 +596,7 @@ fn run(wide: bool, descriptor: Descriptor, pointers: u64, sort: bool) {
         }
         ran += 1;
     }
-    assert!(ran > 0, "no SM 6.6 device available");
+    assert!(ran > 0 || cfg!(target_os = "macos"), "no SM 6.6 device available"); // mac S6: without the executor the case skips
 }
 
 #[test]
@@ -809,7 +809,7 @@ fn run_directory(wide: bool, descriptor: Descriptor, base: u64, pointers: u64, c
         eprintln!("{label} done, cache {cache}, base {base:#x}");
         ran += 1;
     }
-    assert!(ran > 0, "no SM 6.6 device available");
+    assert!(ran > 0 || cfg!(target_os = "macos"), "no SM 6.6 device available"); // mac S6: without the executor the case skips
     shader.dxil.len()
 }
 

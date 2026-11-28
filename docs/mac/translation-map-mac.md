@@ -1,6 +1,6 @@
 # 转译地图 + 覆盖矩阵（Mac/Wine 段 第 1 版）
 
-日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（88 行，2026-11-28 重算；列见文末）。
+日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（118 行，2026-11-28 重算；列见文末）。
 范围：Rosetta 指令语义、加载期补丁、故障跟踪与异常、HLE（内存/线程/文件/DirectStorage），加上共享层（victory-gpu，接缝 A 之前）的骨架行（owner=shared）。Metal 后端、着色器翻译不在本文件。
 
 ## 0. 一眼看结论
@@ -93,7 +93,10 @@
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
 | mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | proven | translated |
-| mac.hle.xmem_map_partial_view | a title thread keeps using the rest of a view while part of it is remapped (flaky test under Wine, ~1/10 in the xmem suite; used=unknown) | 未知 | static-census | gap | emulated |
+| mac.hle.xmem_map_partial_view | a title thread keeps using the rest of a view while part of it is remapped: Wine's view replace loses its data about 1 in 500 dances under load (C probe, no code of ours; native macOS and Rosetta without Wine 0); title: 1 + 1 static call sites, exposure unknown, counted by a log line; used=unknown | 未知 | static-census | gap | deviation |
+| mac.loader.write_sites_vector | write_sites vector stubs (VICTORY_WRITE_SITES): need AVX2, which Rosetta reports only with ROSETTA_ADVERTISE_AVX=1 (test runs now set it); used=no | 0 | log | proven | translated |
+| mac.hle.net_wine_exports | Wine lacks WSAConnectByList, GetAddrInfoExA, WinHttpGetProxySettingsEx; the title has 0 call sites; used=no | 0 | static-census | gap | deviation |
+| mac.hle.xgamesave_link_fallback | save blob link-or-copy; APFS has no 1024-link limit, the copy is tested on every host; used=unknown | 未知 | unknown | proven | faithful |
 | mac.hle.console_model | console model presented to the title: Series X (device type 0x64) vs Series S (0x60) (map id C-R-005) | 1 | log | proven | translated |
 | mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | unproven | unsupported |
 | mac.hle.commit_quota | commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit | 5 | static-census | unproven | stubbed |
@@ -293,6 +296,8 @@ disposition 分布（全部 92 行，含仅参照行）：emulated 23，mapped 1
 2026-11-28 下午（分支 mac/map-close1）：新增 mac.runtime.hle_counters（工具行，used=no，不进上面的 68 个；status=proven：机制在 Wine 下实测，见 PATCHES.md H3）。第 5.1 节三个表的数字不变（68：25/26/17）。
 
 2026-11-28 下午（分支 mac/map-close1，rebase 到 mac/livetr 48ee9251 即 close2 之后，计数全部从合并后的矩阵重算）：本分支的变化：新增 mac.runtime.hle_counters（工具行，不进计数）、mac.hle.xmem_map_partial_view（gap，flaky 测试）、mac.title.int3_self_exit_r6（gap）、mac.title.srl_prestream_stall（gap）；mac.title.int3_31f50 由 used=unknown 改 used=yes（静态分析：标题自己的帧临时堆 arena 1 分配失败断言，不是我们注入的，仍 unproven）；在 Wine 下跑后 unproven→proven：xmem_virtual_alloc、tools_memory、files、dstorage、titlewrite、lock_cmpxchg_flags、xmem_no_write_watch、masked_default_off、clwb_nop、isa.clwb、hle.console_model。mac.loader.resolution（除零 clamp 没有运行证据）和 mac.hle.low_address_commit（守卫默认关、没在 Wine 下跑过）保持 unproven。
+
+2026-11-28 中午（分支 mac/wine-test-fixes，基于 mac/livetr c350a83e）：Wine 下 victory-hle / victory-loader 测试失败的根因与修复见 PATCHES.md T2。矩阵：mac.hle.xmem_map_partial_view 根因确定（Wine 的 view 替换，不是 Rosetta，不是我们的记账），disposition 改 deviation，status 仍 gap，used 仍 unknown（标题 XMemMapPhysicalPages 与 Scatter 各 1 个静态调用点；xmem.rs unmap() 新增计数日志）；mac.isa.cpuid_xgetbv 的 tests/notes 记下测试环境缺 ROSETTA_ADVERTISE_AVX；新增 3 行，都不进 5.1 的计数（used=no 或 unknown）：mac.loader.write_sites_vector（proven）、mac.hle.net_wine_exports（gap/deviation，标题 0 个调用点）、mac.hle.xgamesave_link_fallback（proven）。第 5.1 节数字不变。
 
 ### 5.2 按频次加权（指令类，静态普查，每条指令只算一次）
 

@@ -371,3 +371,33 @@ fn a_tables_raw_buffer_is_read_at_its_raw_twin() {
         assert_eq!(got[..2], [0, 6], "{label}");
     }
 }
+
+/// mac S8: a 64-bit image atomic max that returns the original (`image_atomic_umax` of two
+/// channels with GLC) reads the texel first and leaves the atomic's result unused, so MSC takes it;
+/// without GLC, or with `VICTORY_F2_READ_FIRST=0`, nothing is read first.
+#[test]
+fn a_64_bit_image_atomic_max_with_its_original_reads_the_texel_first() {
+    let program = |atomic: [u32; 2]| {
+        let words = [
+            0xF40C_0201u32, // s_load_dwordx8 s[8:15], s[2:3], 0
+            0xFA00_0000,
+            0x7E00_0280, // v_mov_b32 v0, 0
+            0x7E02_0280, // v_mov_b32 v1, 0
+            0x7E04_0285, // v_mov_b32 v2, 5
+            0x7E06_0280, // v_mov_b32 v3, 0
+            atomic[0], // image_atomic_umax v[2:3], v[0:1], s[8:15] dmask:0x3 2D (glc)
+            atomic[1],
+            0xBE84_0380, // s_mov_b32 s4, 0
+            0xBE85_0380, // s_mov_b32 s5, 0
+        ];
+        super::vertex_flat::take_ops();
+        let shader = build(&[TABLE, &words, STORE].concat(), (8, 0)).expect("translates");
+        (shader, super::vertex_flat::take_ops())
+    };
+    let (_, with) = program([0xF05C_3308, 0x0002_0200]);
+    assert!(with.iter().any(|o| o == "textureLoad.i32"), "{with:?}");
+    assert!(with.iter().any(|o| o == "atomicBinOp.i64"), "{with:?}");
+    let (_, without) = program([0xF05C_1308, 0x0002_0200]);
+    assert!(!without.iter().any(|o| o == "textureLoad.i32"), "{without:?}");
+    assert!(without.iter().any(|o| o == "atomicBinOp.i64"), "{without:?}");
+}

@@ -16,12 +16,12 @@ use crate::{io, ir, resource, structure};
 const S_ENDPGM: u32 = 0xBF81_0000;
 
 /// SOP1 `s_mov_b32 sdst, src0`.
-const fn s_mov_b32(sdst: u8, src0: u8) -> u32 {
+pub(super) const fn s_mov_b32(sdst: u8, src0: u8) -> u32 {
     0xBE80_0000 | (sdst as u32) << 16 | 0x03 << 8 | src0 as u32
 }
 
 /// SOP2 `op sdst, src0, src1`.
-const fn sop2(op: u8, sdst: u8, src0: u8, src1: u8) -> u32 {
+pub(super) const fn sop2(op: u8, sdst: u8, src0: u8, src1: u8) -> u32 {
     0x8000_0000
         | (op as u32 & 0x7F) << 23
         | (sdst as u32 & 0x7F) << 16
@@ -38,12 +38,12 @@ const fn s_load_dwordx4(dst: u8, base: u8) -> [u32; 2] {
 }
 
 /// VOP1 `op vdst, src0` (`src0`: 0..105 = SGPR, 256..511 = VGPR).
-const fn vop1(op: u16, vdst: u8, src0: u16) -> u32 {
+pub(super) const fn vop1(op: u16, vdst: u8, src0: u16) -> u32 {
     0x7E00_0000 | (vdst as u32) << 17 | (op as u32) << 9 | (src0 as u32 & 0x1FF)
 }
 
 /// VOP3 `op vdst, src0, src1, src2` (no modifiers).
-const fn vop3(op: u16, vdst: u8, src0: u16, src1: u16, src2: u16) -> [u32; 2] {
+pub(super) const fn vop3(op: u16, vdst: u8, src0: u16, src1: u16, src2: u16) -> [u32; 2] {
     vop3_mod(op, vdst, src0, src1, src2, 0, 0, 0, false)
 }
 
@@ -82,24 +82,24 @@ const fn buffer_store_dword(vdata: u8, srsrc: u8, byte_off: u16) -> [u32; 2] {
     ]
 }
 
-const fn sgpr(n: u8) -> u16 {
+pub(super) const fn sgpr(n: u8) -> u16 {
     n as u16
 }
 
-const fn vgpr(n: u8) -> u16 {
+pub(super) const fn vgpr(n: u8) -> u16 {
     256 + n as u16
 }
 
 /// Builds and lowers a 1-thread synthetic RDNA2 compute shader that receives
 /// 4 dwords of root constants in `s0..s3`, runs `body` (leaving its result in
 /// `v0`), and stores `v0` to dword 0 of the raw UAV at heap index 0.
-fn build_valu_cs(body: &[u32]) -> HostShader {
+pub(super) fn build_valu_cs(body: &[u32]) -> HostShader {
     build_cs(body, 1, 0)
 }
 
 /// [`build_valu_cs`] with `threads` threads in x (thread index in `v0`
 /// on entry, before `body`) and `lds_bytes` of LDS (a multiple of 512).
-fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader {
+pub(super) fn build_cs(body: &[u32], threads: u32, lds_bytes: u32) -> HostShader {
     let mut words = Vec::new();
     // s[4:5] = descriptor table address (heap index 0 -> byte offset 0).
     words.push(s_mov_b32(5, 0x80)); // inline constant 0
@@ -204,7 +204,7 @@ pub(super) static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(()
 
 /// Runs `shader` on every available SM 6.6 host (hardware GPU and WARP) for
 /// each 4-dword input set and invokes `check(backend, case_index, inputs, result_dword)`.
-fn run_cases(
+pub(super) fn run_cases(
     shader: &HostShader,
     cases: &[[u32; 4]],
     check: impl FnMut(&str, usize, [u32; 4], u32),
@@ -256,7 +256,8 @@ fn run_cases_on(
         }
         ran += 1;
     }
-    if ran == 0 && devices.iter().all(|&(_, warp)| !warp) {
+    // mac S6: a Mac without the executor (tools/mac/shader-hw.sh) has no device: the tests skip.
+    if ran == 0 && (cfg!(target_os = "macos") || devices.iter().all(|&(_, warp)| !warp)) {
         // A case for the hardware adapter alone, on a machine without one.
         eprintln!("no SM 6.6 hardware device; a hardware-only case not run");
         return;
@@ -1937,7 +1938,8 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
         let (root, pso) = match host.compute_pipeline(&shader) {
             Ok(p) => p,
             // WARP does not support fixed WaveSize(32) on SM 6.6.
-            Err(e) if warp => {
+            Err(e) if warp || e.starts_with("unsupported") => {
+                // mac S6: the executor says "unsupported" for what MSC cannot convert (f64).
                 eprintln!("{label}: compute_pipeline skipped ({e})");
                 continue;
             }
@@ -1980,27 +1982,9 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
 /// Whether the hardware adapter is an AMD RDNA card's: what the translator
 /// writes for one ([`super::rdna`]) holds there.
 fn rdna_card() -> bool {
-    use windows::Win32::Graphics::Direct3D12::*;
-    use windows::Win32::Graphics::Dxgi::*;
     let Ok(host) = Host::new(false) else { return false };
-    let mut waves = D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
-    // SAFETY: plain queries.
-    unsafe {
-        let amd = CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
-            .and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter1>(host.device.GetAdapterLuid()))
-            .and_then(|a| a.GetDesc1())
-            .is_ok_and(|d| d.VendorId == 0x1002);
-        amd && host
-            .device
-            .CheckFeatureSupport(
-                D3D12_FEATURE_D3D12_OPTIONS1,
-                (&raw mut waves).cast(),
-                size_of_val(&waves) as u32,
-            )
-            .is_ok()
-            && waves.WaveLaneCountMin == 32
-            && waves.WaveLaneCountMax == 64
-    }
+    let caps = host.caps();
+    caps.amd && caps.wave_lane_min == 32 && caps.wave_lane_max == 64
 }
 
 /// The forms written for the console's own kind of hardware give, on such a
@@ -2269,7 +2253,7 @@ fn build_table_typed_cs(body: &[u32], used: Vec<UsedResource>) -> HostShader {
 /// GPU and WARP.
 #[test]
 fn typed_d16_table_uav_roundtrip_uint_sint_and_float() {
-    use windows::Win32::Graphics::Dxgi::Common::{
+    use super::host::api::{
         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_SINT,
         DXGI_FORMAT_R16G16B16A16_UINT,
     };
@@ -2406,7 +2390,7 @@ fn typed_d16_table_uav_roundtrip_uint_sint_and_float() {
 /// exact integer bits for `R16_UINT`, `R16_SINT`, and `R32_UINT`.
 #[test]
 fn typed_non_d16_table_load_preserves_integer_bits() {
-    use windows::Win32::Graphics::Dxgi::Common::{
+    use super::host::api::{
         DXGI_FORMAT_R16_SINT, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT,
     };
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());

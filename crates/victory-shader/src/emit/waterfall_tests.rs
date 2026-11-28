@@ -3,7 +3,7 @@
 //! by `dxil.dll` when present, and run on the host GPU and WARP, each lane
 //! reading the resource its own descriptor names.
 
-use windows::Win32::Graphics::Direct3D12::*;
+use super::host::api::*;
 
 use super::host::{Dispatch, Host, Root, Stride, View};
 use super::{HostShader, lower, validator};
@@ -232,7 +232,7 @@ fn lanes_sample_the_entry_their_offset_names_in_the_console_waterfall() {
     use crate::resource::tests::WATERFALL_INDEXED_WAVE32;
     let shader = build(WATERFALL_INDEXED_WAVE32, false);
     let results = sampled(&shader);
-    assert!(!results.is_empty());
+    assert!(!results.is_empty() || cfg!(target_os = "macos")); // mac S6: no executor, the case skips
     for (label, red) in results {
         // Even lanes hold entry 0's offset, odd lanes entry 1's.
         let want: Vec<f32> = (0..32).map(|l| [1.0, 2.0][l & 1]).collect();
@@ -248,7 +248,7 @@ fn lanes_sample_their_own_texture_in_a_waterfall_narrowed_by_v_cmpx() {
     for folded in [false, true] {
         let shader = build(&cmpx_waterfall(false, folded), false);
         let results = sampled(&shader);
-        assert!(!results.is_empty());
+        assert!(!results.is_empty() || cfg!(target_os = "macos")); // mac S6: no executor, the case skips
         for (label, red) in results {
             assert_eq!(red, want, "{label}, folded {folded}");
         }

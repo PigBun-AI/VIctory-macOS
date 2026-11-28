@@ -89,13 +89,17 @@ pub mod live;
 pub mod livelib;
 pub mod wire;
 mod container;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod cube_lod_tests;
 #[cfg(all(test, windows))]
 mod diff_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod intersect_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
+pub mod host;
+// mac S6: the hardware host of the tests on macOS: an executor process on the Metal back.
+#[cfg(all(target_os = "macos", test))]
+#[path = "host_exec.rs"]
 pub mod host;
 mod lower;
 mod mesh_order; // mac S2
@@ -105,7 +109,9 @@ pub mod mesh_cs; // mac S5
 #[cfg(test)]
 mod mesh_cs_tests; // mac S5
 mod own_bits;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
+mod oracle_tests; // mac S6: the per-mnemonic opcode oracle (docs/mac/opcode-oracle.md)
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod permlane_tests;
 mod rect;
 mod sampler;
@@ -113,18 +119,24 @@ mod shader;
 mod threading;
 #[cfg(windows)]
 pub mod validator;
+// mac S6: no DXIL validator on macOS (the tests skip their validation; MSC refuses a bad program).
+#[cfg(all(target_os = "macos", test))]
+#[path = "validator_none.rs"]
+pub mod validator;
 pub mod vertex_flat; // mac S1
 #[cfg(test)]
 mod vertex_flat_tests; // mac S1
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod probe_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod size_tests;
-#[cfg(all(test, windows))]
+#[cfg(test)]
+mod f2_tests; // mac S8
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod valu_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod waterfall_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod wave64_tests;
 #[cfg(test)]
 mod s3_tests; // mac S3
@@ -141,6 +153,7 @@ pub use sampler::StaticSampler;
 pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
 pub use mesh_cs::MeshComputeMode; // mac S5
 pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
+pub use lower::{f16_native, f16_nearest, host_metal_chain, set_host_metal_chain}; // mac S7
 pub use lower::sunclamp::export_sat;
 pub use rect::{clip_as_varying, rect_list_gs, writes_clip_distance, CLIP_VARYING}; // mac S4
 pub use shader::{
@@ -1940,7 +1953,7 @@ mod tests {
     }
 
     /// A pixel shader writing a constant colour.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn constant_color() -> Vec<u8> {
         let mut s = Shader::new(true);
         s.outputs.push(SigElement {
@@ -2066,12 +2079,10 @@ mod tests {
     /// exports the differences in x and y: 1 and -1 in every pixel of a
     /// triangle, those at its edges too, whose neighbours are helpers.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn quad_neighbours_at_a_triangles_edge_are_read() {
+        use super::host::api::{D3D12_SHADER_VISIBILITY_MESH, D3D12_SHADER_VISIBILITY_PIXEL};
         use super::host::{Draw, Host, Root};
-        use windows::Win32::Graphics::Direct3D12::{
-            D3D12_SHADER_VISIBILITY_MESH, D3D12_SHADER_VISIBILITY_PIXEL,
-        };
         let _one = super::valu_tests::ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2297,13 +2308,10 @@ mod tests {
     /// mesh shaders): triangle (0, 1, 2) covers the target with its corners'
     /// edge flags set as without them; with the culling bit, nothing is lit.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn edge_flagged_triangles_draw_as_unflagged_ones() {
+        use super::host::api::D3D12_SHADER_VISIBILITY_MESH;
         use super::host::{Draw, Host, Root};
-        use windows::Win32::Graphics::Direct3D12::{
-            D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_D3D12_OPTIONS7,
-            D3D12_MESH_SHADER_TIER_NOT_SUPPORTED, D3D12_SHADER_VISIBILITY_MESH,
-        };
         let _one = super::valu_tests::ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2314,16 +2322,7 @@ mod tests {
                 eprintln!("no SM 6.6 {label} device; skipped");
                 continue;
             };
-            let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
-            // SAFETY: the query writes the structure of the given size.
-            let queried = unsafe {
-                host.device.CheckFeatureSupport(
-                    D3D12_FEATURE_D3D12_OPTIONS7,
-                    (&raw mut options).cast(),
-                    size_of_val(&options) as u32,
-                )
-            };
-            if queried.is_err() || options.MeshShaderTier == D3D12_MESH_SHADER_TIER_NOT_SUPPORTED {
+            if !host.caps().mesh_shaders {
                 eprintln!("no mesh shaders on the {label} device; skipped");
                 continue;
             }
@@ -2598,7 +2597,7 @@ mod tests {
     /// are 0, the others are read). On the software adapter only: run the
     /// test once plain and once with `VICTORY_SHADER_OPT=127`.
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6
     fn scalar_buffer_loads_read_the_same_dwords_one_call_or_four() {
         // (first register, dwords) of the three loads, in order.
         const LOADS: [(u32, u32); 3] = [(16, 8), (24, 4), (32, 16)];
@@ -2692,7 +2691,8 @@ mod tests {
             v.validate(&mut dxil).unwrap();
         }
         let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-        let Ok(host) = super::host::Host::new(true) else {
+        // mac S6: no software adapter on macOS, the device itself runs it.
+        let Ok(host) = super::host::Host::new(cfg!(not(target_os = "macos"))) else {
             eprintln!("no software adapter; the dispatch is skipped");
             return;
         };
@@ -2849,7 +2849,7 @@ mod tests {
         ) {
             v.validate(&mut dxil).unwrap();
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
         if let Ok(host) = super::host::Host::new(false) {
             let cs = super::HostShader {
                 stage: super::HwStage::Cs,
@@ -3235,7 +3235,7 @@ mod barycentric_tests {
     }
 
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))] // mac S6: the executor host draws too
     fn first_half_values_render_on_hardware_and_warp() {
         use super::bitcode::{Attr, Term};
         use super::host::{Draw, Host};
@@ -3290,28 +3290,24 @@ mod barycentric_tests {
             1.0, 0.5, 1.0, 10.0, 0.0, 0.0, 0.0,
         ];
         let mut ran = 0;
-        for (backend, warp) in [("hardware", false), ("WARP", true)] {
+        'devices: for (backend, warp) in [("hardware", false), ("WARP", true)] {
             let Ok(host) = Host::new(warp) else { continue };
-            let mut options =
-                windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
-            // SAFETY: a correctly sized output for the feature query.
-            unsafe {
-                host.device
-                    .CheckFeatureSupport(
-                        windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_D3D12_OPTIONS3,
-                        (&raw mut options).cast(),
-                        size_of_val(&options) as u32,
-                    )
-                    .unwrap();
-            }
-            if !options.BarycentricsSupported.as_bool() {
+            if !host.caps().barycentrics {
                 eprintln!("no barycentrics on {backend}; skipped");
                 continue;
             }
             for paired in [false, true] {
                 let ps = first_half_pixel(paired);
                 validate(&ps);
-                let (root, pso) = host.pipeline(&vs, &ps).expect("interpolation pipeline");
+                let (root, pso) = match host.pipeline(&vs, &ps) {
+                    // mac S6: MSC 4.0.3 has no `attributeAtVertex` (the pull-model
+                    // barycentrics): the device converter refuses, the case skips.
+                    Err(e) if e.starts_with("unsupported") => {
+                        eprintln!("{backend}: {e}; skipped");
+                        continue 'devices;
+                    }
+                    made => made.expect("interpolation pipeline"),
+                };
                 let out = host
                     .draw(
                         &root,

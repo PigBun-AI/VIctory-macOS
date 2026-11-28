@@ -1106,17 +1106,27 @@ mod tests {
         // Windows 10's winhttp.dll); the HLE supplies those itself, so skip
         // them only when the host really lacks them.
         const NEWER_WINDOWS_ONLY: &[&str] = &["WinHttpGetProxySettingsEx"];
+        // What Wine's own ws2_32 and winhttp do not export (checked against CrossOver Wine 26.3, wine-11.0):
+        // the host has nothing to forward to there. The title imports none of them by name (the static import
+        // census, research/census/title-isa-20261127/import-callsites.tsv, has no call site of them).
+        const WINE_LACKS: &[&str] = &["WSAConnectByList", "GetAddrInfoExA", "WinHttpGetProxySettingsEx"];
+        let on_wine = crate::modules::xmem::on_wine();
+        let mut lacking = Vec::new();
         for e in m.exports.iter().filter(|e| !e.name.starts_with('#')) {
             let dll = if e.name.starts_with("WinHttp") {
                 "winhttp.dll"
             } else {
                 "ws2_32.dll"
             };
-            let present = crate::host::function(dll, e.name).is_some();
-            if !present && NEWER_WINDOWS_ONLY.contains(&e.name) {
+            if crate::host::function(dll, e.name).is_some() {
                 continue;
             }
-            assert!(present, "{dll} lacks {}", e.name);
+            if NEWER_WINDOWS_ONLY.contains(&e.name) || (on_wine && WINE_LACKS.contains(&e.name)) {
+                eprintln!("{dll} lacks {} (allowed on this host)", e.name);
+                continue;
+            }
+            lacking.push(format!("{dll}!{}", e.name));
         }
+        assert!(lacking.is_empty(), "the host lacks {lacking:?}");
     }
 }

@@ -378,6 +378,9 @@ mod tests {
         use windows_sys::Win32::System::Memory::{
             MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, PAGE_READONLY, PAGE_READWRITE, VirtualAlloc, VirtualProtect,
         };
+        // The vector stores are changed only where avx2 is there (the title runs on such a CPU). Rosetta
+        // hides it unless ROSETTA_ADVERTISE_AVX=1 (tools/macos/test-wine.sh sets it); say so, not "left 0 right 1".
+        assert!(std::is_x86_feature_detected!("avx2"), "no avx2 in this process: under Rosetta set ROSETTA_ADVERTISE_AVX=1");
         // Each stores at r9+40h (r10 is 0): rdx, r13 or a vector register 0, 1, 9.
         let stores: &[(&[u8], usize)] = &[
             (&[0x49, 0x89, 0x51, 0x40], 0),                         // (four bytes: left alone)

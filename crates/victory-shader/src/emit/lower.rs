@@ -1168,18 +1168,113 @@ pub(super) fn with_local_waves<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// `VICTORY_F16_NEAREST=1`: the results of 16-bit float operations (`v_add_f16`,
-/// `v_mul_f16`, `v_cvt_f16_f32` ...) are rounded to nearest as the console rounds them
-/// ([`Lower::f16_nearest`]) instead of as the host's `f32tof16` does (toward zero on NVIDIA:
-/// the last place of a result that is not exact is then one lower than the console's).
-/// Off by default: it is exact but untried in a game run, and adds instructions to every
-/// such operation. The wave sum of 16-bit floats ([`Lower::half_sum`]) is always exact.
-fn f16_nearest_on() -> bool {
+/// `VICTORY_F16_NEAREST` (default ON, `0` turns it off; mac patch S7): the results of 16-bit
+/// float operations (`v_add_f16`, `v_mul_f16`, `v_cvt_f16_f32`, `v_fma_mix{lo,hi}_f16`,
+/// `v_pk_*_f16`, `v_interp_p2_f16` ...) are rounded to nearest as the console rounds them
+/// ([`Lower::f16_nearest`]) instead of as the host's `f32tof16` does: toward zero on NVIDIA and
+/// in Metal Shader Converter (D3D11.3 spec 3.2.2 allows it), so that the last place of a result
+/// that is not exact was one lower than the console's. It costs about a dozen instructions per
+/// result. `v_cvt_pkrtz_f16_f32` rounds toward zero on the console and keeps its own form
+/// ([`Lower::f16_toward_zero`]); the wave sum of 16-bit floats ([`Lower::half_sum`]) is always
+/// exact. Part of the shader cache key by its effective state ([`f16_nearest`]).
+fn f16_nearest_on() -> bool { // mac S7
     #[cfg(test)]
     if let Some(on) = TEST_F16_NEAREST.get() {
         return on;
     }
-    crate::emit::live::var_os("VICTORY_F16_NEAREST").is_some_and(|v| v == "1")
+    f16_nearest_for(crate::emit::live::var("VICTORY_F16_NEAREST").as_deref())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`f2_read_first_on`], for its thread only.
+    pub(super) static TEST_F2_READ_FIRST: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `VICTORY_F2_READ_FIRST` (mac S8): a 64-bit image atomic min/max that returns the original is
+/// lowered as a 64-bit load, then the atomic with its result unused. On unless exactly "0".
+fn f2_read_first_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_F2_READ_FIRST.get() {
+        return on;
+    }
+    !matches!(crate::emit::live::var("VICTORY_F2_READ_FIRST").as_deref().map(str::trim), Some("0"))
+}
+
+/// `VICTORY_F16_NATIVE` (mac S7): the nearest rounding of 16-bit results as one `fptrunc float to
+/// half` (native 16-bit types, SM 6.2) instead of [`Lower::f16_nearest`]'s dozen operations. Default:
+/// on for our own Metal chain only ([`host_metal_chain`]: the exe runs on the Metal backend, as S5 decides
+/// it), whose Metal Shader Converter compiles the `fptrunc` to Metal's `half(x)`, round to nearest even;
+/// off elsewhere, D3DMetal included (its translation stays as it was: it is the reference path, and a
+/// D3D12 host without `Native16BitShaderOpsSupported` would refuse the module). `1` and `0` force it.
+fn f16_native_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_F16_NATIVE.get() {
+        return on;
+    }
+    f16_native_for(crate::emit::live::var("VICTORY_F16_NATIVE").as_deref(), host_metal_chain())
+}
+
+/// [`f16_native_on`]'s decision: `1` and `0` force it, else it follows the chain. Pure, for testing.
+pub(super) fn f16_native_for(value: Option<&str>, metal_chain: bool) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => metal_chain,
+    }
+}
+
+static HOST_METAL_CHAIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// mac S7: tells the translator whether the exe runs on our own Metal chain ([`host_metal_chain`]); victory-gpu
+/// says it at host creation (the same decision as S5's: `VICTORY_METAL_OUT`, which `run.sh` exports).
+pub fn set_host_metal_chain(on: bool) {
+    HOST_METAL_CHAIN.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`host_metal_chain`], for its thread only.
+    pub(super) static TEST_METAL_CHAIN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the exe runs on our own Metal chain (not D3DMetal, not Windows): what [`set_host_metal_chain`]
+/// said, else `VICTORY_METAL_OUT` set and not empty (what a tool that translates for the Metal chain
+/// exports), else no.
+pub fn host_metal_chain() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_METAL_CHAIN.get() {
+        return on;
+    }
+    match HOST_METAL_CHAIN.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *ENV.get_or_init(|| std::env::var_os("VICTORY_METAL_OUT").is_some_and(|v| !v.is_empty()))
+        }
+    }
+}
+
+/// Whether [`f16_native_on`] holds now, for the shader cache's key.
+pub fn f16_native() -> bool { // mac S7
+    f16_nearest_on() && f16_native_on()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`f16_native_on`], for its thread only.
+    pub(super) static TEST_F16_NATIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// On unless the value is exactly "0" (after trimming). Pure, for testing.
+pub(super) fn f16_nearest_for(value: Option<&str>) -> bool { // mac S7
+    value.map(str::trim) != Some("0")
+}
+
+/// Whether 16-bit float results are rounded to nearest ([`f16_nearest_on`]), for the shader cache's key.
+pub fn f16_nearest() -> bool { // mac S7
+    f16_nearest_on()
 }
 
 #[cfg(test)]
@@ -1204,7 +1299,10 @@ pub fn host_settings() -> [u32; 4] {
         host_max_wave(),
         super::shader::view_heap_limit(),
         super::shader::raw_views(),
-        host_rdna() | u32::from(!host_attribute_at_vertex()) << 31 | super::mesh_compute_bits(super::host_mesh_compute()), // mac S5: bits 29, 30
+        host_rdna()
+            | u32::from(!host_attribute_at_vertex()) << 31
+            | super::mesh_compute_bits(super::host_mesh_compute()) // mac S5: bits 29, 30
+            | u32::from(host_metal_chain()) << 28, // mac S7: bit 28
     ]
 }
 
@@ -4219,6 +4317,33 @@ impl<'a> Lower<'a> {
             46,
             &[a, b, c],
         )
+    }
+
+    /// The f16 (low bits) of the f32 result `f` of a 16-bit float operation: to nearest, ties to
+    /// even, as the console rounds it ([`f16_nearest_on`]), or as the host's conversion does.
+    /// On a host with native 16-bit types ([`f16_native_on`]) the nearest rounding is one
+    /// `fptrunc float to half` (LLVM's is to nearest even), else the dozen operations of
+    /// [`Self::f16_nearest`].
+    fn f16_result(&mut self, f: V) -> V { // mac S7
+        if f16_nearest_on() {
+            if f16_native_on() {
+                return self.f16_fptrunc(f);
+            }
+            self.f16_nearest(f)
+        } else {
+            let i32t = self.s.t.i32;
+            self.s.op(self.cur, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
+        }
+    }
+
+    /// `fptrunc` of `f` to a `half`, its bits zero-extended to a dword (marks the module native 16-bit).
+    fn f16_fptrunc(&mut self, f: V) -> V { // mac S7
+        self.s.flags |= flags::NATIVE_16;
+        let (half, i16t, i32t) = (self.s.m.half(), self.s.m.int(16), self.s.t.i32);
+        let c = self.cur;
+        let h = self.s.m.cast(c, Cast::FpTrunc, f, half);
+        let bits = self.s.m.cast(c, Cast::Bitcast, h, i16t);
+        self.s.m.cast(c, Cast::ZExt, bits, i32t)
     }
 
     /// `f` as an f16 in the low bits, rounded toward zero: the nearest-even
@@ -9138,9 +9263,7 @@ impl<'a> Lower<'a> {
                     Some(o) => self.i32_of(o)?,
                     None => self.s.m.i32(0),
                 };
-                let h = self
-                    .s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, self.s.t.i32, 130, &[r]);
+                let h = self.f16_result(r); // mac S7
                 let (keep, h) = if name == "v_fma_mixhi_f16" {
                     let k16 = self.s.m.i32(16);
                     (0xFFFF, self.s.m.bin(c, Bin::Shl, h, k16))
@@ -9165,9 +9288,7 @@ impl<'a> Lower<'a> {
             "v_cvt_f16_f32" if v.opsel == 0 => {
                 // Rounded to nearest even (the MODE default) into the low half.
                 let a = f(self, 0)?;
-                let r = self
-                    .s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, self.s.t.i32, 130, &[a]);
+                let r = self.f16_result(a); // mac S7
                 let Some(Operand::Vector { reg, .. }) = v.dst else {
                     return Err("a 16-bit result outside a VGPR");
                 };
@@ -9977,14 +10098,9 @@ impl<'a> Lower<'a> {
                 f = l.unary(7, f);
             }
             // The console rounds to nearest; the host's conversion may round toward zero
-            // (NVIDIA's does), one step of the last place lower where the two differ.
-            // shortcut: the host's conversion unless `VICTORY_F16_NEAREST=1`
-            // ([`f16_nearest_on`]), which costs a dozen instructions per result.
-            let h = if f16_nearest_on() {
-                l.f16_nearest(f)
-            } else {
-                l.s.op(l.cur, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
-            };
+            // (NVIDIA's and Metal Shader Converter's do), one step of the last place lower
+            // where the two differ ([`f16_nearest_on`]).
+            let h = l.f16_result(f); // mac S7
             l.write_half(inst, h, guard)
         };
         if name == "v_cvt_f16_f32" {
@@ -10306,7 +10422,7 @@ impl<'a> Lower<'a> {
             return Err("modifiers on a packed integer operation");
         }
         let c = self.cur;
-        let (i32t, f32t) = (self.s.t.i32, self.s.t.f32);
+        let f32t = self.s.t.f32;
         let mut halves = Vec::new();
         for high in [false, true] {
             let mut xs = Vec::new();
@@ -10342,8 +10458,7 @@ impl<'a> Lower<'a> {
                 if v.clamp {
                     f = self.unary(7, f);
                 }
-                self.s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
+                self.f16_result(f) // mac S7
             } else {
                 let k16 = self.s.m.i32(16);
                 let sext = |l: &mut Self, x: V| {
@@ -11215,10 +11330,11 @@ impl<'a> Lower<'a> {
                         if clamp {
                             f = self.unary(7, f);
                         }
-                        let lo = to_f16(self, f);
+                        // (an interpolated value: rounded as the console rounds it)
+                        let lo = self.f16_result(f); // mac S7
                         return self.write_half(inst, lo, None);
                     }
-                    let lo = to_f16(self, f);
+                    let lo = self.f16_result(f); // mac S7
                     self.low_half(inst, reg, lo)
                 } else if matches!(eval, Eval::Mode(1)) {
                     // The whole dword of a flat input: both halves.
@@ -11543,11 +11659,31 @@ impl<'a> Lower<'a> {
                 )
             };
             let at = self.begin_guarded(guard);
+            // mac S8: MSC refuses a 64-bit atomic min/max whose original value is used
+            // (Apple GPUs do the atomic, not the return; docs/metal/dxop.md). The original is
+            // read first, as one 64-bit load, and the atomic's result is left unused: with
+            // another lane or group writing the texel between the two, the load is older than
+            // the atomic's own original, which a max (only upward) tolerates for its use here.
+            let read_first = cache.glc && wide && !compare && (4..=7).contains(&code) && f2_read_first_on();
+            let loaded = if read_first {
+                self.s.flags |= flags::TYPED_UAV_LOADS;
+                let i32t = self.s.t.i32;
+                let res = self.s.m.named_struct("dx.types.ResRet.i32", vec![i32t; 5]);
+                let (iu, h) = (self.s.m.undef(i32t), args[0]);
+                let mut largs = vec![h, iu];
+                largs.extend(&args[2..5]);
+                largs.extend([iu, iu, iu]);
+                let l = self.s.op(self.cur, "textureLoad.i32", Attr::ReadOnly, res, 66, &largs);
+                let (lo, hi) = (self.s.m.extract(self.cur, l, 0), self.s.m.extract(self.cur, l, 1));
+                Some(self.join64(lo, hi))
+            } else {
+                None
+            };
             let r = self
                 .s
                 .op(self.cur, intrinsic, Attr::NoUnwind, ty, opcode, &args);
             if cache.glc {
-                let old = self.end_guarded(at, &[(r, original)])[0];
+                let old = self.end_guarded(at, &[(loaded.unwrap_or(r), original)])[0];
                 if wide {
                     let (lo, hi) = self.split64(old);
                     self.write(inst, Reg::V(reg), lo, None);
@@ -13628,6 +13764,58 @@ mod tests {
     use crate::{io, ir, resource, structure};
 
     const S_ENDPGM: u32 = 0xBF81_0000;
+
+    /// mac S7: rounding of 16-bit results to nearest is on unless the variable is exactly "0".
+    #[test]
+    fn f16_nearest_is_on_unless_switched_off() {
+        use super::f16_nearest_for;
+        assert!(f16_nearest_for(None));
+        assert!(f16_nearest_for(Some("1")));
+        assert!(f16_nearest_for(Some("")));
+        assert!(f16_nearest_for(Some("yes")));
+        assert!(!f16_nearest_for(Some("0")));
+        assert!(!f16_nearest_for(Some(" 0 ")));
+    }
+
+    /// mac S7: the native 16-bit module follows our own Metal chain, not "no `attributeAtVertex`" (D3DMetal has
+    /// neither the capability nor our chain); `1` and `0` force it either way.
+    #[test]
+    fn f16_native_is_on_by_default_on_the_metal_chain_only() {
+        use super::f16_native_for;
+        // our Metal chain: on
+        assert!(f16_native_for(None, true));
+        assert!(f16_native_for(Some(""), true));
+        assert!(f16_native_for(Some("x"), true));
+        // D3DMetal (no attributeAtVertex, but no VICTORY_METAL_OUT) and Windows: off
+        assert!(!f16_native_for(None, false));
+        assert!(!f16_native_for(Some(""), false));
+        // forced
+        assert!(f16_native_for(Some("1"), false));
+        assert!(f16_native_for(Some(" 1 "), false));
+        assert!(!f16_native_for(Some("0"), true));
+    }
+
+    /// mac S7: the same through the host: D3DMetal's host (no `attributeAtVertex`, not the Metal chain) gets the
+    /// sequence, the Metal chain's the `fptrunc`; the chain is in the translation settings (bit 28).
+    #[test]
+    fn f16_native_follows_the_chain_the_host_says() {
+        use super::{TEST_ATTRIBUTE_AT_VERTEX, TEST_F16_NATIVE, TEST_METAL_CHAIN, f16_native, host_settings};
+        TEST_F16_NATIVE.set(None);
+        TEST_ATTRIBUTE_AT_VERTEX.set(Some(false)); // both Mac chains lack it
+        TEST_METAL_CHAIN.set(Some(false)); // D3DMetal
+        let (d3dm, d3dm_word) = (f16_native(), host_settings());
+        TEST_METAL_CHAIN.set(Some(true)); // ours
+        let (metal, metal_word) = (f16_native(), host_settings());
+        TEST_METAL_CHAIN.set(None);
+        TEST_ATTRIBUTE_AT_VERTEX.set(None);
+        assert!(!d3dm, "D3DMetal keeps the sequence");
+        assert!(metal, "the Metal chain gets the fptrunc");
+        assert_ne!(d3dm_word, metal_word);
+        assert_eq!(d3dm_word[3] >> 28 & 1, 0);
+        assert_eq!(metal_word[3] >> 28 & 1, 1);
+        assert_eq!(d3dm_word[..3], metal_word[..3]);
+        assert_eq!(d3dm_word[3] & 0x0FFF_FFFF, metal_word[3] & 0x0FFF_FFFF);
+    }
 
     #[test]
     fn packed_pixel_inputs_find_their_second_row() {

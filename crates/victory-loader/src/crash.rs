@@ -918,7 +918,17 @@ mod tests {
         assert_eq!(memory_at(base + 0x3008), "no access");
         // SAFETY: releases the reservation made above.
         unsafe { VirtualFree(base as *mut _, 0, MEM_RELEASE) };
-        assert_eq!(memory_at(base + 8), "nothing mapped there");
+        // Free for now: a test running beside this one may reserve the address again at once (seen
+        // under Wine, 1 run in 25 of the suite); that is not what is asked here.
+        let after = memory_at(base + 8);
+        let taken = {
+            use windows_sys::Win32::System::Memory::{MEM_FREE, MEMORY_BASIC_INFORMATION, VirtualQuery};
+            // SAFETY: plain data filled in by the query.
+            let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: a valid out pointer of the right size.
+            unsafe { VirtualQuery((base + 8) as *const _, &mut info, size_of_val(&info)) != 0 && info.State != MEM_FREE }
+        };
+        assert!(after == "nothing mapped there" || taken, "{after}");
         assert_eq!(memory_at(0), "nothing mapped there");
         assert_eq!(memory_at(usize::MAX), "outside the address space");
         // This test's own code: an image page, named by its module.

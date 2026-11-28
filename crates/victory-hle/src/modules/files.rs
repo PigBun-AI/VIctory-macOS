@@ -907,8 +907,27 @@ mod tests {
         let f = _wfopen(w(&file).as_ptr(), w("wb").as_ptr());
         assert!(!f.is_null(), "{file}");
         host!("ucrtbase.dll", "fclose": extern "C" fn(File) -> i32)(f);
-        assert_ne!(DeleteFileW(w(&format!("{deep}/f.txt")).as_ptr()), 0);
-        assert_ne!(RemoveDirectoryW(w(&deep).as_ptr()), 0);
+        // Under Wine a file just closed can still be refused (ERROR_SHARING_VIOLATION, 32) for a few
+        // milliseconds, one suite run in 40 on a loaded Mac: its server drops the open file after the
+        // close returned. The delete is tried again there; anywhere else it must work at once.
+        let retry = |call: &dyn Fn() -> i32| {
+            let mut tries = 0;
+            loop {
+                let done = call();
+                let error = host!("kernel32.dll", "GetLastError": extern "system" fn() -> u32)();
+                if done != 0 || error != 32 || !crate::modules::xmem::on_wine() || tries >= 100 {
+                    return (done, error);
+                }
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        let file = w(&format!("{deep}/f.txt"));
+        let (deleted, error) = retry(&|| DeleteFileW(file.as_ptr()));
+        assert_ne!(deleted, 0, "DeleteFileW failed with error {error}");
+        let deep_w = w(&deep);
+        let (removed, error) = retry(&|| RemoveDirectoryW(deep_w.as_ptr()));
+        assert_ne!(removed, 0, "RemoveDirectoryW failed with error {error}");
     }
 
     /// Windows finds a file whatever the case of its name (the console's

@@ -24,6 +24,11 @@ fn workspace_root() -> PathBuf {
 /// for tests, so that it follows `CARGO_TARGET_DIR` like the rest of the
 /// build.
 fn build_probe() -> PathBuf {
+    // Under Wine there is no cargo to run: tools/macos/test-wine.sh builds the fixture for the Windows
+    // target first and names the DLL.
+    if let Some(built) = std::env::var_os("VICTORY_HLE_PROBE").map(PathBuf::from).filter(|p| p.exists()) {
+        return built;
+    }
     let manifest = workspace_root().join("tests/fixtures/hle-probe/Cargo.toml");
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("hle-probe");
     let status = Command::new(env!("CARGO"))
