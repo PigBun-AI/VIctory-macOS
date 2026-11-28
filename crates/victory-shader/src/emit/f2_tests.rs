@@ -1,4 +1,4 @@
-//! Mac patch F2: a 64-bit image atomic max that returns the original is lowered as a 64-bit
+//! Mac patch S8: a 64-bit image atomic max that returns the original is lowered as a 64-bit
 //! load and an atomic whose result is unused (MSC refuses the other form).
 
 use super::lower;
@@ -82,7 +82,7 @@ const STORE: &[u32] = &[
     0xBF81_0000, // s_endpgm
 ];
 
-/// mac F2: a 64-bit image atomic max that returns the original (`image_atomic_umax` of two
+/// mac S8: a 64-bit image atomic max that returns the original (`image_atomic_umax` of two
 /// channels with GLC) reads the texel first and leaves the atomic's result unused, so MSC takes it;
 /// without GLC, or with `VICTORY_F2_READ_FIRST=0`, nothing is read first.
 #[test]

@@ -76,7 +76,7 @@ fn build() -> [u8; 32] {
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_BVH_FENCES",
             "VICTORY_BVH_BOUNDS",
-            "VICTORY_F2_READ_FIRST", // mac F2
+            "VICTORY_F2_READ_FIRST", // mac S8
             // The tone-mapping pixel program's samples clamped alike (one program; the key is global here).
             "VICTORY_TM_CLAMP_HDR",
         ] {
@@ -87,7 +87,7 @@ fn build() -> [u8; 32] {
             }
             bytes.push(0);
         }
-        // 16-bit float results rounded to nearest as the console does (mac F1), default on: keyed
+        // 16-bit float results rounded to nearest as the console does (mac S7), default on: keyed
         // by the effective state like the one below.
         bytes.extend_from_slice(b"VICTORY_F16_NEAREST=");
         bytes.push(victory_shader::emit::f16_nearest() as u8);

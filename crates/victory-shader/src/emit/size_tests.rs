@@ -372,7 +372,7 @@ fn a_tables_raw_buffer_is_read_at_its_raw_twin() {
     }
 }
 
-/// mac F2: a 64-bit image atomic max that returns the original (`image_atomic_umax` of two
+/// mac S8: a 64-bit image atomic max that returns the original (`image_atomic_umax` of two
 /// channels with GLC) reads the texel first and leaves the atomic's result unused, so MSC takes it;
 /// without GLC, or with `VICTORY_F2_READ_FIRST=0`, nothing is read first.
 #[test]

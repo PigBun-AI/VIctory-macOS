@@ -31,7 +31,7 @@ enum TypeDef {
     Int(u32),
     Float,
     Double,
-    /// 16-bit float (mac F1: `fptrunc`, native low precision).
+    /// 16-bit float (mac S7: `fptrunc`, native low precision).
     Half,
     /// Pointee and address space.
     Ptr(Ty, u32),
@@ -110,7 +110,7 @@ pub(crate) enum Cast {
     FpToSi = 4,
     UiToFp = 5,
     SiToFp = 6,
-    /// `fptrunc`: to the narrower float, to nearest even (mac F1).
+    /// `fptrunc`: to the narrower float, to nearest even (mac S7).
     FpTrunc = 7,
     Bitcast = 11,
 }
@@ -256,7 +256,7 @@ impl Module {
         self.ty(TypeDef::Double)
     }
     pub fn half(&mut self) -> Ty {
-        self.ty(TypeDef::Half) // mac F1
+        self.ty(TypeDef::Half) // mac S7
     }
     pub fn ptr(&mut self, to: Ty) -> Ty {
         self.ty(TypeDef::Ptr(to, 0))
@@ -590,7 +590,7 @@ impl Module {
                 TypeDef::Void => w.record(2, &[]),
                 TypeDef::Float => w.record(3, &[]),
                 TypeDef::Double => w.record(4, &[]),
-                TypeDef::Half => w.record(10, &[]), // mac F1
+                TypeDef::Half => w.record(10, &[]), // mac S7
                 TypeDef::Int(b) => w.record(7, &[u64::from(*b)]),
                 TypeDef::Ptr(p, space) => w.record(8, &[u64::from(p.0), u64::from(*space)]),
                 TypeDef::Array(n, e) => w.record(11, &[u64::from(*n), u64::from(e.0)]),
@@ -615,7 +615,7 @@ impl Module {
         w.exit();
 
         w.record(2, &chars("dxil-ms-dx"));
-        // mac F1: a module with a `half` has the layout DXC writes for native 16-bit types
+        // mac S7: a module with a `half` has the layout DXC writes for native 16-bit types
         let native16 = self.types.contains(&TypeDef::Half);
         w.record(
             3,

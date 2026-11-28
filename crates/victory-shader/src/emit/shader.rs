@@ -128,7 +128,7 @@ pub(crate) mod flags {
     pub const ATOMIC_HEAP64: u64 = 1 << 32;
     pub const RESOURCE_HEAP: u64 = 1 << 30;
     pub const SAMPLER_HEAP: u64 = 1 << 31;
-    /// Native low precision (a `half` in the module; mac F1). `SFI0` bit 42.
+    /// Native low precision (a `half` in the module; mac S7). `SFI0` bit 42.
     pub const NATIVE_16: u64 = 1 << 23;
 }
 
@@ -1051,7 +1051,7 @@ impl Shader {
             features |= 0x1000_0000;
         }
         if self.flags & flags::NATIVE_16 != 0 {
-            features |= 1 << 42; // mac F1
+            features |= 1 << 42; // mac S7
         }
         let sfi0 = features.to_le_bytes();
         // mac S5: a compute form has no signatures (its mesh outputs live in the scratch buffer).
