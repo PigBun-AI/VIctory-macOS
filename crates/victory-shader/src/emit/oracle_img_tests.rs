@@ -254,7 +254,7 @@ fn run_sample_row(r: &SampleRow) -> Outcome {
                 continue;
             }
         };
-        let o = run_image(&shader, &[sampler_desc(smp)], cases.len(), |got| {
+        let o = run_image(&shader, &[sampler_desc(smp)], cases.len(), smp.compare, |got| {
             let mut bad = None;
             for (i, &(u, v, o)) in cases.iter().enumerate() {
                 let want = match r.kind {
@@ -283,7 +283,7 @@ fn run_sample_row(r: &SampleRow) -> Outcome {
 }
 
 /// Dispatches a sampled-image program with the 4x4 texture; `check` sees the output UAV.
-fn run_image(shader: &HostShader, samplers: &[D3D12_SAMPLER_DESC], cases: usize, mut check: impl FnMut(&[Vec<u32>]) -> Option<String>) -> Outcome {
+fn run_image(shader: &HostShader, samplers: &[D3D12_SAMPLER_DESC], cases: usize, depth: bool, mut check: impl FnMut(&[Vec<u32>]) -> Option<String>) -> Outcome {
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     let Ok(host) = Host::new(false) else {
         return Outcome::Refused("no device".into());
@@ -294,12 +294,15 @@ fn run_image(shader: &HostShader, samplers: &[D3D12_SAMPLER_DESC], cases: usize,
         Err(e) => return Outcome::Mismatch { cases: 0, bad: 1, examples: vec![format!("compute_pipeline: {e}")] },
     };
     let t = texels();
+    // a comparison sampler reads a depth texture: the red channel of the colour texels
+    let reds: Vec<f32> = t.iter().map(|x| x[0]).collect();
+    let first = if depth { View::Depth(W as u32, H as u32, &reds) } else { View::Texture(W as u32, H as u32, &t) };
     let got = host.dispatch(
         &root,
         &pso,
         &Dispatch {
             roots: vec![(0, Root::Constants(vec![0; shader.user_data_dwords().max(1) as usize]))],
-            views: &[View::Texture(W as u32, H as u32, &t), View::RawUav(4 * cases as u32)],
+            views: &[first, View::RawUav(4 * cases as u32)],
             samplers,
             groups: [1, 1, 1],
         },
@@ -337,10 +340,11 @@ fn sample_rows() -> Vec<SampleRow> {
         dmask,
     };
     // Rows are the mnemonics of the census (`isa-mnemonics.tsv`) the translator takes in a compute
-    // program. Not here: the comparison samples (`image_sample_c_lz`, 3685 shaders: this host binds
-    // RGBA32F colour textures only and Metal compares on depth textures: a harness gap, see
-    // docs/mac/opcode-oracle.md) and `image_get_lod` / `image_sample_c` (derivatives: pixel
-    // programs only).
+    // program. The comparison rows read a depth texture (`View::Depth`, the red channel of the
+    // colour texels) through a comparison sampler (filter 0x80 point, 0x95 linear: PCF of the
+    // four comparisons; LESS_EQUAL against z = 0.2). Not here: `image_get_lod` /
+    // `image_sample_c` (implicit derivatives: pixel programs only); `image_sample_c_lz_o`, `image_gather4_c_lz`
+    // and `image_sample_c_l[_o]` are refused by the translator and no program of the census has them.
     vec![
         s("image_sample_lz", |u, v, _, _| vec![f(u), f(v)], false, false),
         s("image_sample_l", |u, v, _, _| vec![f(u), f(v), f(0.0)], false, false),
@@ -354,6 +358,7 @@ fn sample_rows() -> Vec<SampleRow> {
         g("image_gather4_lz", |u, v, _, _| vec![f(u), f(v)], false, 1),
         g("image_gather4_lz", |u, v, _, _| vec![f(u), f(v)], false, 4),
         g("image_gather4_lz_o", |u, v, _, o| vec![off_bits(o), f(u), f(v)], false, 1),
+        s("image_sample_c_lz", |u, v, z, _| vec![f(z), f(u), f(v)], true, false),
         g("image_gather4_l", |u, v, _, _| vec![f(u), f(v), f(0.0)], false, 1),
         g("image_gather4_l_o", |u, v, _, o| vec![off_bits(o), f(u), f(v), f(0.0)], false, 1),
     ]
@@ -392,7 +397,7 @@ fn load_rows() -> Vec<(String, Outcome)> {
         }
         let o = match program(Img::Srv, &body, false) {
             Err(e) => Outcome::Untranslated(e),
-            Ok(shader) => run_image(&shader, &[], coords.len(), |got| {
+            Ok(shader) => run_image(&shader, &[], coords.len(), false, |got| {
                 for (i, &(x, y)) in coords.iter().enumerate() {
                     let inside = (0..W as i32).contains(&x) && (0..H as i32).contains(&y);
                     let want = if inside { texel(x.into(), y.into(), false) } else { [0.0; 4] };
@@ -415,7 +420,7 @@ fn load_rows() -> Vec<(String, Outcome)> {
         }
         let o = match program(Img::Srv, &body, false) {
             Err(e) => Outcome::Untranslated(e),
-            Ok(shader) => run_image(&shader, &[], 1, |got| {
+            Ok(shader) => run_image(&shader, &[], 1, false, |got| {
                 let want = [W as u32, H as u32, 0, 1];
                 // the depth of a 2D view is not read (dmask bit 2 reads 0 or 1)
                 (got[0][0] != want[0] || got[0][1] != want[1] || got[0][3] != want[3])
@@ -436,7 +441,7 @@ fn load_rows() -> Vec<(String, Outcome)> {
         }
         let o = match program(Img::Srv, &body, true) {
             Err(e) => Outcome::Untranslated(e),
-            Ok(shader) => run_image(&shader, &[sampler_desc(Smp { linear: true, wrap: false, compare: false })], 1, |got| {
+            Ok(shader) => run_image(&shader, &[sampler_desc(Smp { linear: true, wrap: false, compare: false })], 1, false, |got| {
                 let have = [f32::from_bits(got[0][0]), f32::from_bits(got[0][1])];
                 (have[0] != 0.0).then(|| format!("got {have:?}, want a clamped lod of 0"))
             }),
