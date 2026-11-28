@@ -4,6 +4,8 @@
 #
 #   tools/mac/rosetta-probe-wine.sh [full|quick] [output file]
 #   tools/mac/rosetta-probe-wine.sh case <probe-wine.exe arguments...>      e.g.  case vpmaskmovd_ymm cross mask=hi
+#   tools/mac/rosetta-probe-wine.sh isa [output file]    numeric differential batches only (rcp/rsqrt, vcvt*), PROBE_JOBS parallel processes (default 6),
+#                                                        niced; PROBE_FAST=n divides every pass by 2^n (smoke test); PROBE_NEG=1 is the negative control
 #
 # Output (default research/census/rosetta-probe-wine-<date>.txt outside the repo, plus a .md summary next to it):
 # one "RES ..." line per case and mode. A case that kills the process (Rosetta "EmulateForward", a hang) leaves no RES line
@@ -16,7 +18,7 @@ cd "$ROOT"
 HERE="$ROOT/tools/mac/rosetta-probe"
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
 MODE=full
-case "${1:-}" in full|quick|case) MODE="$1"; shift ;; esac
+case "${1:-}" in full|quick|case|isa) MODE="$1"; shift ;; esac
 case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
 WDIR="${VICTORY_MAC_WINE_DIR:-$_g/VIctory-macOS/target/wine-cx}"
 [ -x "$WDIR/bin/wine" ] || WDIR="$HOME/Library/Caches/victory-macos/target/wine-cx"
@@ -30,7 +32,7 @@ esac
 export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d" ROSETTA_ADVERTISE_AVX=1
 OUTDIR="$ROOT/target/rosetta-probe-wine"; mkdir -p "$OUTDIR"
 EXE="$OUTDIR/probe-wine.exe"
-if [ ! -x "$EXE" ] || [ "$HERE/probe-wine.c" -nt "$EXE" ] || [ "$HERE/softref.h" -nt "$EXE" ]; then
+if [ ! -x "$EXE" ] || [ "$HERE/probe-wine.c" -nt "$EXE" ] || [ "$HERE/softref.h" -nt "$EXE" ] || [ "$HERE/softref-cvt.h" -nt "$EXE" ] || [ "$HERE/isa-numeric.h" -nt "$EXE" ]; then
     x86_64-w64-mingw32-clang -O1 -Wall -Wno-unused-function -Wno-unused-variable -mavx2 -mfma -mf16c -mbmi -mbmi2 -mlzcnt -mpopcnt -mcx16 \
         "$HERE/probe-wine.c" -o "$EXE" || exit 1
 fi
@@ -63,6 +65,37 @@ run_one() {
 }
 
 if [ "$MODE" = case ]; then run_one "$@"; exit 0; fi
+
+if [ "$MODE" = isa ]; then
+    OUT="${1:-$HOME/Documents/GTA6Project/research/census/rosetta-probe-isa-$(date +%Y%m%d).txt}"
+    JOBS="${PROBE_JOBS:-6}"
+    # one batch per instruction form (the selector is a substring of the form name); long exhaustive ones first
+    LIST="cvt_f2i:vcvtps2dq_ymm cvt_f2i:vcvttps2dq_ymm cvt_f2i:vcvttss2si_r32 cvt_f2i:vcvttss2si_r64 cvt_f2i:vcvtss2si_r32 cvt_f2i:vcvtss2si_r64
+rcp_rsqrt:vrcpps_xmm rcp_rsqrt:vrcpps_ymm rcp_rsqrt:vrsqrtps_xmm rcp_rsqrt:vrsqrtps_ymm rcp_rsqrt:vrcpss rcp_rsqrt:vrsqrtss
+cvt_i2f:vcvtdq2ps_ymm cvt_i2f:vcvtsi2ss_r32 cvt_i2f:vcvtdq2ps_xmm cvt_i2f:vcvtsi2ss_r64 cvt_i2f:vcvtsi2sd_r32 cvt_i2f:vcvtsi2sd_r64 cvt_i2f:vcvtdq2pd_ymm cvt_i2f:vcvtdq2pd_xmm
+cvt_f2f:vcvtps2pd_ymm cvt_f2f:vcvtps2pd_xmm cvt_f2f:vcvtss2sd cvt_f2f:vcvtpd2ps_xmm cvt_f2f:vcvtpd2ps_ymm cvt_f2f:vcvtsd2ss
+cvt_f2i:vcvttps2dq_xmm cvt_f2i:vcvtps2dq_xmm cvt_f2i:vcvttsd2si_r32 cvt_f2i:vcvttsd2si_r64 cvt_f2i:vcvtsd2si_r32 cvt_f2i:vcvtsd2si_r64
+cvt_f2i:vcvttpd2dq_xmm cvt_f2i:vcvttpd2dq_ymm cvt_f2i:vcvtpd2dq_xmm cvt_f2i:vcvtpd2dq_ymm
+cvt_f2i:*_mem cvt_i2f:*_mem cvt_f2f:*_mem"
+    [ -n "${PROBE_LIST:-}" ] && LIST="$PROBE_LIST"   # e.g. PROBE_LIST="cvt_f2i:*_mem cvt_i2f:*_mem" to rerun a subset
+    {
+    echo "# Rosetta-under-Wine ISA numeric probe $(date '+%Y-%m-%d %H:%M %Z') macOS $(sw_vers -productVersion) $(sysctl -n machdep.cpu.brand_string) jobs=$JOBS fast=${PROBE_FAST:-0} neg=${PROBE_NEG:-0}"
+    echo "# wine: $("$WINE" --version 2>/dev/null), prefix $(basename "$WINEPREFIX"), ROSETTA_ADVERTISE_AVX=1"
+    n=0
+    for j in $LIST; do
+        while [ "$(jobs -r | wc -l)" -ge "$JOBS" ]; do sleep 1; done
+        n=$((n+1)); b="${j%%:*}"; sel="${j#*:}"
+        ( nice -n 10 "$WINE" "$EXE" batch "$b" "$sel" >"$tmp/i.$n" 2>"$tmp/ie.$n" </dev/null; rc=$?
+          tr -d '\r' <"$tmp/i.$n" | grep '^RES'
+          grep -q '^RES' "$tmp/i.$n" || echo "RES fam=$b batch=$sel mode=run status=CRASH rc=$rc stderr=\"$(tail -c 200 "$tmp/ie.$n" | tr '\n"' '  ')\"" ) >"$tmp/io.$n" &
+    done
+    wait
+    i=1; while [ $i -le $n ]; do cat "$tmp/io.$i"; i=$((i+1)); done
+    } >"$OUT" 2>&1
+    echo "# RES lines: $(grep -c '^RES' "$OUT"), FAIL: $(grep -c 'status=FAIL' "$OUT"), CRASH: $(grep -c 'status=CRASH' "$OUT")" >>"$OUT"
+    python3 "$HERE/summarize-wine.py" "$OUT" >"${OUT%.txt}-summary.md"
+    echo "$OUT"; exit 0
+fi
 
 OUT="${1:-$HOME/Documents/GTA6Project/research/census/rosetta-probe-wine-$(date +%Y%m%d).txt}"
 {
