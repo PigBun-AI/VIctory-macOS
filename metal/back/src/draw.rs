@@ -1059,8 +1059,10 @@ impl crate::record::CommandList {
             return Ok(());
         }
         let object_groups = (count - plan.non_provoking).div_ceil(plan.stride);
+        // `gsInstanceCount` is the shader's own (plan.info has it); the draw's instances are the
+        // grid's height. Passing the draw's here, as the runtime header's helper does, made every
+        // instance's threadgroup draw all of them (instances squared).
         let mut info = plan.info;
-        info[10..12].copy_from_slice(&(words[1] as u16).to_le_bytes());
         info[16..24].copy_from_slice(&index.map_or(0, |(va, _)| va).to_le_bytes());
 
         self.bind_geometry_vertex_buffers()?;
@@ -1596,6 +1598,7 @@ pub(crate) fn geometry_plan(
     info[4..6].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
     info[6..8].copy_from_slice(&(stride as u16).to_le_bytes());
     info[8..10].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+    info[10..12].copy_from_slice(&(g.gs_instances as u16).to_le_bytes());
     info[12..14].copy_from_slice(&(prims_per_object as u16).to_le_bytes());
     info[14..16].copy_from_slice(&(verts as u16).to_le_bytes());
     Ok(GeometryPlan {

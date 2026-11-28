@@ -321,6 +321,10 @@ pub struct GeometryPipelineInfo {
     /// `IRInputPrimitive` of the geometry shader.
     pub input_primitive: u32,
     pub payload_bytes: u32,
+    /// The geometry shader's own instance count (`[instance(n)]`, 1 without): what
+    /// `IRRuntimeDrawInfo.gsInstanceCount` must hold. NOT the draw's instance count
+    /// (those are the grid's height).
+    pub gs_instances: u32,
 }
 
 /// The merged facts of a converted mesh pipeline.
@@ -478,6 +482,7 @@ pub fn prepare_graphics(desc: &GraphicsDesc<'_>) -> Result<PreparedGraphics, Msc
                 max_input_primitives: info.max_input_primitives_per_mesh_threadgroup,
                 input_primitive: info.input_primitive,
                 payload_bytes: info.max_payload_bytes,
+                gs_instances: info.instance_count.max(1),
             })
         }
         _ => None,
