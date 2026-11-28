@@ -148,7 +148,8 @@
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
 | metal.post.auto_exposure | 自动曝光统计算错：tonemap 曝光缩放 = 0.75/最小亮度，应为平均亮度；曝光逐帧累积，进入可玩世界后约 100–150 帧开始发白（场景 HDR 数值与 D3DMetal 重放一致；正在修） | 未知 | unknown | gap | deviation |
-| metal.gpu.fidelity_slow_frame | fidelity（内部 2560x1440）GPU 每帧 6.7–17 s（perf 0.2 s）；约 31 s、约 115 s 的停顿；w37 后卡死、CPU 0%（怀疑 GPU 超时后没有 signal） | 未知 | unknown | gap | deviation |
+| metal.gpu.fidelity_slow_frame | fidelity（内部 2560x1440）GPU 每帧 6.7–17 s（perf 0.2 s）。原因：rect 列表 GS draw 7c71c44c（1440p 14580 个实例）每个实例的线程组把全部实例各画一遍（gsInstanceCount 填成 draw 的实例数，实例数被平方）；598f9fe8 修复，测试 gfx_gs_instances `every_instance_of_a_rectangle_list_is_drawn_once`；重放 GPU 时间 5.8–6.5 s → 2.4–2.7 ms。**待补**：修后游戏内帧时间（e4m 实测）；31 s / 115 s 停顿和 w37 后卡死没有重跑，仍待确认 | 未知 | unknown | proven | translated |
+| metal.gpu.gs_instance_count | GS 仿真 draw info 的 gsInstanceCount 是几何着色器自己的 [instance(n)]（默认 1），不是 draw 的实例数（那是 mesh 网格的高）；Apple runtime 头文件的 helper 填的是 draw 的，直接和间接路径都会把实例数平方 | 未知 | unknown | proven | translated |
 | mac.title.hang_watchdog | 标题 30 s 挂起看门狗（+0x2215c35 → +0x23cf683 写 0）；我们后端长帧停顿时被它杀掉；L5 --no-watchdog 是非保真绕法，晨测使用 | 未知 | log | unproven | stubbed |
 
 ## 3. 用到但未证明（按频次）
@@ -263,7 +264,6 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 | 1 | log | shared.object.unknown_method | E_NOTIMPL, which the title reads as a lost device in some paths (device.rs comment, VIctory 13185f5). r5 log: command queue slot 0xb8 called from title+0x24900a5, once (queue method). | identify and implement queue slot 0xb8; test every vtable slot answers or logs |
 | 1 | log | shared.draw.no_host_pipeline | Draws lost until the pipeline is made; refused ones are lost for good. | assert "dropped 0" in the 5 s summary for a scripted opening run |
 | 未知 | unknown | metal.post.auto_exposure | gap | 曝光统计改成平均亮度后逐帧曝光测试；重抓世界语料（w300 起） |
-| 未知 | unknown | metal.gpu.fidelity_slow_frame | gap | 每个 pass 的 GPU 耗时；确认 GPU 超时后是否缺 signal |
 | 未知 | log | mac.title.hang_watchdog | gap | 长帧停顿消除后看门狗不再触发（保真跑不得用 L5） |
 | 未知 | unknown | mac.res.internal | VICTORY_RENDER_SCALE default off: internal resolution follows the title; effect of the 720p output on it is to be determined. | 见 restore_plan |
 | 未知 | unknown | mac.fault.tracking_decision | Whole-block copies for every submission instead of only written pages: 129 GB/frame estimated once the world streams (masked.rs header, #50); in logs the opening scene copies 0.1-3.1 MB/frame with tracking off. | tools/mac/rosetta-probe.sh as a Windows exe under Wine (guarded-page resume for every store class) then a run with FAULT_TRACKING=1 and a frame-hash compare vs tracking … |
