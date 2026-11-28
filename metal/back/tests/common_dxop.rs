@@ -145,6 +145,15 @@ impl Rig {
         self.prog_with(dxil, 0)
     }
 
+    /// Whether MSC and Metal take the program: the refusal's text if not.
+    pub fn try_build(&self, dxil: &[u8], root_flags: u32) -> Result<(), String> {
+        let root = standard_root(root_flags);
+        self.d
+            .compute_pipeline_from_dxil(dxil, Some(&root), &CompileOptions::default())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn prog_with(&self, dxil: &[u8], root_flags: u32) -> Prog {
         let root = RootSignatureDesc {
             flags: root_flags,
@@ -303,6 +312,8 @@ pub const HALF_VS: &str = "float4 main(uint id : SV_VertexID) : SV_Position {\n\
 /// `O`), and where its root arguments are.
 pub struct PixProg {
     pub pipeline: GraphicsPipeline,
+    /// A mesh pipeline: `run_pixels` calls its `size` the group count x.
+    pub mesh: bool,
     pub layout_size: u32,
     pub consts_at: u64,
     pub srv_at: u64,
@@ -359,8 +370,56 @@ impl Rig {
             srv_at: at(ArgKind::Srv),
             uav_at: at(ArgKind::Uav),
             layout_size: layout.size,
+            mesh: false,
             pipeline,
         })
+    }
+
+    /// A mesh + pixel pipeline (no target); `run_mesh` runs it.
+    pub fn mesh_program(&self, name: &str, ms: &str, ps: &str, ms_ops: &[&str], ps_ops: &[&str]) -> Option<PixProg> {
+        let msd = dxil_checked(&format!("{name}_ms"), "ms_6_6", &format!("{PRELUDE}{ms}"), ms_ops)?;
+        let psd = dxil_checked(&format!("{name}_ps"), "ps_6_6", &format!("{PRELUDE}{ps}"), ps_ops)?;
+        let root = RootSignatureDesc {
+            flags: 0,
+            params: vec![
+                Param { kind: ParamKind::Constants { register: 0, space: 0, num_32bit: 8 }, visibility: Visibility::All },
+                Param { kind: ParamKind::Srv { register: 0, space: 0 }, visibility: Visibility::All },
+                Param { kind: ParamKind::Uav { register: 0, space: 0 }, visibility: Visibility::All },
+            ],
+            static_samplers: vec![],
+        };
+        let desc = default_graphics(
+            &root,
+            Stages { vs: None, ps: Some(&psd), ms: Some(&msd), gs: None },
+            &[],
+            &[],
+            false,
+            Variant::Plain,
+        );
+        let pipeline = self
+            .d
+            .graphics_pipeline_from_dxil(&desc)
+            .unwrap_or_else(|e| panic!("{name}: MSC and Metal accept the mesh pipeline: {e}"));
+        let layout = pipeline.layout().clone();
+        let at = |kind: ArgKind| {
+            u64::from(
+                layout.entries.iter().find(|e| e.kind == kind).map(|e| e.offset)
+                    .unwrap_or_else(|| panic!("no {kind:?} entry in the layout")),
+            )
+        };
+        Some(PixProg {
+            consts_at: at(ArgKind::Constants),
+            srv_at: at(ArgKind::Srv),
+            uav_at: at(ArgKind::Uav),
+            layout_size: layout.size,
+            mesh: true,
+            pipeline,
+        })
+    }
+
+    /// Dispatches `groups` mesh groups into a `size` pass; `O` comes back.
+    pub fn run_mesh(&self, p: &PixProg, groups: u32, size: [u32; 2], k: &[u32], input: &[u32], out_words: usize) -> Vec<u32> {
+        self.run_pixels_with(p, size, groups, k, input, out_words, None)
     }
 
     /// Draws the full-screen triangle over a `size` pass with no
@@ -370,6 +429,20 @@ impl Rig {
         &self,
         p: &PixProg,
         size: [u32; 2],
+        k: &[u32],
+        input: &[u32],
+        out_words: usize,
+        heaps: Option<(&DescriptorHeap, &DescriptorHeap)>,
+    ) -> Vec<u32> {
+        self.run_pixels_with(p, size, 0, k, input, out_words, heaps)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_pixels_with(
+        &self,
+        p: &PixProg,
+        size: [u32; 2],
+        groups: u32,
         k: &[u32],
         input: &[u32],
         out_words: usize,
@@ -402,8 +475,14 @@ impl Rig {
         }])
         .unwrap();
         l.set_scissors(&[[0, 0, size[0] as i32, size[1] as i32]]).unwrap();
-        l.set_primitive(Primitive::TriangleList).unwrap();
-        l.draw(&p.pipeline, DrawArgs { vertex_count: 3, instance_count: 1, start_vertex: 0, start_instance: 0 }).unwrap();
+        if !p.mesh {
+            l.set_primitive(Primitive::TriangleList).unwrap();
+        }
+        if p.mesh {
+            l.dispatch_mesh(&p.pipeline, [groups, 1, 1]).unwrap();
+        } else {
+            l.draw(&p.pipeline, DrawArgs { vertex_count: 3, instance_count: 1, start_vertex: 0, start_instance: 0 }).unwrap();
+        }
         l.end_pass(&Stores::default()).unwrap();
         l.end().unwrap();
         let v = self.q.submit(vec![l]).expect("submit");
@@ -521,4 +600,41 @@ pub fn texel(x: i32, y: i32, c: usize) -> f32 {
 
 pub fn close(a: f32, b: f32, tol: f32) -> bool {
     (a - b).abs() <= tol
+}
+
+/// Reads texture mip 0, slice 0 back: rows of `pitch` bytes.
+pub fn download(d: &Device, q: &Queue, t: &Texture, pitch: u32) -> Vec<u8> {
+    let size = t.desc().mip_size(0);
+    let f = victory_metal_back::format::lookup(t.desc().format).unwrap();
+    let len = u64::from(pitch) * u64::from(f.block_rows(size[1])) * u64::from(size[2]);
+    let dst: Buffer = d.create_buffer(BufferKind::Readback, len).unwrap();
+    let mut l = q.begin_list().unwrap();
+    l.copy_texture_to_buffer(
+        &BufLoc { buffer: &dst, offset: 0, format: t.desc().format, row_pitch: pitch, rows: size[1] },
+        &TexLoc { texture: t, mip: 0, slice: 0, plane: 0, origin: [0; 3] },
+        size,
+    )
+    .unwrap();
+    l.end().unwrap();
+    let v = q.submit(vec![l]).unwrap();
+    q.wait_for(v, 20_000).unwrap();
+    let mut out = vec![0u8; len as usize];
+    dst.read(0, &mut out).unwrap();
+    out
+}
+
+pub const UAV: u32 = 2;
+
+/// The root signature of every program here: eight constants at b0, a root
+/// SRV at t0 and a root UAV at u0.
+pub fn standard_root(root_flags: u32) -> RootSignatureDesc {
+    RootSignatureDesc {
+        flags: root_flags,
+        params: vec![
+            Param { kind: ParamKind::Constants { register: 0, space: 0, num_32bit: 8 }, visibility: Visibility::All },
+            Param { kind: ParamKind::Srv { register: 0, space: 0 }, visibility: Visibility::All },
+            Param { kind: ParamKind::Uav { register: 0, space: 0 }, visibility: Visibility::All },
+        ],
+        static_samplers: vec![],
+    }
 }
