@@ -104,6 +104,39 @@ pub fn run(
     let image_name = prepared.file_name();
     drop(prepared);
     drop(original);
+    // The scale the title computes each frame (`VICTORY_SCALE_WATCH`, default on, =0 off):
+    // min, median, max every 10 s on stderr (the log), sampled every 100 ms.
+    #[cfg(windows)]
+    if native_1440p && std::env::var("VICTORY_SCALE_WATCH").as_deref() != Ok("0") {
+        // SAFETY: the mapped image; the title has not run yet.
+        match unsafe { victory_loader::render_scale::watch(image.base()) } {
+            Some(slot) => {
+                std::thread::spawn(move || {
+                    let mut seen = Vec::new();
+                    let mut since = std::time::Instant::now();
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        let v = slot.load(std::sync::atomic::Ordering::Relaxed);
+                        if v != 0 {
+                            seen.push(f32::from_bits(v));
+                        }
+                        if since.elapsed().as_secs() >= 10 {
+                            match victory_loader::render_scale::spread(&mut seen) {
+                                Some((lo, mid, hi)) => eprintln!(
+                                    "render scale the title computed, last 10 s ({} samples): min {lo:.4}, median {mid:.4}, max {hi:.4}",
+                                    seen.len()
+                                ),
+                                None => eprintln!("render scale the title computed, last 10 s: not computed yet"),
+                            }
+                            seen.clear();
+                            since = std::time::Instant::now();
+                        }
+                    }
+                });
+            }
+            None => eprintln!("render scale watch: the scale instruction is not the expected one; not watched"),
+        }
+    }
     victory_hle::runtime::set_main_image(image.base());
     victory_hle::runtime::set_image_path(image.base(), exe);
     println!(

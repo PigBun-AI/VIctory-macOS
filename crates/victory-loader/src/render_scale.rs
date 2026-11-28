@@ -40,6 +40,89 @@ pub fn scene_size(width: u32, height: u32, scale: f32) -> (u32, u32) {
     ((width as f32 * scale) as u32, (height as f32 * scale) as u32)
 }
 
+/// The scale the title computes (`max(controller, minimum)` at [`MAXIMUM`]), noted on every
+/// call by a detour (`VICTORY_SCALE_WATCH`, default on, =0 off): the 8-byte instruction there
+/// jumps to a stub near the image that runs it, stores xmm0 into its own slot and jumps back.
+/// No register but xmm0 (the instruction's own result) is touched. `None` if the bytes are not
+/// the stock or pinned instruction, or no page within 2 GB is free. Before the title runs.
+///
+/// # Safety
+/// `base` is the mapped retail image, not running yet.
+#[cfg(windows)]
+pub unsafe fn watch(base: usize) -> Option<&'static std::sync::atomic::AtomicU32> {
+    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc, VirtualProtect};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let site = base + MAXIMUM as usize;
+    // SAFETY: the mapped image (caller).
+    let bytes: [u8; 8] = unsafe { std::ptr::read_unaligned(site as *const [u8; 8]) };
+    if bytes != STOCK_MAXIMUM && bytes != PINNED_MAXIMUM {
+        return None;
+    }
+    let mut stub = 0usize;
+    let mut at = (site & !0xFFFF).saturating_sub(0x10000);
+    while site - at < 0x7000_0000 {
+        // SAFETY: asking for fresh memory at a hint.
+        let got = unsafe { VirtualAlloc(at as *const _, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) } as usize;
+        if got != 0 {
+            stub = got;
+            break;
+        }
+        at -= 0x10000;
+    }
+    if stub == 0 {
+        return None;
+    }
+    let code = stub_code(stub, site, bytes);
+    // SAFETY: our fresh page.
+    unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), stub as *mut u8, code.len()) };
+    let jump = site_jump(site, stub);
+    let mut old = 0u32;
+    // SAFETY: 8 bytes of the image's code, made writable for the write and put back.
+    unsafe {
+        if VirtualProtect(site as *const _, 8, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(jump.as_ptr(), site as *mut u8, 8);
+        VirtualProtect(site as *const _, 8, old, &mut old);
+        FlushInstructionCache(GetCurrentProcess(), site as *const _, 8);
+        Some(&*((stub + SLOT) as *const std::sync::atomic::AtomicU32))
+    }
+}
+
+/// Where the stub keeps the last scale (f32 bits).
+const SLOT: usize = 0x40;
+
+/// The stub at `stub`: the site's instruction `bytes` (position independent: `[rsi+0x90]`),
+/// `vmovss [rip+d], xmm0` into [`SLOT`], `jmp` back behind the site.
+fn stub_code(stub: usize, site: usize, bytes: [u8; 8]) -> [u8; 21] {
+    let mut c = [0u8; 21];
+    c[..8].copy_from_slice(&bytes);
+    let slot = (stub + SLOT) as i64 - (stub + 16) as i64;
+    c[8..12].copy_from_slice(&[0xC5, 0xFA, 0x11, 0x05]);
+    c[12..16].copy_from_slice(&(slot as i32).to_le_bytes());
+    c[16] = 0xE9;
+    let back = (site + 8) as i64 - (stub + 21) as i64;
+    c[17..21].copy_from_slice(&(back as i32).to_le_bytes());
+    c
+}
+
+/// The site's new bytes: `jmp stub`, three `nop`s.
+fn site_jump(site: usize, stub: usize) -> [u8; 8] {
+    let rel = stub as i64 - (site + 5) as i64;
+    let r = (rel as i32).to_le_bytes();
+    [0xE9, r[0], r[1], r[2], r[3], 0x90, 0x90, 0x90]
+}
+
+/// min, median, max of `values` (scales), `None` for none.
+pub fn spread(values: &mut [f32]) -> Option<(f32, f32, f32)> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f32::total_cmp);
+    Some((values[0], values[values.len() / 2], values[values.len() - 1]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +139,47 @@ mod tests {
         assert_eq!(scene_size(2560, 1440, 2.0 / 3.0), (1706, 960));
         assert_eq!(scene_size(2560, 1440, 0.5), (1280, 720));
         assert_eq!(STOCK_MINIMUM, (2.0f32 / 3.0).to_le_bytes());
+    }
+
+    /// The detour's code: run on a copy of the stock instruction with rsi set, the stub
+    /// leaves max(xmm0, [rsi+0x90]) in xmm0 and in its slot, and comes back behind the site.
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn the_scale_watch_notes_what_the_instruction_made() {
+        let (site, stub) = (0x1_4000_0000usize, 0x1_3fff_0000usize);
+        let j = site_jump(site, stub);
+        assert_eq!(j[0], 0xE9);
+        assert_eq!(site + 5 + i32::from_le_bytes(j[1..5].try_into().unwrap()) as usize, stub);
+        let c = stub_code(stub, site, STOCK_MAXIMUM);
+        assert_eq!(&c[..8], &STOCK_MAXIMUM);
+        assert_eq!(stub + 16 + i32::from_le_bytes(c[12..16].try_into().unwrap()) as usize, stub + SLOT);
+        assert_eq!(stub + 21 + i32::from_le_bytes(c[17..21].try_into().unwrap()) as isize as usize, site + 8);
+        // Run it: a site of the stock bytes then `ret`, the detour in, called with rsi at data
+        // whose +0x90 is the minimum. Adversarial: without the detour the slot stays 0.
+        use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE, VirtualAlloc};
+        unsafe {
+            let page = VirtualAlloc(std::ptr::null(), 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as usize;
+            assert_ne!(page, 0);
+            let base = page - MAXIMUM as usize + 0x100;
+            std::ptr::copy_nonoverlapping(STOCK_MAXIMUM.as_ptr(), (page + 0x100) as *mut u8, 8);
+            *((page + 0x108) as *mut u8) = 0xC3;
+            let run = |x: f32| -> f32 {
+                let mut data = [0f32; 64];
+                data[0x90 / 4] = 1.0;
+                let out: f32;
+                std::arch::asm!("call {f}", f = in(reg) page + 0x100, in("rsi") data.as_ptr(), inout("xmm0") x => out, clobber_abi("C"));
+                out
+            };
+            assert_eq!(run(0.7), 1.0);
+            let slot = watch(base).expect("detour");
+            assert_eq!(slot.load(std::sync::atomic::Ordering::Relaxed), 0);
+            assert_eq!(run(0.7), 1.0);
+            assert_eq!(f32::from_bits(slot.load(std::sync::atomic::Ordering::Relaxed)), 1.0);
+            assert_eq!(run(1.25), 1.25);
+            assert_eq!(f32::from_bits(slot.load(std::sync::atomic::Ordering::Relaxed)), 1.25);
+        }
+        let mut v = [0.8f32, 1.0, 0.7];
+        assert_eq!(spread(&mut v), Some((0.7, 0.8, 1.0)));
+        assert_eq!(spread(&mut []), None);
     }
 }
