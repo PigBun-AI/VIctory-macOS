@@ -40,6 +40,10 @@ pub fn scene_size(width: u32, height: u32, scale: f32) -> (u32, u32) {
     ((width as f32 * scale) as u32, (height as f32 * scale) as u32)
 }
 
+/// Run 2026-11-28 11:15-11:23 (72f115b59, 1440p image with its minimum 1.0, not pinned, 8 fps,
+/// 122-127 ms frames): 45 lines of 10 s, every sample 1.0 (min = median = max = 1.0000), so the
+/// controller does not take the scene below native there: the pin stays off by default.
+///
 /// The scale the title computes (`max(controller, minimum)` at [`MAXIMUM`]), noted on every
 /// call by a detour (`VICTORY_SCALE_WATCH`, default on, =0 off): the 8-byte instruction there
 /// jumps to a stub near the image that runs it, stores xmm0 into its own slot and jumps back.
