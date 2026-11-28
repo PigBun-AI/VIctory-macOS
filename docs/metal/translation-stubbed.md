@@ -523,7 +523,117 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: program name read from the container bytes (make.rs:57-61).
 
-## 53. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
+## 53. C-W-D1 — indirect dispatch (ExecuteIndirect / dispatch signature) with x above 65,535 groups: victory-gpu clamps x to 65,535 unless the adapter reports vendor 0x1002 (indirect.rs widest/amd); the vendor the front reports for the Metal adapter is not 0x1002
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu (indirect clamp) / 5 back -> Metal 4
+- freq: not measured (none: the Windows capture had two tile lists of 67,440 and 47,760 groups (title behaviour, 115,200 tiles at 2560x1440); our internal size and our count are not measured); used=unknown; status=unknown
+- Xbox hardware / driver does: the console runs the dispatch counts it is asked (32-bit); an AMD card does the same
+- deviation: x is cut to 65,535 in victory-gpu before seam A when widest() answers 65,535: the last tiles of a tile list are never processed (Windows: the last 1,905 of 67,440, the lowest band of the picture). Whether the Metal chain takes the 65,535 branch is not read: amd() asks DXGI for the adapter of the host device, which on our chain is the front.
+- restore_plan (how to break through): fid-gpuprof is checking the truncation on the back path; then either make widest() take the wider answer for the Metal adapter (VICTORY_INDIRECT_WIDE logic in indirect.rs) with a test that a 67,440-group record reaches the back whole, or record that it already does.
+- tests: back/tests/exec_indirect_wide.rs (the back runs 65,535 to 3,000,000 groups in x: the Metal side takes 32-bit counts; the clamp in front of it is not tested on our chain)
+- notes: status unknown on purpose: 待查 victory-gpu clamp vs back. 备注：fid-gpuprof 手在核对 back 这一路的截断. hand: fid-gpuprof. Windows ledger D1.
+
+## 54. C-W-D2 — indirect budgets: a record that would take one dispatch past 2^20 groups in total (D2) or a list past 2^27 vertex instances/threads (D3, VICTORY_INDIRECT_CARD_BUDGET) runs empty, and every record after it in the list too
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu (indirect clamp)
+- freq: not measured (none (not counted in any run of ours)); used=unknown; status=unproven
+- Xbox hardware / driver does: the console runs every record
+- deviation: work beyond the bounds is silently skipped (indirect.rs header: "cut legitimate work beyond them"); the Windows runs counted 0 for both, ours has no counter, so whether the title ever gets there is open.
+- restore_plan (how to break through): add the two overflow counts to the clamp's 5 s summary and read them in the next batch run; if 0, keep as a dormant row; if not, raise the bound the way widest() does.
+- tests: gpu: indirect.rs tests cover the clamp at 2^20 and 65,535 (the existing ones; none at the 2^27 budget)
+- notes: D3 (list budget 2^27) is merged into this row: the same mechanism (a budget the clamp charges and then runs records empty). hand: map-refresh (counter) / shared-prove. Windows ledger D2.
+
+## 55. C-W-D4 — indirect draw records above the clamp's size bounds (2^23 vertices an instance, 2^26 vertex instances) run empty
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu (indirect clamp)
+- freq: not measured (none); used=unknown; status=unproven
+- Xbox hardware / driver does: the console runs the record as written
+- deviation: a draw record over the bounds draws nothing; Windows counted 0 in its runs L6-L16; ours is not counted.
+- restore_plan (how to break through): same counter as C-W-D2.
+- tests: —
+- notes: bounds read in indirect.rs header and clamp (2026-11-28). hand: map-refresh (counter) / shared-prove. Windows ledger D4.
+
+## 56. C-W-D5 — DispatchMesh with x above 65,535 groups: victory-gpu draw.rs cuts it to x.min(65_535) (and logs when x was above); the Metal side limit for mesh groups is not recorded
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (callstats:20261127-221938-map had 33 DispatchMesh calls (C-F-033); none known to be above 65,535); used=unknown; status=unproven
+- Xbox hardware / driver does: the console takes the group count of the mesh dispatch
+- deviation: groups above 65,535 are dropped by the cut at draw.rs:3570-3574; the title's mesh draws are meshlet counts per draw, usually far below the cut, but nothing in our logs shows the largest x.
+- restore_plan (how to break through): log the largest DispatchMesh x per run (one counter); if it is above the cut, send the whole count (one dimension) to the back and test Metal's mesh grid limit with a 100,000-group dispatch.
+- tests: —
+- notes: the Metal mesh grid maximum is not in the project's notes: measure, do not assume. hand: map-refresh (counter) / shared-prove. Windows ledger D5.
+
+## 57. C-W-D6 — DispatchMeshX (list slot 0x310) with its group count in GPU memory (indirect != 0): dropped by victory-gpu with the one-time warning "indirect mesh dispatches dropped" (list.rs dispatch_mesh_x, a marked shortcut)
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (none (Windows 0 calls; ours: the warning has not been looked for in the run logs; C-F-060 counts the two signatures created, not the argument form)); used=unknown; status=gap
+- Xbox hardware / driver does: the mesh dispatch reads its group count from the argument buffer
+- deviation: every such call draws nothing. The code comment says "make them ExecuteIndirect when the title uses them"; nothing shows whether it does (the title's 3,523 indirect mesh executions per frame go through ExecuteIndirect, which is a different path).
+- restore_plan (how to break through): grep the warning in the last runs' logs; if it shows, route the call through the indirect mesh path used by ExecuteIndirect.
+- tests: —
+- notes: confirmed in our tree at list.rs:1806-1822; status gap because the drop is certain, the use is not. hand: shared-prove. Windows ledger D6.
+
+## 58. S-W-S16 — image resource of unknown dimension in a descriptor: the Windows fallback treats it as 2D
+
+- owner / chain / hop: shared / shader / 3 lowering to DXIL (emit/lower.rs, emit/wave.rs, resource.rs)
+- freq: not measured (none); used=unknown; status=unproven
+- Xbox hardware / driver does: the descriptor says what the resource is
+- deviation: what our lowering does for a descriptor whose type field names no known dimension is not recorded (refuse, 2D, or fault); Windows corpus 0 of 2,350.
+- restore_plan (how to break through): read the lowering's default for the dimension field and the census counter of unknown types (S-I-022 neighbour); if refused loudly, mark closed.
+- tests: —
+- notes: adjacent S-I-022. hand: mac-shader-harness (phase 2). Windows ledger S16.
+
+## 59. C-W-R7 — descriptor slot of unknown kind: filled with a null 2D view
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (none (counted only at unknown kinds; Windows 0)); used=unknown; status=unproven
+- Xbox hardware / driver does: the descriptor says what it is
+- deviation: what victory-gpu writes for a slot it cannot classify, and what Metal does when a shader samples a null 2D view of the wrong dimension, are not recorded.
+- restore_plan (how to break through): count unknown-kind slots in the descriptor pass; if 0, mark dormant.
+- tests: —
+- notes:  hand: map-refresh (counter). Windows ledger R7.
+
+## 60. C-W-M1 — copy between a stand-in render target (host format substituted for a console format) and title-format texels: skipped by victory-gpu with the warning "copy between a stand-in target and title-format texels skipped" (list.rs:893)
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (none (Windows 0; the warning has not been grepped in our logs)); used=unknown; status=unproven
+- Xbox hardware / driver does: a copy between formats of the same bits works
+- deviation: the copy is not made; the destination keeps old texels (wrong picture content, flicker if reused per frame).
+- restore_plan (how to break through): grep the warning count in the 5 s logs of the last runs (map-refresh); implement via a format-converting compute if it occurs.
+- tests: —
+- notes:  hand: map-refresh (counter) / shared-prove. Windows ledger M1.
+
+## 61. C-W-Y3 — WAIT VALUE with a comparison code that is not 1..7: counted as met (list.rs ValueWait::met `_ => true`), and memory that is not mapped counts as met
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (none (Windows 0 unknown codes; ours not counted)); used=unknown; status=unproven
+- Xbox hardware / driver does: the comparison code is defined by the console
+- deviation: a code outside 1..7 (0 and 8 are "never"/"always" in the shortcut's numbering) never blocks; a wrong guess of the code table (a shortcut in list.rs) would let a queue run ahead of its dependency.
+- restore_plan (how to break through): log the distribution of codes seen (one counter); confirm the code table against the title's own call sites (static), no SDK content in the repo.
+- tests: —
+- notes: the code table is a shortcut ("taken to be the comparison functions'") in list.rs. hand: map-refresh (counter). Windows ledger Y3.
+
+## 62. C-W-Y7 — command-list methods the title calls that we accept and ignore: slot 0x248 (pixel shader depth order), 0x3e0 (shading rate), 0x470 (a u64 whose result is unused; newer titles' state flush); Windows called them "device methods"
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu (list.rs methods)
+- freq: not measured (none (list.rs ignored_state: no call counter)); used=unknown; status=unproven
+- Xbox hardware / driver does: the console applies the depth order and shading rate hints; 0x470 unknown
+- deviation: list.rs:2334-2337 and 2371: ignored_state, no effect. Windows found the 0x248 and 0x3e0 arguments constant 0, so ignoring is equivalent; 0x470 is a bitmask of unknown use. For us they are list slots, not device slots (the Windows ledger names them differently); a nonzero shading rate would make draws render at coarse rate on the console.
+- restore_plan (how to break through): one counter of nonzero arguments to these three slots (map-refresh), then decide.
+- tests: —
+- notes: adjacent C-V-002, shared.object.unknown_method (Mac). hand: map-refresh (counter). Windows ledger Y7.
+
+## 63. C-W-P3 — frame event offset argument (non-zero offset) is ignored
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
+- freq: not measured (none (Windows counts and logs one case)); used=unknown; status=unproven
+- Xbox hardware / driver does: the frame event is signalled at the offset into the frame
+- deviation: if the title sets offset != 0, the pacing signal arrives at the frame boundary instead; pacing impact unknown.
+- restore_plan (how to break through): one counter of nonzero offsets.
+- tests: —
+- notes:  hand: map-refresh (counter). Windows ledger P3.
+
+## 64. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
 
 - owner / chain / hop: mac / command / victory-gpu mac/rosetta.rs fault_tracking()
 - freq: not measured (unknown); used=yes; status=proven
@@ -533,7 +643,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::rosetta::tests::the_variable_decides_and_tests_track (native + Wine: pass)
 - notes: Decision proven by test; its cost is measured in logs. 0x140456fe2 hang (tracking on) was in victory.exe safecopy (G6).
 
-## 54. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
+## 65. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
 
 - owner / chain / hop: mac / command / Mac fork #204 alias.rs NOT ported (PATCHES.md "Not ported")
 - freq: not measured (unknown); used=unknown; status=gap
@@ -543,7 +653,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none in this tree (alias.rs absent)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Fidelity: removes the copy latency/race window; correctness impact today unknown (copies hold). | used=unknown: alias.rs is not in this tree and no log line mentions mach_vm_remap, so a frequency cannot be estimated
 
-## 55. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
+## 66. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -553,7 +663,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Marked here because the shared layer relays the capability.
 
-## 56. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
+## 67. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=gap
@@ -563,7 +673,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
 
-## 57. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
+## 68. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
 
 - owner / chain / hop: mac / command / title code: hang watchdog thread (+0x2215c35 -> +0x23cf683)
 - freq: not measured (log); used=yes; status=unproven
@@ -573,7 +683,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: victory-loader mac::watchdog on a synthetic image (L5); victory-gpu pipeline::builder_verdict_tests (3, the BVH builder making path, ec648b34); not run on the exe
 - notes: A hang that is real hangs for good with L5 on: always give such runs a wall-clock limit (RUN.md). Corpus captures (research/captures/INDEX.md) all ran with the watchdog off, so they are non-fidelity. | 2026-11-28: one cause of a >30 s frame is fixed in code: cold-cache BVH builder pipelines were made on the recording thread at the first builder dispatch (title died at +0x23cf683 about 77 s after start, 2026-11-26 run with VICTORY_BVH_BUILDER=1). ec648b34 (source: Windows fix/sun-clamp, gpu/cf-*) queues them at creation and skips the dispatch while one is being made; mac: cherry-pick, unit tests only, 待运行验证 (cold-cache run). Status gap -> unproven for that cause only; slow frames of the Metal fidelity path are still metal.gpu.fidelity_slow_frame and L5 stays the non-fidelity workaround.
 
-## 58. shared.device.options_double — CheckFeatureSupport OPTIONS: DoublePrecisionFloatShaderOps = 1 (console), host 0
+## 69. shared.device.options_double — CheckFeatureSupport OPTIONS: DoublePrecisionFloatShaderOps = 1 (console), host 0
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
@@ -583,7 +693,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
 - notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
 
-## 59. shared.device.options_tiled — CheckFeatureSupport OPTIONS: TiledResourcesTier = 3 (console), host 2
+## 70. shared.device.options_tiled — CheckFeatureSupport OPTIONS: TiledResourcesTier = 3 (console), host 2
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
@@ -593,7 +703,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
 - notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
 
-## 60. shared.device.options_conservative — CheckFeatureSupport OPTIONS: ConservativeRasterizationTier = 3 (console), host 0
+## 71. shared.device.options_conservative — CheckFeatureSupport OPTIONS: ConservativeRasterizationTier = 3 (console), host 0
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
 - freq: not measured (unknown); used=unknown; status=gap
