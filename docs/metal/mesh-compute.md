@@ -530,9 +530,21 @@ mesh_compute
 ```
 
 meaning: this stage's back builds the emulation from the `VMCS` part (this section). `tools/mac/run.sh`
-reads `$stage/CAPS` and exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` when the line is there, `0`
-when it is not (no file: a stage made before this, or by another script; an old stage with a new exe, or
+(the mac line's file: the metal line may not touch it, `check-touches.sh`) reads `$stage/CAPS` and
+exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` when the line is there, `0` when it is not (no file: a stage made before this, or by another script; an old stage with a new exe, or
 a new stage with an old exe, behaves as before). A value already in the environment is kept (tests).
 The translator's host hook (`victory-gpu/src/mac/mesh_compute.rs`) attaches the part only when it is `1`
 on the Metal chain. A new capability is one more line and one more variable in `run.sh`; a reader that
 meets a line it does not know ignores it.
+
+The `run.sh` side, for the mac line (in the `[ "$backend" = metal ]` branch, after `export VICTORY_METAL_OUT="$stage"`):
+
+```sh
+    if [ -z "${VICTORY_METAL_MESH_COMPUTE_SUPPORTED:-}" ]; then
+        if [ -f "$stage/CAPS" ] && grep -qx 'mesh_compute' "$stage/CAPS"; then
+            export VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1
+        else
+            export VICTORY_METAL_MESH_COMPUTE_SUPPORTED=0
+        fi
+    fi
+```
