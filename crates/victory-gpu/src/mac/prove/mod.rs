@@ -6,3 +6,6 @@ pub(crate) mod rig;
 
 #[cfg(test)]
 mod queue_fence;
+
+#[cfg(test)]
+mod device_slots;

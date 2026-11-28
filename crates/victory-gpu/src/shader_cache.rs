@@ -192,6 +192,32 @@ pub(crate) fn host_shader_with(container: &[u8], reads: &[victory_shader::emit::
     }
 }
 
+/// mac G12: an entry carries the first 16 bytes of the BLAKE3 of its key (the build and the container) and its
+/// encoding. The entry is published by an atomic rename, so a half-written file is never seen, but nothing checked
+/// that what is read is what was written: a flipped byte inside the DXIL (a disk error, a copied cache folder) decoded
+/// as a different, valid shader and was served, and so would an intact entry that sits under another key. An entry
+/// without a good trailer for its key (all entries of earlier builds) is a miss.
+const SEAL: usize = 16;
+
+fn trailer(key: &[u8], body: &[u8]) -> [u8; SEAL] {
+    let mut h = blake3::Hasher::new();
+    h.update(&(key.len() as u64).to_le_bytes());
+    h.update(key);
+    h.update(body);
+    h.finalize().as_bytes()[..SEAL].try_into().expect("16 bytes")
+}
+
+fn seal(mut encoded: Vec<u8>, key: &[u8]) -> Vec<u8> {
+    let t = trailer(key, &encoded);
+    encoded.extend_from_slice(&t);
+    encoded
+}
+
+fn unseal<'a>(bytes: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
+    let (body, t) = bytes.split_at_checked(bytes.len().checked_sub(SEAL)?)?;
+    (trailer(key, body) == *t).then_some(body)
+}
+
 /// The cache entry's converter: the build and the container in, the
 /// encoded translation out. `ran` tells a miss from a hit.
 struct Translate<F> {
@@ -210,7 +236,7 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
     fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
         self.ran.store(true, Ordering::Relaxed);
         let shader = (self.translate)(&input[32..]).map_err(anyhow::Error::msg)?;
-        Ok(encode(&shader))
+        Ok(seal(encode(&shader), input))
     }
 }
 
@@ -229,7 +255,7 @@ fn cached(
         let path = cache
             .get_or_convert(&converter, &input)
             .map_err(|e| format!("{e:#}"))?;
-        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
+        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| unseal(&b, &input).and_then(decode)) { // mac G12
             let (counter, what) = if converter.ran.load(Ordering::Relaxed) {
                 (&MISSES, "translated and cached")
             } else {
@@ -245,6 +271,10 @@ fn cached(
     MISSES.fetch_add(1, Ordering::Relaxed);
     (converter.translate)(container)
 }
+
+#[cfg(test)]
+#[path = "mac/prove/shader_cache_damage.rs"]
+mod prove_damage; // mac G12
 
 #[cfg(test)]
 mod tests {

@@ -628,7 +628,10 @@ modules (`#[path = "mac/prove/..."]`) so they reach private items; the visibilit
 title's 3D UAVs with a first depth slice other than 0 or a size other than the rest (D3DMetal cannot make partial 3D views, finding F1 of C-V-012).
 Shader side: `victory-shader/tests/sampler_spec.rs` (S-G-009) and `emit/mac_dxil_check.rs` (S-D-001: a hook in `emit_program`, `cfg(all(test, not(windows)))`, that checks every DXIL container the translator's tests build with an independent container reader and `llvm-bcanalyzer`; Mac has no `dxil.dll`).
 
-*Why.* Map nodes C-V-012/014/017 and api.CreateConstantBufferView/Resource::Map were "used, not proven".
+One behaviour change (the only one outside tests): **shader cache entries are sealed** (`shader_cache.rs` `seal`/`unseal`, 16 bytes of BLAKE3 over the key (build + container) and the encoding, appended to each entry; an entry without a good trailer is a miss and is translated again). Before, a flipped byte inside an entry's DXIL decoded as a valid, different shader and was served; so was an intact entry under another key's name. All entries of earlier builds are misses once (the cache refills). Tests: `mac/prove/shader_cache_damage.rs`.
+`mac/prove/device_slots.rs` (C-V-001): slots 0x1c8/0x218 fail cleanly with `out` null when the switch is off.
+
+*Why.* Map nodes C-V-001/008/012/014/017, S-G-009, S-D-001 and api.CreateConstantBufferView/Resource::Map were "used, not proven".
 
 *Why not needed on Windows.* The Windows line has its own tests of these modules; these add spec-referenced ones. *Remove when* the Windows line adopts equivalent proofs; the census when F1 is answered.
 
