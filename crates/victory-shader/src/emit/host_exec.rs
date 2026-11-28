@@ -741,7 +741,13 @@ pub struct Draw<'a> {
     pub size: (u32, u32),
     /// Mesh thread groups to dispatch instead of drawing (0: draw).
     pub mesh_groups: u32,
+    /// mac S5: a compute pass into a scratch buffer before the draw. Not on the executor (always
+    /// `None`): the tests that use it run on Windows only.
+    pub scratch: Option<ScratchPass<'a>>,
 }
+
+/// Placeholder: the executor has no scratch pass.
+pub struct ScratchPass<'a>(std::marker::PhantomData<&'a ()>);
 
 // (The Windows host's `stub_vs`/`stub_ps` serve the container-hash test and `diff_tests`, which stay on Windows.)
 
