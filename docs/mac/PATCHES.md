@@ -1058,6 +1058,28 @@ the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 pr
 world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
 the replays log nothing about pipelines, so that the aav pipelines of those frames draw was not observed directly.
 
+### S4 — geometry shaders on the Metal chain: clip distances of rectangle lists (`victory-shader` `emit/{rect,lower,mod}.rs`, `victory-gpu` `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`)
+
+*What.* The translator's rectangle-list geometry stage (`emit::rect_list_gs`) used to be refused for the 29 vertex programs of the title
+that write `SV_ClipDistance` (of 2192; matrix S-M-003): Metal Shader Converter 4.0.3 cannot make the geometry emulation's mesh function
+of a pipeline whose geometry stage *writes* a clip distance ("Failed to materializeAll"; a stage that reads one but writes none is as bad,
+a plain interpolant is fine; checked 2026-11-28, `metal/back/tests/gfx_clip.rs`). Now, when the host is the Metal chain
+(`host_attribute_at_vertex()` false: the same marker S1 uses) and a rectangle list's vertex program writes a clip distance:
+* the vertex program is translated again with its clip distances as a plain output named `VICTORYCLIP`
+  (`emit::translate_variant(.., rect_clip = true)`, `emit::clip_as_varying`; `Shader::translated_as`, `shader_cache::host_shader_as`, a
+  separate cache key; hook in `HostPipeline::new`, `rect_clip`);
+* the rectangle stage reads those distances and writes none. It does the hardware's clipping itself: the rectangle is the parallelogram of its
+  corner and the other two vertices in the unit square `(u, v)`, every output is affine in it, so each plane is a line in the square; the
+  square is cut by each plane in turn (at most one vertex more each, up to four planes) and goes out as one triangle strip with every
+  output evaluated at its vertices. A triangle that is no rectangle is cut the same way. Pixels drawn are those where the interpolated
+  distance is not negative (D3D12's rule for `w > 0`, which a rectangle list has).
+If the host refuses the stage the pipeline is remade without it (as before), and its vertex program then clips nothing.
+Tests: `emit/rect.rs` `clip_distances_are_cut_by_the_stage_and_not_passed_on`; pixels against a CPU reference in `metal/back/tests/gfx_clip_rect.rs`.
+
+*Why not needed on Windows.* D3D12's geometry stages write clip distances; the default capability leaves everything as it was.
+
+*Remove when.* MSC makes a geometry emulation that writes `SV_ClipDistance` (rerun `gfx_clip.rs`'s refusal test: it then fails).
+
 ## Fixes taken from other lines (`git cherry-pick -x`, one `mac:` commit each)
 
 Taken because they close a node of the translation map; the source SHA is in each commit message. Drop one when mac/livetr

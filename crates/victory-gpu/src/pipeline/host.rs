@@ -469,7 +469,22 @@ impl HostPipeline {
             tracing::warn!(?shaders, "a pixel shader reads per-vertex values of a rectangle list");
             return None;
         }
-        let translated_of = |s: &Arc<Shader>| if s.stage == "mesh" { s.translated_with(&reads) } else { s.translated() };
+        // mac S4: a rectangle list whose vertex shader writes a clip distance, on a host whose geometry
+        // stage cannot (the Metal chain: Metal Shader Converter fails to make a geometry emulation that
+        // writes one; `host_attribute_at_vertex` false is how the host says it is that chain): the vertex
+        // shader writes it as a plain output and the rectangle stage cuts by it.
+        let rect_clip = g.is_some_and(|g| g.topology.0 == RECTANGLES)
+            && mesh.is_none()
+            && reads.is_empty()
+            && !victory_shader::emit::host_attribute_at_vertex()
+            && find("vertex")
+                .and_then(|vs| vs.translated())
+                .is_some_and(|t| victory_shader::emit::writes_clip_distance(&t.host.dxil));
+        let translated_of = |s: &Arc<Shader>| match s.stage {
+            "mesh" => s.translated_with(&reads),
+            "vertex" if rect_clip => s.translated_as(&[], true), // mac S4
+            _ => s.translated(),
+        };
         for (s, _) in &stages {
             translated_of(s)?; // mac S1
         }
@@ -751,7 +766,7 @@ impl HostPipeline {
             }
         } else if g.topology.0 == RECTANGLES {
             let ps = stages.get(1).and_then(|(s, _)| s.translated());
-            let vs = &stages[0].0.translated()?.host.dxil;
+            let vs = &translated_of(stages[0].0)?.host.dxil; // mac S4
             match victory_shader::emit::rect_list_gs(vs, ps.map(|t| &t.host.dxil[..])) {
                 Ok(gs) => rect_gs = Some(gs),
                 Err(e) => tracing::warn!(error = %e, ?shaders, "no rectangle geometry stage"),

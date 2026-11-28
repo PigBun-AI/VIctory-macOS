@@ -132,7 +132,7 @@ pub use sampler::StaticSampler;
 pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
 pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
 pub use lower::sunclamp::export_sat;
-pub use rect::rect_list_gs;
+pub use rect::{clip_as_varying, rect_list_gs, writes_clip_distance, CLIP_VARYING}; // mac S4
 pub use shader::{
     MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
     SLOT_STRIDES_COUNT, SLOT_TABLE_STRIDES, SLOT_TABLE_VIEW_ADDRESSES, SLOT_VIEW_ADDRESSES, USER_DATA_SPACE, VIEW_INTEGER, VIEW_SIGNED, VIEW_STRIDE_BITS, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
@@ -492,6 +492,16 @@ pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
 /// the pixel program's `HostShader::vertex_reads` lists).
 pub fn translate_with(container: &[u8], reads: &[VertexRead]) -> Result<HostShader, ShaderError> {
     vertex_flat::with_reads(reads, || translate_first_half(container)) // mac S1
+}
+
+/// [`translate_with`], and for a vertex shader of a rectangle list: with its clip distances written as
+/// plain outputs ([`clip_as_varying`]; mac S4) when `rect_clip`.
+pub fn translate_variant(container: &[u8], reads: &[VertexRead], rect_clip: bool) -> Result<HostShader, ShaderError> {
+    if rect_clip {
+        clip_as_varying(|| translate_with(container, reads)) // mac S4
+    } else {
+        translate_with(container, reads)
+    }
 }
 
 fn translate_first_half(container: &[u8]) -> Result<HostShader, ShaderError> {

@@ -130,15 +130,18 @@ fn build() -> [u8; 32] {
 
 /// [`build`] for a translation that hands per-vertex values on (mac S1: a mesh shader with the reads
 /// of the pixel shader it is paired with); `build` itself when there are none.
-fn build_with(reads: &[victory_shader::emit::VertexRead]) -> [u8; 32] {
+fn build_as(reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> [u8; 32] {
     let base = build();
-    if reads.is_empty() {
+    if reads.is_empty() && !rect_clip {
         return base;
     }
     let mut hash = blake3::Hasher::new();
     hash.update(&base);
     hash.update(b"VICTORY_VERTEX_READS=");
     hash.update(&victory_shader::emit::vertex_flat::encode(reads));
+    if rect_clip {
+        hash.update(b"VICTORY_RECT_CLIP"); // mac S4
+    }
     *hash.finalize().as_bytes()
 }
 
@@ -174,6 +177,13 @@ pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
 /// `victory_shader::emit::translate_with`). The live translator library takes no reads: with some, the
 /// linked translator runs.
 pub(crate) fn host_shader_with(container: &[u8], reads: &[victory_shader::emit::VertexRead]) -> Result<HostShader, String> {
+    host_shader_as(container, reads, false)
+}
+
+/// [`host_shader_with`], and with `rect_clip`: a vertex shader of a rectangle list whose clip distances
+/// are plain outputs (mac S4, `victory_shader::emit::translate_variant`). Also translated by the linked
+/// translator, as the reads are.
+pub(crate) fn host_shader_as(container: &[u8], reads: &[victory_shader::emit::VertexRead], rect_clip: bool) -> Result<HostShader, String> {
     // The generation this translation belongs to: its switches, and the translator library
     // (`VICTORY_LIVE_TRANSLATOR`) that is part of the key `build` computes from the same snapshot.
     let snap = victory_shader::emit::live::snapshot();
@@ -181,13 +191,14 @@ pub(crate) fn host_shader_with(container: &[u8], reads: &[victory_shader::emit::
         #[cfg(windows)]
         if let Some(id) = snap.translator.get()
             && reads.is_empty()
+            && !rect_clip
         {
             return crate::live_translator::translate(id, c, &snap);
         }
-        victory_shader::emit::live::scoped(&snap, || victory_shader::emit::translate_with(c, reads)).map_err(|e| e.to_string())
+        victory_shader::emit::live::scoped(&snap, || victory_shader::emit::translate_variant(c, reads, rect_clip)).map_err(|e| e.to_string())
     };
     match CACHE.get() {
-        Some(cache) => cached(cache, &build_with(reads), container, translate),
+        Some(cache) => cached(cache, &build_as(reads, rect_clip), container, translate),
         None => translate(container),
     }
 }

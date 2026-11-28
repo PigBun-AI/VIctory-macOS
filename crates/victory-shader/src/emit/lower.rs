@@ -2607,7 +2607,16 @@ impl<'a> Lower<'a> {
             nonuniform_handles: self.s.nonuniform_handles,
             #[cfg(test)]
             wave_ops: self.s.flags & flags::WAVE_OPS != 0,
-            dxil: self.s.finish(),
+            dxil: {
+                // mac S4: a vertex shader of a rectangle list writes its clip distances as plain outputs.
+                if super::rect::clip_as_varying_set() {
+                    for e in self.s.outputs.iter_mut().filter(|e| e.kind == 6) {
+                        e.kind = 0;
+                        e.name = super::rect::CLIP_VARYING.into();
+                    }
+                }
+                self.s.finish()
+            },
             user_data,
             samplers: self.samplers,
         })
