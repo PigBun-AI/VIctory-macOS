@@ -725,7 +725,7 @@ fi
     done
     echo "ms/frame lines: $(grep -a -c 'ms/frame' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}'); last:"
     grep -a -h 'ms/frame' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | tail -2
-    echo "GPU errors (kIOGPU/Hang/SubmissionsIgnored/device removed): $(grep -a -ci 'kIOGPU\|hang\|SubmissionsIgnored\|device removed\|DXGI_ERROR_DEVICE' "$out/stdout.log" "$out/stderr.log" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
+    echo "GPU errors (kIOGPU/Hang/SubmissionsIgnored/device removed): $(LC_ALL=C awk '/[Hh]ang watchdog disabled/ {next} /(^|[^[:alnum:]_])(kIOGPU[[:alnum:]_]*|Hang|SubmissionsIgnored|device removed|DXGI_ERROR_DEVICE(_[A-Z0-9_]+)?)([^[:alnum:]_]|$)/ {n++} END {print n+0}' "$out/stdout.log" "$out/stderr.log")"
     [ "$backend" != metal ] || echo "victory-metal lines: $(grep -a -c '^victory-metal' "$out/stderr.log")"
     [ ! -s "$out/frametime-summary.txt" ] || grep -v '^数据无效' "$out/frametime-summary.txt"
 } >"$out/summary.txt"
