@@ -319,6 +319,8 @@ VMCS part payload (little endian, every offset from the start of the payload, 4-
   `DXIL` part in place) works as it does today. The converter ignores unknown parts (as it
   ignores the hash, `mesh_fit.rs`); the back strips nothing.
 * The translator recomputes the container hash over the final bytes if it signs at all.
+* A stage is named by the hash of its container **without** the `VMCS` part (8.10): the
+  denylists name shaders as the census saw them, before the part existed.
 * The part is optional. No `VMCS`: the back behaves as before the emulation (the problem
   pair is refused). `VICTORY_METAL_MESH_COMPUTE=0` also ignores it.
 * The translator may attach it to every mesh shader it can lower (the back only reads it
@@ -507,3 +509,30 @@ heap-indexed reads by the kernel) are counted as `unproven` and do not split by 
   `mesh emu dropped indirect records` (the change since the last present).
 * Tests: `metal/back/tests/mesh_compute.rs` (the prototype's, plus the runtime's from
   `a_mesh_pipeline_metal_refuses_is_made...` on).
+
+### 8.10 Naming a stage, and what a stage can do (CAPS)
+
+**Hash.** Everything that names a stage by its bytes (`msc::guard::stage_hash`, the denylists
+`msc-denylist.txt` and `mesh-pair-denylist.txt`, the front's and the back's drop statistics, the
+census) uses `victory_metal_proto::dropstats::hash_parts`, which hashes a container **without its
+`VMCS` part** (`dropstats::without_vmcs`): the part is the last one, so the result is the container as
+the translator made it before the part was appended (parts before it as they were, the part table one
+entry shorter, the size field the new length). A container with no part, or one whose last part is not
+`VMCS`, is hashed as it is. Test: `a_stage_has_the_same_hash_with_and_without_the_vmcs_part`
+(`mesh_emu.rs`), `a_container_is_hashed_without_its_vmcs_part` (proto). The translator must attach the
+part last and leave the other parts' bytes alone, as `Bundle::attach` does.
+
+**CAPS.** A stage directory (`metal/target/wine-stage`, made by `tools/metal/build-unixlib.sh`) has a
+file `CAPS`: one capability per line, written when the stage is complete. Today:
+
+```
+mesh_compute
+```
+
+meaning: this stage's back builds the emulation from the `VMCS` part (this section). `tools/mac/run.sh`
+reads `$stage/CAPS` and exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` when the line is there, `0`
+when it is not (no file: a stage made before this, or by another script; an old stage with a new exe, or
+a new stage with an old exe, behaves as before). A value already in the environment is kept (tests).
+The translator's host hook (`victory-gpu/src/mac/mesh_compute.rs`) attaches the part only when it is `1`
+on the Metal chain. A new capability is one more line and one more variable in `run.sh`; a reader that
+meets a line it does not know ignores it.

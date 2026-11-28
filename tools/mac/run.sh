@@ -283,6 +283,16 @@ if [ "$backend" = metal ]; then
     export WINEDLLOVERRIDES="$base_overrides;d3d12core=b;d3d12,dxgi=n,b"
     export WINEDLLPATH="$stage${WINEDLLPATH:+:$WINEDLLPATH}"
     export VICTORY_METAL_OUT="$stage"
+    # What the stage's back can do (CAPS, one capability per line; written by tools/metal/build-unixlib.sh): the
+    # translator's host hooks read these variables. A stage without CAPS (built before the file existed) has none.
+    # An explicit value in the environment wins (tests).
+    if [ -z "${VICTORY_METAL_MESH_COMPUTE_SUPPORTED:-}" ]; then
+        if [ -f "$stage/CAPS" ] && grep -qx 'mesh_compute' "$stage/CAPS"; then
+            export VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1
+        else
+            export VICTORY_METAL_MESH_COMPUTE_SUPPORTED=0
+        fi
+    fi
     export VICTORY_METAL_LOG=1
     export VICTORY_METAL_NOTIMPL_LOG="$(winpath "$out/notimpl.log")"
 else
