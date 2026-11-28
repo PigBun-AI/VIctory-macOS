@@ -28,8 +28,14 @@
 #                 it: the host shows it at most 2560x1440 (VICTORY_PRESENT_MAX and VICTORY_WINDOW_MAX default to it; --present-max
 #                 none for the whole picture). settings.xml's resolutionFullscreen is still written (2560x1440), not read for the
 #                 output. Internal size, dynamic resolution and TAA upscaling are the title's. Own data directory.
-#       perf      the output patched to 1280x720 (VICTORY_OUTPUT=1280x720; patch L3), logs
-#                 `non-fidelity: output patched to 1280x720`. Not a fidelity result.
+#       perf      a smaller, patched output; not a fidelity result. Default (mac X13): NATIVE 1440p, 2560x1440 written into
+#                 the image before it is mapped (the SDR display mode record, the scanout reservation, the scene scale and the
+#                 Settings preview viewport; apps/victory/src/native_1440p.rs), logs `output chain: native 1440p on` and
+#                 `non-fidelity: output patched to 2560x1440 (native 1440p, in the image)`. The old 1280x720 output patch (L3) is
+#                 the alternative, asked for with VICTORY_OUTPUT=720 (or 1280x720) or by VICTORY_NATIVE_1440P=0, and logs
+#                 `non-fidelity: output patched to 1280x720`. VICTORY_RENDER_1080P=1 / VICTORY_RENDER_SCALE=<0.25..1> choose the scene's
+#                 scale of the 1440p output. Fidelity ignores VICTORY_NATIVE_1440P=1 / VICTORY_RENDER_1080P=1 (the title logs why).
+#                 run.sh passes the profile to the title as VICTORY_MAC_PROFILE.
 #   --present-max WxH|none       VICTORY_PRESENT_MAX: smaller host window and swap chain, same title output (P1)
 #   --pool-check skip|keep       VICTORY_POOL_CHECK: jump over the back buffer pool's check without patching sizes (L3)
 #   --log-render-size            VICTORY_LOG_RENDER_SIZE=1: the title's internal size in the log (P2); costs a lock
@@ -367,11 +373,23 @@ if [ -n "$record_at" ] && [ -z "${VICTORY_RECORD:-}" ]; then
 fi
 [ "$frametime" = 0 ] || export VICTORY_FRAMETIME_LOG="$out/frametime.log"
 # the title's output: the profile decides, and says so in the log
+# The profile travels to the title (mac X13, victory-loader mac/output_chain.rs): fidelity keeps its own 4K output and turns native
+# 1440p off whatever VICTORY_NATIVE_1440P / VICTORY_RENDER_1080P say; perf takes native 1440p by default. Before X13 the title
+# could only read the profile from VICTORY_OUTPUT (0 = fidelity).
+export VICTORY_MAC_PROFILE="$profile"
 if [ "$profile" = fidelity ]; then
     export VICTORY_OUTPUT=0
-else
-    export VICTORY_OUTPUT="${VICTORY_OUTPUT:-1280x720}"
+    # the title logs `output chain: native 1440p stays off: the fidelity profile ...`; say it here too, once
+    if [ "${VICTORY_NATIVE_1440P:-}" = 1 ] || [ "${VICTORY_RENDER_1080P:-}" = 1 ]; then
+        echo "tools/mac/run.sh: note: the fidelity profile keeps the title's own 4K output: VICTORY_NATIVE_1440P / VICTORY_RENDER_1080P are ignored" >&2
+    fi
 fi
+# perf: VICTORY_OUTPUT is left as the caller has it. Unset: the profile's default, native 1440p (X13; it was 1280x720 here before).
+# what the perf profile will do about the output, as run.sh expects it (the title decides: victory-loader mac/output_chain.rs)
+if [ "$console" = series-s ]; then perf_chain="L3 ${VICTORY_OUTPUT:-1280x720 (default)} (native 1440p is for the Series X image only)"
+elif [ "${VICTORY_NATIVE_1440P:-}" = 0 ]; then perf_chain="native 1440p off (VICTORY_NATIVE_1440P=0): L3 ${VICTORY_OUTPUT:-1280x720 (default)}"
+elif [ -n "${VICTORY_OUTPUT:-}" ] && [ "${VICTORY_OUTPUT}" != 0 ] && [ "${VICTORY_NATIVE_1440P:-}" != 1 ]; then perf_chain="L3 output ${VICTORY_OUTPUT} (VICTORY_OUTPUT is set; native 1440p off)"
+else perf_chain="native 1440p 2560x1440 (the profile's default${VICTORY_RENDER_SCALE:+, scale $VICTORY_RENDER_SCALE}${VICTORY_RENDER_1080P:+, 1080p scene})"; fi
 # fidelity: the title outputs 4K by itself, whatever its settings or the reported display mode say (ui-scale experiments
 # 2026-11-28, docs/mac/PATCHES.md P5); on a Series X the system scales that to the television. Here the host does: the picture is
 # shown at most 2560x1440 (P1 cap on the swap chain; VICTORY_WINDOW_MAX on the title's window). `--present-max none` shows it whole.
@@ -407,7 +425,7 @@ describe() {
         echo "# fidelity: shown at most ${VICTORY_PRESENT_MAX:-unlimited} (VICTORY_PRESENT_MAX, P1) in a window of at most ${VICTORY_WINDOW_MAX:-the work area}; the title's output is not 1440p"
         echo "# fidelity: settings.xml video/resolutionFullscreen is set to $settings_output, but the title does not take its output size from it (P5); kept for the title's own menus"
     else
-        echo "# perf: non-fidelity: output patched to ${VICTORY_OUTPUT} (the title's code, patch L3)"
+        echo "# perf: non-fidelity; output chain: ${perf_chain} (the title's log line 'output chain: ...' says what was applied)"
     fi
     if [ "$watchdog_off" = 1 ]; then
         echo "# non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG}; patch L5): a real hang does not crash, the run ends by --timeout (${tmo} s; 0 = never)"
@@ -628,7 +646,7 @@ print_environment >"$out/run-env.txt"
     echo "exe $(shasum -a 256 "$exe" | cut -c1-16) $(stat -f %Sm -t %FT%T "$exe")"
     [ "$watchdog_off" = 0 ] || echo "non-fidelity: title hang watchdog disabled (VICTORY_MAC_NO_WATCHDOG=${VICTORY_MAC_NO_WATCHDOG})"
     echo "load average at start: $(uptime | sed 's/.*load averages*: //')"
-    [ "$profile" = fidelity ] && echo "settings.xml $(grep -A3 '<resolutionFullscreen>' "$settings" | tr -d ' \n')" || echo "non-fidelity: output patched to ${VICTORY_OUTPUT}"
+    [ "$profile" = fidelity ] && echo "settings.xml $(grep -A3 '<resolutionFullscreen>' "$settings" | tr -d ' \n')" || echo "non-fidelity: output chain ${perf_chain}"
 } >"$out/start.txt"
 cat "$out/start.txt"
 

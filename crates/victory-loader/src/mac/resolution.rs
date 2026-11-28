@@ -99,7 +99,7 @@ pub fn asked_output() -> Asked {
 
 /// What `VICTORY_OUTPUT` asks for, for a host that is a Mac or not: the
 /// value's own, or the default when it is unset or wrong (said why).
-fn asked_output_on(spec: Option<&str>, mac: bool) -> Asked {
+pub(crate) fn asked_output_on(spec: Option<&str>, mac: bool) -> Asked {
     let fallback = default_output_on(mac);
     let Some(spec) = spec else {
         return fallback;
@@ -118,7 +118,7 @@ const EXPECTED_OUTPUT: &str = "expected one of the title's modes: 1920x1080, 256
 
 /// What `spec` asks for: one of [`MODES`], or the title's own size for `0`
 /// or `none`. `Err` says what is wrong with it.
-fn parse_asked(spec: &str) -> Result<Asked, String> {
+pub(crate) fn parse_asked(spec: &str) -> Result<Asked, String> {
     let trimmed = spec.trim();
     if trimmed == "0" || trimmed.eq_ignore_ascii_case("none") {
         return Ok(Asked::Title);
@@ -141,7 +141,7 @@ fn default_output_on(mac: bool) -> Asked {
 /// Whether the host is a Mac: the title runs here under Wine, whose host
 /// is the Mac (`wine_get_host_version` names it).
 #[cfg(windows)]
-fn on_a_mac() -> bool {
+pub(crate) fn on_a_mac() -> bool {
     use std::ffi::{CStr, c_char};
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
     type HostVersion = unsafe extern "C" fn(*mut *const c_char, *mut *const c_char);
@@ -162,7 +162,7 @@ fn on_a_mac() -> bool {
 
 /// Whether the host is a Mac: never, on a host that is not Windows.
 #[cfg(not(windows))]
-fn on_a_mac() -> bool {
+pub(crate) fn on_a_mac() -> bool {
     false
 }
 
@@ -517,8 +517,17 @@ pub fn path_line(asked: &[(Group, String)]) -> String {
 /// code yet.
 #[cfg(windows)]
 pub unsafe fn apply_asked(base: usize, size: usize) {
-    let asked = plan_asked(asked_output(), pool_check_skip_asked(), asked_render_scale(), asked_upscaler());
-    println!("{}", path_line(&asked));
+    // mac X13: which output chain this run takes (native 1440p in the image, or L3's output); the lines were
+    // printed by `run.rs` when it decided. With native 1440p on, L3 asks for no output and no scale: its
+    // scale site shares four bytes with the native one, its output would write 720p over a 1440p title.
+    let chain = super::output_chain::current();
+    let scale = if chain.l3_scale { asked_render_scale() } else { None };
+    let asked = plan_asked(chain.l3_output, pool_check_skip_asked(), scale, asked_upscaler());
+    if asked.is_empty() && chain.native_1440p {
+        println!("resolution: perf, native 1440p is in the image; no L3 site asked to be patched");
+    } else {
+        println!("{}", path_line(&asked));
+    }
     for (group, value) in asked {
         let parts: Vec<(&Site, &[u8])> = group.iter().map(|(s, c)| (*s, c.as_slice())).collect();
         // SAFETY: the caller's promise.

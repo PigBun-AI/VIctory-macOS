@@ -49,8 +49,14 @@ only ones): the backend choice, `WINEDLLPATH` / `WINEDLLOVERRIDES`, `VICTORY_MET
   (title+0x247af25, `int3`), `--pool-check skip` becomes a fixed part of the fidelity profile; the log then carries a
   `non-fidelity: pool check skipped` line (to be added to the loader then), and the node is registered in the matrix as a **stubbed**
   node (a title patch, not the title's own behaviour). Until then it is only an option. Details: `PATCHES.md`, L3.
-- **perf**: `VICTORY_OUTPUT=1280x720` (an own `VICTORY_OUTPUT` in the environment wins), the patch L3; the run log carries
-  `non-fidelity: output patched to 1280x720`. For speed and debugging; no fidelity result may cite it. `--console series-s` is allowed.
+- **perf**: the output is patched smaller (mac X13, `PATCHES.md`): by default **native 1440p**, 2560x1440 written into the image before it
+  is mapped (display mode record, scanout reservation, scene scale, Settings preview viewport); the run log carries
+  `output chain: native 1440p on (the perf profile's default)` and `non-fidelity: output patched to 2560x1440 (native 1440p, in the image)`.
+  `VICTORY_OUTPUT=720` (or `1280x720`) or `VICTORY_NATIVE_1440P=0` takes the old 1280x720 output patch (L3) instead (`non-fidelity: output
+  patched to 1280x720`); the two are alternatives. `VICTORY_RENDER_1080P=1` / `VICTORY_RENDER_SCALE=<0.25..1>` choose the scene's scale of the
+  1440p output. `run.sh` exports the profile as `VICTORY_MAC_PROFILE`; the fidelity profile ignores `VICTORY_NATIVE_1440P=1` and
+  `VICTORY_RENDER_1080P=1` (one log line says why). `--console series-s` is allowed (L3 720p there: native 1440p is for the Series X image).
+  For speed and debugging; no fidelity result may cite it.
 
 ### Backends
 
@@ -386,7 +392,7 @@ Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.
 
 `tools/mac/play.sh --purpose "<column>: <node id>,..." [run.sh options]` (the purpose is required here too, as for every run) is `run.sh --perf --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
 game lock, data directories and checks are run.sh's). `--input none` matters: from world frame 1 the default neutral replay is exclusive
-and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on. The default is `--perf` (1280x720 output patch,
+and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on. The default is `--perf` (native 1440p output, X13; 1280x720 output patch with `VICTORY_OUTPUT=720`,
 non-fidelity; the UI comes out 3x too big because the title lays it out in 4K pixels) since fidelity GPU frames are 6-17 s each on our back;
 `play.sh --fidelity` brings the Series X profile back (a later option wins). `play.sh --worldsave` plays the Windows world save (see "Data
 directories"); `play.sh --new-game` starts a new game again.

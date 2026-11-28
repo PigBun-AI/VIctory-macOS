@@ -15,7 +15,7 @@
 #   --base DIR      the data folder copied (APFS clone) for both runs: default `data` of run.sh's
 #                   seed, data/livetr under the GTA6 root (GTA6_ROOT); the warm run
 #                   also copies the `cache` folder beside it, the cold run starts with an EMPTY one
-#   --perf|--fidelity  run.sh's profile (default --perf: the output patched to 1280x720; --fidelity
+#   --perf|--fidelity  run.sh's profile (default --perf: native 1440p, mac X13; --fidelity
 #                   is run.sh's fidelity profile, which writes 2560x1440 into the copy's settings.xml)
 #   --backend B     run.sh's backend for every run of this script (default metal; d3dmetal is reference-only)
 #   --frames N      the report counts world frames 1..N (default 600)

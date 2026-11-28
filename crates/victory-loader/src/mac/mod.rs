@@ -8,7 +8,9 @@
 //!   resume a fault in the middle of one).
 //! - [`wide`]: 256-bit stores redone as two 128-bit ones, from a list made by
 //!   `cargo xtask wide-stores`.
-//! - [`resolution`]: the title's output size (1280x720 by default on a Mac).
+//! - [`resolution`]: the title's output size (1280x720 by default on a Mac, L3).
+//! - [`output_chain`]: which output chain a run takes: native 1440p (the perf profile's default,
+//!   `apps/victory/src/native_1440p.rs`), L3's output, or the title's own 4K (fidelity) (X13).
 //! - [`clwb`]: `clwb` write-back loops turned into NOPs (a fault per loop
 //!   under Rosetta).
 //! - [`cmpxchg16`]: a diagnostic for 16-bit `lock cmpxchg` at addresses = 15 mod 16
@@ -22,6 +24,7 @@ pub mod clwb;
 pub mod cmpxchg16;
 pub mod int3dump;
 pub mod masked;
+pub mod output_chain;
 pub mod resolution;
 pub mod watchdog;
 pub mod wide;

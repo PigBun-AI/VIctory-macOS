@@ -4,9 +4,9 @@
 #   --purpose is required here too (run.sh refuses to start without it, exit status 7): rule of the integration lead, until the translation map
 #   is filled in no run is made to look at the picture. It goes through to run.sh with the other options.
 # What it sets, in front of your own options (a later option wins, so any of them can be overridden):
-#   --perf         1280x720 output patch (L3), the speed profile; NON-fidelity. Default since 2026-11-28: the fidelity GPU frames are
+#   --perf         native 1440p output (mac X13; the 1280x720 output patch L3 with VICTORY_OUTPUT=720), the speed profile; NON-fidelity. Default since 2026-11-28: the fidelity GPU frames are
 #                  6-17 s each on our back. --fidelity (Series X, 2560x1440, the profile of the formal tests) is still an option
-#                  and wins when given (a later option wins). The perf UI is 3x too big (the title lays the UI out in 4K pixels)
+#                  and wins when given (a later option wins). The UI size at the perf outputs (3x too big at 720p, expected 1.5x at native 1440p) is open: the title lays the UI out in 4K pixels
 #   --no-keys      no scripted Enter every 3 s (VICTORY_KEYS): you press the keys
 #   --input none   no neutral replay (VICTORY_INPUT_REPLAY): from world frame 1 the replay is EXCLUSIVE and would swallow
 #                  your keyboard and pad, so it must be off for hand play

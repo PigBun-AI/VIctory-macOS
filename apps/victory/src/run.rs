@@ -71,15 +71,21 @@ pub fn run(
     // Mac patches (docs/mac/PATCHES.md): nothing happens off Rosetta.
     let mac = crate::mac::plan(&prepared.info, &mut original, &hash);
 
-    // A 1440p output instead of the Series X's 4K one (`native_1440p`): the
-    // patched image goes to a folder of its own, beside the stock one.
+    // A 1440p output instead of the Series X's 4K one (`native_1440p`): the perf profile's default
+    // (mac X13: `victory_loader::mac::output_chain` decides from the profile `tools/mac/run.sh` exports
+    // and the switches `VICTORY_NATIVE_1440P`, `VICTORY_RENDER_1080P`, `VICTORY_RENDER_SCALE`, `VICTORY_OUTPUT`;
+    // the fidelity profile keeps the title's own 4K output whatever is set). The patched image goes to a
+    // folder of its own, beside the stock one.
     // The scene's scale (`VICTORY_RENDER_SCALE`, 0.25..1; `VICTORY_RENDER_1080P=1`
     // is 0.75), pinned there unless `VICTORY_RENDER_SCALE_PIN=0`
     // (`victory_loader::render_scale`); 1080P alone keeps its old unpinned
     // minimum unless the pin is asked for.
-    let render = RenderScale::from_env();
-    let native_1440p = render.is_some() || std::env::var("VICTORY_NATIVE_1440P").as_deref() == Ok("1");
-    let render = render.unwrap_or(RenderScale { scale: 1.0, pin: false });
+    let chain = victory_loader::mac::output_chain::decide_once(matches!(console, Console::SeriesX));
+    for line in &chain.log {
+        println!("{line}");
+    }
+    let native_1440p = chain.native_1440p;
+    let render = RenderScale::from_env().unwrap_or(RenderScale { scale: 1.0, pin: false });
     let images = if native_1440p {
         anyhow::ensure!(matches!(console, Console::SeriesX), "1440p output needs the Series X profile");
         let (w, h) = native_1440p::prepare(&mut prepared, render.scale, render.pin)?;
@@ -90,9 +96,16 @@ pub fn run(
             std::env::set_var("VICTORY_NATIVE_1440P", "1");
         }
         println!("display        {}x{} SDR, scene {w}x{h}", native_1440p::WIDTH, native_1440p::HEIGHT);
+        println!("non-fidelity: output patched to {}x{} (native 1440p, in the image)", native_1440p::WIDTH, native_1440p::HEIGHT);
         println!("render scale   {}{}", render.scale, if render.pin { ", pinned" } else { ", the title's minimum" });
         cfg.cache_subdir(&render.cache_name())?
     } else {
+        // Off by the profile (fidelity) or by the switch: victory-gpu reads this variable itself (the
+        // frontend's viewport for the 1440p target), so a `1` left in the environment is turned off.
+        if std::env::var_os("VICTORY_NATIVE_1440P").is_some() {
+            // SAFETY: nothing else runs yet.
+            unsafe { std::env::set_var("VICTORY_NATIVE_1440P", "0") };
+        }
         cfg.cache_subdir("images")?
     };
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
