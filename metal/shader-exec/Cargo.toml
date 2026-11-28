@@ -1,0 +1,17 @@
+[package]
+name = "victory-metal-shader-exec"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Out-of-process executor for victory-shader's hardware proofs on macOS: DXIL -> MSC -> Metal compute -> read back, over a pipe (docs/metal/shader-exec.md)"
+
+# Metal exists on Apple targets only; elsewhere this crate is an empty binary
+# (the workspace still builds and lints for Windows). It names no Metal type:
+# it drives `victory-metal-back`'s plain-Rust API only.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+victory-metal-back = { path = "../back" }
+
+[[bin]]
+name = "victory-shader-exec"
+path = "src/main.rs"
