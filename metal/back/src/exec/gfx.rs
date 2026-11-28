@@ -539,7 +539,11 @@ impl Executor {
                     && self.options.mesh_compute
                     && super::emu::is_problem_pair(&e) =>
             {
-                match crate::mesh_emu::Emulated::build(&device, &desc, &super::emu::app_layout(&sig)) {
+                match crate::mesh_emu::Emulated::build(
+                    &device,
+                    &desc,
+                    &super::emu::app_layout(&sig),
+                ) {
                     Ok(em) => {
                         let pso = Arc::new(Pso {
                             body: PsoBody::Emulated(Arc::new(em)),

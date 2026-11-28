@@ -42,7 +42,7 @@ use super::tlab::SlotKind;
 use super::{Pso, PsoBody, RootSig, State, status_of};
 use crate::descriptors::ENTRY_SIZE;
 use crate::mesh_emu::{self, Direct, Emulated, Fetch};
-use crate::stages::{DISPATCH, RENDER_ENCODER_STAGES, VIS_DEVICE};
+use crate::stages::{COMPUTE_ENCODER_STAGES, DISPATCH, RENDER_ENCODER_STAGES, VIS_DEVICE};
 
 /// What the pre-scan decided for one emulated draw (one per draw, in order).
 pub(super) enum Prepared {
@@ -88,9 +88,7 @@ enum Conflict {
 }
 
 fn key_of(st: &State, va: u64) -> u64 {
-    st.device
-        .resolve_va(va, 1)
-        .map_or(va, |(base, _)| base)
+    st.device.resolve_va(va, 1).map_or(va, |(base, _)| base)
 }
 
 fn shadow_u64(shadow: &[u8], at: u32) -> u64 {
@@ -226,7 +224,12 @@ impl Run<'_> {
 
     /// The compute work of `groups` groups, encoded now (into the compute
     /// encoder the list has, or a new one).
-    fn encode_direct(&mut self, side: &Side, em: &Emulated, groups: [u32; 3]) -> Result<Direct, Status> {
+    fn encode_direct(
+        &mut self,
+        side: &Side,
+        em: &Emulated,
+        groups: [u32; 3],
+    ) -> Result<Direct, Status> {
         let static_va = side
             .sig
             .as_ref()
@@ -318,6 +321,7 @@ impl Run<'_> {
         // heaps the pass started with.
         let mut heaps_changed = false;
         let mut hoisted = false;
+        let mut ordered = false;
         while let Some(Ok(cmd)) = dec.next() {
             match cmd {
                 Command::EndRenderPass(_) => break,
@@ -367,20 +371,29 @@ impl Run<'_> {
                         sim.note_draw(self.st);
                         continue;
                     };
+                    if !ordered && !heaps_changed {
+                        ordered = self.order_before_kernel().is_ok();
+                    }
                     let prepared = self.prepare_direct(&sim, &pso, &em, &c, heaps_changed);
                     hoisted |= matches!(prepared, Prepared::Direct(_));
                     queue.push_back(prepared);
                     sim.note_draw(self.st);
                 }
                 Command::ExecuteIndirect(c) => {
-                    let mesh = c.arguments().any(|a| a.kind == IndirectArgKind::DISPATCH_MESH);
+                    let mesh = c
+                        .arguments()
+                        .any(|a| a.kind == IndirectArgKind::DISPATCH_MESH);
                     let emulated = sim.gpso.as_ref().and_then(|p| match &p.body {
                         PsoBody::Emulated(em) => Some((p.clone(), em.clone())),
                         _ => None,
                     });
                     match (mesh, emulated) {
                         (true, Some((pso, em))) => {
-                            let prepared = self.prepare_indirect(&sim, &pso, &em, &c, heaps_changed);
+                            if !ordered && !heaps_changed {
+                                ordered = self.order_before_kernel().is_ok();
+                            }
+                            let prepared =
+                                self.prepare_indirect(&sim, &pso, &em, &c, heaps_changed);
                             hoisted |= matches!(prepared, Prepared::Indirect(_));
                             queue.push_back(prepared);
                             sim.note_draw(self.st);
@@ -388,7 +401,13 @@ impl Run<'_> {
                         (true, None) => sim.note_draw(self.st),
                         // A compute record in a pass is not something the
                         // front makes: stop looking.
-                        (false, _) if !c.arguments().any(|a| a.kind.is_action() && a.kind != IndirectArgKind::DISPATCH) => break,
+                        (false, _)
+                            if !c.arguments().any(|a| {
+                                a.kind.is_action() && a.kind != IndirectArgKind::DISPATCH
+                            }) =>
+                        {
+                            break;
+                        }
                         (false, _) => sim.note_draw(self.st),
                     }
                 }
@@ -504,8 +523,14 @@ impl Run<'_> {
     /// visible to it.
     fn order_before_kernel(&mut self) -> R {
         let (list, _, _) = self.open.as_mut().ok_or(Status::BAD_STREAM)?;
-        list.barrier(RENDER_ENCODER_STAGES, DISPATCH, VIS_DEVICE)
-            .map_err(|e| status_of(&e))
+        // The application's barriers name the stages of its own draw; the
+        // kernel is a dispatch, so everything before it is ordered before it.
+        list.barrier(
+            RENDER_ENCODER_STAGES | COMPUTE_ENCODER_STAGES,
+            DISPATCH,
+            VIS_DEVICE,
+        )
+        .map_err(|e| status_of(&e))
     }
 
     /// `DISPATCH_MESH` with an emulated pipeline bound: `None` when the
@@ -552,7 +577,13 @@ impl Run<'_> {
 
     /// The kernel right before its draw: the render encoder ends and the pass
     /// continues in a second one.
-    fn emu_mesh_in_place(&mut self, em: &Arc<Emulated>, side: &Side, c: &DispatchMesh, split: bool) -> R {
+    fn emu_mesh_in_place(
+        &mut self,
+        em: &Arc<Emulated>,
+        side: &Side,
+        c: &DispatchMesh,
+        split: bool,
+    ) -> R {
         if split {
             mesh_emu::count_split();
         } else {
@@ -569,14 +600,22 @@ impl Run<'_> {
     /// `EXECUTE_INDIRECT` whose record ends with a mesh dispatch, with an
     /// emulated pipeline bound: `None` when it is not one.
     pub(super) fn emu_indirect_command(&mut self, c: &ExecuteIndirect<'_>) -> Option<R> {
-        if !c.arguments().any(|a| a.kind == IndirectArgKind::DISPATCH_MESH) {
+        if !c
+            .arguments()
+            .any(|a| a.kind == IndirectArgKind::DISPATCH_MESH)
+        {
             return None;
         }
         let (pso, em) = self.emulated_bound()?;
         Some(self.emu_indirect_run(&pso, &em, c))
     }
 
-    fn emu_indirect_run(&mut self, pso: &Arc<Pso>, em: &Arc<Emulated>, c: &ExecuteIndirect<'_>) -> R {
+    fn emu_indirect_run(
+        &mut self,
+        pso: &Arc<Pso>,
+        em: &Arc<Emulated>,
+        c: &ExecuteIndirect<'_>,
+    ) -> R {
         let (_, bound) = self.list()?;
         let prepared = bound.emu.pop_front();
         let side = bound.graphics.clone();
@@ -664,7 +703,9 @@ mod tests {
         assert!(!is_problem_pair(&MscError::Unsupported(
             "logic operations on render targets".into()
         )));
-        assert!(!is_problem_pair(&MscError::Limit("too many threads".into())));
+        assert!(!is_problem_pair(&MscError::Limit(
+            "too many threads".into()
+        )));
         assert!(!is_problem_pair(&MscError::BadInput("x".into())));
     }
 }

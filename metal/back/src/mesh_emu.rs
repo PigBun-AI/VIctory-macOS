@@ -50,13 +50,7 @@ pub fn enabled_from(value: Option<&str>) -> bool {
 /// [`enabled_from`] of the process environment, read once.
 pub fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        enabled_from(
-            std::env::var("VICTORY_METAL_MESH_COMPUTE")
-                .ok()
-                .as_deref(),
-        )
-    })
+    *ON.get_or_init(|| enabled_from(std::env::var("VICTORY_METAL_MESH_COMPUTE").ok().as_deref()))
 }
 
 /// What the emulation did since the process started.
@@ -223,7 +217,9 @@ impl<'a> Bundle<'a> {
                 .and_then(|f| f.try_into().ok())
                 .ok_or("a part cut short")?;
             let size = word(container, at + 4).ok_or("cut short")? as usize;
-            let data = container.get(at + 8..at + 8 + size).ok_or("a part cut short")?;
+            let data = container
+                .get(at + 8..at + 8 + size)
+                .ok_or("a part cut short")?;
             if four != VMCS {
                 parts.push((four, data));
             }
@@ -281,7 +277,12 @@ impl<'a> Bundle<'a> {
 /// and the dispatch dimensions (a root CBV). `all_visible` makes every
 /// parameter visible to every stage (the compute form reads what the mesh
 /// shader read, whatever visibility said "mesh").
-pub fn extend_root(root: &RootSignatureDesc, layout: &Layout, uav: bool, all_visible: bool) -> RootSignatureDesc {
+pub fn extend_root(
+    root: &RootSignatureDesc,
+    layout: &Layout,
+    uav: bool,
+    all_visible: bool,
+) -> RootSignatureDesc {
     let mut r = root.clone();
     if all_visible {
         for p in &mut r.params {
@@ -417,7 +418,8 @@ impl Emulated {
             Ok(None) => return refuse("the mesh shader has no VMCS part (not lowered)"),
             Err(e) => return refuse(e),
         };
-        let layout = Layout::parse(bundle.layout).map_err(|e| MscError::Unsupported(e.to_string()))?;
+        let layout =
+            Layout::parse(bundle.layout).map_err(|e| MscError::Unsupported(e.to_string()))?;
         let options = CompileOptions {
             compat: mesh.compat,
             ..CompileOptions::default()
@@ -522,7 +524,9 @@ impl CommandList {
     ) -> Result<Direct> {
         let n = u64::from(groups[0]) * u64::from(groups[1]) * u64::from(groups[2]);
         if n == 0 {
-            return Err(Error::BadArgument("an emulated dispatch of no groups".into()));
+            return Err(Error::BadArgument(
+                "an emulated dispatch of no groups".into(),
+            ));
         }
         let bytes = n
             .checked_mul(u64::from(em.layout.group_stride))
@@ -538,7 +542,10 @@ impl CommandList {
         let size = u64::from(em.ext.size);
         let ring = self.alloc_constants(size + 16, 16)?;
         let dims = ring.gpu_va + size;
-        ring.write_bytes(0, &fill_ext(&em.ext, shadow, static_va, scratch.gpu_va, dims))?;
+        ring.write_bytes(
+            0,
+            &fill_ext(&em.ext, shadow, static_va, scratch.gpu_va, dims),
+        )?;
         ring.write_u32s(size, &[groups[0], groups[1], groups[2], 0])?;
         self.set_root_arguments(&ring)?;
         self.dispatch(&em.compute, groups, em.threads)?;
@@ -615,7 +622,10 @@ impl CommandList {
             out_va: u64,
             draw_va: u64,
         }
-        let state = RefCell::new(Chunk { out_va: 0, draw_va: 0 });
+        let state = RefCell::new(Chunk {
+            out_va: 0,
+            draw_va: 0,
+        });
         let mut fetches = Vec::new();
         let dispatch_threads = em.threads;
         let compute = em.compute.clone();
@@ -917,8 +927,20 @@ mod tests {
         let cs = extend_root(&root, &layout, true, true);
         assert_eq!(cs.params.len(), 3);
         assert_eq!(cs.params[0].visibility, Visibility::All);
-        assert!(matches!(cs.params[1].kind, ParamKind::Uav { register: 0, space: 4000000000 }));
-        assert!(matches!(cs.params[2].kind, ParamKind::Cbv { register: 0, space: 4000000000 }));
+        assert!(matches!(
+            cs.params[1].kind,
+            ParamKind::Uav {
+                register: 0,
+                space: 4000000000
+            }
+        ));
+        assert!(matches!(
+            cs.params[2].kind,
+            ParamKind::Cbv {
+                register: 0,
+                space: 4000000000
+            }
+        ));
         let g = extend_root(&root, &layout, false, false);
         assert_eq!(g.params[0].visibility, Visibility::Mesh);
         assert!(matches!(g.params[1].kind, ParamKind::Srv { .. }));

@@ -479,11 +479,8 @@ impl ConstantRing {
                 "ring segments must be a non-zero multiple of 256 bytes".into(),
             ));
         }
-        let buffer = device.create_buffer_in(
-            SetKind::Heap,
-            kind,
-            segment_bytes * u64::from(segments),
-        )?;
+        let buffer =
+            device.create_buffer_in(SetKind::Heap, kind, segment_bytes * u64::from(segments))?;
         Ok(ConstantRing {
             buffer,
             segment: segment_bytes,

@@ -25,11 +25,13 @@ use std::process::Command as Process;
 use common_msc::{dxil_or_skip, dxil_result};
 use exec_support::*;
 use victory_metal_back::mesh_compute::{Element, Layout, Region, Scalar, kind};
+use victory_metal_back::mesh_emu::{self, Bundle};
 use victory_metal_back::mesh_fit;
 use victory_metal_back::msc::RootSignatureDesc as BackRoot;
 use victory_metal_back::pipeline_defaults::{Component, Stages, Variant, default_graphics};
 use victory_metal_proto::cmd::*;
 use victory_metal_proto::ids::*;
+use victory_metal_proto::indirect::{ExecuteIndirect, IndirectArg, IndirectArgKind};
 use victory_metal_proto::pso::*;
 use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
@@ -73,6 +75,13 @@ fn run_x86(tool: &Path, args: &[&Path], stdout: Option<&Path>) {
 /// The mesh shader's compute form and its scratch layout, or `None` (SKIPPED)
 /// without the tools. `Err` is the lowering's refusal.
 fn lower(name: &str, ms: &[u8]) -> Option<Result<(Vec<u8>, Layout), String>> {
+    lower_text(name, ms).map(|r| r.map(|(cs, l, _)| (cs, l)))
+}
+
+/// [`lower`] with the layout text too (what the `VMCS` part carries).
+type Lowered = (Vec<u8>, Layout, String);
+
+fn lower_text(name: &str, ms: &[u8]) -> Option<Result<Lowered, String>> {
     let Some(tools) = tools_dir() else {
         eprintln!("SKIPPED {name}: set VICTORY_DXC_TEXT_TOOLS (tools/metal/dxc-text-tools.sh)");
         return None;
@@ -102,9 +111,11 @@ fn lower(name: &str, ms: &[u8]) -> Option<Result<(Vec<u8>, Layout), String>> {
         return Some(Err(e));
     }
     run_x86(&tools.join("dxcasm"), &[&cs_ll, &out], None);
+    let text = std::fs::read_to_string(&lay).unwrap();
     let result = (
         std::fs::read(&out).unwrap(),
-        Layout::parse(&std::fs::read_to_string(&lay).unwrap()).expect("a layout"),
+        Layout::parse(&text).expect("a layout"),
+        text,
     );
     let _ = std::fs::remove_dir_all(&dir);
     Some(Ok(result))
@@ -240,6 +251,20 @@ O main(uint vid : SV_VertexID, uint grp : SV_InstanceID) {{\n\
 /// is). The small one carries the colour in one `float4`. Both give the pixel
 /// shader the same values.
 fn mesh_hlsl(big: bool) -> String {
+    mesh_hlsl_reading(big, false)
+}
+
+/// `mesh_hlsl`, the tint scaled by the first word of a root SRV `src`
+/// (`t0`, space 0) when `reads`: with the word 1 the picture is the same.
+fn mesh_hlsl_reading(big: bool, reads: bool) -> String {
+    let (decl, scale) = if reads {
+        (
+            "ByteAddressBuffer src : register(t0);\n",
+            "float(src.Load(0))",
+        )
+    } else {
+        ("", "1.0")
+    };
     let (members, writes) = if big {
         // A `float` and a `float3` a pair: Metal puts each `float3` at a
         // multiple of 12, so every pair costs it padding D3D12 does not count.
@@ -263,7 +288,7 @@ fn mesh_hlsl(big: bool) -> String {
         )
     };
     format!(
-        "struct V {{\n  float4 pos : SV_Position;\n{members}  nointerpolation uint idv : TEXCOORD30;\n}};\n\
+        "{decl}struct V {{\n  float4 pos : SV_Position;\n{members}  nointerpolation uint idv : TEXCOORD30;\n}};\n\
 struct P {{ float4 tint : COLOR2; bool cull : SV_CullPrimitive; }};\n\
 [numthreads(128,1,1)] [outputtopology(\"triangle\")]\n\
 void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n\
@@ -279,7 +304,7 @@ void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n\
       uint v = 3 * t + k;\n\
       verts[v].pos = float4(p[k], 0.5, 1);\n      verts[v].idv = v;\n{writes}    }}\n\
     tris[t] = uint3(3 * t, 3 * t + 1, 3 * t + 2);\n\
-    prims[t].tint = float4(1.0 - 0.25 * (t & 1), 0, 0, 0);\n\
+    prims[t].tint = float4((1.0 - 0.25 * (t & 1)) * {scale}, 0, 0, 0);\n\
     prims[t].cull = (t % 7) == 3;\n\
   }}\n}}\n",
         nv = 3 * TRIS,
@@ -311,7 +336,10 @@ struct Gfx {
 }
 
 fn setup() -> Option<Gfx> {
-    let fx = Fx::new();
+    setup_with(Fx::new())
+}
+
+fn setup_with(fx: Fx) -> Option<Gfx> {
     if !fx.executor().device().unwrap().caps().mesh_shaders {
         eprintln!("SKIPPED: no mesh shaders on this device");
         return None;
@@ -402,6 +430,45 @@ impl Gfx {
         srv_va: Option<u64>,
         draw: Command<'static>,
     ) -> Vec<u32> {
+        let mut state = vec![
+            Command::SetRootSignature(SetRootSignature {
+                bind_point: BindPoint::GRAPHICS,
+                root_sig: sig,
+            }),
+            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
+        ];
+        if let Some(va) = srv_va {
+            state.push(graphics_va(0, RootParamKind::SRV, va));
+        }
+        self.picture_in(before, state, vec![draw])
+    }
+
+    /// `before` and `state` outside a pass, `in_pass` inside one over a
+    /// cleared target; the target read back.
+    fn picture_in(
+        &self,
+        before: Vec<Command<'static>>,
+        state: Vec<Command<'static>>,
+        in_pass: Vec<Command<'static>>,
+    ) -> Vec<u32> {
+        let (tex, rb) = self.target();
+        let mut cmds = vec![begin(1, self.q)];
+        cmds.extend(before);
+        cmds.extend(state);
+        cmds.extend(self.pass_around(tex, in_pass));
+        cmds.extend(self.read_back(tex, &rb));
+        cmds.push(end(1));
+        assert_eq!(
+            self.fx.submit(&cmds),
+            Status::OK,
+            "{:?}",
+            self.fx.executor().last_error()
+        );
+        self.settle();
+        cpu_read(rb.cpu_addr, (W * H) as usize)
+    }
+
+    fn target(&self) -> (ResId, CreateBufferArgs) {
         let mut a = CreateTextureArgs::new();
         a.dimension = TexDim::TEX2D;
         a.format = format::R8G8B8A8_UNORM;
@@ -414,6 +481,12 @@ impl Gfx {
         let tex = self.fx.ok(a).res;
         let rb = self.fx.buffer(BufferKind::READBACK, u64::from(W * H * 4));
         cpu_write(rb.cpu_addr, &vec![0xDEAD_BEEF; (W * H) as usize]);
+        (tex, rb)
+    }
+
+    /// Viewport, scissor and topology, then a pass over `tex` (cleared to
+    /// opaque black) holding `in_pass`.
+    fn pass_around(&self, tex: ResId, in_pass: Vec<Command<'static>>) -> Vec<Command<'static>> {
         let mut pass = <BeginRenderPass as Wire>::ZERO;
         pass.rt_count = 1;
         pass.rt[0] = RenderAttachment {
@@ -427,6 +500,25 @@ impl Gfx {
             slice_count: 1,
             clear: [0.0, 0.0, 0.0, 1.0],
         };
+        let mut cmds = vec![
+            Command::SetPrimitiveTopology(SetPrimitiveTopology {
+                topology: Topology::TRIANGLE_LIST,
+                _pad: 0,
+            }),
+            Command::SetViewports(SetViewports::from_slice(&[Viewport::new(
+                0.0, 0.0, W as f32, H as f32,
+            )])),
+            Command::SetScissors(SetScissors::from_slice(&[Rect::new(
+                0, 0, W as i32, H as i32,
+            )])),
+            Command::BeginRenderPass(pass),
+        ];
+        cmds.extend(in_pass);
+        cmds.push(Command::EndRenderPass(<EndRenderPass as Wire>::ZERO));
+        cmds
+    }
+
+    fn read_back(&self, tex: ResId, rb: &CreateBufferArgs) -> Vec<Command<'static>> {
         let mut loc = <TextureLocation as Wire>::ZERO;
         loc.res = tex;
         loc.kind = LocKind::SUBRESOURCE;
@@ -441,47 +533,13 @@ impl Gfx {
         let mut c = <CopyTextureRegion as Wire>::ZERO;
         c.dst = foot;
         c.src = loc;
-        let mut cmds = vec![begin(1, self.q)];
-        cmds.extend(before);
-        cmds.extend([
-            Command::SetRootSignature(SetRootSignature {
-                bind_point: BindPoint::GRAPHICS,
-                root_sig: sig,
-            }),
-            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
-        ]);
-        if let Some(va) = srv_va {
-            cmds.push(graphics_va(0, RootParamKind::SRV, va));
-        }
-        cmds.extend([
-            Command::SetPrimitiveTopology(SetPrimitiveTopology {
-                topology: Topology::TRIANGLE_LIST,
-                _pad: 0,
-            }),
-            Command::SetViewports(SetViewports::from_slice(&[Viewport::new(
-                0.0, 0.0, W as f32, H as f32,
-            )])),
-            Command::SetScissors(SetScissors::from_slice(&[Rect::new(
-                0, 0, W as i32, H as i32,
-            )])),
-            Command::BeginRenderPass(pass),
-            draw,
-            Command::EndRenderPass(<EndRenderPass as Wire>::ZERO),
+        vec![
             Command::Barrier(Barrier::memory(
                 stage::FRAGMENT | stage::VERTEX,
                 stage::BLIT,
             )),
             Command::CopyTextureRegion(c),
-            end(1),
-        ]);
-        assert_eq!(
-            self.fx.submit(&cmds),
-            Status::OK,
-            "{:?}",
-            self.fx.executor().last_error()
-        );
-        self.settle();
-        cpu_read(rb.cpu_addr, (W * H) as usize)
+        ]
     }
 }
 
@@ -982,4 +1040,360 @@ fn bench_emulated_against_native() {
         l.scratch_bytes(u64::from(groups)),
         TRIS
     );
+}
+
+// ---------------------------------------------------------------------------
+// the back's runtime: mesh pipelines Metal cannot take, through the executor
+// (docs/metal/mesh-compute.md, section 8)
+// ---------------------------------------------------------------------------
+
+/// The mesh shader as the translator hands it over: its container with the
+/// lowering (compute form, fetch shader, layout) attached as the `VMCS` part.
+fn with_vmcs(name: &str, ms: &[u8]) -> Option<(Vec<u8>, Layout)> {
+    let (cs, layout, text) = match lower_text(name, ms)? {
+        Ok(x) => x,
+        Err(e) => panic!("the lowering refused the shader: {e}"),
+    };
+    let vs = dxil_or_skip(&format!("{name}_vs"), "vs_6_6", &vs_hlsl(&layout))?;
+    let bundle = Bundle {
+        layout: &text,
+        compute: &cs,
+        vertex: &vs,
+    };
+    Some((bundle.attach(ms).expect("attach the part"), layout))
+}
+
+fn mesh_signature() -> Vec<u8> {
+    let mut v = Vec::new();
+    IndirectArg {
+        kind: IndirectArgKind::DISPATCH_MESH,
+        index: 0,
+        dest_offset: 0,
+        count: 0,
+    }
+    .put(&mut v);
+    v
+}
+
+fn execute_mesh(args: ResId, max_count: u32, count: Option<ResId>) -> Command<'static> {
+    let sig: &'static [u8] = Box::leak(mesh_signature().into_boxed_slice());
+    Command::ExecuteIndirect(ExecuteIndirect {
+        args,
+        args_offset: 0,
+        count: count.unwrap_or(ResId::NULL),
+        count_offset: 0,
+        max_count,
+        stride: 12,
+        root_sig: RootSigId::NULL,
+        signature: sig,
+    })
+}
+
+fn dispatch_mesh(x: u32) -> Command<'static> {
+    Command::DispatchMesh(DispatchMesh {
+        x,
+        y: 1,
+        z: 1,
+        _pad: 0,
+    })
+}
+
+/// What the compute-form tests need: the native picture, the big mesh with
+/// its part, the pixel shader.
+struct Rig {
+    g: Gfx,
+    native: Vec<u32>,
+    ms: Vec<u8>,
+    ps: Vec<u8>,
+}
+
+fn rig_with(fx: Fx, reads: bool) -> Option<Rig> {
+    let g = setup_with(fx)?;
+    let native = native_picture(&g)?;
+    let big = dxil_or_skip("mcb_ms_big", "ms_6_6", &mesh_hlsl_reading(true, reads))?;
+    let ps = dxil_or_skip("mcb_ps_big", "ps_6_6", PS_BIG)?;
+    let (ms, _) = with_vmcs("mcb", &big)?;
+    Some(Rig { g, native, ms, ps })
+}
+
+fn rig() -> Option<Rig> {
+    rig_with(Fx::new(), false)
+}
+
+fn same_picture(got: &[u32], want: &[u32], what: &str) {
+    let mut lit = 0;
+    for (i, (a, b)) in got.iter().zip(want).enumerate() {
+        assert!(
+            close(*a, *b, 1),
+            "{what}: pixel ({}, {}): {a:#010x}, native {b:#010x}",
+            i as u32 % W,
+            i as u32 / W
+        );
+        lit += u32::from(*a != 0xFF00_0000);
+    }
+    assert!(
+        lit > 150,
+        "{what}: the picture is almost empty ({lit} pixels)"
+    );
+}
+
+fn blank(got: &[u32], what: &str) {
+    let n = got.iter().filter(|&&p| p != 0xFF00_0000).count();
+    assert_eq!(n, 0, "{what}: {n} pixels drawn");
+}
+
+#[test]
+fn a_mesh_pipeline_metal_refuses_is_made_and_draws_what_the_native_path_draws() {
+    let Some(r) = rig() else { return };
+    let sig = graphics_root(&r.g.fx, vec![], 0);
+    let before = mesh_emu::counters();
+    let pso =
+        r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps)
+            .unwrap_or_else(|e| panic!("the emulation is not made: {e:?}"));
+    assert_eq!(mesh_emu::counters().pipelines, before.pipelines + 1);
+    let got = r.g.picture(sig, pso, vec![], None, dispatch_mesh(GROUPS));
+    same_picture(&got, &r.native, "DispatchMesh");
+    let after = mesh_emu::counters();
+    assert_eq!(
+        after.hoisted,
+        before.hoisted + 1,
+        "the kernel ran before the pass"
+    );
+    assert_eq!(
+        (after.split, after.in_place),
+        (before.split, before.in_place)
+    );
+    // again, on the same pipeline: the ring and the per-draw arguments are reused
+    let again = r.g.picture(sig, pso, vec![], None, dispatch_mesh(GROUPS));
+    same_picture(&again, &r.native, "DispatchMesh, second frame");
+}
+
+#[test]
+fn an_indirect_mesh_dispatch_draws_what_the_native_path_draws() {
+    let Some(r) = rig() else { return };
+    let sig = graphics_root(&r.g.fx, vec![], 0);
+    let pso = r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    let args = r.g.fx.buffer(BufferKind::UPLOAD, 4096);
+    let count = r.g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // {x, y, z}: the groups the GPU holds
+    cpu_write(args.cpu_addr, &[GROUPS, 1, 1]);
+    let before = mesh_emu::counters();
+    for (n, max, drawn) in [(None, 1, true), (Some(1u32), 4, true), (Some(0), 4, false)] {
+        if let Some(n) = n {
+            cpu_write(count.cpu_addr, &[n]);
+        }
+        let got = r.g.picture(
+            sig,
+            pso,
+            vec![],
+            None,
+            execute_mesh(args.res, max, n.map(|_| count.res)),
+        );
+        if drawn {
+            same_picture(&got, &r.native, &format!("indirect, count {n:?}"));
+        } else {
+            blank(&got, "indirect, count 0");
+        }
+    }
+    assert_eq!(mesh_emu::counters().indirect, before.indirect + 3);
+}
+
+#[test]
+fn an_indirect_record_the_arena_cannot_hold_draws_nothing_and_the_next_one_draws() {
+    let Some(r) = rig() else { return };
+    let sig = graphics_root(&r.g.fx, vec![], 0);
+    let pso = r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    let args = r.g.fx.buffer(BufferKind::UPLOAD, 4096);
+    // Over the arena by far, then a valid record, then a count whose product
+    // overflows 32 bits.
+    cpu_write(
+        args.cpu_addr,
+        &[1_000_000, 1, 1, GROUPS, 1, 1, 70_000, 70_000, 1],
+    );
+    let got =
+        r.g.picture(sig, pso, vec![], None, execute_mesh(args.res, 3, None));
+    // The valid record is the picture the native path draws.
+    same_picture(&got, &r.native, "the record after a refused one");
+}
+
+#[test]
+fn with_the_switch_off_the_big_mesh_is_refused_as_before() {
+    let mut options = small_options();
+    options.mesh_compute = false;
+    let Some(r) = rig_with(Fx::with_options(options), false) else {
+        return;
+    };
+    let sig = graphics_root(&r.g.fx, vec![], 0);
+    let (s, why) =
+        r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps)
+            .expect_err("refused");
+    assert_ne!(s, Status::OK);
+    assert!(!why.is_empty());
+}
+
+#[test]
+fn the_switch_reads_its_values() {
+    assert!(mesh_emu::enabled_from(None));
+    assert!(mesh_emu::enabled_from(Some("1")));
+    assert!(!mesh_emu::enabled_from(Some("0")));
+}
+
+/// A full-screen triangle whose pixel shader stores 1 through the root UAV
+/// at `u1`, and writes black over the black the pass cleared to.
+const VS_FULL: &str = "float4 main(uint v : SV_VertexID) : SV_Position {\n\
+  float2 p = float2((v << 1) & 2, v & 2);\n\
+  return float4(p * 2.0 - 1.0, 0.5, 1); }\n";
+const PS_STORE: &str = "RWByteAddressBuffer bits : register(u1);\n\
+float4 main(float4 p : SV_Position) : SV_Target0 { bits.Store(0, 1); return float4(0, 0, 0, 1); }\n";
+
+/// The pass: a draw that stores 1 into `written`, then the emulated mesh
+/// draw reading `read` through its root SRV. Gives the picture; the mesh
+/// shader tints by the word it reads, so the picture is the native one only if
+/// the kernel saw the 1 (`read` was prefilled with 0).
+fn write_then_read(
+    r: &Rig,
+    same_buffer: bool,
+) -> (Vec<u32>, mesh_emu::Counters, mesh_emu::Counters) {
+    let g = &r.g;
+    let wsig = graphics_root(&g.fx, vec![root_param(RootParamKind::UAV, 1, 0)], 0);
+    let wvs = dxil_or_skip("mcb_vs_full", "vs_6_6", VS_FULL).unwrap();
+    let wps = dxil_or_skip("mcb_ps_store", "ps_6_6", PS_STORE).unwrap();
+    let wpso = g.graphics_pso(wsig, Some(&wvs), None, &wps).unwrap();
+    let msig = graphics_root(&g.fx, vec![root_param(RootParamKind::SRV, 0, 0)], 0);
+    let mpso = g.graphics_pso(msig, None, Some(&r.ms), &r.ps).unwrap();
+    let a = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let b = if same_buffer {
+        a
+    } else {
+        g.fx.buffer(BufferKind::DEFAULT, 256)
+    };
+    let up = g.fx.buffer(BufferKind::UPLOAD, 256);
+    cpu_write(up.cpu_addr, &[0, 0, 0, 0]);
+    let before = vec![
+        copy(a.res, up.res, 256),
+        // the other buffer already holds the 1 the mesh reads
+        Command::Barrier(Barrier::memory(
+            stage::BLIT,
+            stage::BLIT | stage::VERTEX | stage::FRAGMENT | stage::DISPATCH,
+        )),
+    ];
+    let one = g.fx.buffer(BufferKind::UPLOAD, 256);
+    cpu_write(one.cpu_addr, &[1, 0, 0, 0]);
+    let mut before = before;
+    if !same_buffer {
+        before.insert(1, copy(b.res, one.res, 256));
+    }
+    let in_pass = vec![
+        Command::SetRootSignature(SetRootSignature {
+            bind_point: BindPoint::GRAPHICS,
+            root_sig: wsig,
+        }),
+        Command::SetPipeline(SetPipeline { pso: wpso, _pad: 0 }),
+        graphics_va(0, RootParamKind::UAV, a.gpu_va),
+        Command::Draw(Draw {
+            vertex_count: 3,
+            instance_count: 1,
+            start_vertex: 0,
+            start_instance: 0,
+        }),
+        Command::SetRootSignature(SetRootSignature {
+            bind_point: BindPoint::GRAPHICS,
+            root_sig: msig,
+        }),
+        Command::SetPipeline(SetPipeline { pso: mpso, _pad: 0 }),
+        graphics_va(0, RootParamKind::SRV, b.gpu_va),
+        dispatch_mesh(GROUPS),
+    ];
+    let c0 = mesh_emu::counters();
+    let got = g.picture_in(before, vec![], in_pass);
+    (got, c0, mesh_emu::counters())
+}
+
+#[test]
+fn a_draw_that_reads_what_the_pass_wrote_splits_the_pass() {
+    let Some(r) = rig_with(Fx::new(), true) else {
+        return;
+    };
+    if dxil_or_skip("mcb_probe", "vs_6_6", VS_FULL).is_none() {
+        return;
+    }
+    let (got, c0, c1) = write_then_read(&r, true);
+    // The mesh read the 1 the pass stored: the pass was split before the draw
+    // (one more render encoder, the kernel between them) ...
+    assert_eq!(c1.split, c0.split + 1, "the rule split the pass");
+    assert_eq!(c1.hoisted, c0.hoisted, "nothing was hoisted past the write");
+    // ... and its result is the native picture (a hoisted kernel would have
+    // read the 0 and tinted everything black).
+    same_picture(&got, &r.native, "split pass");
+}
+
+#[test]
+fn a_draw_that_reads_something_else_is_hoisted() {
+    let Some(r) = rig_with(Fx::new(), true) else {
+        return;
+    };
+    if dxil_or_skip("mcb_probe", "vs_6_6", VS_FULL).is_none() {
+        return;
+    }
+    let (got, c0, c1) = write_then_read(&r, false);
+    assert_eq!(c1.split, c0.split, "no conflict, no split");
+    assert_eq!(c1.hoisted, c0.hoisted + 1);
+    same_picture(&got, &r.native, "hoisted");
+}
+
+// ---- the scratch ring ---------------------------------------------------------
+
+#[test]
+fn the_scratch_ring_does_not_hand_out_a_segment_a_submission_in_flight_may_use() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use victory_metal_back::device::Device;
+    use victory_metal_back::queue::{Queue, QueueOptions};
+    let fx = Fx::new(); // the GPU lock
+    let _ = &fx;
+    let d = Device::new().expect("Metal 4 device");
+    let q = Queue::with_options(
+        &d,
+        QueueOptions {
+            in_flight: 2,
+            max_lists: 4,
+            ring_segment_bytes: 4096,
+            ring_segments: 2,
+            inter_submit_barrier: true,
+        },
+    )
+    .unwrap();
+    assert!(q.configure_scratch(4096, 2));
+    let a = q.alloc_scratch(4096, 256).unwrap();
+    let b = q.alloc_scratch(4096, 256).unwrap();
+    assert_ne!(a.gpu_va, b.gpu_va);
+    // Both segments belong to the submission being recorded: a third is "more
+    // than the whole ring" and an error, not a wait for ever.
+    assert!(q.alloc_scratch(4096, 256).is_err());
+    assert!(q.alloc_scratch(8192, 256).is_err(), "over a segment");
+    assert!(
+        !q.configure_scratch(8192, 4),
+        "a ring in use keeps its size"
+    );
+    // The submission that holds them stays in flight until the CPU signals.
+    let fence = d.create_fence().unwrap();
+    q.wait_fence(&fence, 1);
+    let mut l = q.begin_list().unwrap();
+    l.end().unwrap();
+    q.submit(vec![l]).unwrap();
+    let signalled = Arc::new(AtomicBool::new(false));
+    let flag = signalled.clone();
+    let f2 = fence.clone();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        flag.store(true, Ordering::SeqCst);
+        f2.signal_cpu(1);
+    });
+    let c = q.alloc_scratch(4096, 256).unwrap();
+    assert!(
+        signalled.load(Ordering::SeqCst),
+        "the ring gave a segment back while the submission using it was still in flight"
+    );
+    assert!(c.gpu_va == a.gpu_va || c.gpu_va == b.gpu_va);
+    t.join().unwrap();
 }
