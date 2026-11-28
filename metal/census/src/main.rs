@@ -35,9 +35,9 @@ mod meshfit;
 #[cfg(target_vendor = "apple")]
 mod meshstat;
 #[cfg(target_vendor = "apple")]
-mod mspair;
-#[cfg(target_vendor = "apple")]
 mod mscs;
+#[cfg(target_vendor = "apple")]
+mod mspair;
 #[cfg(target_vendor = "apple")]
 mod opcodes;
 #[cfg(target_vendor = "apple")]
