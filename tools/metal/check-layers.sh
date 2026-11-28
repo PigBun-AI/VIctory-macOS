@@ -174,7 +174,8 @@ check() {
     # Upstream must not know about us.
     for path in $upstream; do
         [ -e "$path" ] || continue
-        hits=$(grep -rnE 'victory-metal|victory_metal' --include='*.rs' --include='Cargo.toml' "$path" 2>/dev/null)
+        # A comment may name the layering rule (mac S6's host_exec.rs does); only code and manifests count.
+        hits=$(grep -rnE 'victory-metal|victory_metal' --include='*.rs' --include='Cargo.toml' "$path" 2>/dev/null | grep -vE '^[^:]+\.rs:[0-9]+:[[:space:]]*//' || true)
         [ -z "$hits" ] || report "rule 1: upstream references victory-metal ($path)" "$hits"
     done
 
