@@ -858,6 +858,58 @@ fn s_buffer_loads_raw() -> Vec<(String, Outcome)> {
     names.into_iter().map(|(n, d)| (format!("{n}"), s_buffer_row(n, d, false))).collect()
 }
 
+// ---- s_buffer_load_dword (one dword) past the end of a raw view reads 0 ----
+
+/// The one-dword scalar buffer load of a raw SRV, at and past the view's end, the `soffset`
+/// register and the immediate adding up (a byte offset outside the view reads 0: D3D12
+/// "out-of-bounds access of a raw buffer view", every dword of it). With `VICTORY_SHADER_OPT`
+/// wide loads on, the one dword goes through the vector-load path (`raw_dwords`); the test runs
+/// in both modes (shader-hw.sh second pass; `VICTORY_SHADER_OPT=127`). Windows line d040bcb3
+/// (`VICTORY_SCALAR_BOUNDS`) is the same case on the D3D12 host.
+fn one_dword_bounds() -> Vec<(String, Outcome)> {
+    let mut rows = Vec::new();
+    for dwords in [62usize, 13] {
+        let data = pattern(dwords);
+        let end = 4 * dwords as u32;
+        let mut parts = Vec::new();
+        for imm in [0u32, 8] {
+            let mut body = smem("s_buffer_load_dword", 32, 8, imm, Some(3)).to_vec();
+            body.push(vop1(0x001, 16, 32)); // v_mov_b32 v16, s32
+            body.extend(store_out(16, 0));
+            let mut cfg = Cfg::new(Srv::Buffer(4));
+            cfg.vgprs = 40;
+            let shader = match try_build(&body, &cfg) {
+                Ok(s) => s,
+                Err(o) => {
+                    parts.push((format!("imm {imm}"), o));
+                    continue;
+                }
+            };
+            let views = [View::Buffer { data: &data, stride: Stride::Raw }, View::RawUav(16)];
+            eprintln!("smem_bounds: VICTORY_SHADER_OPT {} (wide loads {}), dxil {} bytes", super::shader_opt(), super::shader_opt() & super::bitcode::opt::WIDE != 0, shader.dxil.len());
+            warm(&shader, 16);
+            let mut sos = vec![0, 4, end - 12, end - 8, end - 4, end, end + 4, end + 8, end + 252, 1 << 20, 0x7FFF_FFF0];
+            if imm == 0 {
+                sos.extend([0x8000_0000, 0xFFFF_FFF0, 0xFFFF_FFFC]);
+            }
+            let cases: Vec<[u32; 4]> = sos.iter().map(|&s| [0, 0, 0, s]).collect();
+            let o = sweep(&shader, &views, &[], &cases, |c, got| {
+                let a = u64::from(imm) + u64::from(c[3]);
+                let want = dword_at(&data, a);
+                (got[0][0] != want).then(|| format!("soffset {:#x}: got {:#x} want {want:#x}", c[3], got[0][0]))
+            });
+            parts.push((format!("imm {imm}"), o));
+        }
+        rows.push((format!("s_buffer_load_dword#bounds{dwords}"), merge(parts)));
+    }
+    rows
+}
+
+#[test]
+fn oracle_mem_smem_one_dword_bounds() {
+    run_family_rows("smem_bounds", one_dword_bounds());
+}
+
 fn run_family_rows(family: &str, rows: Vec<(String, Outcome)>) {
     if Host::new(false).is_err() {
         eprintln!("{family}: no device; not run");

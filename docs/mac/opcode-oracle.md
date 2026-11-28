@@ -97,6 +97,8 @@ Result on the Mac GPU: 115 rows, all pass at the default and under `VICTORY_SHAD
 
 Findings: (1) vector buffer loads straddling a view's end leaked the memory behind the view in the default path too, not only at opt 127: MSC `BOUNDS_CHECK` tests the first dword only: fixed by a patch of the B batch (number pending). (2) A thread's texture store followed by an atomic on the texel was reordered by Metal: a fence after the counter store (number pending). (3) `global_load_ubyte/sbyte/ushort/sshort` of title memory were untranslated: part of the same patch. (4) `image_gather4_l[_o]` is the translator's four-texel shortcut: the edge is clamped whatever the sampler says (wrap forms not asked; documented in `lower.rs`).
 
+One-dword scalar loads past a view's end (`oracle_mem_smem_one_dword_bounds`, rows `s_buffer_load_dword#bounds62/13`: soffset + immediate at, one past and far past the end, 2^31 and the 32-bit wrap; run in the default pass and in the `VICTORY_SHADER_OPT=127` pass of `shader-hw.sh`): they read 0 on this tree before and after the Windows line's d040bcb3 (`VICTORY_SCALAR_BOUNDS`). With wide loads on, a one-dword load already goes through `raw_dwords` as a single-component `rawBufferLoad` (the first dword is the one MSC's `BOUNDS_CHECK` does test); the DXIL is byte-identical wide on and off and with or without that patch (2084 / 2096 bytes in the two forms of the row).
+
 ## Honest limits
 
 The oracle checks the translator and the device against a CPU model of the ISA text; it is not a console. Where the ISA text and the console differ (denormal mode, rounding mode registers, out-of-range fields) a row records what the translator does and a person decides.

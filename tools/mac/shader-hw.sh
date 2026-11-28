@@ -49,12 +49,13 @@ VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec.tsv" \
     heavy test cargo test -p victory-shader --lib -j 2 -- $FILTER "$@" 2>&1 | tee "$LOG/test.txt" | grep -E '^test result|FAILED'
 python3 tools/mac/shader-hw-tally.py "$LOG/test.txt" "$LOG/exec.tsv" tools/mac/shader-hw-known.txt
 rc=$?
-# The wide-load pass the test asks for (its doc comment): once with VICTORY_SHADER_OPT=127.
+# The wide-load pass the tests ask for (their doc comments): once with VICTORY_SHADER_OPT=127 (scalar_buffer_loads and
+# the oracle_mem_ rows, among them the one-dword bounds rows).
 if [ -z "$FILTER" ]; then
-    echo "== run scalar_buffer_loads with VICTORY_SHADER_OPT=127"
+    echo "== run scalar_buffer_loads and oracle_mem_ with VICTORY_SHADER_OPT=127"
     rm -f "$LOG/exec127.tsv"
     VICTORY_SHADER_OPT=127 VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec127.tsv" \
-        heavy test-opt127 cargo test -p victory-shader --lib -j 2 -- scalar_buffer_loads 2>&1 | tee "$LOG/test127.txt" | grep -E '^test result|FAILED'
+        heavy test-opt127 cargo test -p victory-shader --lib -j 2 -- scalar_buffer_loads oracle_mem_ 2>&1 | tee "$LOG/test127.txt" | grep -E '^test result|FAILED'
     python3 tools/mac/shader-hw-tally.py "$LOG/test127.txt" "$LOG/exec127.tsv" tools/mac/shader-hw-known.txt @opt127 || rc=1
 fi
 exit $rc
