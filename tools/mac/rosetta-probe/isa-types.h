@@ -26,6 +26,9 @@ typedef struct Op {
     int p2;                                  // store source offset inside the src1 field (vmovhps m64,x stores the high half)
     int al;                                  // required alignment of the memory operand (0 = none)
     int mem_r;                               // 1: destination is memory inside out.r (pre-filled with d); r is compared in full, x[] only where xm says
+    const char *kimm;                        // immediate-stub table (STUB): the kernel for immediate I is kimm + 128 * I; the engine cycles I over the chunks of records
+    int immn;                                // number of immediate values to cycle through (default 256)
+    void (*umask)(const IRec *, const struct Op *, uint64_t m[4]);   // bits of x[0..3] to ignore for this record (architecturally undefined results / flags)
     void (*fix)(IRec *, const struct Op *, int stream);   // generator hook applied to every record (integer ops: flags, width-specific edge values)
 } Op;
 static const char *g_fam = "diff";

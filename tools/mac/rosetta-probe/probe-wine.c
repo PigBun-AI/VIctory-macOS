@@ -691,6 +691,7 @@ static int batch_atomic_split(void) {
 #include "isa-diff.h"
 #include "isa-move.h"
 #include "isa-fparith.h"
+#include "isa-int.h"
 
 // ---------- main ----------
 int main(int argc, char **argv) {
@@ -716,6 +717,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[2], "cvt_i2f")) f = batch_cvt_i2f(argc > 3 ? argv[3] : NULL);
         else if (!strcmp(argv[2], "cvt_f2f")) f = batch_cvt_f2f(argc > 3 ? argv[3] : NULL);
         else if (!strcmp(argv[2], "avx_fparith")) f = batch_ops("avx_fparith", reg_fparith_ops, argc > 3 ? argv[3] : NULL, plan_fp);
+        else if (!strcmp(argv[2], "x86_int_alu")) f = batch_ops("x86_int_alu", reg_alu_ops, argc > 3 ? argv[3] : NULL, plan_int);
         else if (!strcmp(argv[2], "avx_move")) f = batch_ops("avx_move", reg_move_ops, argc > 3 ? argv[3] : NULL, plan_default);
         else { say("unknown batch\n"); return 2; }
         return f ? 1 : 0;
