@@ -30,6 +30,7 @@ case "${FAKE_MODE:-idle}" in
             echo "2026 INFO victory_gpu::replay::snap: frame recorder: the frame is captured" >&2 ;;
     present) for n in 1 2 3 4 5 6 7 8 9 10; do sleep 0.4; echo "$n,16000,5" >>"$VICTORY_FRAMETIME_LOG"; done ;;
     quick) echo "title ended by itself" ; exit 0 ;;
+    caps) echo "title sees VICTORY_METAL_MESH_COMPUTE_SUPPORTED=${VICTORY_METAL_MESH_COMPUTE_SUPPORTED-unset}"; exit 0 ;;
 esac
 [ "${FAKE_MODE:-idle}" = quick ] && exit 0
 while :; do sleep 0.2; done
@@ -193,6 +194,43 @@ waitlock=0; while [ ! -f "$VICTORY_GAME_LOCK/purpose" ] && [ $waitlock -lt 100 ]
 expect "the lock holds the purpose; game-lock.sh status shows it" "grep -qx 'perf-hotspot: mac.perf.frame' $VICTORY_GAME_LOCK/purpose && bash $ROOT/tools/mac/game-lock.sh status | grep -q 'purpose: perf-hotspot: mac.perf.frame'"
 wait $stpid
 expect "the purpose is in RUN.txt of that run too" "[ \"\$(sed -n 1p $T/st/RUN.txt)\" = 'purpose: perf-hotspot: mac.perf.frame' ]"
+echo "== the stage's CAPS file: mesh_compute switches VICTORY_METAL_MESH_COMPUTE_SUPPORTED on (Metal backend)"
+# a fake stage (empty dlls) and a prefix with a system32 of its own, so that the real run (fake Wine) gets as far as starting the "title"
+mkstage() { # NAME [CAPS-CONTENT]: stage $T/stage-NAME; with a second argument a CAPS file with exactly that content
+    mkdir -p "$T/stage-$1/front" "$T/stage-$1/x86_64-windows" "$T/stage-$1/x86_64-unix"
+    : >"$T/stage-$1/front/d3d12.dll"; : >"$T/stage-$1/front/dxgi.dll"; : >"$T/stage-$1/x86_64-windows/victory_metal_bridge.dll"
+    [ $# -lt 2 ] || printf '%s' "$2" >"$T/stage-$1/CAPS"
+}
+mkstage caps $'# the capabilities of this stage\nmesh_compute\n'
+mkstage other $'# nothing for the mesh\nmesh_compute_later\n  mesh_compute\n#mesh_compute\nwave_wide\n'
+mkstage none
+mkstage crlf $'wave_wide\r\nmesh_compute\r\n'
+mkstage empty ''
+pe_metal() { VICTORY_METAL_OUT="$T/stage-$1" env -u VICTORY_METAL_MESH_COMPUTE_SUPPORTED bash "$P" --print-env --backend metal --prefix "$T/prefix-caps-$1" 2>&1; }
+expect "CAPS with mesh_compute: --print-env lists the variable as 1" "pe_metal caps | grep -qx 'VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1'"
+expect "CAPS with mesh_compute: --print-env says where it comes from" "pe_metal caps | grep -q '^# metal: caps: VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1 (from $T/stage-caps/CAPS: mesh_compute)'"
+expect "CAPS with CRLF line ends and mesh_compute: exported" "pe_metal crlf | grep -qx 'VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1'"
+expect "CAPS with only other lines (comments, a longer name, an indented one, wave_wide): not exported" "! pe_metal other | grep -q '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED=' && pe_metal other | grep -q 'caps: .* not set (.*/CAPS has no mesh_compute line)'"
+expect "an empty CAPS: not exported" "! pe_metal empty | grep -q '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED='"
+expect "no CAPS file: not exported, --print-env says so" "! pe_metal none | grep -q '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED=' && pe_metal none | grep -q 'caps: .* not set (no CAPS file in the stage'"
+expect "a value set by hand is kept: with CAPS saying mesh_compute (0 stays 0), with no CAPS (1 stays 1)" "[ \"\$(VICTORY_METAL_MESH_COMPUTE_SUPPORTED=0 VICTORY_METAL_OUT=$T/stage-caps bash $P --print-env --backend metal --prefix $T/prefix-caps-caps 2>&1 | grep '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED=')\" = VICTORY_METAL_MESH_COMPUTE_SUPPORTED=0 ] && [ \"\$(VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1 VICTORY_METAL_OUT=$T/stage-none bash $P --print-env --backend metal --prefix $T/prefix-caps-none 2>&1 | grep '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED=')\" = VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1 ]"
+expect "the D3DMetal backend has no stage and no such line" "! env -u VICTORY_METAL_MESH_COMPUTE_SUPPORTED bash $P --print-env --backend d3dmetal 2>&1 | grep -q 'MESH_COMPUTE'"
+# the title's own environment (the fake Wine prints what it gets)
+caps_run() { # NAME STAGE-NAME
+    mkdir -p "$T/prefix-$1/drive_c/windows/system32"
+    : >"$T/server.calls"
+    VICTORY_METAL_OUT="$T/stage-$2" FAKE_MODE=caps env -u VICTORY_METAL_MESH_COMPUTE_SUPPORTED bash "$P" --purpose "freq: mac.test.caps" --backend metal --exe "$T/victory-fake-until-test.exe" \
+        --prefix "$T/prefix-$1" --out "$T/$1" --no-keys --input none --timeout 20 >"$T/$1.console" 2>"$T/$1.console.err"; rc=$?
+}
+caps_run runcaps caps
+expect "run, CAPS with mesh_compute: the title gets VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1" "grep -q 'title sees VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1' $T/runcaps.console $T/runcaps/stderr.log $T/runcaps/stdout.log 2>/dev/null"
+expect "run, CAPS with mesh_compute: run-env.txt (the record of the run) has it" "grep -qx 'VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1' $T/runcaps/run-env.txt"
+caps_run runother other
+expect "run, CAPS with other lines only: the title gets none" "grep -q 'title sees VICTORY_METAL_MESH_COMPUTE_SUPPORTED=unset' $T/runother.console $T/runother/stderr.log $T/runother/stdout.log 2>/dev/null"
+caps_run runnone none
+expect "run, no CAPS file: the title gets none" "grep -q 'title sees VICTORY_METAL_MESH_COMPUTE_SUPPORTED=unset' $T/runnone.console $T/runnone/stderr.log $T/runnone/stdout.log 2>/dev/null"
+expect "run, no CAPS file: not in run-env.txt either" "! grep -q '^VICTORY_METAL_MESH_COMPUTE_SUPPORTED=' $T/runnone/run-env.txt"
+expect "caps runs: lock released, no fake title left" 'lock_free && no_fake_left'
 echo "== guards"
 expect "--linger alone only warns" "bash $ROOT/tools/mac/run.sh --print-env --backend d3dmetal --linger 3 2>&1 >/dev/null | grep -q 'no effect'"
 expect "bad --until-log refused" "! bash $ROOT/tools/mac/run.sh --print-env --until-log '(' >/dev/null 2>&1"

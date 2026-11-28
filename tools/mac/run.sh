@@ -105,6 +105,10 @@
 # tools/mac/run.local.env is sourced at the start if it exists; a variable already set in the environment wins over the
 # file. With no stage found, the Metal backend stops with an error (set VICTORY_METAL_OUT, write run.local.env, or use
 # --backend d3dmetal). VICTORY_METAL_ARCHIVE (read-only archive of compiled Metal libraries) passes through the same way.
+# The stage's capability file CAPS (optional, in the stage directory): one capability per line, a line that starts with # is a comment. With a line that is
+# exactly `mesh_compute` run.sh exports VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1 to the title (the back of that stage can run the mesh->compute form: S5 appends a
+# VMCS part to a mesh container over 32 KB, which changes the container's hash and so no longer matches an old back's AGX crash list). With no CAPS file, or none
+# of that line, nothing is exported: a new exe with an old stage never appends the part. A value already set in the environment is kept as it is. --print-env says which.
 # Wine: VICTORY_MAC_WINE_DIR, else VIctory-macOS/target/wine-cx under the GTA6 root (the parent of the main checkouts; three levels up from worktrees/mac/<name>).
 # Builds (once) the DXC front end tools/macos/dxc-d3dmetal.sh and sets VICTORY_DXC_HELPER / DXC_LIB /
 # VICTORY_DXC_DIR for the helper shaders (docs/mac/PATCHES.md, G4). Only the Wine processes of the
@@ -294,6 +298,20 @@ if [ "$backend" = metal ]; then
     [ -d "$stage" ] || die "the Metal stage $stage ($stage_from) is not a directory; fix VICTORY_METAL_OUT or tools/mac/run.local.env, or use --backend d3dmetal (reference-only)"
 fi
 SYS32="$prefix/drive_c/windows/system32"
+# the stage's capability file CAPS (docs/mac/RUN.md): a line that is exactly mesh_compute (no comment, no other text) switches the mesh->compute form on
+caps_note=""
+if [ "$backend" = metal ]; then
+    if [ -n "${VICTORY_METAL_MESH_COMPUTE_SUPPORTED:-}" ]; then
+        caps_note="VICTORY_METAL_MESH_COMPUTE_SUPPORTED=${VICTORY_METAL_MESH_COMPUTE_SUPPORTED} (from the environment, kept as it is; the stage's CAPS is not read)"
+    elif [ -f "$stage/CAPS" ] && tr -d '\r' <"$stage/CAPS" | grep -qxF 'mesh_compute'; then
+        export VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1
+        caps_note="VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1 (from $stage/CAPS: mesh_compute)"
+    elif [ -f "$stage/CAPS" ]; then
+        caps_note="VICTORY_METAL_MESH_COMPUTE_SUPPORTED not set ($stage/CAPS has no mesh_compute line)"
+    else
+        caps_note="VICTORY_METAL_MESH_COMPUTE_SUPPORTED not set (no CAPS file in the stage: an old stage; the mesh container keeps its hash)"
+    fi
+fi
 
 # ---- checks that need no side effect ----------------------------------------
 if [ "$backend" = metal ]; then
@@ -398,6 +416,7 @@ describe() {
     [ "$until_on" = 0 ] || echo "# until: stop at the first of: ${until_desc} (linger ${linger} s); --timeout ${tmo} s is only the cap (not met: exit status 6)"
     if [ "$backend" = metal ]; then
         echo "# metal: stage $stage (from $stage_from); front/d3d12.dll front/dxgi.dll x86_64-windows/victory_metal_bridge.dll go into the prefix's system32 (originals kept as .metal-orig)"
+        echo "# metal: caps: $caps_note"
     else
         echo "# d3dmetal: reference-only backend (openings/menus pixel reference, perf comparison)"
         echo "# d3dmetal: any .metal-orig dlls in the prefix's system32 are put back first"
