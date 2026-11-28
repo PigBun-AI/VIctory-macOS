@@ -35,6 +35,12 @@ with a decimal `VICTORY_SHADER_EXEC_COMPAT`.
 **Run.** `tools/mac/shader-hw.sh --back <this checkout>/metal` in the Mac
 worktree. Without `VICTORY_SHADER_EXEC` the tests skip.
 
+**Depth texture + comparison sampler (view kind 9).** `View::Depth` is a one-level D32_FLOAT texture
+(width, height, w*h floats) read through an R32_FLOAT view; with a comparison sampler (filter
+bit 0x80, comparison function) it is what `image_sample_c*` / `SampleCmp` need on Metal
+(MSC's `sample_compare` takes a depth texture). The sampler side was there already
+(`sampler_spec`: the comparison function and the compare bit).
+
 **Graphics (ops 4 and 5).** A pipeline request carries the root signature, a vertex
 or mesh shader, an optional geometry shader, the pixel shader, the render targets' DXGI
 formats (RGBA32 float, sint or uint, read from the pixel shader's output signature), a depth

@@ -484,6 +484,54 @@ impl Runner {
                         .map_err(from_back)?;
                     keep_tex.push(tex);
                 }
+                View::Depth { w, h, depth } => {
+                    if depth.len() != (*w * *h) as usize {
+                        return Err(Failure::Failed("depth data is not w*h floats".into()));
+                    }
+                    let tex = dev
+                        .create_texture(&self.texture_desc(*w, *h, dxgi::D32_FLOAT, 1 | 8))
+                        .map_err(from_back)?;
+                    let pitch = (*w * 4).next_multiple_of(256);
+                    let mut bytes = vec![0u8; (pitch * *h) as usize];
+                    for y in 0..*h as usize {
+                        let row = texels_bytes(&depth[y * *w as usize..(y + 1) * *w as usize]);
+                        bytes[y * pitch as usize..y * pitch as usize + row.len()]
+                            .copy_from_slice(&row);
+                    }
+                    let up = dev
+                        .create_buffer(BufferKind::Upload, bytes.len() as u64)
+                        .map_err(from_back)?;
+                    up.write(0, &bytes).map_err(from_back)?;
+                    upload
+                        .copy_buffer_to_texture(
+                            &TexLoc {
+                                texture: &tex,
+                                mip: 0,
+                                slice: 0,
+                                plane: 0,
+                                origin: [0; 3],
+                            },
+                            &BufLoc {
+                                buffer: &up,
+                                offset: 0,
+                                format: dxgi::D32_FLOAT,
+                                row_pitch: pitch,
+                                rows: *h,
+                            },
+                            [*w, *h, 1],
+                        )
+                        .map_err(from_back)?;
+                    uploads += 1;
+                    keep.push(up);
+                    let spec = ViewSpec {
+                        format: dxgi::R32_FLOAT,
+                        ..ViewSpec::whole(ViewDim::D2)
+                    };
+                    let id = tex.view(&spec).map_err(from_back)?;
+                    heap.write(at, IrDescriptorTableEntry::texture(id, 0.0, 0))
+                        .map_err(from_back)?;
+                    keep_tex.push(tex);
+                }
                 View::RawUav(n) => {
                     let b = shared(dev, &[], *n as usize)?;
                     heap.write_buffer(at, &b, false).map_err(from_back)?;

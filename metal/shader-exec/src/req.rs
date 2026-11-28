@@ -77,6 +77,13 @@ pub enum View {
         mips: u32,
         texels: Vec<f32>,
     },
+    /// A depth texture SRV (D32_FLOAT, read through R32_FLOAT) of one level: what a
+    /// comparison sampler reads.
+    Depth {
+        w: u32,
+        h: u32,
+        depth: Vec<f32>,
+    },
     RawUav(u32),
     TextureUav {
         w: u32,
@@ -211,6 +218,11 @@ fn view(r: &mut R) -> Res<View> {
             };
             View::Buffer { data, stride }
         }
+        9 => View::Depth {
+            w: r.u32()?,
+            h: r.u32()?,
+            depth: f32s(r)?,
+        },
         k => return Err(format!("view kind {k}")),
     })
 }
