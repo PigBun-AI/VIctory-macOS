@@ -89,6 +89,14 @@ Next batches, in order:
 5. **Images** (`image_sample*`, `gather4`, `image_load/store/atomic`, 0.4 M): texel sets with the host's `View::Texture/Cube` and samplers; the reference is a CPU sampler per filter/address mode (a tolerance for the filter weights, as on any GPU).
 6. **Control flow, interpolation, export, hints, `s_barrier`, `s_setreg`, `s_sendmsg`, bvh**: not numeric; `s_branch`/`s_cbranch_*` by structured programs of the existing `structure` tests (a branch table); `v_interp_*` and `exp` need the graphics path of the host (phase B); hints (`s_waitcnt`, `s_nop`, `v_nop`, `s_clause` ...) as "translates and does not change the result" rows.
 
+## Batch B: memory and images (branch `mac/oracle-b`)
+
+Code: `emit/oracle_mem_tests.rs` (MUBUF/MTBUF/SMEM, address forms, D3D12 range rule), `oracle_ds_tests.rs` (LDS, swizzle/bpermute, bank patterns, `buffer_atomic_*`), `oracle_img_tests.rs` (4x4 RGBA32F texture, point/linear x clamp/wrap), `oracle_flat_tests.rs` (`global_*` and `s_load_*` of title memory through the page directory; page with a copy and page without). References: GFX10 ISA manual, Mesa `ac_*` format tables, D3D12 spec (an access outside a view reads 0, a write is dropped; a vector access is checked per component).
+
+Result on the Mac GPU: 114 rows, 11,399 cases, all pass at the default and under `VICTORY_SHADER_OPT=127` (the mem rows). 98 of the 100 census mnemonics of the families smem, buffer, vmem-atomic, image, image-sample, lds, flat are named by a passing row: 3,917,060 of the 3,932,853 instructions of those families (99.6 %), 8.9 % of all 44,048,354 instructions. Not run: `image_sample_c_lz` (15,083; the host binds colour textures, Metal compares on depth textures: harness gap, no D3D12 comparison-sampler path in the executor yet) and `image_get_lod` (710; needs implicit derivatives, pixel programs only). The rows `image_sample_c*`, `image_gather4` (implicit level) are refused by the translator in a compute program (pixel only) and are not in the census as compute uses.
+
+Findings: (1) vector buffer loads straddling a view's end leaked the memory behind the view in the default path too, not only at opt 127: MSC `BOUNDS_CHECK` tests the first dword only: fixed by S7. (2) A thread's texture store followed by an atomic on the texel was reordered by Metal: S8 fence. (3) `global_load_ubyte/sbyte/ushort/sshort` of title memory were untranslated: S7b. (4) `image_gather4_l[_o]` is the translator's four-texel shortcut: the edge is clamped whatever the sampler says (wrap forms not asked; documented in `lower.rs`).
+
 ## Honest limits
 
 The oracle checks the translator and the device against a CPU model of the ISA text; it is not a console. Where the ISA text and the console differ (denormal mode, rounding mode registers, out-of-range fields) a row records what the translator does and a person decides.

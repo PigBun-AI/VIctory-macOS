@@ -3882,6 +3882,45 @@ impl<'a> Lower<'a> {
             _ => Err(name),
         };
         if let Some(rest) = name.strip_prefix("global_load_") {
+            // mac S7b: a byte or a half of title memory: the dword that holds it, shifted out.
+            let sub = match rest {
+                "ubyte" => Some((8, false)),
+                "sbyte" => Some((8, true)),
+                "ushort" => Some((16, false)),
+                "sshort" => Some((16, true)),
+                _ => None,
+            };
+            if let Some((width, signed)) = sub {
+                let Some(Operand::Vector { reg, .. }) = *dst else {
+                    return Err("a global load result");
+                };
+                let (h, byte) = self.memory(lo, hi, guard, false);
+                let c = self.cur;
+                let (not3, three) = (self.s.m.i32(!3), self.s.m.i32(3));
+                let at = self.s.m.bin(c, Bin::And, byte, not3);
+                let mask = self.s.m.i8(1);
+                let r = self.s.op(
+                    c,
+                    "rawBufferLoad.f32",
+                    Attr::ReadOnly,
+                    res,
+                    139,
+                    &[h, at, iu, mask, align],
+                );
+                let w = self.s.m.extract(c, r, 0);
+                let w = self.as_int(w);
+                let within = self.s.m.bin(c, Bin::And, byte, three);
+                let sh = self.s.m.bin(c, Bin::Shl, within, three);
+                let x = self.s.m.bin(c, Bin::LShr, w, sh);
+                let left = self.s.m.i32(32 - width);
+                let x = self.s.m.bin(c, Bin::Shl, x, left);
+                let x = self
+                    .s
+                    .m
+                    .bin(c, if signed { Bin::AShr } else { Bin::LShr }, x, left);
+                self.write(inst, Reg::V(reg), x, guard);
+                return Ok(());
+            }
             let n = count(rest)?;
             let Some(Operand::Vector { reg, .. }) = *dst else {
                 return Err("a global load result");
@@ -11875,7 +11914,7 @@ impl<'a> Lower<'a> {
                     67,
                     &args,
                 );
-                // mac S7: Metal does not order one thread's texture write against its later
+                // mac S8: Metal does not order one thread's texture write against its later
                 // texture atomics on the texel; the fence makes the store land first.
                 self.memory_fence();
                 self.end_guarded(at, &[]);
