@@ -725,4 +725,7 @@ pub(crate) fn cap_kernel(
 // in the object and mesh stages or in the pixels. The executor sets the flag while it makes one.
 thread_local! {
     pub(crate) static NO_RASTER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `VICTORY_METAL_NO_PS=<hash>[,..]`: the same pipelines without their fragment function,
+    /// rasterization on (blending and the colour writes stay): the pixel shader's own cost.
+    pub(crate) static NO_PS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }

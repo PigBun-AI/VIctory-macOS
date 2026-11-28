@@ -1027,6 +1027,9 @@ impl Device {
                         Retained::into_super(stage_in_fn);
                     linking.setFunctionDescriptors(Some(&NSArray::from_retained_slice(&[linked])));
                     d.setObjectStaticLinkingDescriptor(Some(&linking));
+                    if crate::prof::NO_PS.with(|c| c.get()) {
+                        d.setFragmentFunctionDescriptor(None);
+                    }
                     if crate::prof::NO_RASTER.with(|c| c.get()) {
                         d.setFragmentFunctionDescriptor(None);
                         d.setRasterizationEnabled(false);
