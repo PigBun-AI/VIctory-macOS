@@ -3,10 +3,17 @@
 # Apple's D3DMetal or our Metal backend, scripted keys, logs. Not a build step
 # (tools/mac/check.sh builds). Full reference: docs/mac/RUN.md.
 #
-#   tools/mac/run.sh [options] [-- arguments for the title]
+#   tools/mac/run.sh --purpose "<map column>: <node id>,..." [options] [-- arguments for the title]
 #   tools/mac/run.sh --print-env [options]     print the environment and the command, run nothing
 #   tools/mac/run.sh --exec [options] -- ARGS  run `victory.exe ARGS` (for example `warm --jobs 4`) instead of the title, in
 #                                              the very same environment and prefix; no keys, no time limit, no log folder
+#
+# --purpose is REQUIRED (not for --print-env and --help): which column of the translation map this run fills and for which nodes, for example
+#   --purpose "freq: mac.isa.lock_cmpxchg_flags"      --purpose "callstats,freq: S-G-009,S-D-001"
+# The column is one or more of freq, callstats, new-nodes, corpus, perf-hotspot, separated by commas; after the colon at least one node id.
+# Without one, or one that does not fit, run.sh refuses to start with exit status 7 (no other exit status of run.sh is 7). The text is kept as it
+# is: first line of <out>/RUN.txt, in the game lock (`tools/mac/game-lock.sh status` shows it). Rule of the integration lead: until the map is
+# filled in, no run is made to look at the picture. play.sh and the other wrappers pass --purpose through.
 #
 # What a run is made of (each has an option; the options only ever choose, the
 # rest below is the same for every combination):
@@ -136,7 +143,7 @@ out=""; tmo=900; cache=""; data=""; prefix=""; tracking=""; masked=""; build=0; 
 keys="8-3600/3:Enter"; input="$ROOT/tools/mac/input/world-neutral.txt"; record=""; capture=""
 record_at=""; no_watchdog=0; corpus=0; corpus_frame="w5"
 until_logs=(); until_world=""; until_present=""; until_capture=0; linger=0; linger_set=0
-lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
+purpose=""; lock_tmo=0; approved=0; present_max=""; pool_check=""; render_size=0; frametime=0; console=""; print_env=0; execmode=0; settings_output="2560x1440"
 while [ $# -gt 0 ]; do
     case "$1" in
         --backend) backend=${2:?--backend metal|d3dmetal}; shift ;;
@@ -164,6 +171,7 @@ while [ $# -gt 0 ]; do
         --until-world) until_world=${2:?--until-world N}; shift ;;
         --until-present) until_present=${2:?--until-present N}; shift ;;
         --linger) linger=${2:?--linger SECONDS}; linger_set=1; shift ;;
+        --purpose) purpose=${2?--purpose "<map column>: <node id>,..."}; shift ;;
         --print-env|--dry-run) print_env=1 ;;
         --exec) execmode=1 ;;
         -h|--help) usage ;;
@@ -173,6 +181,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 title_args=("$@")
+# --purpose: required for every run that would start the game (not --print-env); exit status 7
+. "$ROOT/tools/mac/purpose.sh"
+if [ "$print_env" = 0 ]; then purpose_check "$purpose" || { echo "tools/mac/run.sh: refused" >&2; exit "$PURPOSE_EXIT"; }; fi
 case "$backend" in d3dmetal|metal) ;; *) die "--backend is d3dmetal or metal, not '$backend'" ;; esac
 case "$profile" in fidelity|perf) ;; *) die "--profile is fidelity or perf, not '$profile'" ;; esac
 case "$settings_output" in 1280x720|1664x936|1920x1080|2560x1440|3840x2160) ;;
@@ -409,7 +420,7 @@ if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
 # ---- the game lock, cleanup ---------------------------------------------------
 # (victory.exe is only ever started below this line; --print-env has left already)
 . "$ROOT/tools/mac/game-lock.sh"
-GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"
+GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"; GL_PURPOSE="$purpose"
 pid=""; wd=""; sm=""; ld=""; uw=""; _cleaned=0
 part=""   # a clone being made (data directory or a part of it): an interrupted run takes it away, so no half-made directory is left
 cleanup() {
@@ -559,6 +570,7 @@ if [ "$execmode" = 1 ]; then
 fi
 
 # what this run is, kept with its logs
+{ echo "purpose: $purpose"; echo "$(date +%FT%T) backend $backend profile $profile out $out"; } >"$out/RUN.txt"
 print_environment >"$out/run-env.txt"
 {
     date +%FT%T

@@ -5,10 +5,11 @@
 # Runs one game each, one after the other (the GPU is shared; never start it while
 # another run is going). Needs a victory.exe built from mac/drop-stats (tools/mac/check.sh).
 #
-#   tools/mac/drop-ab.sh [--out DIR] [--base DIR] [--frames N] [--warm-jobs N] [--perf|--fidelity] [--backend metal|d3dmetal]
+#   tools/mac/drop-ab.sh --purpose "<map column>: <node id>,..." [--out DIR] [--base DIR] [--frames N] [--warm-jobs N] [--perf|--fidelity] [--backend metal|d3dmetal]
 #                        [--make-book] [--warm-only|--cold-only] [--before-cold CMD]
 #   tools/mac/drop-ab.sh --report RUN_DIR [RUN_DIR ...] [--frames N]     (logs only, no run)
 #
+#   --purpose P     REQUIRED (not with --report): run.sh's --purpose (see its head), given to every run.sh of this script; exit status 7 without it
 #   --out DIR       where everything goes (default target/drop-ab/<time>): warm/ and cold/ each
 #                   hold data/ and cache/ (their own copies) and run/ (run.sh's --out: the logs)
 #   --base DIR      the data folder copied (APFS clone) for both runs: default `data` of run.sh's
@@ -51,10 +52,12 @@ G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 cd "$ROOT" || exit 1
 REPORT="$ROOT/tools/mac/drop-stats-report.sh"
 RUN="$ROOT/tools/mac/run.sh"
-profile=perf; backend=metal
+profile=perf; backend=metal; purpose=""
+. "$ROOT/tools/mac/purpose.sh"
 out=""; base=""; frames=600; wjobs=""; book=0; only=""; before=""; report_only=()
 while [ $# -gt 0 ]; do
     case "$1" in
+        --purpose) purpose=${2:?--purpose "<map column>: <node id>,..."}; shift ;;
         --out) out=$2; shift ;; --base) base=$2; shift ;; --frames) frames=$2; shift ;;
         --warm-jobs) wjobs=$2; shift ;; --make-book) book=1 ;;
         --warm-only) only=warm ;; --cold-only) only=cold ;; --before-cold) before=$2; shift ;;
@@ -68,6 +71,7 @@ while [ $# -gt 0 ]; do
 done
 if [ ${#report_only[@]} -gt 0 ]; then exec bash "$ROOT/tools/mac/heavy.sh" --jobs 1 --label drop-stats-report -- "$REPORT" "${report_only[@]}" --frames "$frames"; fi
 
+purpose_check "$purpose" || exit "$PURPOSE_EXIT"
 [ -n "$base" ] || base="$G/data/livetr/data"
 [ -d "$base" ] || { echo "no data folder $base (--base)" >&2; exit 1; }
 basecache="$(dirname "$base")/cache"
@@ -90,7 +94,7 @@ EXE="$ROOT/target/x86_64-pc-windows-gnullvm/release/victory.exe"
 # env of both runs; everything else is run.sh's
 export VICTORY_MAC_DROP_STATS=2
 # the options every run.sh call of this script has: one place, one backend
-RUN_OPTS=(--backend "$backend" "--$profile" --exe "$EXE")
+RUN_OPTS=(--purpose "$purpose" --backend "$backend" "--$profile" --exe "$EXE")
 
 # a copy of a folder: an APFS clone (no extra space until written), else a plain copy
 clone() { cp -c -R "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -R "$1" "$2"; }; }

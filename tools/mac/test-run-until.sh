@@ -53,7 +53,7 @@ run() {
     name=$1; mode=$2; shift 2
     : >"$T/server.calls"
     t_start=$(date +%s)
-    FAKE_MODE=$mode bash "$ROOT/tools/mac/run.sh" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-$name" \
+    FAKE_MODE=$mode bash "$ROOT/tools/mac/run.sh" --purpose "freq: mac.test.until" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-$name" \
         --out "$T/$name" --no-keys --input none "$@" >"$T/$name.console" 2>"$T/$name.console.err"; rc=$?
     secs=$(( $(date +%s) - t_start ))
 }
@@ -130,7 +130,7 @@ if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && 
     for who in before new; do
         script="$T/before/tools/mac/run.sh"; [ $who = new ] && script="$ROOT/tools/mac/run.sh"
         : >"$T/server.calls"
-        FAKE_MODE=log bash "$script" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-d" --out "$T/default-$who" \
+        FAKE_MODE=log bash "$script" --purpose "freq: mac.test.until" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-d" --out "$T/default-$who" \
             --no-keys --input none --timeout 4 >"$T/default-$who.console" 2>"$T/default-$who.console.err"; echo $? >"$T/default-$who.rc"
         cp "$T/server.calls" "$T/default-$who.calls"
     done
@@ -148,6 +148,44 @@ if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && 
 else
     echo "(skipped: run.sh is the committed one; the comparison needs the change uncommitted)"
 fi
+echo "== --purpose: required for a run (exit status 7), not for --print-env and --help"
+P="$ROOT/tools/mac/run.sh"
+refused() { # NAME ARGS...: run.sh must refuse with exit 7, start nothing (no out folder, no lock), and say why in $T/refused.err
+    local name=$1; shift
+    : >"$T/server.calls"
+    FAKE_MODE=idle bash "$P" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-refused" --out "$T/refused-$name" --no-keys --input none --timeout 3 "$@" >"$T/refused.out" 2>"$T/refused.err"; rc=$?
+}
+refused none
+expect "no --purpose: exit 7, says what is needed" '[ $rc = 7 ] && grep -q -- "--purpose is required" "$T/refused.err"'
+expect "no --purpose: nothing started (no out folder, no lock, no wineserver call, no fake title)" '[ ! -e "$T/refused-none" ] && lock_free && [ ! -s "$T/server.calls" ] && no_fake_left'
+refused column --purpose "frames: mac.test.node"
+expect "a column that is not one of the five: exit 7, names the allowed ones" '[ $rc = 7 ] && grep -q "must be one of freq callstats new-nodes corpus perf-hotspot" "$T/refused.err" && [ ! -e "$T/refused-column" ]'
+refused second --purpose "freq,bogus: mac.test.node"
+expect "a bad second column: exit 7" '[ $rc = 7 ]'
+refused ids --purpose "freq:"
+expect "no node id after the colon: exit 7, says so" '[ $rc = 7 ] && grep -q "at least one node id" "$T/refused.err" && [ ! -e "$T/refused-ids" ]'
+refused ids2 --purpose "freq:  , "
+expect "only separators after the colon: exit 7" '[ $rc = 7 ]'
+refused ids3 --purpose "freq: a,"
+expect "a trailing comma (an empty node id): exit 7" '[ $rc = 7 ]'
+refused nocolon --purpose "freq mac.test.node"
+expect "no colon: exit 7" '[ $rc = 7 ] && grep -q "no colon" "$T/refused.err"'
+refused empty --purpose ""
+expect "an empty --purpose: exit 7" '[ $rc = 7 ]'
+refused exec --exec -- warm
+expect "--exec needs it too (it holds the lock): exit 7" '[ $rc = 7 ] && lock_free'
+expect "--print-env needs none" 'bash "$P" --print-env --backend d3dmetal >/dev/null 2>&1'
+expect "--help needs none (it prints the usage, exit 2)" 'bash "$P" --help 2>&1 | grep -q -- "--purpose"'
+expect "several columns and several ids are fine" 'bash "$P" --print-env --backend d3dmetal --purpose "freq, callstats: mac.a.b, S-G-009,c_d" >/dev/null 2>&1'
+# the accepted forms, as the real thing
+run purp idle --timeout 2 --purpose "new-nodes,corpus: mac.isa.x, S-G-009"
+expect "(a later --purpose wins; the text is kept as given) RUN.txt starts with the purpose" "[ \"\$(sed -n 1p $T/purp/RUN.txt)\" = 'purpose: new-nodes,corpus: mac.isa.x, S-G-009' ]"
+VICTORY_X=1 FAKE_MODE=idle bash "$P" --purpose "perf-hotspot: mac.perf.frame" --backend d3dmetal --exe "$T/victory-fake-until-test.exe" --prefix "$T/prefix-st" --out "$T/st" --no-keys --input none --timeout 8 >"$T/st.out" 2>&1 &
+stpid=$!
+waitlock=0; while [ ! -f "$VICTORY_GAME_LOCK/purpose" ] && [ $waitlock -lt 100 ]; do sleep 0.1; waitlock=$((waitlock + 1)); done
+expect "the lock holds the purpose; game-lock.sh status shows it" "grep -qx 'perf-hotspot: mac.perf.frame' $VICTORY_GAME_LOCK/purpose && bash $ROOT/tools/mac/game-lock.sh status | grep -q 'purpose: perf-hotspot: mac.perf.frame'"
+wait $stpid
+expect "the purpose is in RUN.txt of that run too" "[ \"\$(sed -n 1p $T/st/RUN.txt)\" = 'purpose: perf-hotspot: mac.perf.frame' ]"
 echo "== guards"
 expect "--linger alone only warns" "bash $ROOT/tools/mac/run.sh --print-env --backend d3dmetal --linger 3 2>&1 >/dev/null | grep -q 'no effect'"
 expect "bad --until-log refused" "! bash $ROOT/tools/mac/run.sh --print-env --until-log '(' >/dev/null 2>&1"

@@ -47,8 +47,8 @@ gl_state() {
 gl_describe() { # one line about the holder in $1 (default: the lock)
     local d=${1:-$GL_LOCK}
     [ -d "$d" ] || { printf '(nobody: the lock was just released)'; return; }
-    printf 'pid %s since %s backend %s worktree %s out %s' "$(gl_field "$d" pid)" "$(gl_field "$d" since)" \
-        "$(gl_field "$d" backend)" "$(gl_field "$d" worktree)" "$(gl_field "$d" out)"
+    printf 'pid %s since %s backend %s worktree %s out %s%s' "$(gl_field "$d" pid)" "$(gl_field "$d" since)" \
+        "$(gl_field "$d" backend)" "$(gl_field "$d" worktree)" "$(gl_field "$d" out)" "$([ -s "$d/purpose" ] && printf ' purpose "%s"' "$(gl_field "$d" purpose)")"
 }
 # take over a stale lock: rename it away (only one process can win), check what we moved, remove it
 gl_reclaim() {
@@ -78,6 +78,7 @@ gl_enqueue() { # gl_enqueue BACKEND OUT
     local t; t=$(perl -MTime::HiRes=time -e 'printf "%017.6f", time' 2>/dev/null || date +%s)
     gl_ticket="$t-$$"
     printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$$" "$(gl_pidstart $$)" "$(date +%FT%T)" "${GL_WORKTREE:-?}" "${1:-?}" "${2:-?}" >"$GL_QUEUE/$gl_ticket"
+    printf '%s\n' "${GL_PURPOSE:-}" >>"$GL_QUEUE/$gl_ticket"
 }
 gl_dequeue() { [ -z "$gl_ticket" ] || rm -f "$GL_QUEUE/$gl_ticket"; gl_ticket=""; }
 
@@ -100,6 +101,7 @@ gl_acquire() {
                 printf '%s\n' "$backend" >"$GL_LOCK/backend"
                 printf '%s\n' "$out" >"$GL_LOCK/out"
                 printf '%s\n' "${GL_CMD:-?}" >"$GL_LOCK/cmd"
+                printf '%s\n' "${GL_PURPOSE:-}" >"$GL_LOCK/purpose"
                 gl_owner=1; gl_dequeue
                 return 0
             fi
@@ -133,6 +135,7 @@ gl_status() {
     local f
     gl_state; case $? in
         0) echo "game lock: HELD  $(gl_describe)"
+           echo "  purpose: $(gl_field "$GL_LOCK" purpose)"
            echo "  command: $(gl_field "$GL_LOCK" cmd)   (lock $GL_LOCK)" ;;
         2) echo "game lock: STALE (the holder is gone; the next run takes it over)  $(gl_describe)" ;;
         *) echo "game lock: free  (lock $GL_LOCK)" ;;
@@ -140,7 +143,7 @@ gl_status() {
     local n=0
     for f in $(gl_waiters); do
         n=$((n + 1))
-        echo "  waiting #$n: pid $(sed -n 1p "$GL_QUEUE/$f") since $(sed -n 3p "$GL_QUEUE/$f") backend $(sed -n 5p "$GL_QUEUE/$f") worktree $(sed -n 4p "$GL_QUEUE/$f") out $(sed -n 6p "$GL_QUEUE/$f")"
+        echo "  waiting #$n: pid $(sed -n 1p "$GL_QUEUE/$f") since $(sed -n 3p "$GL_QUEUE/$f") backend $(sed -n 5p "$GL_QUEUE/$f") worktree $(sed -n 4p "$GL_QUEUE/$f") out $(sed -n 6p "$GL_QUEUE/$f") purpose \"$(sed -n 7p "$GL_QUEUE/$f")\""
     done
     [ "$n" -gt 0 ] || echo "  nobody is waiting"
 }

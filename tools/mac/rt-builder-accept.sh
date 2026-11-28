@@ -1,15 +1,17 @@
 #!/bin/bash
 # Batch acceptance of the ray-tracing structure builder (docs/mac/rt-builder-acceptance.md):
-#   tools/mac/rt-builder-accept.sh run   [--out DIR] [--timeout SEC] [--backends "metal"] [--baseline] [-- run.sh options]
+#   tools/mac/rt-builder-accept.sh run   --purpose "<map column>: <node id>,..." [--out DIR] [--timeout SEC] [--backends "metal"] [--baseline] [-- run.sh options]
 #   tools/mac/rt-builder-accept.sh check LOGDIR_OR_stderr.log [...]     (logs only; exit 0 = every check passed)
 #   tools/mac/rt-builder-accept.sh print                                  (the run.sh command lines, nothing started)
 # `run` starts one game per backend (default: metal only; --backends "metal d3dmetal" adds the reference-only D3DMetal), one after
 # the other (never two at once; run.sh holds the game lock), with
 # VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1 VICTORY_MAC_DROP_STATS=1 and run.sh --perf, then checks each.
+# --purpose is required for `run` (run.sh's --purpose, see its head; exit status 7 without it) and is passed to every run.sh. `print` shows it if given.
 # --baseline adds a run per backend with the builder off (same input) for the drop counts to compare.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$ROOT/tools/mac/run.sh"
+. "$ROOT/tools/mac/purpose.sh"
 
 check_one() { # $1 = stderr.log ; prints PASS/FAIL lines, returns 0 if all pass
     local f=$1 bad=0
@@ -67,21 +69,23 @@ case "${1:-}" in
     exit $rc ;;
   run|print)
     mode=$1; shift
-    out="$ROOT/target/mac-runs/rt-builder-$(date +%Y%m%d-%H%M%S)"; tmo=900; backends="metal"; base=0; extra=()
+    out="$ROOT/target/mac-runs/rt-builder-$(date +%Y%m%d-%H%M%S)"; tmo=900; backends="metal"; base=0; extra=(); purpose=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --out) out=$2; shift ;; --timeout) tmo=$2; shift ;; --backends) backends=$2; shift ;;
-            --baseline) base=1 ;; --) shift; extra=("$@"); break ;;
+            --baseline) base=1 ;; --purpose) purpose=${2:?--purpose "<map column>: <node id>,..."}; shift ;; --) shift; extra=("$@"); break ;;
             *) echo "unknown option $1" >&2; exit 2 ;;
         esac; shift
     done
+    if [ "$mode" = run ]; then purpose_check "$purpose" || exit "$PURPOSE_EXIT"; fi
+    pargs=(); [ -z "$purpose" ] || pargs=(--purpose "$purpose")
     rc=0
     runs=(); for b in $backends; do runs+=("$b:on"); [ $base = 1 ] && runs+=("$b:off"); done
     for r in "${runs[@]}"; do
         b=${r%%:*}; s=${r##*:}; dir="$out/$b-builder-$s"
         env=(VICTORY_MAC_DROP_STATS=1)
         [ "$s" = on ] && env+=(VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1)
-        cmd=(env "${env[@]}" "$RUN" --backend "$b" --perf --timeout "$tmo" --sample 10 --frametime-log --out "$dir" ${extra[@]+"${extra[@]}"})
+        cmd=(env "${env[@]}" "$RUN" ${pargs[@]+"${pargs[@]}"} --backend "$b" --perf --timeout "$tmo" --sample 10 --frametime-log --out "$dir" ${extra[@]+"${extra[@]}"})
         if [ "$mode" = print ]; then printf '%q ' "${cmd[@]}"; echo; continue; fi
         mkdir -p "$dir"; echo "== $b builder $s -> $dir"
         "${cmd[@]}" || echo "run.sh exited $?"

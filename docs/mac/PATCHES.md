@@ -721,6 +721,14 @@ load > 30, stops) heavy processes outside a slot, only while the game lock is he
 no-`check.sh` fallback of `sync-windows.sh` wrap their `cargo`. The old "nice 15 while the lock is held" block of `check.sh` is gone.
 Tests `test-heavy.sh`, `test-heavy-guard.sh`; rules in `docs/mac/RUN.md` "Heavy tasks". Pure Mac tooling, nothing to recycle.
 
+### M9 — `run.sh --purpose "<map column>: <node id>,..."` is required (`tools/mac/purpose.sh`)
+
+Every run that starts the game says which column of the translation map (`freq`, `callstats`, `new-nodes`, `corpus`, `perf-hotspot`) it
+fills and for which nodes; without a fitting one `run.sh` refuses with exit status 7, before it touches anything (`--print-env` and `--help`
+need none). The text is the first line of `<out>/RUN.txt` and is kept in the game lock (`game-lock.sh status`, also for the queue).
+`play.sh`, `drop-ab.sh`, `rt-builder-accept.sh run` pass it on. Tests: `test-run-until.sh` (refusals: none, bad column, no node id, ...),
+`test-run-lock.sh`. A rule of the integration lead, not a technical need: delete it when runs for the picture are allowed again.
+
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
 *What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is

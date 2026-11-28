@@ -55,7 +55,7 @@ mkprefix() { mkdir -p "$T/prefix-$1/drive_c/windows/system32"; echo "original $1
 start() {
     local id=$1 hold=$2; shift 2
     [ -d "$T/prefix-$id" ] || mkprefix "$id"
-    FAKE_ID=$id FAKE_HOLD=$hold bash "$RUN" --exe "$T/victory-fake-lock-test.exe" --prefix "$T/prefix-$id" --out "$T/out-$id" \
+    FAKE_ID=$id FAKE_HOLD=$hold bash "$RUN" --purpose "freq: mac.test.$id" --exe "$T/victory-fake-lock-test.exe" --prefix "$T/prefix-$id" --out "$T/out-$id" \
         --no-keys --input none --timeout 60 "$@" >"$T/$id.console" 2>"$T/$id.console.err" &
     eval "pid_$id=$!"
 }
@@ -72,6 +72,7 @@ wait_for 'event "A start"' 100 || bad "A never started"
 start B 3 --new-game
 sleep 2.5      # B has been queued for a while; A is half way through
 expect "(a) A holds the lock, B waits for it" "[ \"\$(cat $VICTORY_GAME_LOCK/pid)\" = \$pid_A ] && grep -q 'game-lock: waiting' $T/B.console.err"
+expect "(a) game-lock.sh status shows A's purpose, and B's in the queue" "bash $ROOT/tools/mac/game-lock.sh status | grep -q 'purpose: freq: mac.test.A' && bash $ROOT/tools/mac/game-lock.sh status | grep -q 'purpose \"freq: mac.test.B\"'"
 expect "(a) A's marker is still in the data directory while B waits" "[ -e $DATA/marker-A ]"
 expect "(a) B has not touched the data directory: no clone, no replacement (the seed's files and A's marker only)" "[ \"\$(tree $DATA)\" = \"\$(echo '. ./marker-A ./title1 ./title1/seed.txt ./title1/storage ')\" ] && [ ! -e $BASE/data.new ] && ! ls $BASE | grep -q part"
 expect "(a) B has not touched its prefix: no dll deployed, no .metal-orig" "[ \"\$(cat $T/prefix-B/drive_c/windows/system32/d3d12.dll)\" = 'original B' ] && [ ! -e $T/prefix-B/drive_c/windows/system32/d3d12.dll.metal-orig ] && [ ! -e $T/prefix-B/drive_c/windows/system32/victory_metal_bridge.dll ]"

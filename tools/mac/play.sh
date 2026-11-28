@@ -1,6 +1,8 @@
 #!/bin/bash
 # Play the title by hand: a thin wrapper over tools/mac/run.sh (the game lock, the data directories and all checks stay run.sh's).
-#   tools/mac/play.sh [run.sh options] [-- arguments for the title]
+#   tools/mac/play.sh --purpose "<map column>: <node id>,..." [run.sh options] [-- arguments for the title]
+#   --purpose is required here too (run.sh refuses to start without it, exit status 7): rule of the integration lead, until the translation map
+#   is filled in no run is made to look at the picture. It goes through to run.sh with the other options.
 # What it sets, in front of your own options (a later option wins, so any of them can be overridden):
 #   --perf         1280x720 output patch (L3), the speed profile; NON-fidelity. Default since 2026-11-28: the fidelity GPU frames are
 #                  6-17 s each on our back. --fidelity (Series X, 2560x1440, the profile of the formal tests) is still an option

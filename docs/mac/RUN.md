@@ -5,9 +5,18 @@ selectable (`--backend d3dmetal`) as a reference only (see "Backends"). Both get
 `tools/mac/check.sh` builds (`target/x86_64-pc-windows-gnullvm/release/victory.exe`). Patch notes: `docs/mac/PATCHES.md` (M4).
 
 ```sh
-tools/mac/run.sh [options] [-- arguments for the title]
+tools/mac/run.sh --purpose "<map column>: <node id>,..." [options] [-- arguments for the title]
 tools/mac/run.sh --print-env [options]        # print what would be passed and the command; start nothing, change nothing
 ```
+
+**`--purpose` is required** for every run that starts the game (`--exec` too, `play.sh` too; not `--print-env`, not `--help`): which column of the
+translation map the run fills, and for which nodes. Rule of the integration lead: until the map is filled in, no run is made to look at the
+picture. The form is `<column>[,<column>...]: <node id>[,<node id>...]`; the column is one of `freq`, `callstats`, `new-nodes`, `corpus`,
+`perf-hotspot`; at least one node id (letters, digits, `.`, `_`, `-`) after the colon. Examples: `--purpose "freq: mac.isa.lock_cmpxchg_flags"`,
+`--purpose "callstats,freq: S-G-009,S-D-001"`. A missing or malformed purpose is refused before anything is touched with **exit status 7** (new:
+no other exit status of `run.sh` is 7; the others are in "Stop as soon as you have the data"). The text is kept as given: the first line of
+`<out>/RUN.txt`, and in the game lock (`tools/mac/game-lock.sh status` shows it for the holder and for every run in the queue). `play.sh`,
+`drop-ab.sh` and `rt-builder-accept.sh run` take `--purpose` and pass it to every `run.sh` they start.
 
 Nothing is written outside this checkout's `target/` and the data directories named below; the game directory is only read.
 
@@ -175,6 +184,7 @@ the seed's (new game again) and keeps the warm `cache/` and `dxc/`; `--fresh-dat
 
 | Option | Effect | Default |
 |---|---|---|
+| `--purpose "<column>: <node id>,..."` | **required** (see above): the map column(s) and nodes this run is for; exit status 7 without a fitting one | none |
 | `--exe PATH` | the `victory.exe` to run | `target/x86_64-pc-windows-gnullvm/release/victory.exe` |
 | `--out DIR` | logs go here | `target/mac-runs/<time>` |
 | `--timeout SEC` | stop the run after SEC seconds (0: no limit); with `--until-*` only the cap (not met by then: exit status 6) | 900 |
@@ -269,7 +279,7 @@ and `summary.txt`. The files `until-met.txt` / `until-failed.txt` in the out dir
 **Not met.** `--timeout` ran out (or the title ended by itself first, or the recorder failed): the run ends as before, the log says
 `until 未满足：<the conditions>: <why>`, and the exit status is **6** (the title's own status is in `end.txt`). Without any
 `--until-*` the run is exactly what it was: the title's status, no new lines, no new files. (Exit statuses of `run.sh`: 0 ok, 1 setup
-failed, 2 bad option, 3 another `victory.exe` is running, 4 lock wait ran out, 6 `--until-*` not met; otherwise the title's.)
+failed, 2 bad option, 3 another `victory.exe` is running, 4 lock wait ran out, 6 `--until-*` not met, 7 no or malformed `--purpose`; otherwise the title's.)
 `--until-*` with `--timeout 0` warns: nothing ends a run whose condition never comes. A bare `--capture-frames` or `--corpus` prints a
 hint to add `--until-capture`.
 
@@ -306,7 +316,7 @@ recording), `-present`, not met (exit 6), `--linger`, and that a run without `--
 
 ## What a run leaves in its out directory
 
-`stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
+`RUN.txt` (first line: the `--purpose`), `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
 hash and time, the `settings.xml` size or the non-fidelity line), `run-env.txt` (the `--print-env` text of this run), `summary.txt`
 (status, key log lines, last `ms/frame` lines, a count of GPU error lines), `end.txt`, `load.log` (load average every 10 s), and as asked
 `mem.csv`, `frametime.log`, `notimpl.log` (metal), `until-met.txt` / `until-failed.txt` (`--until-*`).
@@ -317,7 +327,7 @@ Plan for the first fidelity runs: `docs/mac/fidelity-experiment.md`.
 
 ## Playing by hand: `tools/mac/play.sh`
 
-`tools/mac/play.sh [run.sh options]` is `run.sh --perf --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
+`tools/mac/play.sh --purpose "<column>: <node id>,..." [run.sh options]` (the purpose is required here too, as for every run) is `run.sh --perf --no-keys --input none --no-watchdog --timeout 14400` plus your options (the
 game lock, data directories and checks are run.sh's). `--input none` matters: from world frame 1 the default neutral replay is exclusive
 and would swallow the keyboard and the pad. `PLAY_TIMEOUT=SEC` changes the limit, `PLAY_KEEP_WATCHDOG=1` leaves the title's watchdog on. The default is `--perf` (1280x720 output patch,
 non-fidelity; the UI comes out 3x too big because the title lays it out in 4K pixels) since fidelity GPU frames are 6-17 s each on our back;
