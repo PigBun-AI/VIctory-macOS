@@ -1411,6 +1411,54 @@ mod tests {
 
     const BRANCH64: &str = include_str!("../../tests/xdxc/wave64_branch.hlsl");
 
+    #[test]
+    #[ignore = "diagnostic: local native container paths in VICTORY_XDXC_ISA"]
+    fn compare_forms_of_local_containers() {
+        let paths=std::env::var_os("VICTORY_XDXC_ISA").expect("container paths");
+        for p in std::env::split_paths(&paths) {
+            let c=std::fs::read(&p).unwrap();
+            let dx=["0","1"].map(|w| translated(&c,&vec![("VICTORY_WAVE_WIDE".into(),w.into())]).unwrap().dxil);
+            eprintln!("FORM {:?}: {:?} distinct={}",p.file_name(),dx.each_ref().map(|d|d.len()),dx[0]!=dx[1]);
+        }
+    }
+
+    #[test]
+    fn wave_tail_allocation_form_probe() {
+        const H: &str = include_str!("../../tests/xdxc/wave_tail_alloc.hlsl");
+        let t = match tools() { Ok(t) => t, Err(e) => { report("tail_alloc", &skip(e)); return; } };
+        let c = compile_console(&t,H).expect("compile tail allocator");
+        let obj = crate::Container::parse(&c).unwrap();
+        let p = crate::native_programs(obj.part(crate::dxbc::FourCC::DXIL).unwrap().data).unwrap();
+        assert_eq!(p.len(),1); assert!(p[0].wave64);
+        let dx = ["0", "1"].map(|w| translated(&c,&vec![("VICTORY_WAVE_WIDE".into(), w.into())]).unwrap().dxil);
+        eprintln!("tail_alloc wave64=true translated sizes {:?}, distinct={}", dx.each_ref().map(|d| d.len()), dx[0]!=dx[1]);
+        assert_ne!(key_of(&[&dx[0]]),key_of(&[&dx[1]]),"not a discriminating wave64 regression");
+        let src = words(256, 83, |x| (x & 255) | (7 << 8));
+        let how = Compare { ulps: 0, canon: Some(|i, w| {
+            if i != 0 { return w.to_vec(); }
+            w.chunks(256).flat_map(|a| sorted(0,a)).collect()
+        }), reason: "atomic allocation order is unspecified within each stream" };
+        for n in [256, 97, 33, 5] {
+            let inputs = Inputs {constants: vec![n,1,3,0],resources:vec![Res::Srv(src.clone()),Res::Uav(512),Res::Uav(4)],groups:[4,1,1]};
+            let r=dual_path_wave_wide(H,&inputs,&how);
+            report(&format!("tail_alloc {n} wide=0"),&r.wide0); report(&format!("tail_alloc {n} wide=1"),&r.wide1);
+            let mut slots=vec![0u32;512];
+            let mut counters=vec![0u32;4];
+            for i in 0..n as usize {
+                for (stream,bit) in [(0,1),(1,4)] {
+                    if src[i] & bit == 0 {continue;}
+                    slots[stream*256 + counters[stream] as usize]=i as u32+1;
+                    counters[stream]+=1;
+                    let maximum=if stream==0 {(i as u32).div_ceil(3)} else {(2*i as u32).div_ceil(3)+7};
+                    counters[stream+2]=counters[stream+2].max(maximum);
+                }
+            }
+            if let Some((out,_))=&r.outputs { a_matches_cpu("tail_alloc",out,&[slots,counters],&how); }
+            assert!(matches!(r.wide0,Verdict::Different(_)), "update the known wide=0 difference if fixed: {}", r.wide0.summary());
+            assert!(r.wide1.is_same(),"{}",r.wide1.summary());
+        }
+    }
+
     fn branch64_model(cond: u32, src: &[u32]) -> Vec<Vec<u32>> {
         let mut out = vec![0u32; src.len() * 4];
         let mut bases = Vec::new();
