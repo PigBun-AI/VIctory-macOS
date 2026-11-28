@@ -489,6 +489,16 @@ fn absorb(w: &mut Window, p: &Pending) {
             RAW_LEFT.store(0, Ordering::Relaxed);
         }
     }
+    if vis_enabled()
+        && p.prof
+            .labels
+            .iter()
+            .any(|l| l.contains("execute-indirect graphics-gs"))
+    {
+        if let Some(n) = vis_last() {
+            eprintln!("victory-metal gpuprof: visibility samples of the last counted GS draw: {n}");
+        }
+    }
     for (ns, label) in slow {
         let (head, snapped) = split_snap(label);
         let args = match (snapped, SNAP.get().and_then(|s| s.as_ref())) {
