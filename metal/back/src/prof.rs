@@ -614,6 +614,13 @@ fn table(w: &Window, pending: usize) -> String {
             ));
         }
     }
+    if vis_enabled() {
+        if let Some(n) = vis_last() {
+            out.push_str(&format!(
+                "\n  visibility samples of the last counted GS draw: {n}"
+            ));
+        }
+    }
     out
 }
 
@@ -728,4 +735,37 @@ thread_local! {
     /// `VICTORY_METAL_NO_PS=<hash>[,..]`: the same pipelines without their fragment function,
     /// rasterization on (blending and the colour writes stay): the pixel shader's own cost.
     pub(crate) static NO_PS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// `VICTORY_METAL_GS_VISIBILITY=<hash>[,..]` (a diagnostic): counts the samples the geometry
+// pipelines with these label hashes rasterize (Metal's visibility result, counting mode) and
+// prints the last count with the GPU time table. A pixel drawn once per sample: the draw's
+// coverage; a draw of tiles with more samples than the target has pixels overdraws.
+thread_local! {
+    pub(crate) static GS_VIS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn vis_enabled() -> bool {
+    static E: OnceLock<bool> = OnceLock::new();
+    *E.get_or_init(|| {
+        std::env::var_os("VICTORY_METAL_GS_VISIBILITY").is_some_and(|v| !v.is_empty())
+    })
+}
+
+static VIS: OnceLock<Option<crate::memory::Buffer>> = OnceLock::new();
+
+/// The buffer the render passes write visibility results to (one 8-byte slot).
+pub(crate) fn vis_buffer(device: &crate::device::Device) -> Option<&'static crate::memory::Buffer> {
+    VIS.get_or_init(|| {
+        device
+            .create_buffer(crate::memory::BufferKind::Shared, 4096)
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The last visibility count, if a pass wrote one.
+pub(crate) fn vis_last() -> Option<u64> {
+    let w = VIS.get()?.as_ref()?.read_u32s(0, 2).ok()?;
+    Some(u64::from(w[0]) | (u64::from(w[1]) << 32))
 }

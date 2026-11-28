@@ -1207,8 +1207,16 @@ impl Run<'_> {
                         })
                     });
                 crate::prof::GS_CAP.with(|c| c.set(cap));
+                let vis = g.kind() == crate::render::Kind::Geometry
+                    && std::env::var("VICTORY_METAL_GS_VISIBILITY").is_ok_and(|v| {
+                        let label = crate::prof::pipeline_label(gpso_id);
+                        v.split(',')
+                            .any(|h| !h.trim().is_empty() && label.contains(h.trim()))
+                    });
+                crate::prof::GS_VIS.with(|c| c.set(vis));
                 let r = list.execute_indirect_draws(kernels, g, kind, &spec);
                 crate::prof::GS_CAP.with(|c| c.set(None));
+                crate::prof::GS_VIS.with(|c| c.set(false));
                 r
             }
             _ => return Err(Status::INVALID_ARG),

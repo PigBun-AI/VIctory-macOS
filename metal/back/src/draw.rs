@@ -47,7 +47,7 @@ use objc2_metal::{
     MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLoadAction, MTLPixelFormat,
     MTLPrimitiveTopologyClass, MTLPrimitiveType, MTLRenderPipelineState, MTLRenderStages,
     MTLScissorRect, MTLSize, MTLStencilDescriptor, MTLStencilOperation, MTLStoreAction, MTLTexture,
-    MTLTriangleFillMode, MTLViewport,
+    MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode,
 };
 
 use crate::descriptors::{RingAlloc, bind_point};
@@ -545,6 +545,11 @@ impl crate::record::CommandList {
 
     /// Creates the render encoder of the open pass (the tracker asked for it).
     pub(crate) fn open_render(&mut self) -> Result<()> {
+        let vis_buf = if crate::prof::vis_enabled() {
+            crate::prof::vis_buffer(&self.queue().device().clone())
+        } else {
+            None
+        };
         let pass = self
             .pass
             .as_mut()
@@ -607,6 +612,10 @@ impl crate::record::CommandList {
             desc.setRenderTargetHeight(pass.size[1] as usize);
             // SAFETY: a plain count, 1 is always valid.
             unsafe { desc.setDefaultRasterSampleCount(1) };
+        }
+        if let Some(b) = vis_buf {
+            // SAFETY: a shared buffer of 4096 bytes, kept for the process.
+            unsafe { desc.setVisibilityResultBuffer(Some(b.raw())) };
         }
         pass.opened = true;
         let encoder = self
@@ -1223,11 +1232,20 @@ impl crate::record::CommandList {
             l.cap_gs_groups(r.action_va)?;
             l.snap_gs_record(r.action_va)?;
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
+            let vis = crate::prof::GS_VIS.with(|c| c.get());
+            if vis {
+                // SAFETY: slot 0 of the visibility buffer the pass was made with.
+                unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Counting, 0) };
+            }
             enc.drawMeshThreadgroupsWithIndirectBuffer_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
                 r.action_va + GS_GROUPS_AT,
                 size(plan.object_threads),
                 size(plan.mesh_threads),
             );
+            if vis {
+                // SAFETY: as above.
+                unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Disabled, 0) };
+            }
             l.stats.draws += 1;
             Ok(())
         })
