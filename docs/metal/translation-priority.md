@@ -146,7 +146,7 @@ priority = log10(freq + 1) x max(symptom) / cost. symptom = what a wrong node do
 | 140 | shared.device.feature_query | shared | unproven | 0 | geom0 color0 flicker0 slow0 crash1 | 1 | 6 | 0.000 | Answer additional features from the host device (options1..21, shader model, GPU VA); feasibility high. |
 | 141 | shared.draw.descriptor_drops | shared | unproven | 0 | geom2 color0 flicker1 slow0 crash0 | 2 | 6 | 0.000 | Raise slots dynamically; feasibility high; no occurrence yet. |
 
-ranked: 141; not ranked (closed, summary, used=no, reference only): 31; rows without a parsable symptom: 1
+ranked: 141; not ranked (closed, summary, used=no, reference only): 31; rows without a parsable symptom: 0
 
 ## Not ranked
 
