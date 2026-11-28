@@ -10,7 +10,7 @@
 //! The process is named by `VICTORY_SHADER_EXEC`; without it [`Host::new`]
 //! fails, which the tests treat as "no device" and skip, so `cargo test` of
 //! this crate stays green on a Mac with no Metal tooling. This crate names no
-//! Metal symbol and depends on no crate of the metal workspace (the layering
+//! Metal symbol and depends on no `victory-metal-*` crate (the layering
 //! rule); the pipe protocol is the whole contract (`wire`, mirrored in
 //! `metal/shader-exec/src/wire.rs`; golden vectors pin both).
 //!
