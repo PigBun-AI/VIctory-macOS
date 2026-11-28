@@ -518,6 +518,25 @@ impl Executor {
             };
             let parts: Vec<&[u8]> = code.iter().map(|c| c.unwrap_or(&[])).collect();
             *label = crate::dropstats::label_of_stages(ty, &parts);
+            // `VICTORY_METAL_DUMP_PSO=<dir>` (with `VICTORY_METAL_DUMP_PSO_HASH=<hex>[,..]` to pick
+            // pipelines by their label hash, as the GPU time table prints it): the stages' DXIL
+            // as `<hash>-<stage>.dxil`, for reading what a slow pipeline runs.
+            if let Some(dir) = std::env::var_os("VICTORY_METAL_DUMP_PSO") {
+                let hex = format!("{:016x}", label.hash);
+                let wanted = std::env::var("VICTORY_METAL_DUMP_PSO_HASH").ok();
+                if wanted.is_none_or(|w| w.split(',').any(|h| hex.contains(h.trim()))) {
+                    for (name, bytes) in
+                        ["vs", "ps", "amp", "ms", "gs"].into_iter().zip(code.iter())
+                    {
+                        if let Some(b) = bytes {
+                            let path =
+                                std::path::Path::new(&dir).join(format!("{hex}-{name}.dxil"));
+                            let _ = std::fs::create_dir_all(&dir);
+                            let _ = std::fs::write(path, b);
+                        }
+                    }
+                }
+            }
         }
         let desc = describe(d, &sig.msc_desc, code, self.options.compat).map_err(|r| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
