@@ -1847,3 +1847,33 @@ fn a_heap_switch_in_the_pass_does_not_stop_the_pre_scan_for_a_kernel_that_does_n
     assert_eq!(c1.split, c0.split + 1);
     assert_eq!(c1.in_place, c0.in_place);
 }
+
+#[test]
+fn a_mesh_without_a_vmcs_part_is_refused_as_before_the_emulation_existed() {
+    // The translator's product is not there yet: a mesh Metal refuses for its
+    // size, with the switch on (the default), is refused with Metal's reason,
+    // and nothing is emulated.
+    let Some(g) = setup_with(Fx::new()) else {
+        return;
+    };
+    let Some(big) = dxil_or_skip(
+        "mcb_ms_novmcs",
+        "ms_6_6",
+        &mesh_hlsl_with(true, 0, true, [0, 0]),
+    ) else {
+        return;
+    };
+    let ps = dxil_or_skip("mcb_ps_all", "ps_6_6", &ps_all()).unwrap();
+    assert!(
+        matches!(mesh_emu::Bundle::find(&big), Ok(None)),
+        "the shader has no VMCS part"
+    );
+    let sig = graphics_root(&g.fx, vec![], 0);
+    let before = mesh_emu::counters_here();
+    let (s, why) = g
+        .graphics_pso(sig, None, Some(&big), &ps)
+        .expect_err("refused");
+    assert_ne!(s, Status::OK);
+    assert!(why.contains("mesh size"), "Metal's reason: {why}");
+    assert_eq!(mesh_emu::counters_here(), before, "nothing was emulated");
+}
