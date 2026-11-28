@@ -89,13 +89,17 @@ pub mod live;
 pub mod livelib;
 pub mod wire;
 mod container;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod cube_lod_tests;
 #[cfg(all(test, windows))]
 mod diff_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod intersect_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
+pub mod host;
+// mac S6: the hardware host of the tests on macOS: an executor process on the Metal back.
+#[cfg(all(target_os = "macos", test))]
+#[path = "host_exec.rs"]
 pub mod host;
 mod lower;
 mod mesh_order; // mac S2
@@ -105,7 +109,7 @@ pub mod mesh_cs; // mac S5
 #[cfg(test)]
 mod mesh_cs_tests; // mac S5
 mod own_bits;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod permlane_tests;
 mod rect;
 mod sampler;
@@ -113,18 +117,22 @@ mod shader;
 mod threading;
 #[cfg(windows)]
 pub mod validator;
+// mac S6: no DXIL validator on macOS (the tests skip their validation; MSC refuses a bad program).
+#[cfg(all(target_os = "macos", test))]
+#[path = "validator_none.rs"]
+pub mod validator;
 pub mod vertex_flat; // mac S1
 #[cfg(test)]
 mod vertex_flat_tests; // mac S1
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod probe_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod size_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod valu_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod waterfall_tests;
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod wave64_tests;
 #[cfg(test)]
 mod s3_tests; // mac S3

@@ -152,30 +152,16 @@ fn permlane_rows_and_inactive_sources() {
             eprintln!("no SM 6.6 {backend}; skipped");
             continue;
         };
-        let mut options =
-            windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
-        // SAFETY: options is the correctly sized output for this feature query.
-        unsafe {
-            host.device
-                .CheckFeatureSupport(
-                    windows::Win32::Graphics::Direct3D12::D3D12_FEATURE_D3D12_OPTIONS1,
-                    (&raw mut options).cast(),
-                    size_of_val(&options) as u32,
-                )
-                .expect("wave capabilities");
-        }
-        eprintln!(
-            "{backend} waves {}..{}",
-            options.WaveLaneCountMin, options.WaveLaneCountMax
-        );
-        if options.WaveLaneCountMax < 32 {
+        let caps = host.caps();
+        eprintln!("{backend} waves {}..{}", caps.wave_lane_min, caps.wave_lane_max);
+        if caps.wave_lane_max < 32 {
             eprintln!("{backend} cannot hold two 16-lane rows; GPU checks skipped");
             continue;
         }
         ran += 1;
         eprintln!("permlane: testing row and EXEC cases on {backend}");
         for wave64 in [false, true] {
-            if options.WaveLaneCountMin > if wave64 { 64 } else { 32 } {
+            if caps.wave_lane_min > if wave64 { 64 } else { 32 } {
                 eprintln!("{backend} does not support the requested console wave size; skipped");
                 continue;
             }
@@ -185,7 +171,7 @@ fn permlane_rows_and_inactive_sources() {
                         for alias in [false, true] {
                             let shader = lowered(
                                 &native(cross, fi, bc, alias, wave64),
-                                options.WaveLaneCountMax,
+                                caps.wave_lane_max,
                             )
                             .expect("lower permlane");
                             let (root, pso) =

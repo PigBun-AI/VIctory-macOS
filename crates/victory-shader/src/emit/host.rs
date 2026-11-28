@@ -17,6 +17,24 @@ pub struct Host {
     pub device: ID3D12Device,
 }
 
+/// mac S6: the names the tests use from D3D12 and DXGI, one path for both hosts (`host_exec::api` on macOS).
+pub mod api {
+    pub use windows::Win32::Graphics::Direct3D12::*;
+    pub use windows::Win32::Graphics::Dxgi::Common::*;
+}
+
+/// What the tests ask of the device (mac S6: `host_exec::HostCaps` on macOS).
+#[derive(Clone, Debug, Default)]
+pub struct HostCaps {
+    pub name: String,
+    pub wave_lane_min: u32,
+    pub wave_lane_max: u32,
+    /// An AMD adapter (the console's own kind of hardware).
+    pub amd: bool,
+    pub mesh_shaders: bool,
+    pub barycentrics: bool,
+}
+
 /// What the stage declares that a pipeline must match.
 fn sig(dxil: &[u8], fourcc: FourCC) -> Result<Vec<SigElement>, String> {
     let c = Container::parse(dxil).map_err(|e| e.to_string())?;
@@ -120,6 +138,48 @@ impl Host {
                 ));
             }
             Ok(Host { device })
+        }
+    }
+
+    /// The device's wave sizes, vendor and optional features (mac S6: the one
+    /// way the tests ask, on both hosts).
+    pub fn caps(&self) -> HostCaps {
+        let mut waves = D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
+        let mut mesh = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
+        let mut bary = D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+        // SAFETY: each query writes the correctly sized structure; adapter calls are plain queries.
+        unsafe {
+            let ok = |r: windows::core::Result<()>| r.is_ok();
+            let waves_ok = ok(self.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS1,
+                (&raw mut waves).cast(),
+                size_of_val(&waves) as u32,
+            ));
+            let mesh_ok = ok(self.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS7,
+                (&raw mut mesh).cast(),
+                size_of_val(&mesh) as u32,
+            ));
+            let bary_ok = ok(self.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS3,
+                (&raw mut bary).cast(),
+                size_of_val(&bary) as u32,
+            ));
+            let desc = CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
+                .and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter1>(self.device.GetAdapterLuid()))
+                .and_then(|a| a.GetDesc1())
+                .ok();
+            HostCaps {
+                name: desc
+                    .as_ref()
+                    .map(|d| String::from_utf16_lossy(&d.Description).trim_end_matches('\0').to_owned())
+                    .unwrap_or_default(),
+                wave_lane_min: if waves_ok { waves.WaveLaneCountMin } else { 0 },
+                wave_lane_max: if waves_ok { waves.WaveLaneCountMax } else { 0 },
+                amd: desc.is_some_and(|d| d.VendorId == 0x1002),
+                mesh_shaders: mesh_ok && mesh.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED,
+                barycentrics: bary_ok && bary.BarycentricsSupported.as_bool(),
+            }
         }
     }
 

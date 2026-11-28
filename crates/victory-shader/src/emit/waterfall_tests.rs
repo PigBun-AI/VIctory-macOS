@@ -3,7 +3,7 @@
 //! by `dxil.dll` when present, and run on the host GPU and WARP, each lane
 //! reading the resource its own descriptor names.
 
-use windows::Win32::Graphics::Direct3D12::*;
+use super::host::api::*;
 
 use super::host::{Dispatch, Host, Root, Stride, View};
 use super::{HostShader, lower, validator};

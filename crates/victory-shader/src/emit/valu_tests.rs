@@ -1937,7 +1937,8 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
         let (root, pso) = match host.compute_pipeline(&shader) {
             Ok(p) => p,
             // WARP does not support fixed WaveSize(32) on SM 6.6.
-            Err(e) if warp => {
+            Err(e) if warp || e.starts_with("unsupported") => {
+                // mac S6: the executor says "unsupported" for what MSC cannot convert (f64).
                 eprintln!("{label}: compute_pipeline skipped ({e})");
                 continue;
             }
@@ -1980,27 +1981,9 @@ fn whole_wave_f64_sum_and_cvt_f32_f64() {
 /// Whether the hardware adapter is an AMD RDNA card's: what the translator
 /// writes for one ([`super::rdna`]) holds there.
 fn rdna_card() -> bool {
-    use windows::Win32::Graphics::Direct3D12::*;
-    use windows::Win32::Graphics::Dxgi::*;
     let Ok(host) = Host::new(false) else { return false };
-    let mut waves = D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
-    // SAFETY: plain queries.
-    unsafe {
-        let amd = CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
-            .and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter1>(host.device.GetAdapterLuid()))
-            .and_then(|a| a.GetDesc1())
-            .is_ok_and(|d| d.VendorId == 0x1002);
-        amd && host
-            .device
-            .CheckFeatureSupport(
-                D3D12_FEATURE_D3D12_OPTIONS1,
-                (&raw mut waves).cast(),
-                size_of_val(&waves) as u32,
-            )
-            .is_ok()
-            && waves.WaveLaneCountMin == 32
-            && waves.WaveLaneCountMax == 64
-    }
+    let caps = host.caps();
+    caps.amd && caps.wave_lane_min == 32 && caps.wave_lane_max == 64
 }
 
 /// The forms written for the console's own kind of hardware give, on such a
@@ -2269,7 +2252,7 @@ fn build_table_typed_cs(body: &[u32], used: Vec<UsedResource>) -> HostShader {
 /// GPU and WARP.
 #[test]
 fn typed_d16_table_uav_roundtrip_uint_sint_and_float() {
-    use windows::Win32::Graphics::Dxgi::Common::{
+    use super::host::api::{
         DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_SINT,
         DXGI_FORMAT_R16G16B16A16_UINT,
     };
@@ -2406,7 +2389,7 @@ fn typed_d16_table_uav_roundtrip_uint_sint_and_float() {
 /// exact integer bits for `R16_UINT`, `R16_SINT`, and `R32_UINT`.
 #[test]
 fn typed_non_d16_table_load_preserves_integer_bits() {
-    use windows::Win32::Graphics::Dxgi::Common::{
+    use super::host::api::{
         DXGI_FORMAT_R16_SINT, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_UINT,
     };
     let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());

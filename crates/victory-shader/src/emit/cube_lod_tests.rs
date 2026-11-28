@@ -6,7 +6,7 @@ use super::intersect_tests::build_compute_shader;
 use crate::native::{
     ComputeIo, HwStage, NativeProgram, ResourceType, RootParam, RootType, StageIo, UsedResource,
 };
-use windows::Win32::Graphics::Direct3D12::*;
+use super::host::api::*;
 
 /// The level is the red channel on all six faces so every sample returns
 /// its selected mip directly (including the fraction with trilinear filtering).

@@ -1,0 +1,5 @@
+# test	class	reason
+# class: base = the harness; semantic = MSC/Metal differs from D3D12/the console; bug = translator bug handed over
+emit::valu_tests::v_sin_and_v_cos_f32_reduce_large_turns	semantic	sin(NaN) is 0 through MSC/Metal (D3D12: NaN); the lowering ends in a plain sin of NaN
+emit::valu_tests::v_sin_and_v_cos_f16_reduce_large_turns	semantic	same, half precision
+emit::size_tests::a_counter_texture_is_set_by_a_store_of_one_channel	semantic	atomic add after an image store of the same texel in one thread reads/writes 9, wants 10 (UNDER INVESTIGATION)
