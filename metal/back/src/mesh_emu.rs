@@ -676,10 +676,10 @@ fn fill_ext(
 impl CommandList {
     /// Scratch kept until this submission completes. A full open ring must not wrap or wait for itself.
     pub fn mesh_scratch_va(&mut self, bytes: u64) -> Result<u64> {
-        if bytes <= self.queue().scratch_segment_bytes() {
-            if let Some(slice) = self.queue().try_mesh_ring(bytes, 256)? {
-                return Ok(slice.gpu_va);
-            }
+        if bytes <= self.queue().scratch_segment_bytes()
+            && let Some(slice) = self.queue().try_mesh_ring(bytes, 256)?
+        {
+            return Ok(slice.gpu_va);
         }
         if bytes > MAX_BLOCK_BYTES {
             return Err(Error::Unsupported(format!(
