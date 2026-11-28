@@ -421,14 +421,22 @@ when Rosetta reports these as writes; keep until a probe on a macOS update shows
 ### L1 — masked 256-bit stores rewritten (commit `781672bc`, `victory-loader/src/mac/masked.rs`)
 
 AVX masked stores (`vpmaskmovd/q`, `vmaskmovps/pd`, `vcvtps2ph` to memory) redone as plain stores
-Rosetta can resume. Done whenever fault tracking runs under Rosetta, which is now the default (G2), so it
-needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`, a plain `wine victory.exe`,
-and `tools/mac/run.sh`, which no longer sets it) logs `masked stores  1241 patched to plain stores`.
-`VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `apps/victory/src/mac.rs`
-adds the 8 plain 256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
-variable is unset **or is plain `all`**: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
-exported) replaced the list, so those 8 were never patched on a `run.sh` start; and with tracking off by default
-nothing was patched at all without the variable. With `VICTORY_FAULT_TRACKING=0` nothing is patched (nothing is guarded).
+Rosetta can resume. Done **by default under Rosetta, with fault tracking on or off** (11-28: a masked store whose
+lane >= 1 faults is fatal under Rosetta whatever put the guard there; the patch costs a jump per site and nothing
+when no fault happens), so it needs no variable: a start with `VICTORY_PATCH_MASKED` unset (`tools/macos/victory.sh`,
+a plain `wine victory.exe`, and `tools/mac/run.sh`, which no longer sets it) logs
+`masked stores  patch on (default under Rosetta, tracking on; all + the 8 extra sites of build 1.0.2.1)` and then
+`masked stores  1241 patched to plain stores`. Off Rosetta nothing is patched
+(`masked stores  patch off (not under Rosetta, ...)`).
+`VICTORY_PATCH_MASKED`: `none` (no patch), `all`, or hex RVAs (explicit, taken as given). `masked::decide`
+(`victory-loader/src/mac/masked.rs`; `apps/victory/src/mac.rs` only calls it and prints its `why`) adds the 8 plain
+256-bit stores of #144 (RVAs in `BUILD_1_0_2_1_EXTRA`, build 1.0.2.1, hash `b99f876b…`) when the
+variable is unset **or is plain `all`**, under Rosetta: 1233 found by the scan + 8 = 1241. Before, an explicit `all` (which `run.sh`
+exported) replaced the list, so those 8 were never patched on a `run.sh` start; and until 11-28 (`4ab34ad8` made it follow
+tracking, which is on by default) `VICTORY_FAULT_TRACKING=0` patched nothing.
+*Tests* (native, `masked::patch_tests`): `plan_patches_by_default_under_rosetta_whatever_tracking_says` (the four
+combinations of Rosetta and tracking), `plan_takes_the_variable_as_it_is_and_the_extra_sites_only_for_all` (none / all /
+RVAs / another build), `the_extra_sites_are_all_plus_eight_distinct_rvas`.
 Not needed on Windows: it resumes them. Remove with G2.
 
 *Coverage (checked 2026-11-28 against the static census of build 1.0.2.1, `research/census/title-isa-20261127`;
