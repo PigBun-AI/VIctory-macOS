@@ -41,7 +41,7 @@
 |---|---|---|---|---|---|
 | mac.isa.maskmov_ymm_store_nofault | AVX2 masked store to memory (vpmaskmovd/q, vmaskmovps/pd; ymm 1124, xmm 6) when no fault occurs | 1,130 | static-census | proven | emulated |
 | mac.isa.maskmov_ymm_store_fault_crossing | AVX2 masked 256-bit store that starts in accessible memory and faults in the next page (the VirtualProtect-gu… | 1,130 | static-census | proven | emulated |
-| mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | gap | unsupported |
+| mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | proven | emulated |
 | mac.isa.vextract128_mem | vextractf128/vextracti128 store to memory (xmm half of ymm) | 33 | static-census | proven | translated |
 | mac.isa.store256_plain | plain 256-bit vector stores (vmovups/vmovdqu/vmovaps ymm to memory), crossing into a protected page | 119,255 | static-census | proven | translated |
 | mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | unproven | stubbed |
@@ -58,16 +58,16 @@
 | mac.isa.tso_ordering | x86 total-store-order memory model for lock-free code (pause 2,601, mfence 36, sfence 20, lfence 8) | 2,665 | static-census | unproven | translated |
 | mac.isa.fault_resume_ordinary | synchronous page fault resume of ordinary stores, locked RMW, rep movs, movnt (all but the masked/vcvtps2ph c… | 未知 | unknown | proven | translated |
 | mac.isa.page_size | page granularity seen by the title (4 KiB guest pages on 16 KiB host pages) | 未知 | unknown | proven | translated |
-| mac.isa.lock_cmpxchg16_split | 16-bit lock cmpxchg whose operand straddles a 16-byte boundary (address = 15 mod 16) | 2,036 | static-census | gap | emulated |
-| mac.isa.cmpxchg32_rax_hit | 32-bit cmpxchg success path: upper 32 bits of RAX | 9,665 | static-census | gap | emulated |
-| mac.isa.rmw_fault_access_type | access type and address in the exception record of a faulting locked/RMW instruction (cmpxchg, xadd, xchg [me… | 56,796 | static-census | gap | emulated |
+| mac.isa.lock_cmpxchg16_split | 16-bit lock cmpxchg whose operand straddles a 16-byte boundary (address = 15 mod 16) | 2,036 | static-census | unproven | emulated |
+| mac.isa.cmpxchg32_rax_hit | 32-bit cmpxchg success path: upper 32 bits of RAX | 9,665 | static-census | proven | faithful |
+| mac.isa.rmw_fault_access_type | access type and address in the exception record of a faulting locked/RMW instruction (cmpxchg, xadd, xchg [me… | 56,796 | static-census | proven | emulated |
 | mac.title.int3_31f50 | int3 trap at image+0x31f50 (frame 64 of one diag run) | 未知 | unknown | unproven | 未定 |
 
 ### 加载期补丁
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.loader.masked_patch | masked-store rewrite to plain stores (masked.rs): scans c4-VEX 0F38 8e/2e/2f stores + vcvtps2ph + vextract128… | 1,234 | log | unproven | translated |
+| mac.loader.masked_patch | masked-store rewrite to plain stores (masked.rs): scans c4-VEX 0F38 8e/2e/2f stores + vcvtps2ph + vextract128… | 1,234 | log | proven | translated |
 | mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | unproven | translated |
 | mac.loader.wide_patch | 256-bit store split into two 128-bit stores (wide.rs), sites from `cargo xtask wide-stores` | 117,413 | static-census | proven | stubbed |
 | mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | unproven | stubbed |
@@ -89,18 +89,18 @@
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | unproven | translated |
+| mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | proven | translated |
 | mac.hle.console_model | console model presented to the title: Series X (device type 0x64) vs Series S (0x60) (map id C-R-005) | 1 | log | unproven | translated |
 | mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | unproven | unsupported |
 | mac.hle.commit_quota | commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit | 5 | static-census | unproven | stubbed |
 | mac.hle.working_set_statistics | XMemGetWorkingSetStatistics returns limit/used for the title | 1 | static-census | unproven | stubbed |
-| mac.hle.tools_memory | retail answers: no tools memory, transfers bounded | 2 | static-census | unproven | mapped |
+| mac.hle.tools_memory | retail answers: no tools memory, transfers bounded | 2 | static-census | proven | mapped |
 | mac.hle.globalmemorystatus | GlobalMemoryStatusEx answered by Wine from the Mac host | 1 | static-census | unproven | emulated |
 | mac.hle.cool_fox_residency | [仅参照 D3DMetal] 32 GB residency budgets, fallback heaps, GPU pool back-off and deferred uploads under low comm… | 2,800 | log | unproven | stubbed |
 | mac.hle.zero_copy_alias | [仅参照 D3DMetal] zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages | 未知 | unknown | gap | stubbed |
 | mac.hle.suspendthread | SuspendThread only for the title's own threads (others return success without suspending) | 1 | static-census | unproven | translated |
-| mac.hle.files | virtual drives G: and T: map title file paths onto host folders (rewrites CreateFileW/ReadFile/...) | 13 | static-census | unproven | translated |
-| mac.hle.dstorage | DirectStorage queues/requests, zlib and BCPack decompression on the CPU | 79 | log | unproven | emulated |
+| mac.hle.files | virtual drives G: and T: map title file paths onto host folders (rewrites CreateFileW/ReadFile/...) | 13 | static-census | proven | translated |
+| mac.hle.dstorage | DirectStorage queues/requests, zlib and BCPack decompression on the CPU | 79 | log | proven | emulated |
 | mac.hle.display_audio_misc | HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, e… | 4 | log | unproven | stubbed |
 | mac.hle.audio_timer_leak | audio_client_timer threads grow without bound: +20..40 per minute in a long run | 20 | log | gap | emulated |
 
@@ -108,10 +108,10 @@
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.res.output | title output size (swap chain / output resolution) | 1 | log | unproven | stubbed |
-| mac.res.internal | title internal (render) resolution | 未知 | unknown | unproven | stubbed |
-| mac.res.drs | dynamic resolution scaling driven by GPU frame time | 未知 | unknown | unproven | emulated |
-| mac.res.fsr | in-game FSR upscaler (amd_fidelityfx_upscaler_xbox.dll + loader dll) | 未知 | unknown | unproven | emulated |
+| mac.res.output | title output size (swap chain / output resolution) | 1 | log | proven | faithful |
+| mac.res.internal | title internal (render) resolution | 未知 | unknown | proven | translated |
+| mac.res.drs | dynamic resolution scaling driven by GPU frame time | 未知 | unknown | gap | unsupported |
+| mac.res.fsr | in-game FSR upscaler (amd_fidelityfx_upscaler_xbox.dll + loader dll) | 未知 | unknown | unproven | translated |
 
 ### 共享层骨架（owner=shared）
 
@@ -124,7 +124,7 @@
 | shared.fence.wait | fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149) | 0 | log | unproven | stubbed |
 | shared.device.feature_query | CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample} | 0 | log | unproven | stubbed |
 | shared.object.unknown_method | any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL) | 1 | log | gap | stubbed |
-| shared.pipeline.unknown_creation_methods | title pipeline-creation methods at vtable slots 0x1c8 and 0x218 (title+0x2477578, title+0x24800d5) return E_N… | 18,432 | log | gap | unsupported |
+| shared.pipeline.unknown_creation_methods | title pipeline-creation methods at vtable slots 0x1c8 and 0x218 (title+0x2477578, title+0x24800d5) return E_N… | 18,432 | log | gap | stubbed |
 | shared.pipeline.untranslated_shader | a shader that does not translate: its pipelines' draws are dropped | 1 | log | gap | unsupported |
 | shared.draw.no_host_pipeline | draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated) | 1 | log | gap | stubbed |
 | shared.draw.descriptor_drops | draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader wit… | 0 | log | unproven | stubbed |
@@ -142,7 +142,7 @@
 |---|---|---|---|---|---|
 | metal.post.auto_exposure | 自动曝光统计算错：tonemap 曝光缩放 = 0.75/最小亮度，应为平均亮度；曝光逐帧累积，进入可玩世界后约 100–150 帧开始发白（场景 HDR 数值与 D3DMetal 重放一致；正在修） | 未知 | unknown | gap | deviation |
 | metal.gpu.fidelity_slow_frame | fidelity（内部 2560x1440）GPU 每帧 6.7–17 s（perf 0.2 s）；约 31 s、约 115 s 的停顿；w37 后卡死、CPU 0%（怀疑 GPU 超时后没有 signal） | 未知 | unknown | gap | deviation |
-| mac.title.hang_watchdog | 标题 30 s 挂起看门狗（+0x2215c35 → +0x23cf683 写 0）；我们后端长帧停顿时被它杀掉；L5 --no-watchdog 是非保真绕法，晨测使用 | 未知 | log | gap | stubbed |
+| mac.title.hang_watchdog | 标题 30 s 挂起看门狗（+0x2215c35 → +0x23cf683 写 0）；我们后端长帧停顿时被它杀掉；L5 --no-watchdog 是非保真绕法，晨测使用 | 未知 | log | unproven | stubbed |
 
 ## 3. 用到但未证明（按频次）
 

@@ -911,6 +911,65 @@ mod tests {
         assert_ne!(RemoveDirectoryW(w(&deep).as_ptr()), 0);
     }
 
+    /// Windows finds a file whatever the case of its name (the console's
+    /// file system does too); the host folder's own case decides nothing,
+    /// in the last component or in the ones before it.
+    #[test]
+    fn names_differing_only_in_case_are_one_file() {
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const FILE_SHARE_READ: u32 = 1;
+        const OPEN_EXISTING: u32 = 3;
+        const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
+        let dir = tempfile::tempdir().unwrap();
+        let letter = mount(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("SubDir")).unwrap();
+        std::fs::write(dir.path().join("SubDir").join("MiXeD.Bin"), b"x").unwrap();
+        let close = host!("kernel32.dll", "CloseHandle": extern "system" fn(Handle) -> i32);
+        for name in ["SubDir/MiXeD.Bin", "subdir/mixed.bin", "SUBDIR\\MIXED.BIN", "sUbDiR/MIXED.bin"] {
+            let path = w(&format!("{letter}:\\{name}"));
+            assert_ne!(GetFileAttributesW(path.as_ptr()), INVALID_FILE_ATTRIBUTES, "{name}");
+            let h = CreateFileW(
+                path.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            );
+            assert_ne!(h as isize, -1, "{name}");
+            close(h);
+        }
+        // A name that is not there stays not there.
+        let path = w(&format!("{letter}:\\subdir\\mixed.bin.x"));
+        assert_eq!(GetFileAttributesW(path.as_ptr()), INVALID_FILE_ATTRIBUTES);
+    }
+
+    /// Host paths just under and over the length where the rewrite changes
+    /// to the `\\?\` form (`LONG`): a file is found at every length around it.
+    #[test]
+    fn paths_around_the_long_path_limit_are_found() {
+        const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        let letter = mount(dir.path()).unwrap();
+        // the host path of a file in the root is `root` + `\` + name
+        let base = root.encode_utf16().count() + 1;
+        assert!(base + 1 + 10 < LONG && LONG + 10 - base < 255, "the temp folder leaves room: {root}");
+        for total in LONG - 4..=LONG + 4 {
+            let name = "n".repeat(total - base);
+            std::fs::write(dir.path().join(&name), b"x").unwrap();
+            let path = w(&format!("{letter}:\\{name}"));
+            assert_ne!(
+                GetFileAttributesW(path.as_ptr()),
+                INVALID_FILE_ATTRIBUTES,
+                "host path of {total} characters"
+            );
+            let host = translate(&path[..path.len() - 1]).map(|v| text(&v)).unwrap();
+            assert_eq!(host.starts_with("\\\\?\\"), total >= LONG, "{total}: {host}");
+        }
+    }
+
     #[test]
     fn title_file_calls_land_in_the_host_folder() {
         let dir = tempfile::tempdir().unwrap();

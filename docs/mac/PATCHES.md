@@ -259,6 +259,17 @@ The victory-shader count (297) is not a skip: the Windows line's crate is anothe
 Mac fork's (458 tests): per-file counts differ everywhere (`emit/lower/tests.rs` 93 and `halves_tests.rs` 45 are
 the fork's, `bvh.rs`, `bitcode/opt.rs`, `wave64_tests.rs` are the line's) and no test is gated on `VICTORY_HELPER_DXC`.
 
+`victory-hle` (2026-11-28, `tools/mac/wine-tests.sh -p victory-hle`; 181 pass, 4 fail, 2 ignored of 187 before the 2 new `files`
+tests and the 11 `mac_counts` ones were in): all of `xmem` (but one), `files` (7), `dstorage` (18; 1 benchmark ignored) pass, ten
+runs of each. Not passing:
+- `xmem::a_title_thread_goes_on_using_the_rest_of_a_view`: intermittent (about 1 in 10 inside the xmem suite, 0 of 32 alone): the
+  title thread reads its page back as 0 or as bytes up to 99 writes old while the other pages of the view are unmapped and mapped
+  again. `unmap()` returns the whole view to a placeholder and maps the rest again, so the page is a placeholder for a moment;
+  on Windows it faults and waits, here it did not fault and the writes were lost. Matrix: `mac.hle.xmem_map_partial_view`.
+- Not xmem, not explained here: `net::only_loopback_is_reachable` (Wine's ws2_32 has no `WSAConnectByList`),
+  `xgameui::dialogs_end_with_what_was_typed` (a different HRESULT on the host: -2147483638 for -2147467260),
+  `xgamesave::a_kept_blob_past_the_link_limit_is_copied` (the temp folder is not on NTFS, 1024 links to a file are not there).
+
 ### Findings of the first run under Rosetta (2026-11-27, not fixed)
 
 - `VICTORY_FAULT_TRACKING=1`: the process stops with `rosetta error: unexpectedly need to EmulateForward on a
