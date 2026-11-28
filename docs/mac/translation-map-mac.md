@@ -24,6 +24,7 @@
   - **AVX 整数运算差分探针（2026-11-28，avx_int_arith，890 个操作）**：vpadd/vpsub/饱和、min/max、avg、abs、sign、cmp、乘法族、vpmaddwd/ubsw、vpsadbw、vpmovsx/zx、各移位（立即数/xmm 计数/逐元素变量）、vaddsub、vptest 系，29.7 亿条记录。82 种指令位精确，**发现 2 个 gap**：(1) vpsllvq/vpsrlvq 只取每个 64 位计数的低 32 位（高 32 位非零且低 32 位≤63 时错：该移位而没清零），标题 112 个位点中 2 个可疑（RVA 0x4f33502/0x4f3351c）；(2) vptest/vtestps/vtestpd 不清 PF/AF，标题 9,955 个位点无一读取。矩阵：mac.isa.avx.int_arith（gap）、vpsllvq_count_high（gap）、vptest_pf_af（proven/deviation）；修法等集成负责人拍板，L1 未改。
   - **avx_convert 差分探针**：96 个操作，目的值与模型 0 处不符；覆盖范围和限制见 mac.isa.avx.convert。
   - **avx_round 差分探针**：18 个操作，目的值与模型 0 处不符；覆盖范围和限制见 mac.isa.avx.round。
+  - **avx_masked 差分探针**：28 个操作，目的值与模型 0 处不符；覆盖范围和限制见 mac.isa.avx.masked。
   - **ADX（adcx/adox）可用性（2026-11-28）**：Rosetta 的 CPUID 不报告 ADX，adcx/adox 都抛非法指令（#UD，tests/adx-absent.c 可复现）。标题在 RVA 0x21a2895 查询 ADX，将结果缓存为 RVA 0x7127354 的 0x40 位，并用掩码 0x52 分派大整数运算。在已解析调用图中，放开 ADX 约束可达 24 个汇编例程的 2,611 处；令 ADX=0，全部走不到。另 2 个例程共 67 处无已知入口，不能当作已证有保护。矩阵 mac.isa.adx 保持 gap；未发现无保护的执行路径，不建议改 L1。
   - BMI/LZCNT/POPCNT 46 种形式各 60,000 组、FMA 60 种形式（随机 + 边界 + 4 种舍入 + FTZ/DAZ + NaN 规则）、vcvtph2ps 全部 65,536 个半精度、vcvtps2ph imm 0-4 × 4 种舍入各 320 万个，全部与软件模型逐位一致（0 个不符）；cpuid/xgetbv 和 4 KiB 页粒度也实测。失败的 cmpxchg 的 CF/OF/SF/AF/PF 在 8 种形式、各 2 万组随机下 100% 是操作数反了的结果（ZF 对），xadd 的标志全对。
 - 默认启动（Rosetta + 跟踪关）时 **1234 处 masked store 补丁一个都不打**（masked::choice(None,false)=None）。运行日志里看到“1234 patched”是因为 tools/mac/run.sh 和集成 runlt.sh 都 export 了 VICTORY_PATCH_MASKED=all。直接 `wine victory.exe` 或 tools/macos/victory.sh 启动则不打补丁。

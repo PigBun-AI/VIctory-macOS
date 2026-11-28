@@ -700,6 +700,7 @@ static int batch_atomic_split(void) {
 #include "isa-iarith.h"
 #include "isa-convert.h"
 #include "isa-round.h"
+#include "isa-masked.h"
 #include "isa-cflow.h"
 
 // ---------- main ----------
@@ -736,6 +737,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[2], "avx_int_arith")) f = batch_ops("avx_int_arith", reg_iarith_ops, argc > 3 ? argv[3] : NULL, plan_ia);
         else if (!strcmp(argv[2], "avx_convert")) f = batch_ops("avx_convert", reg_convert_ops, argc > 3 ? argv[3] : NULL, plan_cv);
         else if (!strcmp(argv[2], "avx_round")) f = batch_ops("avx_round", reg_round_ops, argc > 3 ? argv[3] : NULL, plan_rnd);
+        else if (!strcmp(argv[2], "avx_masked")) f = batch_ops("avx_masked", reg_masked_ops, argc > 3 ? argv[3] : NULL, plan_mask);
         else if (!strcmp(argv[2], "avx_move")) f = batch_ops("avx_move", reg_move_ops, argc > 3 ? argv[3] : NULL, plan_default);
         else { say("unknown batch\n"); return 2; }
         return f ? 1 : 0;

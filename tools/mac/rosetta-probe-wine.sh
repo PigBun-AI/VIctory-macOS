@@ -98,6 +98,7 @@ x86_int_shift_mul_div:*
 avx_int_arith:*
 avx_convert:*
 avx_round:*
+avx_masked:*
 "
     [ -n "${PROBE_LIST:-}" ] && LIST="$PROBE_LIST"   # e.g. PROBE_LIST="cvt_f2i:*_mem cvt_i2f:*_mem" to rerun a subset
     {
