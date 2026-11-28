@@ -214,15 +214,42 @@ impl Run<'_> {
     /// The bound graphics pipeline and its root arguments, written to the
     /// ring and the argument table.
     fn graphics_ready(&mut self) -> Result<(&mut CommandList, GraphicsPipeline), Status> {
+        // Why a draw cannot run is recorded in `note` (dropstats groups drops by it): a draw
+        // whose pipeline the back never got (refused at creation, e.g. `attributeAtVertex`)
+        // is "no graphics pipeline bound".
+        let Some((_, _, bound)) = self.open.as_ref() else {
+            return Err(Status::BAD_STREAM);
+        };
+        let why = if bound.gpso.is_none() {
+            Some("no graphics pipeline bound (its creation was refused, or none was set)")
+        } else if bound.graphics.sig.is_none() {
+            Some("no graphics root signature bound")
+        } else if !matches!(
+            bound.gpso.as_ref().map(|p| &p.body),
+            Some(PsoBody::Graphics(_))
+        ) {
+            Some("the bound pipeline is not a graphics pipeline")
+        } else if !bound
+            .gpso
+            .as_ref()
+            .zip(bound.graphics.sig.as_ref())
+            .is_some_and(|(p, s)| p.root_sig.compatible_with(s))
+        {
+            Some("the bound graphics pipeline was made for another root signature")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            self.st.note = Some(why.to_string());
+            return Err(Status::INVALID_ARG);
+        }
         let (list, bound) = self.list()?;
         let pso = bound.gpso.clone().ok_or(Status::INVALID_ARG)?;
         let sig = bound.graphics.sig.clone().ok_or(Status::INVALID_ARG)?;
         let PsoBody::Graphics(p) = &pso.body else {
             return Err(Status::INVALID_ARG);
         };
-        if !pso.root_sig.compatible_with(&sig) {
-            return Err(Status::INVALID_ARG);
-        }
+        let _ = sig;
         let pipeline = p.clone();
         write_root_arguments(list, bound, true)?;
         Ok((list, pipeline))

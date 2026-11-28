@@ -63,3 +63,8 @@ and its test skips.
 depth read-back, wave-64 hardware proofs
 (MSC refuses a non-32 wave size; the translator's wave-32 lowering is what
 runs), f64 (MSC cannot convert double precision), WARP.
+
+## Private SDK (GDKX)
+
+GDKX may be used freely while developing (semantics, structure layouts, oracle numbers, the constants and structures we
+need). Do not commit whole headers, documentation or the `private/` directory. See `metal/README.md`.

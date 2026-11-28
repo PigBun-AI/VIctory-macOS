@@ -9,6 +9,11 @@ Tests: `metal/back/tests/dxop_{alu,wave,tex,pixel,mesh,atomic,atomic64,int64,typ
 (root constants `K`, SRV `I`, UAV `O`; a pixel rig and a mesh rig; every program is checked to declare the dx.op it is meant
 to prove). Without `VICTORY_HELPER_DXC` / `DXC_LIB` they print SKIPPED and pass. 44 tests.
 
+## Private SDK (GDKX)
+
+GDKX may be used freely while developing (semantics, structure layouts, oracle numbers, the constants and structures we
+need). Do not commit whole headers, documentation or the `private/` directory. See `metal/README.md`.
+
 ## Closed (spec + GPU)
 
 | node | programs | tests |

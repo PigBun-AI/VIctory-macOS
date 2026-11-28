@@ -99,3 +99,8 @@ Measured on an Apple M5 Max, macOS 27, SDK 27.2 (2026-11-27):
   0.65 ms, max 16 ms): about 500 times faster in total.
 * The full archives answer every pipeline of the census in 0.4 to 3 s per kind (serial), median 0.15 to 0.31 ms,
   against 3 671 s (compute), 871 s (mesh), 739 s (pixel), 52 s (vertex) of pipeline compile time cold on 18 threads.
+
+## Private SDK (GDKX)
+
+GDKX may be used freely while developing (semantics, structure layouts, oracle numbers, the constants and structures we
+need). Do not commit whole headers, documentation or the `private/` directory. See `metal/README.md`.

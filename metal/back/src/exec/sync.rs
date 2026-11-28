@@ -219,6 +219,9 @@ impl State {
                 crate::Error::Metal(_) => Status::OUT_OF_MEMORY,
                 e => status_of(&e),
             })?;
+        if crate::zero_init::enabled() {
+            crate::zero_init::buffer(&self.device, &buffer);
+        }
         a.gpu_va = buffer.gpu_va();
         a.cpu_addr = buffer.cpu_addr();
         a.alloc_size = buffer.alloc_size();
@@ -667,6 +670,10 @@ impl State {
             heap.create_texture(&self.device, a.heap_offset, &desc)
         };
         let texture = made.map_err(|e| self.refuse("CREATE_TEXTURE", &e))?;
+        // A committed texture of the original API starts as zeros (placed ones keep what the memory holds).
+        if crate::zero_init::enabled() && a.heap.is_null() {
+            crate::zero_init::texture(&self.device, &texture);
+        }
         a.alloc_size = texture.alloc_size();
         a.res = ResId(
             self.resources
@@ -694,6 +701,9 @@ impl State {
             .device
             .create_heap(kind, a.size)
             .map_err(|e| self.refuse("CREATE_HEAP", &e))?;
+        if crate::zero_init::enabled() {
+            crate::zero_init::heap(&self.device, &heap);
+        }
         a.alloc_size = heap.size();
         a.heap = MemHeapId(self.mem_heaps.insert(heap).map_err(exhausted)?);
         Ok(())

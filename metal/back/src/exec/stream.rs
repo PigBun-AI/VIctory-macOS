@@ -1036,6 +1036,25 @@ impl Run<'_> {
     }
 
     fn dispatch(&mut self, c: &Dispatch) -> R {
+        let why = match self.open.as_ref() {
+            None => None,
+            Some((_, _, b)) => match (&b.pso, &b.compute.sig) {
+                (None, _) => Some("DISPATCH: no compute pipeline bound"),
+                (_, None) => Some("DISPATCH: no compute root signature bound"),
+                (Some(p), Some(s)) if !matches!(p.body, PsoBody::Compute { .. }) => {
+                    let _ = s;
+                    Some("DISPATCH: the bound pipeline is not a compute pipeline")
+                }
+                (Some(p), Some(s)) if !p.root_sig.compatible_with(s) => {
+                    Some("DISPATCH: the bound pipeline was made for another root signature")
+                }
+                _ => None,
+            },
+        };
+        if let Some(why) = why {
+            self.st.note = Some(why.to_string());
+            return Err(Status::INVALID_ARG);
+        }
         let (list, bound) = self.list()?;
         let pso = bound.pso.clone().ok_or(Status::INVALID_ARG)?;
         let sig = bound.compute.sig.clone().ok_or(Status::INVALID_ARG)?;
@@ -1083,19 +1102,29 @@ impl Run<'_> {
         let graphics = c
             .arguments()
             .any(|a| a.kind.is_action() && a.kind != IndirectArgKind::DISPATCH);
-        let sig = if graphics {
+        let side = if graphics { "graphics" } else { "compute" };
+        let Some(sig) = (if graphics {
             bound.graphics.sig.clone()
         } else {
             bound.compute.sig.clone()
-        }
-        .ok_or(Status::INVALID_ARG)?;
-        let pso = if graphics {
+        }) else {
+            self.st.note = Some(format!("EXECUTE_INDIRECT: no {side} root signature bound"));
+            return Err(Status::INVALID_ARG);
+        };
+        let Some(pso) = (if graphics {
             bound.gpso.clone()
         } else {
             bound.pso.clone()
-        }
-        .ok_or(Status::INVALID_ARG)?;
+        }) else {
+            self.st.note = Some(format!(
+                "EXECUTE_INDIRECT: no {side} pipeline bound (its creation was refused, or none was set)"
+            ));
+            return Err(Status::INVALID_ARG);
+        };
         if !pso.root_sig.compatible_with(&sig) {
+            self.st.note = Some(format!(
+                "EXECUTE_INDIRECT: the bound {side} pipeline was made for another root signature"
+            ));
             return Err(Status::INVALID_ARG);
         }
         // The signature was made for a root signature; the list's must be
@@ -1103,6 +1132,10 @@ impl Run<'_> {
         if let Some(made_for) = &signature_root
             && !made_for.compatible_with(&sig)
         {
+            self.st.note = Some(
+                "EXECUTE_INDIRECT: the command signature was made for another root signature"
+                    .to_string(),
+            );
             return Err(Status::INVALID_ARG);
         }
         let plan = super::indirect::plan(c, Some(&sig))?;

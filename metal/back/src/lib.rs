@@ -91,6 +91,8 @@ pub mod stages;
 pub mod texture;
 #[cfg(target_vendor = "apple")]
 pub mod typed;
+#[cfg(target_vendor = "apple")]
+pub mod zero_init;
 
 #[cfg(target_vendor = "apple")]
 pub use error::{Error, Result};
