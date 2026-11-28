@@ -1374,7 +1374,7 @@ Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass pl
 *Why not needed on Windows.* Windows has D3D12 and the DXIL validator; the tests run there as they were.
 *Remove when.* A Windows-independent device for the proofs exists upstream (or the Windows host is rebuilt on the same pipe).
 
-### F1 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/lower.rs`, 1 line each in `emit/mod.rs` and `victory-gpu` `shader_cache.rs`)
+### F1 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/{lower,bitcode,shader,live,mod}.rs`, `victory-gpu` `shader_cache.rs`)
 
 *What.* The translator's `VICTORY_F16_NEAREST` (round the result of a 16-bit float operation to nearest even, `Lower::f16_nearest`) is **on by
 default**; `VICTORY_F16_NEAREST=0` turns it off. It now covers every result rounding of the title's code: `v_cvt_f16_f32`, the VOP f16 arithmetic
@@ -1382,6 +1382,17 @@ default**; `VICTORY_F16_NEAREST=0` turns it off. It now covers every result roun
 plain `legacyF32ToF16`; one helper, `Lower::f16_result`, is now the only place that picks). Not touched: `v_cvt_pkrtz_f16_f32` (round toward zero on
 the console too, `f16_toward_zero`), the format conversions of d16 stores, and the wave sum of halves (already exact). The shader cache key holds the
 effective state (`emit::f16_nearest()`), as for `VICTORY_EXPORT_F16_SAT`, so a default flip or a `=0` run never reuses the other's translations.
+
+*One `fptrunc` on the Metal chain (`VICTORY_F16_NATIVE`, default on where the host has no `attributeAtVertex`, i.e. there).* The
+nearest rounding is not the dozen-operation sequence there but one `fptrunc float to half` of a native 16-bit module: LLVM's `fptrunc` rounds to nearest
+even, and MSC compiles it to Metal's `half(x)`. The writer got a `half` type, the `fptrunc` cast (opcode 7), the data layout DXC writes for native
+16-bit modules (`f16:16`, `i16:16`, `i8:8`), and the Native16 feature (shader flag 1<<23, `SFI0` bit 42) which a module with a `half` sets. The
+sequence stays for the other hosts (a D3D12 host without native 16-bit shader ops would refuse the module) and for `VICTORY_F16_NATIVE=0`. Why it was
+worth it: the sequence costs +4.4 % DXIL and +17..59 % pipeline build time on the 11,621 changed programs; the `fptrunc` costs **-0.04 %** DXIL (median
+-0.05 %, p90 +0.1 %, max +2.4 %) and the pipeline build time is the same as with the switch off (sample of 2,325: cs 166 s vs 174 s off, ps 33 s vs 27 s, ms 56 s vs 62 s,
+vs 5.8 s vs 4.9 s; noisy machine). Pass counts unchanged (25,760 translated; sample cs 198/198, vs 165/165, ps 104/1,028, ms 917/934). Hardware: the same tests as
+below, with the `fptrunc` path: 0 differences in 134 M-input samples and in 755 M inputs of each of the three instructions (`fptrunc` of f32 to half, 1.24 M inputs
+around every rounding tie of all halves also exact in `metal/back/tests/dxop_fptrunc.rs` on the metal line).
 
 *Why not needed on Windows.* The Windows line keeps the switch off (exact but untried in a game run; the upstream comment: the host's `f32tof16` is also
 toward zero on NVIDIA); there it is a choice, not a fix. On the Mac, Metal Shader Converter's `f32tof16` is round toward zero (D3D11.3 Functional Spec 3.2.2
@@ -1397,8 +1408,8 @@ have such a rounding (11,621 of the 25,756 translated census programs change by 
 exponent range of both signs, denormals, 65520, Inf, NaN, -0): **0 differences**, NaN gives NaN, an f32 denormal input may give either zero; the same programs with the switch off differ in 37 % of inputs, so the test can fail. Census (`victory-census translate`, 25,985
 containers): translated 25,760 on and off, failed 225 on and off, the same programs; 11,621 translations change; DXIL bytes of those +4.4 % in
 total (median +6 %, 90th percentile +14 %, largest 2.9x). MSC/Metal on a 20 % sample of the changed programs (2,325): cs 198/198, vs 165/165,
-ps 104/1,028, ms 917/934 on **and** off, the same programs; pipeline build time of the sample (a loaded machine, noisy): cs +57 %, vs +17 %,
-ps +59 %, ms +43 %. GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
+ps 104/1,028, ms 917/934 on **and** off, the same programs; with the 12-operation sequence the pipeline build time of the sample (a loaded machine, noisy) is cs +57 %, vs +17 %,
+ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
 
 ## Not ported this round (decided with the Windows line as the reference)
 
@@ -1413,6 +1424,25 @@ the generic upstream PRs in the Mac history (not Mac specific). Each is a candid
 `mac:` commit once a run on the Mac shows the need.
 
 Taken later (no longer "not ported"): the low-address guards and 2 TiB views (#398, with the #1009 guards it builds on), see X3.
+
+### F2 — a 64-bit image atomic max that returns the original: read first, atomic without its result (`victory-shader` `emit/lower.rs`, `emit/live.rs`, `victory-gpu` `shader_cache.rs`)
+
+*What.* `image_atomic_{s,u}{min,max}` of two channels (an R32G32 view as one 64-bit texel) with GLC lowers as a `textureLoad.i32` of the texel, joined
+to 64 bits, then the `atomicBinOp.i64` whose result is not used; the load's value is the register result. Other 64-bit atomics are as before.
+`VICTORY_F2_READ_FIRST=0` turns it off (a key of the shader cache).
+
+*Why not needed on Windows.* D3D12 drivers return the original of a 64-bit atomic. MSC refuses the instruction with its result used
+(`UnsupportedInstruction: dx.op.atomicBinOp.i64`) and takes it without; Apple GPUs do 64-bit min/max natively (measured on the M5 Max, `docs/metal/dxop.md`
+on the metal line). Between the load and the atomic another lane can raise the texel: the load is then older than the atomic's own original. The title's only
+program that uses the return (`PS_Weather_Particle_Prepass_74a7a22c`) takes the high half as a depth for a `discard` against its own depth (a max only goes up):
+a stale load can only miss a discard that a later pixel would make anyway. That is a reading of the program, not a measurement.
+
+*Remove when.* MSC returns the original of a 64-bit min/max, or Metal does.
+
+*Evidence (2026-11-28).* Unit test `emit::f2_tests` (the load is there with GLC, not without or with the switch off). Census of the 679 programs that declare a
+64-bit atomic (677 ps, 2 cs), translated and converted with MSC 4.0.3 with the switch on and off: ps 61 ok / 616 refused on, 60 / 617 off (the 616 are the
+`attributeAtVertex` refusals, which S1 handles on the host; the census converts without it), cs 2/2 both; the program that flips is 64974027a11daa59, the weather prepass. The read-then-max form
+itself ran on Metal in `metal/back/tests/dxop_atomic64.rs` (the metal line). The translated program's run (62 convert) is the mac-host-harness line's.
 
 ### M7 — `tools/mac/play.sh`: hand play wrapper
 

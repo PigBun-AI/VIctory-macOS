@@ -58,6 +58,7 @@ fn build(words: &[u32], srv: (u8, u32)) -> Result<Vec<u8>, ShaderError> {
         outputs: Vec::new(),
         prims: Vec::new(),
         mesh_stride: 0,
+        cs: None, // mac S5
     })?;
     Ok(lowered.dxil)
 }
