@@ -54,7 +54,12 @@ else
         echo "   note: policy checks the checked-out tree (HEAD), which is not $BRANCH"
     fi
     if (
-        [ -f "$ROOT/tools/mac/env.sh" ] && . "$ROOT/tools/mac/env.sh" >/dev/null 2>&1
+        # the toolchain comes from tools/mac/env.sh when this checkout has it (tools/metal/env.sh is not needed, and is never read here)
+        if [ -f "$ROOT/tools/mac/env.sh" ]; then
+            . "$ROOT/tools/mac/env.sh" >/dev/null 2>&1 || echo "   note: tools/mac/env.sh found no toolchain (set VICTORY_MAC_TOOLCHAIN); using the cargo on PATH"
+        else
+            echo "   note: no tools/mac/env.sh in this checkout; using the cargo on PATH"
+        fi
         command -v cargo >/dev/null 2>&1 || { echo "   cargo not found (tools/mac/env.sh did not help)"; exit 2; }
         cargo xtask policy 2>&1 | sed 's/^/   /'
         exit "${PIPESTATUS[0]}"
