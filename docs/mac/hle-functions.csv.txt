@@ -1,86 +1,86 @@
 dll,function,static_callsites,address_taken_sites,status,module,basis,runtime_calls
-xapu.dll,XApuDequeueResult,1,0,implemented,apu,body of 12 code lines,
-xapu.dll,XApuDisconnect,1,0,implemented,apu,body of 9 code lines,
-xapu.dll,XApuEnqueueCommand,1,0,implemented,apu,body of 70 code lines,
-xapu.dll,XApuGetResultCount,1,0,implemented,apu,body of 8 code lines,
-AcpHal.dll,AcpHalAllocateShapeContexts,1,0,implemented,audio,body of 29 code lines,
-AcpHal.dll,AcpHalCreate,1,0,implemented,audio,body of 16 code lines,
-AcpHal.dll,AcpHalReleaseShapeContexts,1,0,implemented,audio,body of 8 code lines,
-AcpHal.dll,ApuAlloc,1,0,implemented,audio,body of 13 code lines,
-AcpHal.dll,ApuFree,1,0,implemented,audio,body of 1 code lines,
-AcpHal.dll,ApuIsVirtualAddressValid,1,0,implemented,audio,body of 2 code lines,
-AcpHal.dll,ApuMapApuAddress,1,0,implemented,audio,body of 1 code lines,
-AcpHal.dll,ApuMapVirtualAddress,1,0,implemented,audio,body of 1 code lines,
-d3d12_xs.dll,D3D12ConfigureVirtualMemoryX,1,0,implemented,d3d12x,fn not found in the module file (defined elsewhere): treated as implemented,
-d3d12_xs.dll,D3D12SerializeVersionedRootSignature,1,0,implemented,d3d12x,fn not found in the module file (defined elsewhere): treated as implemented,
-d3d12_xs.dll,D3D12XboxCreateDevice,1,0,implemented,d3d12x,body of 9 code lines,
-chad.dll,XDspActivate,1,0,implemented,dsp,body of 42 code lines,
-chad.dll,XDspConnectWithMaximumStreamLimit,1,0,implemented,dsp,body of 24 code lines,
-chad.dll,XDspDeactivate,1,0,implemented,dsp,body of 7 code lines,
-chad.dll,XDspDisconnect,1,0,implemented,dsp,body of 5 code lines,
-chad.dll,XDspSubmitCommand,1,0,implemented,dsp,body of 19 code lines,
-XCRDAPI.dll,DStorageGetFactory,1,0,implemented,dstorage,body of 9 code lines,
-api-ms-win-core-file-l1-1-0.dll,CreateFileW,13,0,implemented,files,body of 10 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,GetFileAttributesW,3,1,implemented,files,body of 2 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,FindFirstFileW,2,0,implemented,files,body of 5 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,GetFileAttributesExW,2,0,implemented,files,body of 6 code lines; overrides the host,
-api-ms-win-crt-stdio-l1-1-0.dll,_wfopen,2,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-crt-stdio-l1-1-0.dll,fread,2,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,CreateDirectoryW,1,0,implemented,files,body of 5 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,DeleteFileW,1,0,implemented,files,body of 2 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,GetDiskFreeSpaceExW,1,0,implemented,files,body of 7 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,GetFileAttributesA,1,0,implemented,files,body of 12 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,RemoveDirectoryW,1,0,implemented,files,body of 2 code lines; overrides the host,
-api-ms-win-core-file-l1-1-0.dll,SetFileAttributesW,1,0,implemented,files,body of 5 code lines; overrides the host,
-api-ms-win-core-file-l2-1-0.dll,MoveFileExW,1,0,implemented,files,body of 6 code lines; overrides the host,
-api-ms-win-crt-filesystem-l1-1-0.dll,_wstat64,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-crt-filesystem-l1-1-0.dll,remove,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-crt-stdio-l1-1-0.dll,fopen,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-GameInput.dll,#1,1,0,implemented,gameinput,body of 6 code lines,
-api-ms-win-crt-runtime-l1-1-0.dll,_invalid_parameter_noinfo_noreturn,108,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-core-debug-l1-1-0.dll,OutputDebugStringA,17,0,implemented,kernel,body of 5 code lines; overrides the host,
-api-ms-win-core-errorhandling-l1-1-0.dll,SetUnhandledExceptionFilter,11,1,implemented,kernel,body of 2 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,GetProcAddress,12,0,implemented,kernel,body of 24 code lines; overrides the host,
-api-ms-win-crt-runtime-l1-1-0.dll,exit,5,0,implemented,kernel,body of 1 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,FreeLibrary,3,0,implemented,kernel,body of 6 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleHandleW,3,0,implemented,kernel,body of 4 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,LoadLibraryExA,2,0,implemented,kernel,body of 6 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-1.dll,LoadLibraryW,2,0,implemented,kernel,body of 1 code lines; overrides the host,
-api-ms-win-core-processthreads-l1-1-0.dll,SetThreadPriority,2,0,implemented,kernel,body of 12 code lines; overrides the host,
-api-ms-win-crt-runtime-l1-1-0.dll,abort,2,0,implemented,kernel,body of 1 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleFileNameA,1,0,implemented,kernel,body of 4 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleFileNameW,1,0,implemented,kernel,body of 5 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleHandleA,1,0,implemented,kernel,body of 4 code lines; overrides the host,
-api-ms-win-core-libraryloader-l1-2-0.dll,LoadLibraryExW,1,0,implemented,kernel,body of 6 code lines; overrides the host,
-api-ms-win-core-processthreads-l1-1-0.dll,TerminateProcess,1,0,implemented,kernel,body of 4 code lines; overrides the host,
-api-ms-win-crt-runtime-l1-1-0.dll,__p___argc,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-crt-runtime-l1-1-0.dll,__p___argv,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-crt-runtime-l1-1-0.dll,terminate,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,
-api-ms-win-core-psm-appnotify-l1-1-0.dll,RegisterAppStateChangeNotification,2,0,implemented,lifecycle,body of 1 code lines; overrides the host,
-api-ms-win-core-psm-appnotify-l1-1-0.dll,UnregisterAppStateChangeNotification,2,0,implemented,lifecycle,body of 1 code lines; overrides the host,
-api-ms-win-core-psm-appnotify-l1-1-1.dll,RegisterAppConstrainedChangeNotification,1,0,implemented,lifecycle,body of 1 code lines; overrides the host,
-api-ms-win-core-psm-appnotify-l1-1-1.dll,UnregisterAppConstrainedChangeNotification,1,0,implemented,lifecycle,body of 1 code lines; overrides the host,
-ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll,CreateWindowExA,1,0,implemented,lifecycle,body of 21 code lines; overrides the host,
-api-ms-win-core-processthreads-l1-1-0.dll,SuspendThread,1,0,implemented,mac,body of 10 code lines; overrides the host,
-MFPlat.DLL,MFCreateSourceResolver,1,0,implemented,media,body of 23 code lines; overrides the host,
-WINHTTP.dll,WinHttpSetOption,4,0,implemented,net,body of 7 code lines; overrides the host,
-WS2_32.dll,getaddrinfo,3,0,implemented,net,body of 6 code lines; overrides the host,
-WINHTTP.dll,WinHttpConnect,2,0,implemented,net,body of 10 code lines; overrides the host,
-WINHTTP.dll,WinHttpOpen,2,0,implemented,net,body of 10 code lines; overrides the host,
-WS2_32.dll,#20,2,0,implemented,net,body of 6 code lines; overrides the host,
-WS2_32.dll,#4,2,0,implemented,net,body of 4 code lines; overrides the host,
-WS2_32.dll,#52,1,0,implemented,net,body of 4 code lines; overrides the host,
-xg_xs.dll,XGCreateTextureComputer,1,0,implemented,xg,body of 25 code lines,
-xg_xs.dll,XGSuggestSwizzleMode,1,0,implemented,xg,body of 7 code lines,
-api-ms-win-core-memory-l1-1-0.dll,VirtualFree,24,1,implemented,xmem,body of 5 code lines; overrides the host,
-xmem.dll,XMemAlloc,1,0,implemented,xmem,body of 7 code lines,
-xmem.dll,XMemAllocatePhysicalPages,1,0,implemented,xmem,body of 50 code lines,
-xmem.dll,XMemFree,1,0,implemented,xmem,body of 7 code lines,
-xmem.dll,XMemFreeDefault,1,0,implemented,xmem,body of 15 code lines,
-xmem.dll,XMemFreePhysicalPages,1,0,implemented,xmem,body of 9 code lines,
-xmem.dll,XMemMapPhysicalPages,1,0,implemented,xmem,body of 39 code lines,
-xmem.dll,XMemMapPhysicalPagesScatter,1,0,implemented,xmem,body of 28 code lines,
-xmem.dll,XMemTransferMemory,1,0,implemented,xmem,body of 16 code lines,
+xapu.dll,XApuDequeueResult,1,0,implemented,apu,body of 12 code lines,853762
+xapu.dll,XApuDisconnect,1,0,implemented,apu,body of 9 code lines,0
+xapu.dll,XApuEnqueueCommand,1,0,implemented,apu,body of 70 code lines,853768
+xapu.dll,XApuGetResultCount,1,0,implemented,apu,body of 8 code lines,110601
+AcpHal.dll,AcpHalAllocateShapeContexts,1,0,implemented,audio,body of 29 code lines,1
+AcpHal.dll,AcpHalCreate,1,0,implemented,audio,body of 16 code lines,1
+AcpHal.dll,AcpHalReleaseShapeContexts,1,0,implemented,audio,body of 8 code lines,0
+AcpHal.dll,ApuAlloc,1,0,implemented,audio,body of 13 code lines,2
+AcpHal.dll,ApuFree,1,0,implemented,audio,body of 1 code lines,0
+AcpHal.dll,ApuIsVirtualAddressValid,1,0,implemented,audio,body of 2 code lines,31592
+AcpHal.dll,ApuMapApuAddress,1,0,implemented,audio,body of 1 code lines,9188
+AcpHal.dll,ApuMapVirtualAddress,1,0,implemented,audio,body of 1 code lines,31592
+d3d12_xs.dll,D3D12ConfigureVirtualMemoryX,1,0,implemented,d3d12x,fn not found in the module file (defined elsewhere): treated as implemented,1
+d3d12_xs.dll,D3D12SerializeVersionedRootSignature,1,0,implemented,d3d12x,fn not found in the module file (defined elsewhere): treated as implemented,106
+d3d12_xs.dll,D3D12XboxCreateDevice,1,0,implemented,d3d12x,body of 9 code lines,1
+chad.dll,XDspActivate,1,0,implemented,dsp,body of 42 code lines,150
+chad.dll,XDspConnectWithMaximumStreamLimit,1,0,implemented,dsp,body of 24 code lines,1
+chad.dll,XDspDeactivate,1,0,implemented,dsp,body of 7 code lines,134
+chad.dll,XDspDisconnect,1,0,implemented,dsp,body of 5 code lines,0
+chad.dll,XDspSubmitCommand,1,0,implemented,dsp,body of 19 code lines,179368
+XCRDAPI.dll,DStorageGetFactory,1,0,implemented,dstorage,body of 9 code lines,1
+api-ms-win-core-file-l1-1-0.dll,CreateFileW,13,0,implemented,files,body of 10 code lines; overrides the host,82
+api-ms-win-core-file-l1-1-0.dll,GetFileAttributesW,3,1,implemented,files,body of 2 code lines; overrides the host,603
+api-ms-win-core-file-l1-1-0.dll,FindFirstFileW,2,0,implemented,files,body of 5 code lines; overrides the host,4
+api-ms-win-core-file-l1-1-0.dll,GetFileAttributesExW,2,0,implemented,files,body of 6 code lines; overrides the host,1
+api-ms-win-crt-stdio-l1-1-0.dll,_wfopen,2,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,1
+api-ms-win-crt-stdio-l1-1-0.dll,fread,2,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,0
+api-ms-win-core-file-l1-1-0.dll,CreateDirectoryW,1,0,implemented,files,body of 5 code lines; overrides the host,3
+api-ms-win-core-file-l1-1-0.dll,DeleteFileW,1,0,implemented,files,body of 2 code lines; overrides the host,0
+api-ms-win-core-file-l1-1-0.dll,GetDiskFreeSpaceExW,1,0,implemented,files,body of 7 code lines; overrides the host,0
+api-ms-win-core-file-l1-1-0.dll,GetFileAttributesA,1,0,implemented,files,body of 12 code lines; overrides the host,0
+api-ms-win-core-file-l1-1-0.dll,RemoveDirectoryW,1,0,implemented,files,body of 2 code lines; overrides the host,0
+api-ms-win-core-file-l1-1-0.dll,SetFileAttributesW,1,0,implemented,files,body of 5 code lines; overrides the host,0
+api-ms-win-core-file-l2-1-0.dll,MoveFileExW,1,0,implemented,files,body of 6 code lines; overrides the host,0
+api-ms-win-crt-filesystem-l1-1-0.dll,_wstat64,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,38
+api-ms-win-crt-filesystem-l1-1-0.dll,remove,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,0
+api-ms-win-crt-stdio-l1-1-0.dll,fopen,1,0,implemented,files,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,0
+GameInput.dll,#1,1,0,implemented,gameinput,body of 6 code lines,1
+api-ms-win-crt-runtime-l1-1-0.dll,_invalid_parameter_noinfo_noreturn,108,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,0
+api-ms-win-core-debug-l1-1-0.dll,OutputDebugStringA,17,0,implemented,kernel,body of 5 code lines; overrides the host,38
+api-ms-win-core-errorhandling-l1-1-0.dll,SetUnhandledExceptionFilter,11,1,implemented,kernel,body of 2 code lines; overrides the host,4
+api-ms-win-core-libraryloader-l1-2-0.dll,GetProcAddress,12,0,implemented,kernel,body of 24 code lines; overrides the host,16
+api-ms-win-crt-runtime-l1-1-0.dll,exit,5,0,implemented,kernel,body of 1 code lines; overrides the host,1
+api-ms-win-core-libraryloader-l1-2-0.dll,FreeLibrary,3,0,implemented,kernel,body of 6 code lines; overrides the host,0
+api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleHandleW,3,0,implemented,kernel,body of 4 code lines; overrides the host,1
+api-ms-win-core-libraryloader-l1-2-0.dll,LoadLibraryExA,2,0,implemented,kernel,body of 6 code lines; overrides the host,0
+api-ms-win-core-libraryloader-l1-2-1.dll,LoadLibraryW,2,0,implemented,kernel,body of 1 code lines; overrides the host,2
+api-ms-win-core-processthreads-l1-1-0.dll,SetThreadPriority,2,0,implemented,kernel,body of 12 code lines; overrides the host,77
+api-ms-win-crt-runtime-l1-1-0.dll,abort,2,0,implemented,kernel,body of 1 code lines; overrides the host,0
+api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleFileNameA,1,0,implemented,kernel,body of 4 code lines; overrides the host,0
+api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleFileNameW,1,0,implemented,kernel,body of 5 code lines; overrides the host,2
+api-ms-win-core-libraryloader-l1-2-0.dll,GetModuleHandleA,1,0,implemented,kernel,body of 4 code lines; overrides the host,1
+api-ms-win-core-libraryloader-l1-2-0.dll,LoadLibraryExW,1,0,implemented,kernel,body of 6 code lines; overrides the host,2
+api-ms-win-core-processthreads-l1-1-0.dll,TerminateProcess,1,0,implemented,kernel,body of 4 code lines; overrides the host,0
+api-ms-win-crt-runtime-l1-1-0.dll,__p___argc,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,1
+api-ms-win-crt-runtime-l1-1-0.dll,__p___argv,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,1
+api-ms-win-crt-runtime-l1-1-0.dll,terminate,1,0,implemented,kernel,fn not found in the module file (defined elsewhere): treated as implemented; overrides the host,0
+api-ms-win-core-psm-appnotify-l1-1-0.dll,RegisterAppStateChangeNotification,2,0,implemented,lifecycle,body of 1 code lines; overrides the host,2
+api-ms-win-core-psm-appnotify-l1-1-0.dll,UnregisterAppStateChangeNotification,2,0,implemented,lifecycle,body of 1 code lines; overrides the host,0
+api-ms-win-core-psm-appnotify-l1-1-1.dll,RegisterAppConstrainedChangeNotification,1,0,implemented,lifecycle,body of 1 code lines; overrides the host,1
+api-ms-win-core-psm-appnotify-l1-1-1.dll,UnregisterAppConstrainedChangeNotification,1,0,implemented,lifecycle,body of 1 code lines; overrides the host,0
+ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll,CreateWindowExA,1,0,implemented,lifecycle,body of 21 code lines; overrides the host,1
+api-ms-win-core-processthreads-l1-1-0.dll,SuspendThread,1,0,implemented,mac,body of 10 code lines; overrides the host,0
+MFPlat.DLL,MFCreateSourceResolver,1,0,implemented,media,body of 23 code lines; overrides the host,0
+WINHTTP.dll,WinHttpSetOption,4,0,implemented,net,body of 7 code lines; overrides the host,0
+WS2_32.dll,getaddrinfo,3,0,implemented,net,body of 6 code lines; overrides the host,2
+WINHTTP.dll,WinHttpConnect,2,0,implemented,net,body of 10 code lines; overrides the host,1
+WINHTTP.dll,WinHttpOpen,2,0,implemented,net,body of 10 code lines; overrides the host,1
+WS2_32.dll,#20,2,0,implemented,net,body of 6 code lines; overrides the host,0
+WS2_32.dll,#4,2,0,implemented,net,body of 4 code lines; overrides the host,0
+WS2_32.dll,#52,1,0,implemented,net,body of 4 code lines; overrides the host,0
+xg_xs.dll,XGCreateTextureComputer,1,0,implemented,xg,body of 25 code lines,318
+xg_xs.dll,XGSuggestSwizzleMode,1,0,implemented,xg,body of 7 code lines,120
+api-ms-win-core-memory-l1-1-0.dll,VirtualFree,24,1,implemented,xmem,body of 5 code lines; overrides the host,4
+xmem.dll,XMemAlloc,1,0,implemented,xmem,body of 7 code lines,2
+xmem.dll,XMemAllocatePhysicalPages,1,0,implemented,xmem,body of 50 code lines,3
+xmem.dll,XMemFree,1,0,implemented,xmem,body of 7 code lines,0
+xmem.dll,XMemFreeDefault,1,0,implemented,xmem,body of 15 code lines,0
+xmem.dll,XMemFreePhysicalPages,1,0,implemented,xmem,body of 9 code lines,0
+xmem.dll,XMemMapPhysicalPages,1,0,implemented,xmem,body of 39 code lines,20298
+xmem.dll,XMemMapPhysicalPagesScatter,1,0,implemented,xmem,body of 28 code lines,2108
+xmem.dll,XMemTransferMemory,1,0,implemented,xmem,body of 16 code lines,0
 ADVAPI32.dll,RegCloseKey,1,0,implemented,xsystem,body of 4 code lines; overrides the host,
 ADVAPI32.dll,RegOpenKeyW,1,0,implemented,xsystem,body of 5 code lines; overrides the host,
 ADVAPI32.dll,RegQueryValueExW,1,0,implemented,xsystem,body of 31 code lines; overrides the host,
@@ -506,14 +506,14 @@ WS2_32.dll,#151,1,0,passthrough-to-host,host,DLL allowed by HostPolicy; exported
 WS2_32.dll,#18,1,0,passthrough-to-host,host,DLL allowed by HostPolicy; exported by Wine,
 WS2_32.dll,#22,1,0,passthrough-to-host,host,DLL allowed by HostPolicy; exported by Wine,
 WS2_32.dll,#9,1,0,passthrough-to-host,host,DLL allowed by HostPolicy; exported by Wine,
-xapu.dll,XApuConnect,1,0,stub,apu,a comment in the body says shortcut:,
-AcpHal.dll,ApuCreateHeap,1,0,stub,audio,doc comment says stub/shortcut/not implemented,
-api-ms-win-core-file-l1-1-0.dll,ReadFile,2,2,stub,files,a comment in the body says shortcut:; overrides the host,
-WS2_32.dll,#2,3,0,stub,net,doc comment says stub/shortcut/not implemented; overrides the host,
-xmem.dll,XMemAllocDefault,1,0,stub,xmem,a comment in the body says shortcut:,
-xmem.dll,XMemGetWorkingSetStatistics,1,0,stub,xmem,doc comment says stub/shortcut/not implemented,
-xmem.dll,XMemIsToolsMemAvailable,1,0,stub,xmem,body of 1 code lines that calls nothing (returns a constant),
-xmem.dll,XMemVirtualAlloc,1,0,stub,xmem,a comment in the body says shortcut:,
+xapu.dll,XApuConnect,1,0,stub,apu,a comment in the body says shortcut:,1
+AcpHal.dll,ApuCreateHeap,1,0,stub,audio,doc comment says stub/shortcut/not implemented,1
+api-ms-win-core-file-l1-1-0.dll,ReadFile,2,2,stub,files,a comment in the body says shortcut:; overrides the host,109925
+WS2_32.dll,#2,3,0,stub,net,doc comment says stub/shortcut/not implemented; overrides the host,0
+xmem.dll,XMemAllocDefault,1,0,stub,xmem,a comment in the body says shortcut:,15
+xmem.dll,XMemGetWorkingSetStatistics,1,0,stub,xmem,doc comment says stub/shortcut/not implemented,0
+xmem.dll,XMemIsToolsMemAvailable,1,0,stub,xmem,body of 1 code lines that calls nothing (returns a constant),0
+xmem.dll,XMemVirtualAlloc,1,0,stub,xmem,a comment in the body says shortcut:,19
 XboxBvhBuilder.dll,?BuildRaytracingAccelerationStructureBatched2X@XboxBvhBuilder@@QEAAXPEAUID3D12GraphicsCommandList6@@IPEBUD3D12XBOX_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_BATCHED_DESC2@@@Z,6,2,title-dll,title,"DLL shipped by the title, mapped by the loader",
 XboxBvhBuilder.dll,?Set64BitMortonCodes@XboxBvhBuilder@@QEAAX_N@Z,8,0,title-dll,title,"DLL shipped by the title, mapped by the loader",
 Bink2Scarlett.dll,BinkPause,6,0,title-dll,title,"DLL shipped by the title, mapped by the loader",
