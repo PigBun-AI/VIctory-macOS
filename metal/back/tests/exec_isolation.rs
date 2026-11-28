@@ -99,3 +99,14 @@ fn strict_block_restores_the_stop_of_the_whole_block() {
             .contains("block stopped")
     );
 }
+
+/// A dispatch with no pipeline bound is refused with a reason that names it
+/// (dropstats groups drops by the reason).
+#[test]
+fn a_dispatch_with_no_pipeline_says_why() {
+    let w = world(false);
+    let s = w.fx.submit(&[begin(1, w.q), dispatch(1, 1, 1), end(1)]);
+    assert_eq!(s, Status::INVALID_ARG);
+    let why = w.fx.executor().last_error().unwrap();
+    assert!(why.contains("no compute pipeline bound"), "{why}");
+}
