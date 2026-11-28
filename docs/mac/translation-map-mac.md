@@ -91,7 +91,7 @@
 |---|---|---|---|---|---|
 | mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | unproven | translated |
 | mac.hle.console_model | console model presented to the title: Series X (device type 0x64) vs Series S (0x60) (map id C-R-005) | 1 | log | unproven | translated |
-| mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | gap | unsupported |
+| mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | unproven | unsupported |
 | mac.hle.commit_quota | commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit | 5 | static-census | unproven | stubbed |
 | mac.hle.working_set_statistics | XMemGetWorkingSetStatistics returns limit/used for the title | 1 | static-census | unproven | stubbed |
 | mac.hle.tools_memory | retail answers: no tools memory, transfers bounded | 2 | static-census | unproven | mapped |
@@ -272,11 +272,13 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 | 范围 | 单元数 | proven | unproven | gap |
 |---|---|---|---|---|
-| 全部 used=yes（不含仅参照） | 68 | 25 (36.8%) | 26 (38.2%) | 17 (25.0%) |
-| 指令类（mac.isa.*） | 21 | 15 (71.4%) | 4 | 2 |
-| 其余（loader/fault/hle/res/title/shared/shader/metal） | 47 | 10 (21.3%) | 22 | 15 |
+| 全部 used=yes（不含仅参照） | 69 | 25 (36.2%) | 32 (46.4%) | 12 (17.4%) |
+| 指令类（mac.isa.*） | 21 | 15 (71.4%) | 5 | 1 |
+| 其余（loader/fault/hle/res/title/shared/shader/metal） | 48 | 10 (20.8%) | 27 | 11 |
 
 上一版（本文件第 1 版，未跑 Wine 探针、未剔除仅参照行）：59 个单元 proven 12（20.3%）、unproven 31、gap 16。这版的变化：Wine 探针把 cpuid_xgetbv、bmi_lzcnt_popcnt、fma_f16c、page_size、wide_patch 从 unproven 变 proven；新登记 3 个指令类 gap（lock_cmpxchg16_split、cmpxchg32_rax_hit、rmw_fault_access_type）和 1 个 HLE gap（audio_timer_leak）；7 个 used=yes 的 D3DMetal 行移出统计。
+
+2026-11-28 第二批闭环（mac/map-close2）后从矩阵重算：69 个，proven 25、unproven 32、gap 12（masked_default_off、isa.clwb、low_address_commit 三行 gap→unproven，代码与单元测试已做、待下午运行；新增 mac.hle.console_model 一行 unproven；表里 gap 数此前落后于矩阵，这次一并按矩阵校正）。
 
 2026-11-28 重算（脚本从矩阵算，口径同上：used=yes、去掉 notes 以「仅参照（D3DMetal）」开头的 10 行，共 68 个）。和上次记录（56 个：16/24/16）的差别：矩阵从 70 行增到 87 行，v1 之后加进来的行（shared.rt.*、shader.*、mac.res.*、mac.isa 新行等）计入；本次改动：mac.isa.maskmov_ymm_store_fault_crossing 由 gap 改 proven（L1 加载期补丁改掉全部 masked store 站点，扫描 1233 + 8 个 plain = 1241，审计 0 漏）；新增 3 个 used=yes 的 gap 行：metal.post.auto_exposure、metal.gpu.fidelity_slow_frame、mac.title.hang_watchdog。68 个里含 4 个 shader.*/metal.* 行（shader.ps.attribute_at_vertex proven，shader.mesh.output_size_32k、metal.post.auto_exposure、metal.gpu.fidelity_slow_frame gap）；若只算 v1 范围（去掉 shader.*、metal.* 行）是 64 个：proven 24（37.5%）、unproven 26（40.6%）、gap 14（21.9%）。
 
