@@ -40,6 +40,11 @@ printf '#!/bin/sh\nexec "$WINE" "$@"\n' > "$LINK"
 chmod +x "$LINK"
 export WINEPREFIX="${WINEPREFIX:-$ROOT/target/wineprefix}"
 export WINEDEBUG="${WINEDEBUG:--all}"
+# Rosetta hides AVX/AVX2/BMI/FMA from the process (cpuid leaf 1 ecx bit 28 is 0, OSXSAVE is 0) unless
+# ROSETTA_ADVERTISE_AVX=1 is set; the game runs (victory.sh, tools/mac/run.sh) set it. Tests that
+# look for avx2 (loader write_sites' vector stores, gpu torn.rs / shadow.rs / safecopy.rs) must see the
+# same CPU the game sees, or they take the other path or fail.
+export ROSETTA_ADVERTISE_AVX="${ROSETTA_ADVERTISE_AVX:-1}"
 # A new prefix would wait on hidden Mono and Gecko install prompts, and the
 # tests need neither. Wine's crash dialog is turned off for the same reason.
 export WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
