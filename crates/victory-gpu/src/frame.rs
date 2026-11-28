@@ -46,8 +46,8 @@ fn asked() -> Option<Duration> {
     })
 }
 
-/// `16.667` ??16,667 us; 0 ??zero; negative, more than a second or not a
-/// number ??`None`.
+/// `16.667` → 16,667 us; 0 → zero; negative, more than a second or not a
+/// number → `None`.
 fn parse_ms(spec: &str) -> Option<Duration> {
     let ms = spec.trim().parse::<f64>().ok().filter(|ms| ms.is_finite() && (0.0..=1000.0).contains(ms))?;
     Some(Duration::from_nanos((ms * 1e6).round() as u64))
