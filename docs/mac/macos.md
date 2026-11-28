@@ -144,7 +144,7 @@ Measured on an M1 Max with macOS 27.0 on 26 November 2026, with a wired Xbox 360
 
 Listing the adapter in `EnableHidraw` instead, without SDL, does not work. Wine's XInput reads only HID buttons 1 to 10, in DirectInput's order, and the D-pad only from a hat switch, while Apple's report descriptor puts the D-pad on buttons 12 to 15. The D-pad was lost, and Start, Back and the stick clicks were swapped.
 
-To avoid triggering `try_map_free_area` scans across host Metal mappings when running under an unpatched CrossOver build as well, `xmem::low_guards` leaves 2.75 GiB of bottom-up slack below 4 GiB under Wine (keeping the top ~1 GiB below 4 GiB reserved for 32-bit `XMemVirtualAlloc` requests; `VICTORY_LOW_GUARDS=0` disables the low-address guards; under Wine on macOS they are off by default until a run has shown them safe, `VICTORY_LOW_GUARDS=1` enables them, see PATCHES.md X3), and DirectStorage's whole-section and fallback `xmem` views request addresses at or above 2 TiB via `MapViewOfFile3`.
+To avoid triggering `try_map_free_area` scans across host Metal mappings when running under an unpatched CrossOver build as well, `xmem::low_guards` leaves 2.75 GiB of bottom-up slack below 4 GiB under Wine (keeping the top ~1 GiB below 4 GiB reserved for 32-bit `XMemVirtualAlloc` requests; `VICTORY_LOW_GUARDS=0` disables the low-address guards; under Wine on macOS they are off by default until a run has shown them safe, `VICTORY_LOW_GUARDS=1` enables them, see PATCHES.md X3), and DirectStorage's whole-section and fallback `xmem` views request addresses at or above 2 TiB via `MapViewOfFile3` (also off by default under Wine on macOS; `VICTORY_OWN_VIEW_HIGH=1` enables it).
 
 ## Use D3DMetal 4.0 beta 3
 

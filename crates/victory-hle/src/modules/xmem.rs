@@ -397,12 +397,35 @@ const PAGE: usize = 64 << 10;
 /// gigabytes of host mappings while holding `virtual_mutex`.
 const OWN_VIEW_FLOOR: usize = 2 << 40;
 
+/// Whether our own views start above [`OWN_VIEW_FLOOR`] under Wine:
+/// `VICTORY_OWN_VIEW_HIGH=1` (`true`, `on`) asks for it, `0` (`false`, `off`)
+/// does not, and unset is on except under Wine on macOS (mac X3: not yet run
+/// there, switched on once a `VICTORY_OWN_VIEW_HIGH=1` run has shown it safe).
+/// Off means a plain [`MapViewOfFile`], as before the floor.
+fn own_view_high() -> bool {
+    static ON: LazyLock<bool> = LazyLock::new(|| {
+        own_view_high_from(
+            std::env::var("VICTORY_OWN_VIEW_HIGH").ok().as_deref(),
+            victory_gpu::mac::rosetta::rosetta(),
+        )
+    });
+    *ON
+}
+
+/// [`own_view_high`] for a given `VICTORY_OWN_VIEW_HIGH` value and platform;
+/// shares the switch parsing and the platform default with
+/// [`low_guards`].
+fn own_view_high_from(value: Option<&str>, wine_on_macos: bool) -> bool {
+    low_guards::enabled_from(value, low_guards::default_on(wine_on_macos))
+}
+
 /// Maps `[offset, offset + size)` of `section` writable for our own CPU writes
 /// (DirectStorage destinations), starting at or above [`OWN_VIEW_FLOOR`] under
-/// Wine and falling back to [`MapViewOfFile`] if the host refuses the hint.
+/// Wine ([`own_view_high`]) and falling back to [`MapViewOfFile`] if the host
+/// refuses the hint or the floor is off.
 unsafe fn map_own_view(section: HANDLE, offset: u64, size: usize) -> MEMORY_MAPPED_VIEW_ADDRESS {
     use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
-    if on_wine() {
+    if on_wine() && own_view_high() {
         let mut requirements = MEM_ADDRESS_REQUIREMENTS {
             LowestStartingAddress: OWN_VIEW_FLOOR as *mut c_void,
             HighestEndingAddress: std::ptr::null_mut(),
@@ -2600,6 +2623,21 @@ mod tests {
     /// mac: the kept whole-section view (`Section::window`) and a per-write
     /// view (`View::map`) both start above 2 TiB under Wine.
     #[test]
+    fn own_views_are_high_by_default_except_under_wine_on_macos() {
+        assert!(!own_view_high_from(None, true));
+        assert!(!own_view_high_from(Some(""), true));
+        assert!(own_view_high_from(Some("1"), true));
+        assert!(own_view_high_from(Some(" true "), true));
+        assert!(own_view_high_from(Some("on"), true));
+        assert!(!own_view_high_from(Some("0"), true));
+        assert!(own_view_high_from(None, false));
+        assert!(own_view_high_from(Some("junk"), false));
+        assert!(!own_view_high_from(Some("0"), false));
+        assert!(!own_view_high_from(Some("off"), false));
+        assert!(own_view_high_from(Some("1"), false));
+    }
+
+    #[test]
     fn own_section_views_start_above_two_tib_under_wine() {
         use windows_sys::Win32::System::Memory::UnmapViewOfFile;
         let pages = allocate(2);
@@ -2609,7 +2647,7 @@ mod tests {
         // per-write `View::map` path as well.
         let one = unsafe { map_own_view(slice.section.handle, (slice.index * PAGE) as u64, PAGE) };
         assert!(!one.Value.is_null());
-        if on_wine() {
+        if on_wine() && own_view_high() {
             assert!(
                 whole >= OWN_VIEW_FLOOR,
                 "whole view {whole:#x} below {OWN_VIEW_FLOOR:#x}"
@@ -2677,14 +2715,14 @@ pub mod low_guards {
     /// Whether the guards are on when `VICTORY_LOW_GUARDS` is unset: on
     /// everywhere except Wine on macOS (mac X3: not yet run there, switched
     /// on once a `VICTORY_LOW_GUARDS=1` run has shown it safe).
-    const fn default_on(wine_on_macos: bool) -> bool {
+    pub(super) const fn default_on(wine_on_macos: bool) -> bool {
         !wine_on_macos
     }
 
     /// Whether `VICTORY_LOW_GUARDS` leaves low-address guards enabled:
     /// `1`/`true`/`on` enable, `0`/`false`/`off` disable, anything else
     /// (unset, empty) is `default`.
-    fn enabled_from(value: Option<&str>, default: bool) -> bool {
+    pub(super) fn enabled_from(value: Option<&str>, default: bool) -> bool {
         let Some(v) = value.map(str::trim) else {
             return default;
         };
