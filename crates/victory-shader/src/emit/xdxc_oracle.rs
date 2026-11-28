@@ -1433,6 +1433,11 @@ mod tests {
         let dx = ["0", "1"].map(|w| translated(&c,&vec![("VICTORY_WAVE_WIDE".into(), w.into())]).unwrap().dxil);
         eprintln!("tail_alloc wave64=true translated sizes {:?}, distinct={}", dx.each_ref().map(|d| d.len()), dx[0]!=dx[1]);
         assert_ne!(key_of(&[&dx[0]]),key_of(&[&dx[1]]),"not a discriminating wave64 regression");
+        // check.sh builds/translates the form without an executor; shader-hw.sh checks both GPU verdicts.
+        if std::env::var_os("VICTORY_SHADER_EXEC").is_none() {
+            report("tail_alloc execution", &skip("no executor: VICTORY_SHADER_EXEC is not set"));
+            return;
+        }
         let src = words(256, 83, |x| (x & 255) | (7 << 8));
         let how = Compare { ulps: 0, canon: Some(|i, w| {
             if i != 0 { return w.to_vec(); }
