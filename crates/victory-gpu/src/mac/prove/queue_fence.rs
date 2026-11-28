@@ -137,3 +137,24 @@ fn allocators_and_lists_reset_and_the_healthy_device_is_not_removed() {
     let device = crate::device::device();
     assert_eq!(slot::<extern "system" fn(This) -> HRESULT>(device, 0x128)(device), S_OK, "GetDeviceRemovedReason of a healthy device");
 }
+
+/// `SetEventOnCompletion(v, NULL)` blocks until the fence reaches `v` (the spec: "if hEvent is NULL, the function does
+/// not return until the fence reaches the value"); it used to return E_NOTIMPL at once (matrix shared.fence.wait).
+#[test]
+fn a_blocking_wait_returns_when_another_thread_signals() {
+    let f = fence(0);
+    let at = f as usize;
+    let signaller = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let f = at as This;
+        assert_eq!(slot::<FenceSignal>(f, 0x50)(f, 3), S_OK);
+    });
+    let started = std::time::Instant::now();
+    assert_eq!(slot::<SetEvent>(f, 0x48)(f, 3, std::ptr::null_mut()), S_OK);
+    assert!(completed(f) >= 3, "returned only when the value was reached");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(3), "it did block");
+    signaller.join().unwrap();
+    // an already reached value returns at once
+    assert_eq!(slot::<SetEvent>(f, 0x48)(f, 2, std::ptr::null_mut()), S_OK);
+    assert_eq!(slot::<Release>(f, 0x10)(f), 0);
+}

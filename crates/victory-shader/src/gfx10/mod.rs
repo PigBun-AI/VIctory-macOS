@@ -342,6 +342,9 @@ fn isa(offset: usize, reason: &'static str) -> ShaderError {
 }
 
 #[cfg(test)]
+mod llvm_tests; // mac G12
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

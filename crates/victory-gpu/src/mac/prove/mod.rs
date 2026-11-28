@@ -9,3 +9,6 @@ mod queue_fence;
 
 #[cfg(test)]
 mod device_slots;
+
+#[cfg(test)]
+mod device_features;
