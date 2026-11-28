@@ -85,8 +85,8 @@ fn setup() -> Option<Fxs> {
     let ps = dxil_or_skip("clip_rect_ps", "ps_6_6", PS)?;
     let gs = victory_shader::emit::rect_list_gs(&vs, Some(&ps)).expect("the rectangle stage");
     assert!(
-        victory_shader::emit::writes_clip_distance(&vs),
-        "the test's vertex shader writes no clip distance"
+        !victory_shader::emit::writes_clip_distance(&vs),
+        "the test's vertex shader must carry the distances as a plain output, as the translator's variant does"
     );
     let fx = Fx::new();
     let q = fx.queue();
