@@ -37,6 +37,8 @@ fork's has one, pointing at `tools/macos/gnullvm-cc.sh`, which needs Homebrew's 
 
 ## Patches
 
+**Map tooling — symptom priority.** `tools/mac/matrix-priority.py` validates the Mac file by column name and prints remaining work in priority order; `check.sh` runs its offline contract test. No title, launcher or host behavior is changed. Retire the local reader/test when a shared matrix tool validates Mac-owned rows (including costs on proven rows) and emits the same Mac-only view.
+
 ### M1 — builds and tests natively on macOS (commit `31b87a11`)
 
 *What.* The Windows line only compiles on Windows: new code names `cfg(windows)` modules and

@@ -40,6 +40,7 @@ step() {
     return 0
 }
 
+step "Mac matrix contract" "$LOGS/matrix-test.log" tail -- python3 tools/mac/test-matrix-priority.py
 step "native build" "$LOGS/native-build.log" tail -- cargo build --workspace --locked
 step "native tests" "$LOGS/native-test.log" tests -- cargo test --workspace --locked --no-fail-fast
 step "cross build"  "$LOGS/cross-build.log" tail -- cargo build --release -p victory --target x86_64-pc-windows-gnullvm --locked

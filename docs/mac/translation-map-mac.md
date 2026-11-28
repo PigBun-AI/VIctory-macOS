@@ -1,6 +1,6 @@
 # 转译地图 + 覆盖矩阵（Mac/Wine 段 第 1 版）
 
-日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（118 行，2026-11-28 重算；列见文末）。
+日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（206 行，2026-11-28 17:45 基线；第 8 节是当前派工顺序。正文历史覆盖率各按其标注的快照读取）。
 范围：Rosetta 指令语义、加载期补丁、故障跟踪与异常、HLE（内存/线程/文件/DirectStorage），加上共享层（victory-gpu，接缝 A 之前）的骨架行（owner=shared）。Metal 后端、着色器翻译不在本文件。
 
 ## 0. 一眼看结论
@@ -354,8 +354,32 @@ disposition 分布（全部 92 行，含仅参照行）：emulated 23，mapped 1
 
 ## 8. 矩阵列
 
-`id,chain,hop,unit,owner,used,freq,freq_source,tests,reference,reference_detail,status,disposition,xbox_hw,deviation,restore_plan,notes`（deviation、restore_plan 只对 emulated/stubbed/unsupported 行填写；translated 行的风险与后续写在 notes 里以“Risk:”“Next:”标出）。
+`id,chain,hop,unit,owner,used,freq,freq_source,tests,reference,reference_detail,status,disposition,xbox_hw,deviation,restore_plan,notes,symptom,cost`（deviation、restore_plan 只对 emulated/stubbed/unsupported 行填写；translated 行的风险与后续写在 notes 里以“Risk:”“Next:”标出）。
 
+
+### 8.1 按症状派工（2026-11-28；17:45 拉取，推前纳入 ev1930）
+
+与 `research/map-plan/symptom-format.md`（Metal 分支维护同文 `docs/metal/symptom-format.md`）一致。第 18 列 `symptom` 必填：`geomN colorN flickerN slowN crashN`，依次是缺几何、错色/发白发暗、画面不稳、慢帧、崩溃。0 无关，1 局部或可能，2 明显，3 整屏或失去本次运行。描述出错后果，不是故障概率；proven 行也保留反事实分数。尾标 `估` 是症状估分，`freq=floor` 是有实测复现证据但没有可直接解析的数值频次，`closed` 是已修待复核，`summary` 是由其他节点承接的汇总。
+
+第 19 列 `cost` 为人时，`估` 后缀单指成本估计，不等于症状估分。计划中 1 天按 8 人时、区间取中点；找不到成本填 `4估`，proven 留空。优先分 = `log10(freq+1) × max(五项症状) / max(cost, 0.25)`。频次列按完整数值解析；其他文字/未知按 1，带 `freq=floor` 的按 10,000（不是声称实测发生一万次）。`used=no`、proven、closed、summary、仅参照（D3DMetal）不参与。未取整分降序，同分按 id。下面是 Mac 文件全部 owner 的节点视图，不是仅筛 owner=mac；运行 `python3 tools/mac/matrix-priority.py` 可重建。
+
+| # | 节点 | 有效频次 | 最高症状分 | 人时 | 得分 |
+|---:|---|---:|---:|---:|---:|
+| 1 | mac.isa.lock_cmpxchg16_split | 333 | 2 | 0.5 | 10.094986 |
+| 2 | mac.title.int3_self_exit_r6 | 10000 (freq=floor) | 3 | 3 | 4.000043 |
+| 3 | mac.title.srl_prestream_stall | 10000 (freq=floor) | 3 | 4估 | 3.000033 |
+| 4 | metal.post.auto_exposure | 10000 (freq=floor) | 3 | 4估 | 3.000033 |
+| 5 | shared.drop.cbv_unaligned | 357134 | 2 | 4估 | 2.776416 |
+| 6 | mac.isa.adx | 2678 | 3 | 4估 | 2.570980 |
+| 7 | shared.rt.bvh_build | 1168 | 3 | 4估 | 2.300861 |
+| 8 | shader.mesh.output_size_32k | 8765 | 2 | 4估 | 1.971401 |
+| 9 | mac.isa.tso_ordering | 2665 | 2 | 4 | 1.712930 |
+| 10 | shared.drop.buffer_view_refused | 132 | 2 | 4估 | 1.061926 |
+| 11 | shared.rt.resolve | 570 | 3 | 8估 | 1.033739 |
+| 12 | mac.title.hang_watchdog | 1 (freq=unknown) | 3 | 1 | 0.903090 |
+| 13 | C-V-016 | 3487 | 2 | 8 | 0.885644 |
+| 14 | shared.drop.copy_self | 34 | 2 | 4估 | 0.772034 |
+| 15 | mac.isa.amd_only | 33 | 2 | 4 | 0.765739 |
 
 ## 9. 方法与验收
 
