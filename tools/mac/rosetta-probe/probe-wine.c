@@ -697,7 +697,7 @@ static int batch_atomic_split(void) {
 #include "isa-intsh.h"
 #include "isa-compare.h"
 #include "isa-shuffle.h"
-#include "isa-sse.h"
+#include "isa-iarith.h"
 #include "isa-cflow.h"
 
 // ---------- main ----------
@@ -731,7 +731,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[2], "avx_compare")) f = batch_ops("avx_compare", reg_compare_ops, argc > 3 ? argv[3] : NULL, plan_cmp);
         else if (!strcmp(argv[2], "avx_shuffle")) f = batch_ops("avx_shuffle", reg_shuffle_ops, argc > 3 ? argv[3] : NULL, plan_shuf);
         else if (!strcmp(argv[2], "x86_control_flow")) f = batch_ops("x86_control_flow", reg_cflow_ops, argc > 3 ? argv[3] : NULL, plan_cf);
-        else if (!strcmp(argv[2], "x86_sse_legacy")) f = batch_ops("x86_sse_legacy", reg_sse_ops, argc > 3 ? argv[3] : NULL, plan_sse);
+        else if (!strcmp(argv[2], "avx_int_arith")) f = batch_ops("avx_int_arith", reg_iarith_ops, argc > 3 ? argv[3] : NULL, plan_ia);
         else if (!strcmp(argv[2], "avx_move")) f = batch_ops("avx_move", reg_move_ops, argc > 3 ? argv[3] : NULL, plan_default);
         else { say("unknown batch\n"); return 2; }
         return f ? 1 : 0;
