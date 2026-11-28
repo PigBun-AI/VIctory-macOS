@@ -605,6 +605,21 @@ a 32-bit load. Three remain which the linear analysis could not decide (RVAs `0x
 CAS loops whose eax comes from a 32-bit `mov eax,[..]`, the third `cmpxchg [rcx+0x14], edx` followed by `vmovd xmm1, eax`, which
 reads only EAX): no exposure found, no patch.
 
+### G11 — `VICTORY_MAC_LAYOUT_STATS=1`: which texture layouts the title creates (`victory-gpu/src/mac/layout_stats.rs`, 1 hook in `resource.rs` `hand_out_resource`)
+
+*What.* Counts every texture the title creates by dimension, layout field (`0x100 | swizzle mode`), render-target/depth flags,
+element size, block, and whether it has mips, depth/array, or samples; logs one `layout stats:` line per distinct key when
+the texture count reaches 256, 512, ... and the number of textures whose mode the detiler cannot address (XOR modes `_T`/`_X`).
+Off unless set (one atomic load per texture). Nothing the title or the host sees changes.
+
+*Why.* Map rows C-V-003 (detile) and C-V-005 (tile modes): the detiler is proven against addrlib for the modes without XOR
+(`victory-formats/tests/addrlib_golden.rs`), and for sizes of the XOR modes; which modes the title really uses was never
+counted (the capture `frame.bin` holds host-side descriptions only). The count decides whether XOR addressing (needs the
+per-surface pipe-bank XOR) is worth writing.
+
+*Why not needed on Windows.* The Windows line has the same detiler and the same question; this is a measurement, not a fix. *Remove when*
+the census has been read and the answer is in the map row.
+
 ### H1 — `SuspendThread` only for the title's own threads (commit `5050245c`)
 
 New `victory-hle/src/modules/mac.rs`, registered in `modules/mod.rs` **only when `rosetta()`**,

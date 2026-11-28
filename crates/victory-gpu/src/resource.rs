@@ -2682,6 +2682,9 @@ fn hand_out_resource(
         desc.sample_count,
         desc.flags,
     ); // mac P2
+    if desc.dimension != BUFFER {
+        crate::mac::layout_stats::texture(desc.dimension, desc.layout, desc.flags, desc.format, desc.mip_levels, desc.depth_or_array_size, desc.sample_count); // mac G11
+    }
     let resource = Box::new(Resource {
         object: Object::new(&RESOURCE_FUNCTIONS),
         desc,

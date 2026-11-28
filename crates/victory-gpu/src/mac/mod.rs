@@ -8,6 +8,7 @@ pub mod attribute_at_vertex; // mac S1
 pub mod drop_stats;
 pub mod frames;
 pub mod hlsl;
+pub mod layout_stats; // mac G11
 pub mod present_cap;
 pub mod pso_x;
 pub mod render_size;
