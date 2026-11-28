@@ -20,10 +20,30 @@ use crate::memory::{Buffer, BufferKind};
 use crate::queue::Queue;
 use crate::texture::{TexDim, Texture};
 
-/// Whether the switch is on (read once).
+/// The byte new memory is filled with, read once: 0 for `VICTORY_METAL_ZERO_INIT=1`, 0x7F for
+/// `VICTORY_METAL_POISON_INIT=1` (the reverse control: memory that is plainly not zero, so a
+/// title that reads before it writes shows it every run), `None` when neither is set.
+pub fn fill_value() -> Option<u8> {
+    static V: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        let on = |n: &str| std::env::var_os(n).is_some_and(|v| v != "0");
+        if on("VICTORY_METAL_POISON_INIT") {
+            Some(0x7F)
+        } else if on("VICTORY_METAL_ZERO_INIT") {
+            Some(0)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether either switch is on.
 pub fn enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_ZERO_INIT").is_some_and(|v| v != "0"))
+    fill_value().is_some()
+}
+
+fn value() -> u8 {
+    fill_value().unwrap_or(0)
 }
 
 fn log(what: &str) {
@@ -48,13 +68,13 @@ fn run(
 pub fn buffer(device: &Device, b: &Buffer) {
     let len = b.len();
     let r = match b.kind() {
-        BufferKind::Default => run(device, |l| l.fill_buffer(b, 0, len, 0)),
+        BufferKind::Default => run(device, |l| l.fill_buffer(b, 0, len, value())),
         BufferKind::Wrapped => return,
         _ => {
             let p = b.cpu_addr() as *mut u8;
             if !p.is_null() {
                 // SAFETY: the buffer's CPU mapping is `len` bytes long and nobody else has it yet.
-                unsafe { std::ptr::write_bytes(p, 0, len as usize) };
+                unsafe { std::ptr::write_bytes(p, value(), len as usize) };
             }
             Ok(())
         }
@@ -69,7 +89,7 @@ pub fn heap(device: &Device, h: &Heap) {
     let size = h.size();
     let r = h
         .create_buffer(device, 0, size)
-        .and_then(|b| run(device, |l| l.fill_buffer(&b, 0, size, 0)));
+        .and_then(|b| run(device, |l| l.fill_buffer(&b, 0, size, value())));
     if let Err(e) = r {
         log(&format!("heap of {size} bytes: {e}"));
     }
