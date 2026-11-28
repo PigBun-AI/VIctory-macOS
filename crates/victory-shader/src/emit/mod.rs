@@ -91,6 +91,8 @@ pub mod wire;
 mod container;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod cube_lod_tests;
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac F1: the rounding of 16-bit results on the host, over every input
+mod f16_hw_tests;
 #[cfg(all(test, windows))]
 mod diff_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
