@@ -13,7 +13,7 @@ use victory_metal_back::device::Device;
 use victory_metal_back::format::dxgi;
 use victory_metal_back::memory::{Buffer, BufferKind};
 use victory_metal_back::msc::{
-    self, CompileOptions, Compat, MscError, ParamKind, RootSignatureDesc, ShaderPipeline,
+    self, Compat, CompileOptions, MscError, ParamKind, RootSignatureDesc, ShaderPipeline,
     Visibility, flags as root_flags,
 };
 use victory_metal_back::queue::Queue;
@@ -226,7 +226,8 @@ fn texels_bytes(t: &[f32]) -> Vec<u8> {
 
 impl Runner {
     pub fn new() -> Result<Runner, Failure> {
-        let device = Device::new().map_err(|e| Failure::Unsupported(format!("no Metal 4 device: {e}")))?;
+        let device =
+            Device::new().map_err(|e| Failure::Unsupported(format!("no Metal 4 device: {e}")))?;
         let queue = Queue::new(&device).map_err(from_back)?;
         // The game's executor builds with bounds checking (exec/mod.rs). The
         // proofs compare against D3D12's NaN and infinity results, so MSC's
@@ -273,7 +274,9 @@ impl Runner {
             .compute_pipeline_from_dxil(dxil, Some(&desc), &options)
             .map_err(from_msc)?;
         if made.reflection.threadgroup_size.contains(&0) {
-            return Err(Failure::Failed("the shader reports no thread group size".into()));
+            return Err(Failure::Failed(
+                "the shader reports no thread group size".into(),
+            ));
         }
         self.pipelines.insert(key, made);
         Ok(())
@@ -311,7 +314,9 @@ impl Runner {
             match v {
                 View::Texture { .. } | View::Cube { .. } => {
                     let (w, h, faces, mips, texels) = match v {
-                        View::Cube { size, mips, texels } => (*size, *size, 6u32, (*mips).max(1), texels),
+                        View::Cube { size, mips, texels } => {
+                            (*size, *size, 6u32, (*mips).max(1), texels)
+                        }
                         View::Texture { w, h, texels } => (*w, *h, 1, 1, texels),
                         _ => unreachable!(),
                     };
@@ -339,8 +344,11 @@ impl Runner {
                         rest = tail;
                         let mut bytes = vec![0u8; (pitch * mh) as usize];
                         for y in 0..mh as usize {
-                            let row = texels_bytes(&level[y * mw as usize * 4..(y + 1) * mw as usize * 4]);
-                            bytes[y * pitch as usize..y * pitch as usize + row.len()].copy_from_slice(&row);
+                            let row = texels_bytes(
+                                &level[y * mw as usize * 4..(y + 1) * mw as usize * 4],
+                            );
+                            bytes[y * pitch as usize..y * pitch as usize + row.len()]
+                                .copy_from_slice(&row);
                         }
                         let up = dev
                             .create_buffer(BufferKind::Upload, bytes.len() as u64)
@@ -348,15 +356,31 @@ impl Runner {
                         up.write(0, &bytes).map_err(from_back)?;
                         upload
                             .copy_buffer_to_texture(
-                                &TexLoc { texture: &tex, mip, slice, plane: 0, origin: [0; 3] },
-                                &BufLoc { buffer: &up, offset: 0, format: desc.format, row_pitch: pitch, rows: mh },
+                                &TexLoc {
+                                    texture: &tex,
+                                    mip,
+                                    slice,
+                                    plane: 0,
+                                    origin: [0; 3],
+                                },
+                                &BufLoc {
+                                    buffer: &up,
+                                    offset: 0,
+                                    format: desc.format,
+                                    row_pitch: pitch,
+                                    rows: mh,
+                                },
                                 [mw, mh, 1],
                             )
                             .map_err(from_back)?;
                         uploads += 1;
                         keep.push(up);
                     }
-                    let spec = ViewSpec::whole(if faces == 6 { ViewDim::Cube } else { ViewDim::D2 });
+                    let spec = ViewSpec::whole(if faces == 6 {
+                        ViewDim::Cube
+                    } else {
+                        ViewDim::D2
+                    });
                     let id = tex.view(&spec).map_err(from_back)?;
                     heap.write(at, IrDescriptorTableEntry::texture(id, 0.0, 0))
                         .map_err(from_back)?;
@@ -370,16 +394,22 @@ impl Runner {
                 View::HalfUav(e) => {
                     let n = 2 * *e;
                     let b = shared(dev, &[], n as usize)?;
-                    let f = typed_format(dxgi::R16G16B16A16_FLOAT)
-                        .ok_or_else(|| Failure::Unsupported("no typed R16G16B16A16_FLOAT".into()))?;
+                    let f = typed_format(dxgi::R16G16B16A16_FLOAT).ok_or_else(|| {
+                        Failure::Unsupported("no typed R16G16B16A16_FLOAT".into())
+                    })?;
                     heap.write_typed_buffer(at, &b, &f, 0, u64::from(*e), ViewAccess::ReadWrite)
                         .map_err(from_back)?;
                     outs.push(Out::Buffer(b, n));
                 }
-                View::TypedUav { data, format, elem_bytes } => {
+                View::TypedUav {
+                    data,
+                    format,
+                    elem_bytes,
+                } => {
                     let b = shared(dev, data, 0)?;
-                    let f = typed_format(*format)
-                        .ok_or_else(|| Failure::Unsupported(format!("no typed view of DXGI format {format}")))?;
+                    let f = typed_format(*format).ok_or_else(|| {
+                        Failure::Unsupported(format!("no typed view of DXGI format {format}"))
+                    })?;
                     let elements = (data.len() as u64 * 4) / u64::from(*elem_bytes);
                     heap.write_typed_buffer(at, &b, &f, 0, elements, ViewAccess::ReadWrite)
                         .map_err(from_back)?;
@@ -430,7 +460,9 @@ impl Runner {
                                 _ => (dxgi::R32G32B32A32_FLOAT, 16),
                             };
                             let f = typed_format(format).ok_or_else(|| {
-                                Failure::Unsupported(format!("no typed view of DXGI format {format}"))
+                                Failure::Unsupported(format!(
+                                    "no typed view of DXGI format {format}"
+                                ))
                             })?;
                             let elements = (data.len() as u64 * 4) / u64::from(bytes);
                             heap.write_typed_buffer(at, &b, &f, 0, elements, ViewAccess::Read)
@@ -448,11 +480,14 @@ impl Runner {
             self.run_list(upload)?;
         }
         // Samplers.
-        let sampler_heap = DescriptorHeap::new(dev, d.samplers.len().max(1) as u32).map_err(from_back)?;
+        let sampler_heap =
+            DescriptorHeap::new(dev, d.samplers.len().max(1) as u32).map_err(from_back)?;
         let mut samplers = Vec::new();
         for (i, s) in d.samplers.iter().enumerate() {
             let smp = dev.create_sampler(&sampler_spec(s)).map_err(from_back)?;
-            sampler_heap.write(i as u32, smp.entry()).map_err(from_back)?;
+            sampler_heap
+                .write(i as u32, smp.entry())
+                .map_err(from_back)?;
             samplers.push(smp);
         }
         // The top-level argument buffer, laid out by MSC.
@@ -464,7 +499,9 @@ impl Runner {
         tlab.zero();
         for (param, arg) in &d.roots {
             let Some(entry) = r.layout.entries.get(*param as usize) else {
-                return Err(Failure::Failed(format!("root parameter {param} is not in the layout")));
+                return Err(Failure::Failed(format!(
+                    "root parameter {param} is not in the layout"
+                )));
             };
             let off = u64::from(entry.offset);
             match arg {
@@ -486,7 +523,8 @@ impl Runner {
         if let Some(idx) = r.layout.static_sampler_table
             && let Some(entry) = r.layout.entries.get(idx)
         {
-            let table = DescriptorHeap::new(dev, root.samplers.len().max(1) as u32).map_err(from_back)?;
+            let table =
+                DescriptorHeap::new(dev, root.samplers.len().max(1) as u32).map_err(from_back)?;
             for (i, s) in root.samplers.iter().enumerate() {
                 let spec = sampler_spec(&req::Sampler {
                     filter: s.filter,
@@ -521,8 +559,20 @@ impl Runner {
             for o in &outs {
                 if let Out::Texture(t) = o {
                     l.copy_texture_to_buffer(
-                        &BufLoc { buffer: &t.readback, offset: 0, format: t.format, row_pitch: t.pitch, rows: t.height },
-                        &TexLoc { texture: &t.texture, mip: 0, slice: 0, plane: 0, origin: [0; 3] },
+                        &BufLoc {
+                            buffer: &t.readback,
+                            offset: 0,
+                            format: t.format,
+                            row_pitch: t.pitch,
+                            rows: t.height,
+                        },
+                        &TexLoc {
+                            texture: &t.texture,
+                            mip: 0,
+                            slice: 0,
+                            plane: 0,
+                            origin: [0; 3],
+                        },
                         [t.width, t.height, 1],
                     )
                     .map_err(from_back)?;

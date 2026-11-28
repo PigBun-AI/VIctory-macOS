@@ -29,15 +29,14 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle(&frame, &mut runner)
-        }))
-        .unwrap_or_else(|_| {
-            let mut w = W::default();
-            w.u8(status::FAILED);
-            w.str("the executor panicked");
-            w.0
-        });
+        let reply =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&frame, &mut runner)))
+                .unwrap_or_else(|_| {
+                    let mut w = W::default();
+                    w.u8(status::FAILED);
+                    w.str("the executor panicked");
+                    w.0
+                });
         if wire::write_frame(&mut output, &reply).is_err() {
             return;
         }
@@ -56,6 +55,8 @@ fn main() {
             run::Failure::Failed(t) => fail(status::FAILED, &t),
         }
     }
+
+    type Parsed<'a> = (u64, req::Root, &'a [u8], Option<req::Dispatch>);
 
     fn handle(frame: &[u8], runner: &mut Option<Result<run::Runner, String>>) -> Vec<u8> {
         let mut r = R::new(frame);
@@ -89,7 +90,7 @@ fn main() {
                 w.0
             }
             op::COMPILE | op::DISPATCH => {
-                let res = (|| -> Result<(u64, req::Root, &[u8], Option<req::Dispatch>), String> {
+                let res = (|| -> Result<Parsed, String> {
                     let root = req::root(&mut r)?;
                     let dxil = r.bytes()?;
                     let key = run::key_of(r.consumed());

@@ -62,6 +62,7 @@ impl W {
     pub fn u32(&mut self, v: u32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
+    #[cfg(test)]
     pub fn f32(&mut self, v: f32) {
         self.u32(v.to_bits());
     }
@@ -106,7 +107,9 @@ impl<'a> R<'a> {
         Ok(self.take(1)?[0])
     }
     pub fn u32(&mut self) -> Res<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().expect("4 bytes")))
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("4 bytes"),
+        ))
     }
     pub fn f32(&mut self) -> Res<f32> {
         Ok(f32::from_bits(self.u32()?))
@@ -115,15 +118,14 @@ impl<'a> R<'a> {
         let n = self.u32()? as usize;
         self.take(n)
     }
-    pub fn str(&mut self) -> Res<String> {
-        Ok(String::from_utf8_lossy(self.bytes()?).into_owned())
-    }
     pub fn u32s(&mut self) -> Res<Vec<u32>> {
         let n = self.u32()? as usize;
         let raw = self.take(n.checked_mul(4).ok_or("overflow")?)?;
         Ok(raw
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().expect("4 bytes")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect())
     }
     /// The bytes read so far (the cache key of a request is its prefix).
@@ -154,8 +156,8 @@ mod tests {
         assert_eq!(
             w.0,
             [
-                7, 4, 3, 2, 1, 0, 0, 0xC0, 0x3F, 2, 0, 0, 0, b'a', b'b', 2, 0, 0, 0, 1, 0, 0, 0,
-                2, 0, 0, 0
+                7, 4, 3, 2, 1, 0, 0, 0xC0, 0x3F, 2, 0, 0, 0, b'a', b'b', 2, 0, 0, 0, 1, 0, 0, 0, 2,
+                0, 0, 0
             ]
         );
         let mut r = R::new(&w.0);
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(r.bytes().unwrap(), b"ab");
         assert_eq!(r.u32s().unwrap(), vec![1, 2]);
         r.end().unwrap();
-        assert!(R::new(&w.0[..3]).u32().is_ok() == false);
+        assert!(R::new(&[1, 2, 3]).u32().is_err());
         assert!(R::new(&[5, 0, 0, 0, 1]).bytes().is_err());
     }
 

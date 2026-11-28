@@ -45,7 +45,10 @@ pub struct Root {
 pub enum Arg {
     Constants(Vec<u32>),
     /// A root CBV (or SRV) over a buffer of these dwords.
-    View { srv: bool, data: Vec<u32> },
+    View {
+        srv: bool,
+        data: Vec<u32>,
+    },
     /// A root UAV over a zeroed buffer of this many dwords.
     Uav(u32),
 }
@@ -63,16 +66,37 @@ pub enum Stride {
 #[derive(Clone, Debug, PartialEq)]
 pub enum View {
     /// RGBA32F texture SRV.
-    Texture { w: u32, h: u32, texels: Vec<f32> },
+    Texture {
+        w: u32,
+        h: u32,
+        texels: Vec<f32>,
+    },
     /// RGBA32F cube SRV, texels in D3D12 subresource order (face-major).
-    Cube { size: u32, mips: u32, texels: Vec<f32> },
+    Cube {
+        size: u32,
+        mips: u32,
+        texels: Vec<f32>,
+    },
     RawUav(u32),
-    TextureUav { w: u32, h: u32 },
-    UintTextureUav { w: u32, h: u32 },
+    TextureUav {
+        w: u32,
+        h: u32,
+    },
+    UintTextureUav {
+        w: u32,
+        h: u32,
+    },
     HalfUav(u32),
-    TypedUav { data: Vec<u32>, format: u32, elem_bytes: u32 },
+    TypedUav {
+        data: Vec<u32>,
+        format: u32,
+        elem_bytes: u32,
+    },
     Cbv(Vec<u32>),
-    Buffer { data: Vec<u32>, stride: Stride },
+    Buffer {
+        data: Vec<u32>,
+        stride: Stride,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -251,8 +275,20 @@ mod tests {
         assert_eq!(
             root.params,
             vec![
-                Param { kind: 0, vis: 0, register: 0, space: 7, n32: 4 },
-                Param { kind: 3, vis: 0, register: 2, space: 9, n32: 0 },
+                Param {
+                    kind: 0,
+                    vis: 0,
+                    register: 0,
+                    space: 7,
+                    n32: 4
+                },
+                Param {
+                    kind: 3,
+                    vis: 0,
+                    register: 2,
+                    space: 9,
+                    n32: 0
+                },
             ]
         );
     }
