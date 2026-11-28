@@ -46,6 +46,7 @@
 mod dxil;
 mod emu;
 mod gfx;
+pub use gfx::graphics_pipeline_for_host;
 mod handles;
 mod indirect;
 mod present;

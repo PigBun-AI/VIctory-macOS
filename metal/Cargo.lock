@@ -460,6 +460,7 @@ name = "victory-metal-shader-exec"
 version = "0.1.0"
 dependencies = [
  "victory-metal-back",
+ "victory-metal-proto",
 ]
 
 [[package]]

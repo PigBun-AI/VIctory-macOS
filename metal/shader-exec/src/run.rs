@@ -10,6 +10,10 @@ use std::hash::{Hash, Hasher};
 use victory_metal_back::copy::{BufLoc, TexLoc};
 use victory_metal_back::descriptors::{DescriptorHeap, IrDescriptorTableEntry};
 use victory_metal_back::device::Device;
+use victory_metal_back::draw::{
+    ColorAttachment, DepthAttachment, DrawArgs, Load, PassSpec, Primitive, Stores, TargetSpec,
+    ViewportRect,
+};
 use victory_metal_back::format::dxgi;
 use victory_metal_back::memory::{Buffer, BufferKind};
 use victory_metal_back::msc::{
@@ -17,6 +21,7 @@ use victory_metal_back::msc::{
     Visibility, flags as root_flags,
 };
 use victory_metal_back::queue::Queue;
+use victory_metal_back::render::GraphicsPipeline;
 use victory_metal_back::sampler::{Address, Border, Compare, Filter, SamplerSpec};
 use victory_metal_back::stages;
 use victory_metal_back::texture::{TexDim, Texture, TextureDesc, ViewDim, ViewSpec};
@@ -64,6 +69,7 @@ pub struct Runner {
     device: Device,
     queue: Queue,
     pipelines: HashMap<u64, ShaderPipeline>,
+    graphics: HashMap<u64, GraphicsPipeline>,
     compat: Compat,
 }
 
@@ -245,6 +251,7 @@ impl Runner {
             device,
             queue,
             pipelines: HashMap::new(),
+            graphics: HashMap::new(),
             compat,
         })
     }
@@ -301,6 +308,97 @@ impl Runner {
     ) -> Result<Vec<Vec<u32>>, Failure> {
         self.compile(key, root, dxil)?;
         let sp = &self.pipelines[&key];
+        let r = &sp.reflection;
+        let Bound {
+            heap,
+            sampler_heap,
+            tlab,
+            outs,
+            keep,
+        } = self.bind(&r.layout, root, d)?;
+        let mut l = self.queue.begin_list().map_err(from_back)?;
+        l.set_heaps(&heap, Some(&sampler_heap)).map_err(from_back)?;
+        l.set_root_arguments(&tlab).map_err(from_back)?;
+        l.dispatch(&sp.pipeline, d.groups, r.threadgroup_size)
+            .map_err(from_back)?;
+        if outs.iter().any(|o| matches!(o, Out::Texture(_))) {
+            l.barrier(stages::DISPATCH, stages::BLIT, stages::VIS_DEVICE)
+                .map_err(from_back)?;
+            for o in &outs {
+                if let Out::Texture(t) = o {
+                    l.copy_texture_to_buffer(
+                        &BufLoc {
+                            buffer: &t.readback,
+                            offset: 0,
+                            format: t.format,
+                            row_pitch: t.pitch,
+                            rows: t.height,
+                        },
+                        &TexLoc {
+                            texture: &t.texture,
+                            mip: 0,
+                            slice: 0,
+                            plane: 0,
+                            origin: [0; 3],
+                        },
+                        [t.width, t.height, 1],
+                    )
+                    .map_err(from_back)?;
+                }
+            }
+        }
+        self.run_list(l)?;
+        let mut out = Vec::new();
+        for o in &outs {
+            out.push(match o {
+                Out::Buffer(b, n) => b.read_u32s(0, *n as usize).map_err(from_back)?,
+                Out::Texture(t) => {
+                    let row = (t.width * t.words) as usize;
+                    let mut all = Vec::with_capacity(row * t.height as usize);
+                    for y in 0..t.height {
+                        all.extend(
+                            t.readback
+                                .read_u32s(u64::from(y * t.pitch), row)
+                                .map_err(from_back)?,
+                        );
+                    }
+                    all
+                }
+            });
+        }
+        drop(keep);
+        Ok(out)
+    }
+}
+
+/// What a request's views and arguments became on the device.
+struct Bound {
+    heap: DescriptorHeap,
+    sampler_heap: DescriptorHeap,
+    tlab: victory_metal_back::descriptors::RingAlloc,
+    outs: Vec<Out>,
+    /// Buffers, textures, samplers that must outlive the work.
+    keep: Keep,
+}
+
+/// Held, not read: dropping it is the point.
+#[allow(dead_code)]
+struct Keep {
+    buffers: Vec<Buffer>,
+    textures: Vec<Texture>,
+    samplers: Vec<victory_metal_back::sampler::Sampler>,
+    tables: Vec<DescriptorHeap>,
+}
+
+impl Runner {
+    /// The view heap, the sampler heap and the top-level argument buffer of a request, laid out
+    /// as MSC put the arguments for `layout`; the uploads have run.
+    fn bind(
+        &self,
+        layout: &victory_metal_back::msc::TopLevelLayout,
+        root: &req::Root,
+        d: &req::Dispatch,
+    ) -> Result<Bound, Failure> {
         let dev = &self.device;
         let heap = DescriptorHeap::new(dev, d.views.len().max(1) as u32).map_err(from_back)?;
         let mut keep: Vec<Buffer> = Vec::new();
@@ -491,14 +589,13 @@ impl Runner {
             samplers.push(smp);
         }
         // The top-level argument buffer, laid out by MSC.
-        let r = &sp.reflection;
         let tlab = self
             .queue
-            .alloc_constants(u64::from(r.layout.size).max(16), 8)
+            .alloc_constants(u64::from(layout.size).max(16), 8)
             .map_err(from_back)?;
         tlab.zero();
         for (param, arg) in &d.roots {
-            let Some(entry) = r.layout.entries.get(*param as usize) else {
+            let Some(entry) = layout.entries.get(*param as usize) else {
                 return Err(Failure::Failed(format!(
                     "root parameter {param} is not in the layout"
                 )));
@@ -520,8 +617,8 @@ impl Runner {
         }
         // The static samplers' table.
         let mut static_table = None;
-        if let Some(idx) = r.layout.static_sampler_table
-            && let Some(entry) = r.layout.entries.get(idx)
+        if let Some(idx) = layout.static_sampler_table
+            && let Some(entry) = layout.entries.get(idx)
         {
             let table =
                 DescriptorHeap::new(dev, root.samplers.len().max(1) as u32).map_err(from_back)?;
@@ -548,57 +645,233 @@ impl Runner {
                 .map_err(from_back)?;
             static_table = Some(table);
         }
-        let mut l = self.queue.begin_list().map_err(from_back)?;
-        l.set_heaps(&heap, Some(&sampler_heap)).map_err(from_back)?;
-        l.set_root_arguments(&tlab).map_err(from_back)?;
-        l.dispatch(&sp.pipeline, d.groups, r.threadgroup_size)
-            .map_err(from_back)?;
-        if outs.iter().any(|o| matches!(o, Out::Texture(_))) {
-            l.barrier(stages::DISPATCH, stages::BLIT, stages::VIS_DEVICE)
-                .map_err(from_back)?;
-            for o in &outs {
-                if let Out::Texture(t) = o {
-                    l.copy_texture_to_buffer(
-                        &BufLoc {
-                            buffer: &t.readback,
-                            offset: 0,
-                            format: t.format,
-                            row_pitch: t.pitch,
-                            rows: t.height,
-                        },
-                        &TexLoc {
-                            texture: &t.texture,
-                            mip: 0,
-                            slice: 0,
-                            plane: 0,
-                            origin: [0; 3],
-                        },
-                        [t.width, t.height, 1],
-                    )
-                    .map_err(from_back)?;
-                }
+        Ok(Bound {
+            heap,
+            sampler_heap,
+            tlab,
+            outs,
+            keep: Keep {
+                buffers: keep,
+                textures: keep_tex,
+                samplers,
+                tables: static_table.into_iter().collect(),
+            },
+        })
+    }
+}
+
+impl Runner {
+    /// The pipeline of a draw request, made once per request prefix.
+    pub fn graphics_pipeline(
+        &mut self,
+        key: u64,
+        root: &req::Root,
+        p: &req::Pipeline<'_>,
+    ) -> Result<GraphicsPipeline, Failure> {
+        use victory_metal_proto::pso::{GraphicsPsoDesc, InputElement, TopologyType};
+        use victory_metal_proto::types::CompareFunc;
+        if let Some(g) = self.graphics.get(&key) {
+            return Ok(g.clone());
+        }
+        if p.mesh && !self.device.caps().mesh_shaders {
+            return Err(Failure::Unsupported(
+                "the device has no mesh shaders".into(),
+            ));
+        }
+        let mut d = GraphicsPsoDesc::new();
+        d.raster.cull = victory_metal_proto::pso::CullMode::NONE;
+        d.depth.depth_enable = 0;
+        d.depth.depth_write = 0;
+        if p.inputs.len() > d.inputs.len() || p.targets.len() > d.rt_formats.len() {
+            return Err(Failure::Failed("too many inputs or targets".into()));
+        }
+        d.input_count = p.inputs.len() as u32;
+        for (i, e) in p.inputs.iter().enumerate() {
+            d.inputs[i] = InputElement::new(&e.semantic, e.index, e.format, 0, e.offset);
+        }
+        d.rt_count = p.targets.len() as u32;
+        for (i, f) in p.targets.iter().enumerate() {
+            d.rt_formats[i] = *f;
+        }
+        match p.depth {
+            0 => {}
+            1 | 2 => {
+                d.ds_format = if p.depth == 1 {
+                    dxgi::D32_FLOAT
+                } else {
+                    dxgi::D32_FLOAT_S8X24_UINT
+                };
+                d.depth.depth_enable = 1;
+                d.depth.depth_write = 1;
+                d.depth.depth_func = CompareFunc::ALWAYS;
+                d.depth.stencil_enable = u8::from(p.depth == 2);
             }
+            k => return Err(Failure::Failed(format!("depth kind {k}"))),
         }
+        d.topology = if p.mesh {
+            TopologyType::UNDEFINED
+        } else {
+            TopologyType::TRIANGLE
+        };
+        let desc = msc_root(root)?;
+        let code = if p.mesh {
+            [None, Some(p.ps), None, Some(p.stage), None]
+        } else {
+            [
+                Some(p.stage),
+                Some(p.ps),
+                None,
+                None,
+                (!p.gs.is_empty()).then_some(p.gs),
+            ]
+        };
+        let made = victory_metal_back::exec::graphics_pipeline_for_host(
+            &self.device,
+            &d,
+            &desc,
+            code,
+            self.compat,
+        )
+        .map_err(from_msc)?;
+        self.graphics.insert(key, made.clone());
+        Ok(made)
+    }
+
+    /// Draws one triangle (or dispatches mesh groups) into an RGBA32 target the size of `d.size`
+    /// and returns the target's texels, four dwords each, row by row.
+    pub fn draw(
+        &mut self,
+        key: u64,
+        root: &req::Root,
+        p: &req::Pipeline<'_>,
+        d: &req::Draw,
+    ) -> Result<Vec<u32>, Failure> {
+        let pipeline = self.graphics_pipeline(key, root, p)?;
+        let dev = &self.device;
+        let [w, h] = d.size;
+        let bound = self.bind(pipeline.layout(), root, &d.bind)?;
+        let target_format = *p.targets.first().unwrap_or(&dxgi::R32G32B32A32_FLOAT);
+        let tex = dev
+            .create_texture(&self.texture_desc(w, h, target_format, 4 | 1))
+            .map_err(from_back)?;
+        let depth = if p.depth == 0 {
+            None
+        } else {
+            let f = if p.depth == 1 {
+                dxgi::D32_FLOAT
+            } else {
+                dxgi::D32_FLOAT_S8X24_UINT
+            };
+            Some((
+                dev.create_texture(&self.texture_desc(w, h, f, 8))
+                    .map_err(from_back)?,
+                f,
+            ))
+        };
+        let vb = if d.vertices.is_empty() {
+            None
+        } else {
+            Some(shared(dev, &d.vertices, 0)?)
+        };
+        let pitch = (w * 16).next_multiple_of(256);
+        let readback = dev
+            .create_buffer(BufferKind::Readback, u64::from(pitch * h))
+            .map_err(from_back)?;
+        let mut l = self.queue.begin_list().map_err(from_back)?;
+        l.set_heaps(&bound.heap, Some(&bound.sampler_heap))
+            .map_err(from_back)?;
+        l.set_root_arguments(&bound.tlab).map_err(from_back)?;
+        let whole = |texture: &Texture, format: u32| TargetSpec {
+            texture: texture.clone(),
+            format,
+            dim: ViewDim::D2,
+            mip: 0,
+            first_slice: 0,
+            slice_count: 1,
+        };
+        l.begin_pass(PassSpec {
+            colors: vec![Some(ColorAttachment {
+                target: whole(&tex, target_format),
+                load: Load::Clear,
+                clear: [0.0; 4],
+            })],
+            depth: depth.as_ref().map(|(t, f)| DepthAttachment {
+                target: whole(t, *f),
+                depth_load: Load::Clear,
+                stencil_load: Load::Clear,
+                clear_depth: 1.0,
+                clear_stencil: 0,
+            }),
+            empty_size: None,
+        })
+        .map_err(from_back)?;
+        l.set_viewports(&[ViewportRect {
+            x: 0.0,
+            y: 0.0,
+            width: w as f32,
+            height: h as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }])
+        .map_err(from_back)?;
+        l.set_scissors(&[[0, 0, w as i32, h as i32]])
+            .map_err(from_back)?;
+        if p.mesh {
+            l.dispatch_mesh(&pipeline, [d.bind.groups[0], 1, 1])
+                .map_err(from_back)?;
+        } else {
+            l.set_primitive(Primitive::TriangleList)
+                .map_err(from_back)?;
+            if let Some(vb) = &vb {
+                l.set_vertex_buffers(0, &[(vb.gpu_va(), (d.vertices.len() * 4) as u32, d.stride)])
+                    .map_err(from_back)?;
+            }
+            l.draw(
+                &pipeline,
+                DrawArgs {
+                    vertex_count: 3,
+                    instance_count: 1,
+                    start_vertex: 0,
+                    start_instance: 0,
+                },
+            )
+            .map_err(from_back)?;
+        }
+        l.end_pass(&Stores::default()).map_err(from_back)?;
+        l.barrier(
+            stages::VERTEX | stages::FRAGMENT | stages::MESH,
+            stages::BLIT,
+            stages::VIS_DEVICE,
+        )
+        .map_err(from_back)?;
+        l.copy_texture_to_buffer(
+            &BufLoc {
+                buffer: &readback,
+                offset: 0,
+                format: target_format,
+                row_pitch: pitch,
+                rows: h,
+            },
+            &TexLoc {
+                texture: &tex,
+                mip: 0,
+                slice: 0,
+                plane: 0,
+                origin: [0; 3],
+            },
+            [w, h, 1],
+        )
+        .map_err(from_back)?;
         self.run_list(l)?;
-        let mut out = Vec::new();
-        for o in &outs {
-            out.push(match o {
-                Out::Buffer(b, n) => b.read_u32s(0, *n as usize).map_err(from_back)?,
-                Out::Texture(t) => {
-                    let row = (t.width * t.words) as usize;
-                    let mut all = Vec::with_capacity(row * t.height as usize);
-                    for y in 0..t.height {
-                        all.extend(
-                            t.readback
-                                .read_u32s(u64::from(y * t.pitch), row)
-                                .map_err(from_back)?,
-                        );
-                    }
-                    all
-                }
-            });
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            out.extend(
+                readback
+                    .read_u32s(u64::from(y * pitch), (w * 4) as usize)
+                    .map_err(from_back)?,
+            );
         }
-        drop((keep, keep_tex, samplers, static_table));
+        drop((bound, tex, depth, vb));
         Ok(out)
     }
 }

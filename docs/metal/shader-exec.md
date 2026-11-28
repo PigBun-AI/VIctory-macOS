@@ -19,7 +19,7 @@ a worker that dies or exceeds `VICTORY_SHADER_EXEC_TIMEOUT_SECS` (default
 120). It also keeps `victory-shader` free of `victory-metal-*` (layering).
 
 **Protocol (version 1).** Frames: `u32` length, payload. Request: `u8 op`
-(1 hello, 2 compile, 3 dispatch) and the body (root signature, DXIL, and for
+(1 hello, 2 compile, 3 dispatch, 4 draw, 5 pipeline) and the body (root signature, DXIL, and for
 dispatch the root arguments, views, samplers, group counts). Reply: `u8
 status` (0 ok, 1 unsupported -> the test skips, 2 failed -> the test fails),
 then the body or a text. The codec is written twice (`src/wire.rs`,
@@ -35,6 +35,23 @@ with a decimal `VICTORY_SHADER_EXEC_COMPAT`.
 **Run.** `tools/mac/shader-hw.sh --back <this checkout>/metal` in the Mac
 worktree. Without `VICTORY_SHADER_EXEC` the tests skip.
 
-**Not covered yet.** Graphics (draw, mesh) tests, wave-64 hardware proofs
+**Graphics (ops 4 and 5).** A pipeline request carries the root signature, a vertex
+or mesh shader, an optional geometry shader, the pixel shader, the render targets' DXGI
+formats (RGBA32 float, sint or uint, read from the pixel shader's output signature), a depth
+target kind (none, D32, D32+stencil) and the vertex inputs (semantic, index, DXGI format,
+offset; one vertex buffer). The executor describes it with the protocol's own
+`GraphicsPsoDesc` (`victory-metal-proto`, plain Rust) and the back's
+`exec::graphics_pipeline_for_host`, the table the game's `CREATE_GRAPHICS_PIPELINE` uses,
+so a test runs the pipeline the game would make. Op 5 only makes the pipeline (a pair MSC or
+Metal refuses is an error at that point, as from D3D12). Op 4 draws one triangle (or
+dispatches mesh groups; the group count rides in `groups[0]`) into an RGBA32F target of the
+given size, with the same bindings as a dispatch (`bind()`: heaps and top-level argument
+buffer are shared with it), and returns the target's texels, four dwords each, row by row.
+Pipelines are cached by the hash of the request prefix. Hello's flag bit 2 (barycentrics) is
+set for every device, but MSC 4.0.3 has no `attributeAtVertex`: such a program is refused
+and its test skips.
+
+**Not covered yet.** Root descriptor tables in a draw, MSAA and more than one target,
+depth read-back, wave-64 hardware proofs
 (MSC refuses a non-32 wave size; the translator's wave-32 lowering is what
 runs), f64 (MSC cannot convert double precision), WARP.
