@@ -257,21 +257,26 @@ fn mesh_hlsl(big: bool) -> String {
 /// `mesh_hlsl`, the tint scaled by the first word of a root SRV `src`
 /// (`t0`, space 0) when `reads`: with the word 1 the picture is the same.
 fn mesh_hlsl_reading(big: bool, reads: bool) -> String {
-    mesh_hlsl_with(big, reads, false)
+    mesh_hlsl_with(big, u8::from(reads), false)
 }
 
 /// `unfixable`: two `SV_ClipDistance` floats instead of two of the `float`
 /// members. D3D12 counts them once (the same 32000 bytes), Metal twice, which
 /// no order of the members repacks: the mesh Metal refuses for good, which
 /// only the compute form takes.
-fn mesh_hlsl_with(big: bool, reads: bool, unfixable: bool) -> String {
-    let (decl, scale) = if reads {
-        (
+fn mesh_hlsl_with(big: bool, reads: u8, unfixable: bool) -> String {
+    let (decl, scale) = match reads {
+        // a root SRV
+        1 => (
             "ByteAddressBuffer src : register(t0);\n",
             "float(src.Load(0))",
-        )
-    } else {
-        ("", "1.0")
+        ),
+        // a root constant
+        2 => (
+            "cbuffer C : register(b0) { uint scale; };\n",
+            "float(scale)",
+        ),
+        _ => ("", "1.0"),
     };
     let (members, writes) = if big {
         // A `float` and a `float3` a pair: Metal puts each `float3` at a
@@ -1145,6 +1150,10 @@ struct Rig {
 }
 
 fn rig_with(fx: Fx, reads: bool) -> Option<Rig> {
+    rig_reading(fx, u8::from(reads))
+}
+
+fn rig_reading(fx: Fx, reads: u8) -> Option<Rig> {
     let g = setup_with(fx)?;
     let native = native_picture(&g)?;
     let big = dxil_or_skip("mcb_ms_big", "ms_6_6", &mesh_hlsl_with(true, reads, true))?;
@@ -1509,5 +1518,80 @@ fn frames_in_flight_do_not_overwrite_each_others_scratch() {
             got, want[k],
             "frame {k} was drawn from scratch another frame wrote"
         );
+    }
+}
+
+#[test]
+fn an_indirect_record_with_root_constants_reaches_its_own_dispatch() {
+    let Some(r) = rig_reading(Fx::new(), 2) else {
+        return;
+    };
+    let g = &r.g;
+    let sig = graphics_root(&g.fx, vec![constants_param(1)], 0);
+    let pso = g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    let constants = |k: u32| {
+        let bytes: &'static [u8] = Box::leak(k.to_le_bytes().to_vec().into_boxed_slice());
+        Command::SetRootConstants(SetRootConstants {
+            bind_point: BindPoint::GRAPHICS,
+            root_index: 0,
+            dest_offset: 0,
+            data: bytes,
+        })
+    };
+    let state = |k: Option<u32>| {
+        let mut v = vec![
+            Command::SetRootSignature(SetRootSignature {
+                bind_point: BindPoint::GRAPHICS,
+                root_sig: sig,
+            }),
+            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
+        ];
+        v.extend(k.map(constants));
+        v
+    };
+    // what a direct dispatch with the constant 1 and with 2 draws
+    let one = g.picture_in(vec![], state(Some(1)), vec![dispatch_mesh(GROUPS)]);
+    let two = g.picture_in(vec![], state(Some(2)), vec![dispatch_mesh(GROUPS)]);
+    same_picture(&one, &r.native, "constant 1");
+    assert_ne!(one, two, "the constant changes the picture");
+    // records {constant, x, y, z}: the constant, then the dispatch
+    let mut signature = Vec::new();
+    for a in [
+        IndirectArg {
+            kind: IndirectArgKind::CONSTANT,
+            index: 0,
+            dest_offset: 0,
+            count: 1,
+        },
+        IndirectArg {
+            kind: IndirectArgKind::DISPATCH_MESH,
+            index: 0,
+            dest_offset: 0,
+            count: 0,
+        },
+    ] {
+        a.put(&mut signature);
+    }
+    let signature: &'static [u8] = Box::leak(signature.into_boxed_slice());
+    let args = g.fx.buffer(BufferKind::UPLOAD, 4096);
+    for (records, want) in [
+        (vec![1, GROUPS, 1, 1], &one),
+        // the second record draws over the first: its constant is the picture
+        (vec![1, GROUPS, 1, 1, 2, GROUPS, 1, 1], &two),
+        (vec![2, GROUPS, 1, 1, 1, GROUPS, 1, 1], &one),
+    ] {
+        cpu_write(args.cpu_addr, &records);
+        let draw = Command::ExecuteIndirect(ExecuteIndirect {
+            args: args.res,
+            args_offset: 0,
+            count: ResId::NULL,
+            count_offset: 0,
+            max_count: records.len() as u32 / 4,
+            stride: 16,
+            root_sig: sig,
+            signature,
+        });
+        let got = g.picture_in(vec![], state(None), vec![draw]);
+        same_picture(&got, want, &format!("records {records:?}"));
     }
 }
