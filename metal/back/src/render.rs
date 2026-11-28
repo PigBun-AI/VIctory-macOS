@@ -1028,7 +1028,17 @@ impl Device {
                     linking.setFunctionDescriptors(Some(&NSArray::from_retained_slice(&[linked])));
                     d.setObjectStaticLinkingDescriptor(Some(&linking));
                     if crate::prof::NO_PS.with(|c| c.get()) {
-                        d.setFragmentFunctionDescriptor(None);
+                        // a pixel shader that writes a constant: what the rest of the pass costs
+                        let triv = self
+                            .library_from_msl(
+                                "#include <metal_stdlib>\nusing namespace metal;\n\
+                                 struct FO { float4 c [[color(0)]]; };\n\
+                                 fragment FO triv_fs() { FO o; o.c = float4(0.0); return o; }\n",
+                            )
+                            .map_err(MscError::Metal)?;
+                        let f =
+                            function_descriptor(triv.raw(), "triv_fs").map_err(MscError::Metal)?;
+                        d.setFragmentFunctionDescriptor(Some(&f));
                     }
                     if crate::prof::NO_RASTER.with(|c| c.get()) {
                         d.setFragmentFunctionDescriptor(None);
