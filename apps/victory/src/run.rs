@@ -113,7 +113,7 @@ pub fn run(
         Console::SeriesX => victory_hle::console::Console::SeriesX,
         Console::SeriesS => victory_hle::console::Console::SeriesS,
     });
-    println!("console        {}", victory_hle::console::current().name());
+    println!("{}", victory_hle::modules::xsystem::console_line(victory_hle::console::current()));
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {
         println!("title dll      {name} at {:#x}", dll.base());
