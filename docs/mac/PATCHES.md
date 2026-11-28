@@ -1486,6 +1486,10 @@ ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added 
 *Why not needed on Windows.* D3D12 zeroes out-of-range per component.
 *Remove when.* MSC bounds-checks each component of a vector raw load. Proof: `oracle_mem_*`, `probe_straddle_past_the_view_end`, `oracle_flat_loads`.
 
+### S16 — bounded local shader calls and compressed FP16 colour exports
+
+Local PC-relative calls execute the callee and return; unresolved indirect forms are rejected, not silently skipped. Title vertex-fetch handovers remain inputs. Decode packed half pairs for compressed colour export. Source: `mac/shader-pc-oracle` at `c722f6f8`. On the 2,631-container fidperf corpus, before and after: 2,625 translated, the same 6 failed, aggregate DXIL digest `73cba1c214599504`. Retire when the shared translator passes the call/return and export oracle rows.
+
 ### S15 — expand live EXEC lanes per quad for scalar `s_wqm` (Windows ledger S21)
 
 A quad is active only if one of its four source lanes is active, not unconditionally. The EXEC oracle compares wave32 and wave64 with the ISA reference (300/300 each). Distinct from S12's scalar-number operand. Retire when the common lowering has the same semantics and passes both reference comparisons.
