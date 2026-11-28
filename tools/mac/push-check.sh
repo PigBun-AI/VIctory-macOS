@@ -12,11 +12,17 @@
 #       project paths, *.local e-mail addresses, words from the private word list, and `mac:`
 #       commits whose author/committer is not the placeholder identity.
 #   (d) new binaries, blobs over 1 MB, game-file extensions.
+#   (e) class nda-gdkx (tools/mac/push-check-nda.py; docs/mac/RUN.md "GDKX (NDA)"): NDA SDK header names, gdkx/gxdk
+#       directories, private/ path segments. ANY hit blocks: it is never REVIEW, no option turns it off, no waiver. Always runs first.
+#       --nda-only runs only this class (the pre-push hook does that: tools/mac/install-hooks.sh).
 #
 # The private word list (real name, user name, host names, ...) is NOT in the repository: it is read
 # from tools/mac/privacy.local.txt (untracked, in .gitignore), else $PRIVACY_WORDS_FILE, else
 # <git common dir>/privacy.local.txt. One word per line; `w:` in front = whole word only. Values of
 # PIGBUN_CRED_*_USER / _USERNAME / _HOST in the environment are added when present.
+#
+# Options: --remote NAME (default fork), --skip-policy, --words FILE, --windows-review, --strict, --no-words, -v,
+#          --nda-only (only class (e)), --also-not SHA (also exclude what SHA has; repeatable; used by the hook).
 #
 # Exit code: 0 clean (review items may still be printed), 1 something blocks the push,
 # 2 the check could not run (bad usage, no word list, not a git repo).
@@ -26,13 +32,15 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 2
 
-BRANCH=""; REMOTE=fork; SKIP_POLICY=0; EXTRA=()
+BRANCH=""; REMOTE=fork; SKIP_POLICY=0; EXTRA=(); NDA_ONLY=0; ALSO_NOT=()
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) sed -n '2,/^# Findings are never/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         --remote) REMOTE="${2:?}"; shift 2 ;;
         --skip-policy) SKIP_POLICY=1; shift ;;
         --words) export PRIVACY_WORDS_FILE="${2:?}"; shift 2 ;;
+        --nda-only) NDA_ONLY=1; shift ;;
+        --also-not) ALSO_NOT+=("^${2:?}"); shift 2 ;;
         --windows-review|--strict|--no-words|-v|--verbose) EXTRA+=("$1"); shift ;;
         -*) echo "push-check: unknown option: $1 (try --help)" >&2; exit 2 ;;
         *) [ -z "$BRANCH" ] && BRANCH="$1" || { echo "push-check: one branch only" >&2; exit 2; }; shift ;;
@@ -44,6 +52,16 @@ COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
 
 RC=0
 echo "== push-check: $BRANCH ($(git rev-parse --short=9 "$BRANCH")) against remotes/$REMOTE/*"
+
+# ---- (e) nda-gdkx: always, first, no waiver --------------------------------------
+python3 "$ROOT/tools/mac/push-check-nda.py" --root "$ROOT" range "$BRANCH" --not "--remotes=$REMOTE" ${ALSO_NOT[@]+"${ALSO_NOT[@]}"}
+NDARC=$?
+if [ "$NDARC" -eq 2 ]; then echo "   nda-gdkx check could not run: refusing"; echo "== push-check: BLOCKED (exit 2)"; exit 2; fi
+if [ "$NDARC" -ne 0 ]; then RC=1; fi
+if [ "$NDA_ONLY" = 1 ]; then
+    if [ "$RC" -eq 0 ]; then echo "== push-check (nda-only): CLEAN"; else echo "== push-check (nda-only): BLOCKED (exit 1)"; fi
+    exit "$RC"
+fi
 
 # ---- (a) policy ------------------------------------------------------------
 if [ "$SKIP_POLICY" = 1 ]; then

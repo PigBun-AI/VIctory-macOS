@@ -5,6 +5,11 @@ below. Every commit that is ours starts with `mac:`. The aim: new files and `cfg
 modules for the Mac, the fewest and shortest edits to files the Windows line owns, so that
 `git merge win/feat-live-translator` stays cheap (`git log --oneline 150c16b4..mac/livetr` lists ours).
 
+**GDKX (NDA) rule of the Mac patch layer.** The GDKX on this Mac is a local reference: use it for API semantics, structure layouts and compiler-generated oracles;
+constants and structure definitions the implementation needs may be written into our code. Never commit a whole header or document of it as it is (take
+semantics in our own words, note 「依据本机 GDKX 参照」). `push-check.sh` class `nda-gdkx` blocks the NDA header names and `gdkx`/`gxdk`/`private/` paths and the shared
+pre-push hook enforces it (`docs/mac/RUN.md`, "GDKX (NDA)", patch M12).
+
 Facts as of **2026-11-27** (when written and checked): the Windows line is the user's line
 (Marvisak ffe310eb2 → fxceless → avatarmanz 7900XTX → codec-d/cool_fox → the user's commits),
 which has **no** Mac or Rosetta code; the Mac patches come from VIctory-macOS `origin/main`
@@ -816,6 +821,13 @@ a value set by hand is kept. Reason (S5): the VMCS part appended to a mesh conta
 back's AGX crash list would no longer match; an old stage with a new exe must not append it. `--print-env` shows the variable and its source
 (`# metal: caps:`). Metal-backend only; D3DMetal unaffected. Tests: `test-run-until.sh` (CAPS with `mesh_compute`, with other lines only, without a
 file, `--print-env`, and a run with a fake Wine). Pure Mac tooling; drop it when every stage carries the part's support (then S5 defaults on).
+
+
+### M12 — NDA guard: `push-check.sh` class `nda-gdkx`, `push-check-nda.py`, `install-hooks.sh`, `test-push-check-nda.sh`
+
+Path rules only: NDA SDK header names (`d3d12_x*.h`, `xg*.h`, `XGame*.h`, `*_xs.h`, `pix3_xbox.h`, `dstorage_xs.h`, ...), `gdkx`/`gxdk` directories, `private/` segments;
+every hit blocks (no REVIEW, no waiver). `install-hooks.sh` installs the shared pre-push hook (managed block, idempotent, existing hook kept) and the engine
+copy under the git common directory. Rules in `docs/mac/RUN.md` "GDKX (NDA)". Pure Mac tooling, nothing to recycle.
 
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
