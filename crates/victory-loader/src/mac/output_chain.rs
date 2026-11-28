@@ -169,8 +169,7 @@ pub fn decide(env: &Env) -> Decision {
     };
 
     if profile == Some(Profile::Fidelity) {
-        // Fidelity: the title's own 4K output. L3 stays as it was (run.sh refuses a size in this profile).
-        let l3_output = if explicit_size { l3_own } else { Asked::Title };
+        // Enforce stock output here too: the launcher is not the only entry point.
         if native_asked == Some(true) || r1080 {
             let which: Vec<&str> = [
                 (native_asked == Some(true)).then_some("VICTORY_NATIVE_1440P=1"),
@@ -186,7 +185,7 @@ pub fn decide(env: &Env) -> Decision {
         } else {
             log.push("output chain: fidelity: the title's own 4K output, nothing about the output patched".to_owned());
         }
-        return Decision { profile, native_1440p: false, l3_output, l3_scale: true, log };
+        return Decision { profile, native_1440p: false, l3_output: Asked::Title, l3_scale: false, log };
     }
 
     // Not fidelity: perf, or not told.
@@ -320,6 +319,9 @@ mod tests {
         // Through `VICTORY_OUTPUT=0` alone, as run.sh passed the profile before.
         let d = decide(&Env { output: Some("0"), native_1440p: Some("1"), ..env(None) });
         assert!(!d.native_1440p);
+        let direct = decide(&Env { output: Some("720"), render_scale: Some("0.5"), ..env(Some("fidelity")) });
+        assert_eq!(direct.l3_output, Asked::Title);
+        assert!(!direct.l3_scale);
         // =0 in fidelity is no news: no "ignored" line.
         let d = decide(&Env { native_1440p: Some("0"), ..env(Some("fidelity")) });
         assert!(!d.log[0].contains("ignored"), "{:?}", d.log);

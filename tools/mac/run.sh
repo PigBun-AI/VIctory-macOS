@@ -379,10 +379,6 @@ fi
 export VICTORY_MAC_PROFILE="$profile"
 if [ "$profile" = fidelity ]; then
     export VICTORY_OUTPUT=0
-    # the title logs `output chain: native 1440p stays off: the fidelity profile ...`; say it here too, once
-    if [ "${VICTORY_NATIVE_1440P:-}" = 1 ] || [ "${VICTORY_RENDER_1080P:-}" = 1 ]; then
-        echo "tools/mac/run.sh: note: the fidelity profile keeps the title's own 4K output: VICTORY_NATIVE_1440P / VICTORY_RENDER_1080P are ignored" >&2
-    fi
 fi
 # perf: VICTORY_OUTPUT is left as the caller has it. Unset: the profile's default, native 1440p (X13; it was 1280x720 here before).
 # what the perf profile will do about the output, as run.sh expects it (the title decides: victory-loader mac/output_chain.rs)
