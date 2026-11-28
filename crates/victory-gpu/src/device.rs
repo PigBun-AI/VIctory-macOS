@@ -268,6 +268,12 @@ extern "system" fn check_feature_support(
     data: *mut c_void,
     size: u32,
 ) -> HRESULT {
+    let hr = feature_answer(feature, data, size);
+    crate::mac::drop_stats::feature_answer(feature, hr); // mac G12
+    hr
+}
+
+fn feature_answer(feature: u32, data: *mut c_void, size: u32) -> HRESULT {
     const OPTIONS_QUERY: u32 = 0;
     const ARCHITECTURE: u32 = 1;
     const FEATURE_LEVELS: u32 = 2;

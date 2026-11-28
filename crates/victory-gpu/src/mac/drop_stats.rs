@@ -179,6 +179,8 @@ struct Pso {
 
 #[derive(Default)]
 struct State {
+    uav_ranges: [u64; 3], // G13: full, strict subrange, unknown
+    feature_results: std::collections::BTreeMap<u32, std::collections::BTreeMap<i32, u64>>,
     frame: Counts,
     total: Counts,
     world: Counts,
@@ -448,7 +450,27 @@ fn summary_world(s: &State) {
     summary_of(s, "world", &s.world);
 }
 
+pub(crate) fn feature_answer(id: u32, hr: i32) {
+    if enabled() {
+        with(|s| *s.feature_results.entry(id).or_default().entry(hr).or_default() += 1);
+    }
+}
+
+pub(crate) fn uav_range(index: usize) {
+    with(|s| s.uav_ranges[index] += 1);
+}
+
 fn summary(s: &State, label: &str) {
+    let [full, strict_subrange, unknown] = s.uav_ranges;
+    if full + strict_subrange + unknown != 0 {
+        tracing::info!("drop-stats uav3d layer=shared full={full} strict_subrange={strict_subrange} unknown={unknown}");
+    }
+    for (id, results) in &s.feature_results {
+        let total: u64 = results.values().sum();
+        for (&hr, n) in results {
+            tracing::info!("drop-stats feature layer=shared id={id} total={total} hr={hr:#010x} count={n}");
+        }
+    }
     summary_of(s, label, &s.total);
 }
 

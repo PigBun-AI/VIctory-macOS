@@ -60,29 +60,64 @@ pub fn texture(dimension: u32, layout: u32, flags: u32, format: u32, mips: u16, 
     }
 }
 
-static UAV3D: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+// total, nonzero first, explicit size, full, strict subrange, unknown (one coherent snapshot).
+static UAV3D: Mutex<[u64; 6]> = Mutex::new([0; 6]);
+type Volume = (u64, u32, u16, u16); // width, height, base depth, declared mip count
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Range { Full, Partial, Unknown }
+
+fn range(volume: Option<Volume>, mip: u32, first: u32, size: u32) -> Range {
+    let Some((w, h, d, levels)) = volume else { return Range::Unknown };
+    if w == 0 || h == 0 || d == 0 { return Range::Unknown; }
+    let chain = 1 + w.max(h.into()).max(d.into()).ilog2();
+    let levels = if levels == 0 { chain } else { u32::from(levels) };
+    if mip >= levels || levels > chain { return Range::Unknown; }
+    let depth = u32::from(d).checked_shr(mip).unwrap_or(0).max(1);
+    if first >= depth { return Range::Unknown; }
+    let rest = depth - first;
+    let size = if size == u32::MAX { rest } else { size };
+    if size == 0 || size > rest { Range::Unknown }
+    else if first == 0 && size == depth { Range::Full }
+    else { Range::Partial }
+}
+
+#[test]
+fn classifies_the_range_at_the_selected_volume_mip() {
+    // Microsoft Learn: D3D12_TEX3D_UAV (MipSlice, FirstWSlice, WSize; -1 = remainder),
+    // D3D12_RESOURCE_DESC (MipLevels=0 = full chain). Depth halves to a minimum of one.
+    use Range::*;
+    let v = Some((32, 8, 9, 0));
+    for (m,f,s,want) in [(1,0,4,Full),(1,0,u32::MAX,Full),(1,0,3,Partial),
+        (1,1,u32::MAX,Partial),(1,2,1,Partial),(1,1,4,Unknown),(1,4,1,Unknown),
+        (1,0,0,Unknown),(5,0,1,Full),(6,0,1,Unknown)] {
+        assert_eq!(range(v,m,f,s),want);
+    }
+    assert_eq!(range(Some((32,8,9,1)),1,0,4),Unknown);
+    assert_eq!(range(None,0,0,1),Unknown);
+}
 
 /// A 3D unordered access view the title made (`words`: the description): counted as all, with a first depth slice
 /// other than 0, and with a size that is not "the rest" (`u32::MAX`). D3DMetal refuses partial views of a 3D texture
 /// (matrix row C-V-012, finding F1); this says whether the title makes any. Logged at the powers of two of the count.
-pub fn uav_3d(words: &[u32; 10]) {
-    if !*ENABLED || words[1] != 8 {
+pub(crate) fn uav_3d(words: &[u32; 10], volume: impl FnOnce() -> Option<Volume>) {
+    if words[1] != 8 || (!*ENABLED && !super::drop_stats::enabled()) {
         return;
     }
     // words: format, dimension, MipSlice, FirstWSlice, WSize
-    let n = UAV3D[0].fetch_add(1, Relaxed) + 1;
-    if words[3] != 0 {
-        UAV3D[1].fetch_add(1, Relaxed);
-    }
-    if words[4] != u32::MAX {
-        UAV3D[2].fetch_add(1, Relaxed);
-    }
-    if n.is_power_of_two() {
-        tracing::info!(
-            "layout stats: {n} 3D unordered access views, {} from a depth slice other than 0, {} with a size other than the rest",
-            UAV3D[1].load(Relaxed),
-            UAV3D[2].load(Relaxed)
-        );
+    let class = match range(volume(), words[2], words[3], words[4]) {
+        Range::Full => 3, Range::Partial => 4, Range::Unknown => 5,
+    };
+    if super::drop_stats::enabled() { super::drop_stats::uav_range(class - 3); }
+    if !*ENABLED { return; }
+    let mut counts = UAV3D.lock().unwrap_or_else(|e| e.into_inner());
+    counts[0] += 1;
+    counts[1] += u64::from(words[3] != 0);
+    counts[2] += u64::from(words[4] != u32::MAX);
+    counts[class] += 1;
+    if counts[0].is_power_of_two() || counts[class] == 1 {
+        let [n, first, explicit, full, partial, unknown] = *counts;
+        tracing::info!("layout stats: {n} 3D unordered access views, {first} from a depth slice other than 0, {explicit} with a size other than the rest; full={full} strict_subrange={partial} unknown={unknown}");
     }
 }
 

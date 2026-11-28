@@ -2391,6 +2391,16 @@ pub(crate) fn is_resource(this: This) -> bool {
         && usize::from_ne_bytes(table) == RESOURCE_FUNCTIONS.0.as_ptr() as usize
 }
 
+/// mac G11: extent of this create-UAV call's own live 3D resource, never its host copy.
+#[cfg(windows)]
+pub(crate) fn uav_volume_extent(this: This) -> Option<(u64, u32, u16, u16)> {
+    if this.is_null() || !is_resource(this) {
+        return None;
+    }
+    let d = &resource(this).desc;
+    (d.dimension == 4).then_some((d.width, d.height, d.depth_or_array_size, d.mip_levels))
+}
+
 /// A title texture's host copy, shared, for a list to hold.
 #[cfg(windows)]
 pub(crate) fn host_copy(this: This) -> Option<std::sync::Arc<HostTexture>> {

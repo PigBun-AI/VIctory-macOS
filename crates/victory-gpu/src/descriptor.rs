@@ -1384,9 +1384,15 @@ pub(crate) extern "system" fn create_uav(
     desc: *const [u32; 10],
     handle: u64,
 ) {
-    let view = View::Unordered(resource as usize, counter as usize, words(desc));
-    if let Some(w) = words(desc) {
-        crate::mac::layout_stats::uav_3d(&w); // mac G11
+    let desc = words(desc);
+    let view = View::Unordered(resource as usize, counter as usize, desc);
+    if let Some(w) = desc {
+        crate::mac::layout_stats::uav_3d(&w, || {
+            #[cfg(windows)]
+            { crate::resource::uav_volume_extent(resource) }
+            #[cfg(not(windows))]
+            { None }
+        }); // mac G11: only resolve the resource when collecting 3D UAV stats.
     }
     record(handle, view);
 }

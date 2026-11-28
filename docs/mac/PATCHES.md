@@ -664,7 +664,7 @@ It never fails the run.
 *What.* Counts every texture the title creates by dimension, layout field (`0x100 | swizzle mode`), render-target/depth flags,
 element size, block, and whether it has mips, depth/array, or samples; logs one `layout stats:` line per distinct key when
 the texture count reaches 256, 512, ... and the number of textures whose mode the detiler cannot address (XOR modes `_T`/`_X`).
-Off unless set (one atomic load per texture). Nothing the title or the host sees changes.
+Off unless set (one atomic load per texture). For ordinary CreateUnorderedAccessView calls naming a 3D view, compare the view range with the same resource's depth at MipSlice. Report cumulative full/strict_subrange/unknown at powers of two and on the first occurrence in each class. Null, unrecognised and invalid ranges are unknown. Explicit full depth is not a partial view. Nothing the title or the host sees changes.
 
 *Why.* Map rows C-V-003 (detile) and C-V-005 (tile modes): the detiler is proven against addrlib for the modes without XOR
 (`victory-formats/tests/addrlib_golden.rs`), and for sizes of the XOR modes; which modes the title really uses was never
@@ -673,6 +673,10 @@ per-surface pipe-bank XOR) is worth writing.
 
 *Why not needed on Windows.* The Windows line has the same detiler and the same question; this is a measurement, not a fix. *Remove when*
 the census has been read and the answer is in the map row.
+
+### G13 — shared GPU telemetry for 3D UAV ranges and device feature queries
+
+`VICTORY_MAC_DROP_STATS=1` reports cumulative 3D UAV counts (full, strict subrange, unknown) and CheckFeatureSupport counts by feature ID and HRESULT. G11 layout stats can report the same view classification independently. No rendering behavior changes. Retire once equivalent upstream counters exist.
 
 ### G12 — test-only hooks and a 3D UAV census for the shared-layer proofs (`victory-gpu/src/mac/prove/`, `#[path]` test modules in `descriptor.rs`, `descriptor/host.rs`, `resource.rs`; `pub(crate)` on `RESOURCE_IIDS`, `QUEUE_IIDS`, `ALLOCATOR_IIDS`, `QueueDesc` fields; `queue::signal_offset_for_tests`; `layout_stats::uav_3d` + 1 hook in `descriptor.rs` create_uav)
 
