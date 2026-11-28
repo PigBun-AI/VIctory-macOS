@@ -689,6 +689,30 @@ impl CommandList {
         Ok(())
     }
 
+    /// `VICTORY_METAL_GS_GROUP_CAP`: clamps the mesh threadgroup count the expansion wrote at
+    /// `action_va` (`GS_GROUPS_AT`, x) to the cap the executor set, if any.
+    pub(crate) fn cap_gs_groups(&mut self, action_va: u64) -> Result<()> {
+        let Some(cap) = crate::prof::GS_CAP.with(|c| c.get()) else {
+            return Ok(());
+        };
+        let Some(k) = crate::prof::cap_kernel(&self.queue.device().clone()) else {
+            return Ok(());
+        };
+        self.barrier(DISPATCH, DISPATCH, VIS_DEVICE)?;
+        let params = self.alloc_constants(16, 16)?;
+        let at = action_va;
+        params.write_u32s(0, &[at as u32, (at >> 32) as u32, cap, 0])?;
+        self.set_address(30, params.gpu_va)?;
+        self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
+        // The draw reads the threadgroup counts next.
+        self.barrier(
+            DISPATCH,
+            stages::OBJECT | stages::MESH | stages::VERTEX,
+            VIS_DEVICE,
+        )?;
+        Ok(())
+    }
+
     /// `Dispatch`: `groups` threadgroups of `threads` threads.
     pub fn dispatch(
         &mut self,

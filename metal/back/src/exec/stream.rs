@@ -1090,7 +1090,23 @@ impl Run<'_> {
                     Action::DrawIndexed => crate::draw::IndirectDraw::DrawIndexed,
                     _ => crate::draw::IndirectDraw::Mesh,
                 };
-                list.execute_indirect_draws(kernels, g, kind, &spec)
+                // `VICTORY_METAL_GS_GROUP_CAP=<hash>:<n>[,...]`: see `prof::GS_CAP`.
+                let cap = std::env::var("VICTORY_METAL_GS_GROUP_CAP")
+                    .ok()
+                    .filter(|_| g.kind() == crate::render::Kind::Geometry)
+                    .and_then(|v| {
+                        let label = crate::prof::pipeline_label(gpso_id);
+                        v.split(',').find_map(|e| {
+                            let (h, n) = e.split_once(':')?;
+                            label
+                                .contains(h.trim())
+                                .then(|| n.trim().parse::<u32>().ok())?
+                        })
+                    });
+                crate::prof::GS_CAP.with(|c| c.set(cap));
+                let r = list.execute_indirect_draws(kernels, g, kind, &spec);
+                crate::prof::GS_CAP.with(|c| c.set(None));
+                r
             }
             _ => return Err(Status::INVALID_ARG),
         }

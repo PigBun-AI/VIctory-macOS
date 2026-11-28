@@ -1157,6 +1157,7 @@ impl crate::record::CommandList {
                 .set_address(bind_point::DRAW_ARGUMENTS as u32, r.action_va)?;
             l.table
                 .set_address(bind_point::UNIFORMS as u32, r.action_va + UNIFORMS_AT)?;
+            l.cap_gs_groups(r.action_va)?;
             l.snap_gs_record(r.action_va)?;
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
             enc.drawMeshThreadgroupsWithIndirectBuffer_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(

@@ -699,3 +699,23 @@ fn split_snap(label: &str) -> (&str, Option<u32>) {
         None => (label, None),
     }
 }
+
+// `VICTORY_METAL_GS_GROUP_CAP=<hash>:<n>` (a diagnostic): the geometry-shader indirect draws of
+// that pipeline run at most `n` mesh threadgroups (the first n instances), to tell whether their
+// cost is per pixel or has a knee. The executor sets the cap for the draw it is about to record.
+thread_local! {
+    pub(crate) static GS_CAP: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+const CAP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void capk(constant ulong2& p [[buffer(30)]]) {\n\
+  device uint* d = (device uint*)p.x; uint cap = (uint)p.y;\n\
+  if (d[5] > cap) d[5] = cap;\n}\n";
+
+pub(crate) fn cap_kernel(
+    device: &crate::device::Device,
+) -> Option<&'static crate::pipeline::ComputePipeline> {
+    static K: OnceLock<Option<crate::pipeline::ComputePipeline>> = OnceLock::new();
+    K.get_or_init(|| device.compute_pipeline_from_msl(CAP_SOURCE, "capk").ok())
+        .as_ref()
+}
