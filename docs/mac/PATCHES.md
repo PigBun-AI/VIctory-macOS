@@ -1500,6 +1500,10 @@ ps +59 %, ms +43 % (the `fptrunc` form: none, above). GPU run time of the added 
 *Why not needed on Windows.* D3D12 zeroes out-of-range per component.
 *Remove when.* MSC bounds-checks each component of a vector raw load. Proof: `oracle_mem_*`, `probe_straddle_past_the_view_end`, `oracle_flat_loads`.
 
+### S15 — expand live EXEC lanes per quad for scalar `s_wqm` (Windows ledger S21)
+
+A quad is active only if one of its four source lanes is active, not unconditionally. The EXEC oracle compares wave32 and wave64 with the ISA reference (300/300 each). Distinct from S12's scalar-number operand. Retire when the common lowering has the same semantics and passes both reference comparisons.
+
 ### S14 — a fence after a counter-texture `image_store` (`victory-shader/src/emit/lower.rs`, `image()`)
 
 *What.* The upscaler's counter texture (`image_store` of 9, then `image_atomic_add 1` on the same texel by the same thread) gave 9, not 10: Metal does not order a thread's texture write against its later texture atomic. A mode-2 `barrier` (the existing `memory_fence`) after the `textureStore` of such a counter store makes the store land first; 6/6 runs give 10 (`size_tests::a_counter_texture_is_set_by_a_store_of_one_channel`, removed from `shader-hw-known.txt`).
