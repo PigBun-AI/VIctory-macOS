@@ -316,6 +316,17 @@ impl DeviceObj_Impl {
         data: *mut c_void,
         size: u32,
     ) -> WResult<()> {
+        let result = self.feature_answer(feature, data, size);
+        // Both generated COM entry points forward here: count an invocation exactly once.
+        crate::callstats::tally("feature.id", || feature.0.to_string());
+        crate::callstats::tally("feature.id_hr", || {
+            let hr = result.as_ref().err().map_or(0, |e| e.code().0);
+            format!("{} {hr:#010x}", feature.0)
+        });
+        result
+    }
+
+    fn feature_answer(&self, feature: D3D12_FEATURE, data: *mut c_void, size: u32) -> WResult<()> {
         if data.is_null() {
             return Err(werr(Hr::E_INVALIDARG));
         }
