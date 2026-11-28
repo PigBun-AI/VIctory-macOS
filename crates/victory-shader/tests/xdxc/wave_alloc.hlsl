@@ -21,6 +21,8 @@ void main(uint3 tid : SV_DispatchThreadID)
     DUAL_BIND_SRV(src, 0, 0)
     DUAL_BIND_UAV(recs, 1, 0)
     DUAL_BIND_UAV(counter, 2, 1)
+    if (tid.x >= params.x || (tid.x & 63) < params.z)
+        return; // lanes past the count, or the first params.z lanes of each group, leave early: a partial wave, or a whole host wave gone
     uint v = src.Load(tid.x * 4);
 #if VARIANT == 0
     uint c = v & 7;

@@ -443,7 +443,7 @@ fn compare(a: &[Vec<u32>], b: &[Vec<u32>], how: &Compare) -> Verdict {
                 || (how.ulps > 0 && f32::from_bits(*p).is_nan() && f32::from_bits(*q).is_nan());
             if !same {
                 differing += 1;
-                if first.len() < 4 {
+                if first.len() < verbose_limit() {
                     first.push((k, *p, *q));
                 }
             }
@@ -456,6 +456,10 @@ fn compare(a: &[Vec<u32>], b: &[Vec<u32>], how: &Compare) -> Verdict {
         }
     }
     Verdict::Same { words: total }
+}
+
+fn verbose_limit() -> usize {
+    if std::env::var("VICTORY_XDXC_VERBOSE").is_ok_and(|v| v == "1") { 64 } else { 4 }
 }
 
 fn skip(why: impl Into<String>) -> Verdict {
@@ -496,11 +500,28 @@ pub fn dual_path_with(hlsl: &str, inputs: &Inputs, settings: &Settings, how: &Co
         Ok(s) => s,
         Err(e) => return fail("path B: translate", e),
     };
+    if std::env::var("VICTORY_XDXC_VERBOSE").is_ok_and(|v| v == "1") {
+        eprintln!("xdxc-oracle: translated DXIL {} bytes, key {}", shader.dxil.len(), key_of(&[&shader.dxil]));
+    }
     let b = match run_console(&host, &shader, inputs) {
         Ok(o) => o,
         Err(e) => return fail("path B: run", e),
     };
     (compare(&a, &b, how), Some(Outputs { a, b }))
+}
+
+/// Path B alone (for a program whose result depends on the console's 64-lane waves, which path A cannot run). `Err` is a
+/// verdict that is not a result: skipped or failed.
+pub fn console_only(hlsl: &str, inputs: &Inputs, settings: &Settings) -> Result<Vec<Vec<u32>>, Verdict> {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let t = tools().map_err(skip)?;
+    let host = Host::new(false).map_err(|e| skip(format!("no executor: {e}")))?;
+    let failed = |stage: &'static str, why: String| Verdict::Failed { stage, why };
+    let container = compile_console(&t, hlsl).map_err(|e| failed("path B: compile (console compiler)", e))?;
+    check_layout(&container, inputs).map_err(|e| failed("path B: layout", e))?;
+    let shader = translated(&container, settings).map_err(|e| failed("path B: translate", e))?;
+    eprintln!("xdxc-oracle: translated DXIL {} bytes, key {}", shader.dxil.len(), key_of(&[&shader.dxil]));
+    run_console(&host, &shader, inputs).map_err(|e| failed("path B: run", e))
 }
 
 /// [`dual_path_with`] with the translator's defaults and an exact comparison.
@@ -635,9 +656,13 @@ mod tests {
 
     const WAVE_ALLOC: &str = include_str!("../../tests/xdxc/wave_alloc.hlsl");
 
-    fn alloc_inputs() -> (Inputs, Vec<u32>) {
+    /// (count, skip): the dispatch is cut to `count` threads and the first `skip` lanes of every group leave early: whole waves, a
+    /// partial wave across the host-wave boundary, one that leaves a whole host wave empty (either half), a single lane, none at all.
+    const COUNTS: [(u32, u32); 15] = [(256, 0), (100, 0), (70, 0), (40, 0), (33, 0), (20, 0), (5, 0), (1, 0), (256, 32), (256, 16), (256, 63), (100, 32), (256, 1), (0, 0), (40, 40)];
+
+    fn alloc_inputs(count: u32, skip: u32) -> (Inputs, Vec<u32>) {
         let src = words(256, 11, |x| x);
-        let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(src.clone()), Res::Uav(2048), Res::Uav(1)], groups: [4, 1, 1] };
+        let inputs = Inputs { constants: vec![count, 0, skip], resources: vec![Res::Srv(src.clone()), Res::Uav(2048), Res::Uav(1)], groups: [4, 1, 1] };
         (inputs, src)
     }
 
@@ -646,10 +671,10 @@ mod tests {
         if uav == 0 { sorted(uav, w) } else { w.to_vec() }
     }
 
-    fn alloc_cpu(variant: u32, src: &[u32]) -> Vec<Vec<u32>> {
+    fn alloc_cpu(variant: u32, src: &[u32], count: u32, skip: u32) -> Vec<Vec<u32>> {
         let mut recs = vec![0u32; 2048];
         let mut n = 0;
-        for (t, v) in src.iter().enumerate() {
+        for (t, v) in src.iter().enumerate().take(count as usize).filter(|(t, _)| (*t as u32 & 63) >= skip) {
             let c = match variant {
                 0 | 1 => (v & 7) as usize,
                 _ => (v & 1) as usize,
@@ -663,25 +688,26 @@ mod tests {
     }
 
     fn wave_alloc(variant: u32) {
-        let (inputs, src) = alloc_inputs();
         let how = Compare {
             ulps: 0,
             canon: Some(alloc_canon),
             reason: "which wave wins the counter first (and so which slots a lane gets) is the atomic's race; the multiset of records and the total are the result",
         };
         let hlsl = with_variant(WAVE_ALLOC, variant);
-        let w = dual_path_wave_wide(&hlsl, &inputs, &how);
-        report(&format!("wave_alloc{variant}"), &w.wide0);
-        report(&format!("wave_alloc{variant}"), &w.wide1);
-        if w.wide0.is_skipped() {
-            return;
+        for (count, skip) in COUNTS {
+            let (inputs, src) = alloc_inputs(count, skip);
+            let w = dual_path_wave_wide(&hlsl, &inputs, &how);
+            let name = format!("wave_alloc{variant}@{count}-skip{skip}");
+            if w.wide0.is_skipped() {
+                report(&name, &w.wide0);
+                return;
+            }
+            eprintln!("xdxc-oracle {name}: {}", wave_label(&w));
+            if let Some((o0, _)) = &w.outputs {
+                a_matches_cpu(&name, o0, &alloc_cpu(variant, &src, count, skip), &how);
+            }
+            record(&name, &w);
         }
-        eprintln!("xdxc-oracle wave_alloc{variant}: {}", wave_label(&w));
-        if let Some((o0, _)) = &w.outputs {
-            let cpu: Vec<Vec<u32>> = alloc_cpu(variant, &src);
-            a_matches_cpu(&format!("wave_alloc{variant}"), o0, &cpu, &how);
-        }
-        record(&format!("wave_alloc{variant}"), &w);
     }
 
     /// Expected outcomes per case, once seen: (wide=0 same, wide=1 same). A change in either direction fails the test, so a
@@ -792,8 +818,8 @@ mod tests {
     fn f16_nan_canon(uav: usize, w: &[u32]) -> Vec<u32> {
         w.iter()
             .map(|&x| match uav {
-                0 if x & 0x7C00 == 0x7C00 && x & 0x3FF != 0 => (x & 0x8000) | 0x7E00,
-                1 if x & 0x7F80_0000 == 0x7F80_0000 && x & 0x007F_FFFF != 0 => (x & 0x8000_0000) | 0x7FC0_0000,
+                0 if x & 0x7C00 == 0x7C00 && x & 0x3FF != 0 => 0x7E00,
+                1 if x & 0x7F80_0000 == 0x7F80_0000 && x & 0x007F_FFFF != 0 => 0x7FC0_0000,
                 _ => x,
             })
             .collect()
@@ -872,29 +898,51 @@ mod tests {
         Inputs { constants: vec![0; 4], resources: vec![Res::Srv(in0), Res::Srv(in1), Res::Uav(n as u32), Res::Uav(n as u32)], groups: [1024, 1, 1] }
     }
 
+    /// Number of positions where two outputs differ, and the first one.
+    fn mismatches(x: &[u32], y: &[u32]) -> (usize, Option<(usize, u32, u32)>) {
+        let d: Vec<usize> = (0..x.len().min(y.len())).filter(|&i| x[i] != y[i]).collect();
+        (d.len(), d.first().map(|&i| (i, x[i], y[i])))
+    }
+
     #[test]
     fn s7_f16_conversions() {
         let inputs = f16_inputs();
-        let how = Compare { ulps: 0, canon: Some(f16_nan_canon), reason: "the payload of a NaN is not compared (a NaN is a NaN)" };
+        let how = Compare { ulps: 0, canon: Some(f16_nan_canon), reason: "the payload and sign of a NaN are not compared (a NaN is a NaN)" };
         let (v, out) = dual_path_with(F16, &inputs, &Vec::new(), &how);
-        report("f16_convert", &v);
+        report("f16_convert (default translation)", &v);
         if v.is_skipped() {
             return;
         }
         let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
+        let (v0, out0) = dual_path_with(F16, &inputs, &vec![("VICTORY_F16_NEAREST".to_string(), "0".to_string())], &how);
+        report("f16_convert (VICTORY_F16_NEAREST=0)", &v0);
         let (Res::Srv(in0), Res::Srv(in1)) = (&inputs.resources[0], &inputs.resources[1]) else { unreachable!() };
-        // path A: widening is exact; narrowing is checked against both roundings and the counts are reported
+        let canon0 = |w: &[u32]| f16_nan_canon(0, w);
         let wide: Vec<u32> = in1.iter().map(|h| f16_to_f32_cpu(h & 0xFFFF)).collect();
-        let c = compare(&[out.a[1].clone()], &[wide], &how);
-        assert!(c.is_same(), "f16 -> f32 on path A is not exact: {}", c.summary());
-        let (mut rne, mut rtz) = (0, 0);
-        for (x, h) in in0.iter().zip(&out.a[0]) {
-            let h = f16_nan_canon(0, &[*h])[0];
-            rne += usize::from(f16_nan_canon(0, &[f32_to_f16_cpu(*x, false)])[0] != h);
-            rtz += usize::from(f16_nan_canon(0, &[f32_to_f16_cpu(*x, true)])[0] != h);
+        let rne: Vec<u32> = in0.iter().map(|x| f32_to_f16_cpu(*x, false)).collect();
+        let rtz: Vec<u32> = in0.iter().map(|x| f32_to_f16_cpu(*x, true)).collect();
+        // widening is exact everywhere
+        // the sign of a NaN is not kept by either path's widening, so it is not compared there
+        let nan_any = |w: &[u32]| -> Vec<u32> { w.iter().map(|&x| if f32::from_bits(x).is_nan() { 0x7FC0_0000 } else { x }).collect() };
+        let m = mismatches(&nan_any(&out.a[1]), &nan_any(&wide));
+        eprintln!("xdxc-oracle f16_convert: A widening vs exact model: {m:?}");
+        let mb = mismatches(&nan_any(&out.b[1]), &nan_any(&wide));
+        eprintln!("xdxc-oracle f16_convert: B widening vs exact model: {mb:?}");
+        // narrowing: which rounding is each path
+        for (n, o) in [("A", &out.a[0]), ("B default", &out.b[0])].into_iter().chain(out0.iter().map(|o| ("B nearest=0", &o.b[0]))) {
+            eprintln!(
+                "xdxc-oracle f16_convert: narrowing {n}: vs round-to-nearest-even {:?} ; vs round-to-zero {:?}",
+                mismatches(&canon0(o), &canon0(&rne)),
+                mismatches(&canon0(o), &canon0(&rtz))
+            );
         }
-        eprintln!("xdxc-oracle f16_convert: path A f32->f16 differs from round-to-nearest-even in {rne} of 65536, from round-to-zero in {rtz}");
-        assert!(v.is_same(), "{}", v.summary());
+        assert_eq!(m.0, 0, "path A widening");
+        assert_eq!(mb.0, 0, "path B widening");
+        let first = |o: &[u32], m: &[u32]| (0..o.len()).filter(|&i| canon0(&o[i..=i]) != canon0(&m[i..=i])).take(6).map(|i| (in0[i], o[i], m[i])).collect::<Vec<_>>();
+        eprintln!("xdxc-oracle f16_convert: B default vs nearest-even, first (input, B, model): {:x?}", first(&out.b[0], &rne));
+        eprintln!("xdxc-oracle f16_convert: A vs round-to-zero, first (input, A, model): {:x?}", first(&out.a[0], &rtz));
+        assert_eq!(mismatches(&canon0(&out.b[0]), &canon0(&rne)).0, 0, "B narrows to nearest-even by default");
+        assert!(v0.is_same(), "B with VICTORY_F16_NEAREST=0 is path A's conversion: {}", v0.summary());
     }
 
     // ---- v_div_fixup: the quotient of special values ----
@@ -904,8 +952,8 @@ mod tests {
     fn special_floats() -> Vec<u32> {
         vec![
             0x0000_0000, 0x8000_0000, 0x3F80_0000, 0xBF80_0000, 0x4040_0000, 0x3DCC_CCCD, 0x7F80_0000, 0xFF80_0000, 0x7FC0_0000, 0xFFC0_0000,
-            0x7FC0_1234, 0x7FA0_0000, 0x0000_0001, 0x807F_FFFF, 0x0080_0000, 0x7F7F_FFFF, 0xFF7F_FFFF, 0x7E80_0000, 0x0180_0000, 0x1E3C_E508,
-            0x6015_8CFB, 0x3F7F_FFFF, 0x3F80_0001, 0x0040_0000, 0x4B00_0000, 0xC2F6_E979, 0x4E6E_6B28, 0x0000_FFFF, 0x7F00_0000, 0x00FF_FFFF,
+            0x7FC0_1234, 0x7FA0_0000, 0x3F00_0000, 0x807F_FFFF | 0x0080_0000, 0x0080_0000, 0x7F7F_FFFF, 0xFF7F_FFFF, 0x7E80_0000, 0x0180_0000, 0x1E3C_E508,
+            0x6015_8CFB, 0x3F7F_FFFF, 0x3F80_0001, 0x00C0_0000, 0x4B00_0000, 0xC2F6_E979, 0x4E6E_6B28, 0x0001_FFFF | 0x0100_0000, 0x7F00_0000, 0x00FF_FFFF,
             0x3EAA_AAAB, 0x4120_0000,
         ]
     }
@@ -914,42 +962,74 @@ mod tests {
         w.iter().map(|&x| if x & 0x7F80_0000 == 0x7F80_0000 && x & 0x007F_FFFF != 0 { (x & 0x8000_0000) | 0x7FC0_0000 } else { x }).collect()
     }
 
-    #[test]
-    fn v_div_fixup_special_quotients() {
+    /// The console compiler's float divide (NewBE): a reciprocal and a multiply (legacy multiply unless the value is `precise`), not a
+    /// correctly rounded quotient and no v_div_fixup. Model: rcp as 1/b, legacy multiply 0 * x = +0.
+    fn rcp_mul_model(a: u32, b: u32, legacy: bool) -> u32 {
+        // the console flushes f32 denormals (inputs and results), keeping the sign of a zero
+        let flush = |x: f32| if x != 0.0 && x.abs() < f32::MIN_POSITIVE { 0.0f32.copysign(x) } else { x };
+        let (fa, fb) = (flush(f32::from_bits(a)), flush(f32::from_bits(b)));
+        let r = flush(1.0 / fb);
+        if legacy && (fa == 0.0 || r == 0.0) {
+            return 0;
+        }
+        // flushed when the exact product is below the smallest normal, before any rounding
+        let p = f64::from(fa) * f64::from(r);
+        if p != 0.0 && p.abs() < f64::from(f32::MIN_POSITIVE) {
+            return 0.0f32.copysign(p as f32).to_bits();
+        }
+        (p as f32).to_bits()
+    }
+
+    fn div_case(precise: bool) {
         let t = special_floats();
         assert_eq!(t.len(), 32);
+        let hlsl = format!("#define PRECISE_DIV {}\n{DIV}", u32::from(precise));
         let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(t.clone()), Res::Uav(1024)], groups: [16, 1, 1] };
         let how = Compare { ulps: 0, canon: Some(nan_canon_f32), reason: "the payload of a NaN is not compared; its sign is" };
-        let (v, out) = dual_path_with(DIV, &inputs, &Vec::new(), &how);
-        report("div_nan", &v);
+        let (v, out) = dual_path_with(&hlsl, &inputs, &Vec::new(), &how);
+        report(&format!("div_nan precise={precise}: A (IEEE quotient) vs B (console)"), &v);
         if v.is_skipped() {
             return;
         }
         let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
-        let cpu: Vec<u32> = (0..1024).map(|k| (f32::from_bits(t[k / 32]) / f32::from_bits(t[k % 32])).to_bits()).collect();
-        let c = compare(&out.a, &[cpu], &how);
-        eprintln!("xdxc-oracle div_nan: path A against Rust IEEE division: {}", c.summary());
-        assert!(v.is_same(), "{}", v.summary());
+        let ieee: Vec<u32> = (0..1024).map(|k| (f32::from_bits(t[k / 32]) / f32::from_bits(t[k % 32])).to_bits()).collect();
+        let m = mismatches(&nan_canon_f32(0, &out.a[0]), &nan_canon_f32(0, &ieee));
+        eprintln!("xdxc-oracle div_nan precise={precise}: path A vs Rust IEEE division: {m:?} (NaN canonicalised)");
+        let model: Vec<u32> = (0..1024).map(|k| rcp_mul_model(t[k / 32], t[k % 32], !precise)).collect();
+        // B against the compiler's own lowering, within one ulp (v_rcp_f32 is not exact) and with NaNs equal
+        let c = compare(&[out.b[0].clone()], &[model], &Compare { ulps: 2, canon: Some(nan_canon_f32), reason: "v_rcp_f32 is accurate to 1 ulp, the product adds a rounding" });
+        eprintln!("xdxc-oracle div_nan precise={precise}: path B vs reciprocal-multiply model: {}", c.summary());
+        let ad = mismatches(&nan_canon_f32(0, &out.a[0]), &nan_canon_f32(0, &out.b[0]));
+        eprintln!("xdxc-oracle div_nan precise={precise}: A and B differ in {} of 1024 quotients: the console compiler's division is not IEEE", ad.0);
+        assert!(c.is_same(), "B is not the compiler's reciprocal-multiply: {}", c.summary());
+    }
+
+    #[test]
+    fn division_is_a_reciprocal_and_a_legacy_multiply_on_the_console() {
+        div_case(false);
+    }
+
+    #[test]
+    fn precise_division_is_a_reciprocal_and_a_multiply_on_the_console() {
+        div_case(true);
     }
 
     // ---- out-of-range buffer accesses ----
 
     const OOB: &str = include_str!("../../tests/xdxc/oob_buffer.hlsl");
 
-    #[test]
-    fn out_of_range_buffer_accesses() {
+    fn oob_inputs() -> (Inputs, Vec<u32>) {
         let src = words(16, 31, |x| x | 1);
         let inputs = Inputs {
             constants: vec![1 << 20],
             resources: vec![Res::Srv(src.clone()), Res::Uav(40), Res::Uav(512), Res::Uav(8)],
             groups: [1, 1, 1],
         };
-        let (v, out) = dual_path_with(OOB, &inputs, &Vec::new(), &Compare::EXACT);
-        report("oob_buffer", &v);
-        if v.is_skipped() {
-            return;
-        }
-        let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
+        (inputs, src)
+    }
+
+    /// HLSL's rule: a dword out of range reads 0; a write or atomic out of range is dropped.
+    fn oob_model(straddle: bool, src: &[u32]) -> Vec<Vec<u32>> {
         let at = |i: usize| src.get(i).copied().unwrap_or(0);
         let mut dst = vec![0u32; 40];
         let mut got = vec![0u32; 512];
@@ -957,22 +1037,72 @@ mod tests {
             if t < 40 {
                 dst[t] = t as u32 + 1;
             }
-            let (a, b0, b1) = (at(t), at(t), at(t + 1));
-            let _ = b0;
-            let c = [at(t), at(t + 1), at(t + 2), at(t + 3)];
+            let (b, c) = if straddle {
+                ([at(t), at(t + 1)], [at(t), at(t + 1), at(t + 2), at(t + 3)])
+            } else {
+                ([at(2 * t), at(2 * t + 1)], [at(4 * t), at(4 * t + 1), at(4 * t + 2), at(4 * t + 3)])
+            };
+            let a = at(t);
             let k = t * 8;
-            got[k] = a.wrapping_add(b1.wrapping_mul(3));
+            got[k] = a.wrapping_add(b[1].wrapping_mul(3));
             got[k + 1] = c[0] ^ c[1] ^ c[2] ^ c[3];
-            got[k + 2] = 0;
-            got[k + 3] = 0;
+            got[k + 3] = at((0xFFFF_FFF0u32.wrapping_add(t as u32 * 4) / 4) as usize);
             got[k + 4] = c[3];
-            got[k + 5] = c[0];
+            got[k + 5] = b[0];
             got[k + 6] = c[2];
             got[k + 7] = a;
         }
-        // Load2/Load4 straddling the end: each dword that is out of range reads 0 (HLSL's out-of-bounds rule)
-        a_matches_cpu("oob_buffer", &out, &[dst, got, vec![1, 2, 3, 4, 2, 3, 4, 5]], &Compare::EXACT);
+        vec![dst, got, vec![1, 2, 3, 4, 2, 3, 4, 5]]
+    }
+
+    fn oob(straddle: bool) -> (Verdict, Option<Outputs>, Vec<u32>) {
+        let (inputs, src) = oob_inputs();
+        let hlsl = format!("#define STRADDLE {}\n{OOB}", u32::from(straddle));
+        let (v, out) = dual_path_with(&hlsl, &inputs, &Vec::new(), &Compare::EXACT);
+        (v, out, src)
+    }
+
+    #[test]
+    fn out_of_range_buffer_accesses_whole_vectors() {
+        let (v, out, src) = oob(false);
+        report("oob_buffer", &v);
+        if v.is_skipped() {
+            return;
+        }
+        let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
+        a_matches_cpu("oob_buffer", &out, &oob_model(false, &src), &Compare::EXACT);
         assert!(v.is_same(), "{}", v.summary());
+    }
+
+    /// Vector loads that start in range and end past it: what each path reads for the dwords past the end is not HLSL's to say
+    /// (the spec leaves a partly-out-of-range access to the hardware), so this reports what each path does and asserts only that
+    /// the whole-dword results inside the range agree.
+    #[test]
+    fn out_of_range_vector_loads_that_straddle_the_end() {
+        let (v, out, src) = oob(true);
+        report("oob_buffer_straddle", &v);
+        if v.is_skipped() {
+            return;
+        }
+        let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
+        let model = oob_model(true, &src);
+        let past = |o: &[Vec<u32>]| {
+            // words of the output that depend on a dword past the end: per thread t in 13..16 (Load4) and t == 15 (Load2)
+            (0..64usize).flat_map(|t| (0..8).map(move |k| (t, k))).filter(|&(t, k)| (t >= 13 && matches!(k, 1 | 4 | 6)) || (t == 15 && matches!(k, 0 | 5))).map(|(t, k)| o[1][t * 8 + k]).collect::<Vec<u32>>()
+        };
+        eprintln!("xdxc-oracle oob_buffer_straddle: dwords that read past the end -- A {:x?} ; B {:x?} ; HLSL model {:x?}", past(&out.a), past(&out.b), past(&model));
+        // everything that does not read past the end agrees with the model on both paths
+        for (name, o) in [("A", &out.a), ("B", &out.b)] {
+            for t in 0..64usize {
+                for k in 0..8 {
+                    let dep = (t >= 13 && matches!(k, 1 | 4 | 6)) || (t == 15 && matches!(k, 0 | 5));
+                    if !dep {
+                        assert_eq!(o[1][t * 8 + k], model[1][t * 8 + k], "{name}: thread {t} word {k}");
+                    }
+                }
+            }
+            assert_eq!(o[0], model[0], "{name}: dst");
+        }
     }
 
     // ---- LDS atomics ----
@@ -1047,31 +1177,318 @@ mod tests {
 
     const QUAD: &str = include_str!("../../tests/xdxc/quad_ops.hlsl");
 
-    #[test]
-    fn quad_operations_read_the_neighbours_of_a_two_by_two() {
+    /// A 16x16 grid of threads; `lanes` = false: HLSL's 2x2 quads, true: four consecutive threads of a row (the console's lane quads
+    /// of a group whose lanes run along x).
+    fn quad_model(src: &[u32], lanes: bool) -> Vec<u32> {
+        let mut want = vec![0u32; 16 * 16 * 6];
+        let f = |x: usize, y: usize| src[y * 16 + x];
+        for y in 0..16usize {
+            for x in 0..16usize {
+                let o = (y * 16 + x) * 6;
+                if lanes {
+                    let q = x & !3;
+                    want[o] = f(x ^ 1, y);
+                    want[o + 1] = f(x ^ 2, y);
+                    want[o + 2] = f(x ^ 3, y);
+                    want[o + 3] = f(q + 2, y);
+                    want[o + 4] = if x & 1 == 1 { f(q + 1, y) } else { 0 };
+                } else {
+                    let (qx, qy) = (x & !1, y & !1);
+                    want[o] = f(x ^ 1, y);
+                    want[o + 1] = f(x, y ^ 1);
+                    want[o + 2] = f(x ^ 1, y ^ 1);
+                    want[o + 3] = f(qx, qy + 1); // lane 2 of the quad: x even, y odd
+                    want[o + 4] = if x & 1 == 1 { f(qx + 1, qy) } else { 0 };
+                }
+                want[o + 5] = f(x, y);
+            }
+        }
+        want
+    }
+
+    fn quad_run(tx: u32) -> (Verdict, Option<Outputs>, Vec<u32>) {
         let src = words(16 * 16, 51, |x| x);
-        let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(src.clone()), Res::Uav(16 * 16 * 6)], groups: [2, 2, 1] };
-        let (v, out) = dual_path_with(QUAD, &inputs, &Vec::new(), &Compare::EXACT);
-        report("quad_ops", &v);
+        let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(src.clone()), Res::Uav(16 * 16 * 6)], groups: [16 / tx, 16 / tx, 1] };
+        let (v, out) = dual_path_with(&format!("#define TX {tx}\n#define TY {tx}\n{QUAD}"), &inputs, &Vec::new(), &Compare::EXACT);
+        (v, out, src)
+    }
+
+    /// Groups of 2x2 threads: the four lanes of the group are the quad, in the order HLSL says (x fastest), so both paths agree.
+    #[test]
+    fn quad_operations_in_two_by_two_groups() {
+        let (v, out, src) = quad_run(2);
+        report("quad_ops 2x2", &v);
         if v.is_skipped() {
             return;
         }
         let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
-        let mut want = vec![0u32; 16 * 16 * 6];
-        for y in 0..16usize {
-            for x in 0..16usize {
-                let f = |xx: usize, yy: usize| src[yy * 16 + xx];
-                let (qx, qy) = (x & !1, y & !1);
-                let o = (y * 16 + x) * 6;
-                want[o] = f(x ^ 1, y);
-                want[o + 1] = f(x, y ^ 1);
-                want[o + 2] = f(x ^ 1, y ^ 1);
-                want[o + 3] = f(qx, qy + 1); // lane 2 of the quad: x even, y odd
-                want[o + 4] = if (x & 7) & 1 == 1 { f(qx + 1, qy) } else { 0 };
-                want[o + 5] = f(x, y);
+        a_matches_cpu("quad_ops 2x2", &out, &[quad_model(&src, false)], &Compare::EXACT);
+        assert!(v.is_same(), "{}", v.summary());
+    }
+
+    /// On this Mac, A matches 2x2 quads and B matches four consecutive x lanes. No native console execution was used;
+    /// this detects a layout difference but does not attribute it to the compiler or translator.
+    #[test]
+    fn quad_operations_in_eight_by_eight_groups_are_lane_quads_on_the_console() {
+        let (v, out, src) = quad_run(8);
+        report("quad_ops 8x8", &v);
+        if v.is_skipped() {
+            return;
+        }
+        let out = out.unwrap_or_else(|| panic!("{}", v.summary()));
+        a_matches_cpu("quad_ops 8x8", &out, &[quad_model(&src, false)], &Compare::EXACT);
+        let c = compare(&out.b, &[quad_model(&src, true)], &Compare::EXACT);
+        assert!(c.is_same(), "path B is not the lane-quad model: {}", c.summary());
+        assert!(!v.is_same(), "the two paths now agree on 2D quads: update docs/mac/xdxc-oracle.md");
+    }
+
+    /// A tool: the mnemonics of the native program of the containers in `VICTORY_XDXC_ISA` (colon-separated), with counts.
+    #[test]
+    #[ignore = "a tool: names containers in VICTORY_XDXC_ISA"]
+    fn isa_mnemonics_of_containers() {
+        let Some(p) = std::env::var_os("VICTORY_XDXC_ISA") else { return };
+        for f in std::env::split_paths(&p) {
+            let bytes = std::fs::read(&f).unwrap();
+            let c = crate::Container::parse(&bytes).unwrap();
+            let part = c.part(crate::dxbc::FourCC::DXIL).unwrap();
+            for n in crate::native_programs(part.data).unwrap() {
+                let mut h: std::collections::BTreeMap<String, usize> = Default::default();
+                for i in crate::gfx10::decode(&n.code).unwrap() {
+                    let t = i.text(n.wave64);
+                    let m = t.split_whitespace().next().unwrap_or("").to_string();
+                    *h.entry(m).or_default() += 1;
+                }
+                eprintln!("ISA {} wave64 {} threads {:?}: {:?}", f.display(), n.wave64, n.io, h);
+                if std::env::var_os("VICTORY_XDXC_ISA_TEXT").is_some() {
+                    for i in crate::gfx10::decode(&n.code).unwrap() {
+                        eprintln!("ISAT {:05x} {}", i.offset, i.text(n.wave64));
+                    }
+                }
             }
         }
-        a_matches_cpu("quad_ops", &out, &[want], &Compare::EXACT);
-        assert!(v.is_same(), "{}", v.summary());
+    }
+
+    // ---- wave-wide aggregated atomics over a waterfall loop (the idiom of the third container) ----
+
+    const BUCKETS: &str = include_str!("../../tests/xdxc/wave_buckets.hlsl");
+
+    /// (key, slot) pairs sorted; the counters as they are.
+    fn buckets_canon(uav: usize, w: &[u32]) -> Vec<u32> {
+        if uav != 0 {
+            return w.to_vec();
+        }
+        let mut pairs: Vec<(u32, u32)> = w.chunks(2).map(|c| (c[0], c[1])).collect();
+        pairs.sort_unstable();
+        pairs.into_iter().flat_map(|(a, b)| [a, b]).collect()
+    }
+
+    fn buckets_cpu(variant: u32, src: &[u32], count: u32, skip: u32) -> Vec<Vec<u32>> {
+        let mut counts = vec![0u32; 32];
+        let mut pairs = Vec::new();
+        let mut next = [0u32; 16];
+        let mut slots = vec![(0u32, 0u32); 0];
+        let _ = &mut slots;
+        for (t, v) in src.iter().enumerate() {
+            let key = v % 16;
+            if t as u32 >= count || (t as u32 & 63) < skip {
+                // threads past the count never write: their pair stays zero
+                pairs.push((0, 0));
+                continue;
+            }
+            if variant == 2 && v & 3 == 0 {
+                pairs.push((key, 0xFFFF_FFFF));
+                continue;
+            }
+            pairs.push((key, next[key as usize]));
+            next[key as usize] += 1;
+            counts[key as usize] += 1;
+            counts[16 + key as usize] = counts[16 + key as usize].max(*v);
+        }
+        vec![pairs.into_iter().flat_map(|(a, b)| [a, b]).collect(), counts]
+    }
+
+    fn buckets(variant: u32) {
+        let how = Compare {
+            ulps: 0,
+            canon: Some(buckets_canon),
+            reason: "which wave takes which base of a key is the atomic's race; the sorted (key, slot) pairs and the counters are the result",
+        };
+        let hlsl = with_variant(BUCKETS, variant);
+        for (count, skip) in COUNTS {
+            let src = words(256, 61, |x| x);
+            let inputs = Inputs { constants: vec![count, 0, skip], resources: vec![Res::Srv(src.clone()), Res::Uav(512), Res::Uav(32)], groups: [4, 1, 1] };
+            let w = dual_path_wave_wide(&hlsl, &inputs, &how);
+            let name = format!("wave_buckets{variant}@{count}-skip{skip}");
+            if w.wide0.is_skipped() {
+                report(&name, &w.wide0);
+                return;
+            }
+            eprintln!("xdxc-oracle {name}: {}", wave_label(&w));
+            if let Some((o0, _)) = &w.outputs {
+                a_matches_cpu(&name, o0, &buckets_cpu(variant, &src, count, skip), &how);
+            }
+            record(&name, &w);
+        }
+    }
+
+    #[test]
+    fn wave_buckets_waterfall_loop() {
+        buckets(0);
+    }
+
+    #[test]
+    fn wave_buckets_waterfall_loop_with_a_divergent_entry() {
+        buckets(2);
+    }
+
+    // ---- a wave that is 64 lanes wide: what only the console path can say ----
+
+    const LANES64: &str = include_str!("../../tests/xdxc/wave64_lanes.hlsl");
+
+    fn lanes64_model(src: &[u32]) -> Vec<u32> {
+        let mut out = vec![0u32; src.len() * 8];
+        for w in 0..src.len() / 64 {
+            let v = &src[w * 64..w * 64 + 64];
+            let ones = v.iter().filter(|x| *x & 1 != 0).count() as u32;
+            let total: u32 = v.iter().map(|x| x & 255).sum();
+            let (mut run, mut run_d, mut total_d) = (0u32, 0u32, 0u32);
+            for x in v {
+                if x & 2 != 0 {
+                    total_d += x & 255;
+                }
+            }
+            for l in 0..64 {
+                let t = w * 64 + l;
+                let o = t * 8;
+                out[o] = v[63];
+                out[o + 1] = v[40];
+                out[o + 2] = ones;
+                out[o + 3] = run;
+                out[o + 4] = total;
+                run += v[l] & 255;
+                if v[l] & 2 != 0 {
+                    out[o + 5] = total_d;
+                    out[o + 6] = run_d;
+                    run_d += v[l] & 255;
+                } else {
+                    out[o + 5] = 0xFFFF_FFFF;
+                    out[o + 6] = 0xFFFF_FFFF;
+                }
+                out[o + 7] = l as u32 + 6400;
+            }
+        }
+        out
+    }
+
+    /// Which translation of a console wave64 is the console's? Each form against a CPU model of a 64-lane wave.
+    #[test]
+    fn a_console_wave_of_64_lanes_in_each_wave_form() {
+        let src = words(256, 71, |x| x);
+        let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(src.clone()), Res::Uav(256 * 8)], groups: [4, 1, 1] };
+        let model = lanes64_model(&src);
+        let mut same = [false; 2];
+        for (i, wide) in ["0", "1"].iter().enumerate() {
+            match console_only(LANES64, &inputs, &vec![("VICTORY_WAVE_WIDE".to_string(), wide.to_string())]) {
+                Err(v) => {
+                    report(&format!("wave64_lanes wide={wide}"), &v);
+                    if v.is_skipped() {
+                        return;
+                    }
+                    panic!("{}", v.summary());
+                }
+                Ok(o) => {
+                    let m = mismatches(&o[0], &model);
+                    let by_col: Vec<usize> = (0..8).map(|c| (0..256).filter(|t| o[0][t * 8 + c] != model[t * 8 + c]).count()).collect();
+                    eprintln!("xdxc-oracle wave64_lanes wide={wide}: against a 64-lane wave model: {} of {} dwords differ, per output column {by_col:?}, first {:?}", m.0, model.len(), m.1);
+                    same[i] = m.0 == 0;
+                }
+            }
+        }
+        eprintln!("xdxc-oracle wave64_lanes: matches the 64-lane model: wide=0 {} wide=1 {}", same[0], same[1]);
+    }
+
+    // ---- wave operations and an atomic inside a branch some lanes take (the wide form's ground) ----
+
+    const BRANCH64: &str = include_str!("../../tests/xdxc/wave64_branch.hlsl");
+
+    fn branch64_model(cond: u32, src: &[u32]) -> Vec<Vec<u32>> {
+        let mut out = vec![0u32; src.len() * 4];
+        let mut bases = Vec::new();
+        let mut total = 0u32;
+        let x = [63usize, 40, 32, 0, 0, 5][cond as usize];
+        for w in 0..src.len() / 64 {
+            let a: Vec<u32> = src[w * 64..w * 64 + 64].iter().map(|v| v & 255).collect();
+            let take = |l: usize| match cond {
+                0 => l == 63,
+                1 => l == 40,
+                2 => l >= 32,
+                3 => l < 32,
+                4 => l % 2 == 0,
+                _ => l == 5 || l == 60,
+            };
+            let r: u32 = (0..64).filter(|&l| take(l)).map(|l| a[l]).sum();
+            let q = (0..64).filter(|&l| take(l)).map(|l| a[l]).max().unwrap_or(0);
+            let mut run = 0;
+            for l in 0..64 {
+                let o = (w * 64 + l) * 4;
+                if take(l) {
+                    out[o] = r;
+                    out[o + 1] = run;
+                    out[o + 2] = q;
+                    run += a[l];
+                } else {
+                    out[o] = 0xFFFF_FFFF;
+                    out[o + 1] = 0xFFFF_FFFF;
+                    out[o + 2] = 0xFFFF_FFFF;
+                }
+                out[o + 3] = if take(x) { r } else { 0xFFFF_FFFF };
+            }
+            bases.push(total);
+            total += r + 1;
+        }
+        // bases are the atomic's race: sorted by the comparison
+        vec![out, bases, vec![total]]
+    }
+
+    #[test]
+    #[ignore = "exploratory B-only diagnostic, not a dual-path regression"]
+    fn wave_operations_and_an_atomic_in_a_branch_some_lanes_take() {
+        let src = words(256, 81, |x| x);
+        let mut report_rows = Vec::new();
+        for cond in 0..6u32 {
+            let inputs = Inputs { constants: vec![0; 4], resources: vec![Res::Srv(src.clone()), Res::Uav(1024), Res::Uav(4), Res::Uav(1)], groups: [4, 1, 1] };
+            let hlsl = format!("#define COND {cond}\n{BRANCH64}");
+            let model = branch64_model(cond, &src);
+            // the bases, one per wave, are won in the atomic's order: the multiset is the result (waves add r+1 each)
+            let canon = |o: &[Vec<u32>]| -> Vec<Vec<u32>> {
+                let mut b = o[1].clone();
+                b.sort_unstable();
+                // the bases of waves adding the same amount can swap; the multiset of partial sums is what the model has when
+                // the waves went in order, so compare the total and the number of waves instead
+                vec![o[0].clone(), vec![b.len() as u32], o[2].clone()]
+            };
+            let mut row = format!("COND {cond}:");
+            for wide in ["0", "1"] {
+                match console_only(&hlsl, &inputs, &vec![("VICTORY_WAVE_WIDE".to_string(), wide.to_string())]) {
+                    Err(v) => {
+                        report(&format!("wave64_branch cond {cond} wide={wide}"), &v);
+                        if v.is_skipped() {
+                            return;
+                        }
+                        let _ = write!(row, " wide={wide} {}", v.summary());
+                    }
+                    Ok(o) => {
+                        let (g, m) = (canon(&o), canon(&model));
+                        let diff = mismatches(&g[0], &m[0]);
+                        let ok = diff.0 == 0 && g[1] == m[1] && g[2] == m[2];
+                        let _ = write!(row, " wide={wide} {}", if ok { "matches the 64-lane model".to_string() } else { format!("DIFFERS ({} of {} dwords, first {:?}; total {:?} vs {:?})", diff.0, m[0].len(), diff.1, g[2], m[2]) });
+                    }
+                }
+            }
+            report_rows.push(row);
+        }
+        for r in &report_rows {
+            eprintln!("xdxc-oracle wave64_branch: {r}");
+        }
     }
 }

@@ -1,3 +1,6 @@
+#ifndef PRECISE_DIV
+#define PRECISE_DIV 0
+#endif
 // Our own HLSL (xdxc oracle, v_div_fixup): the f32 quotient of every pair of a table of 32 special values, a[i] / b[j],
 // thread = i * 32 + j. Zeros, infinities, NaNs of both signs and payloads, denormals, the largest and smallest normals.
 #define RS "RootFlags(0), RootConstants(num32BitConstants=4, b0), DescriptorTable(SRV(t0, numDescriptors=1), UAV(u0, numDescriptors=1))"
@@ -13,5 +16,10 @@ void main(uint3 tid : SV_DispatchThreadID)
     DUAL_BIND_UAV(dst, 1, 0)
     float a = asfloat(tbl.Load((tid.x >> 5) * 4));
     float b = asfloat(tbl.Load((tid.x & 31) * 4));
-    dst.Store(tid.x * 4, asuint(a / b));
+#if PRECISE_DIV
+    precise float q = a / b;
+#else
+    float q = a / b;
+#endif
+    dst.Store(tid.x * 4, asuint(q));
 }
