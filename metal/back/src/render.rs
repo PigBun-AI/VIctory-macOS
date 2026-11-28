@@ -1027,6 +1027,10 @@ impl Device {
                         Retained::into_super(stage_in_fn);
                     linking.setFunctionDescriptors(Some(&NSArray::from_retained_slice(&[linked])));
                     d.setObjectStaticLinkingDescriptor(Some(&linking));
+                    if crate::prof::NO_RASTER.with(|c| c.get()) {
+                        d.setFragmentFunctionDescriptor(None);
+                        d.setRasterizationEnabled(false);
+                    }
                     d.setMaxTotalThreadsPerMeshThreadgroup(g.max_input_primitives.max(1) as usize);
                     d.setMaxTotalThreadsPerObjectThreadgroup(256);
                     d.setPayloadMemoryLength(g.payload_bytes.max(16384) as usize);

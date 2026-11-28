@@ -538,6 +538,12 @@ impl Executor {
                 }
             }
         }
+        let no_raster = std::env::var("VICTORY_METAL_NO_RASTER").is_ok_and(|v| {
+            let hex = format!("{:016x}", label.hash);
+            v.split(',')
+                .any(|h| !h.trim().is_empty() && hex.contains(h.trim()))
+        });
+        crate::prof::NO_RASTER.with(|c| c.set(no_raster));
         let desc = describe(d, &sig.msc_desc, code, self.options.compat).map_err(|r| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
             r.status()
