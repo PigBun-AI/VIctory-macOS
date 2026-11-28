@@ -1168,18 +1168,31 @@ pub(super) fn with_local_waves<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// `VICTORY_F16_NEAREST=1`: the results of 16-bit float operations (`v_add_f16`,
-/// `v_mul_f16`, `v_cvt_f16_f32` ...) are rounded to nearest as the console rounds them
-/// ([`Lower::f16_nearest`]) instead of as the host's `f32tof16` does (toward zero on NVIDIA:
-/// the last place of a result that is not exact is then one lower than the console's).
-/// Off by default: it is exact but untried in a game run, and adds instructions to every
-/// such operation. The wave sum of 16-bit floats ([`Lower::half_sum`]) is always exact.
-fn f16_nearest_on() -> bool {
+/// `VICTORY_F16_NEAREST` (default ON, `0` turns it off; mac patch F1): the results of 16-bit
+/// float operations (`v_add_f16`, `v_mul_f16`, `v_cvt_f16_f32`, `v_fma_mix{lo,hi}_f16`,
+/// `v_pk_*_f16`, `v_interp_p2_f16` ...) are rounded to nearest as the console rounds them
+/// ([`Lower::f16_nearest`]) instead of as the host's `f32tof16` does: toward zero on NVIDIA and
+/// in Metal Shader Converter (D3D11.3 spec 3.2.2 allows it), so that the last place of a result
+/// that is not exact was one lower than the console's. It costs about a dozen instructions per
+/// result. `v_cvt_pkrtz_f16_f32` rounds toward zero on the console and keeps its own form
+/// ([`Lower::f16_toward_zero`]); the wave sum of 16-bit floats ([`Lower::half_sum`]) is always
+/// exact. Part of the shader cache key by its effective state ([`f16_nearest`]).
+fn f16_nearest_on() -> bool { // mac F1
     #[cfg(test)]
     if let Some(on) = TEST_F16_NEAREST.get() {
         return on;
     }
-    crate::emit::live::var_os("VICTORY_F16_NEAREST").is_some_and(|v| v == "1")
+    f16_nearest_for(crate::emit::live::var("VICTORY_F16_NEAREST").as_deref())
+}
+
+/// On unless the value is exactly "0" (after trimming). Pure, for testing.
+pub(super) fn f16_nearest_for(value: Option<&str>) -> bool { // mac F1
+    value.map(str::trim) != Some("0")
+}
+
+/// Whether 16-bit float results are rounded to nearest ([`f16_nearest_on`]), for the shader cache's key.
+pub fn f16_nearest() -> bool { // mac F1
+    f16_nearest_on()
 }
 
 #[cfg(test)]
@@ -4219,6 +4232,17 @@ impl<'a> Lower<'a> {
             46,
             &[a, b, c],
         )
+    }
+
+    /// The f16 (low bits) of the f32 result `f` of a 16-bit float operation: to nearest, ties to
+    /// even, as the console rounds it ([`f16_nearest_on`]), or as the host's conversion does.
+    fn f16_result(&mut self, f: V) -> V { // mac F1
+        if f16_nearest_on() {
+            self.f16_nearest(f)
+        } else {
+            let i32t = self.s.t.i32;
+            self.s.op(self.cur, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
+        }
     }
 
     /// `f` as an f16 in the low bits, rounded toward zero: the nearest-even
@@ -9138,9 +9162,7 @@ impl<'a> Lower<'a> {
                     Some(o) => self.i32_of(o)?,
                     None => self.s.m.i32(0),
                 };
-                let h = self
-                    .s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, self.s.t.i32, 130, &[r]);
+                let h = self.f16_result(r); // mac F1
                 let (keep, h) = if name == "v_fma_mixhi_f16" {
                     let k16 = self.s.m.i32(16);
                     (0xFFFF, self.s.m.bin(c, Bin::Shl, h, k16))
@@ -9165,9 +9187,7 @@ impl<'a> Lower<'a> {
             "v_cvt_f16_f32" if v.opsel == 0 => {
                 // Rounded to nearest even (the MODE default) into the low half.
                 let a = f(self, 0)?;
-                let r = self
-                    .s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, self.s.t.i32, 130, &[a]);
+                let r = self.f16_result(a); // mac F1
                 let Some(Operand::Vector { reg, .. }) = v.dst else {
                     return Err("a 16-bit result outside a VGPR");
                 };
@@ -9977,14 +9997,9 @@ impl<'a> Lower<'a> {
                 f = l.unary(7, f);
             }
             // The console rounds to nearest; the host's conversion may round toward zero
-            // (NVIDIA's does), one step of the last place lower where the two differ.
-            // shortcut: the host's conversion unless `VICTORY_F16_NEAREST=1`
-            // ([`f16_nearest_on`]), which costs a dozen instructions per result.
-            let h = if f16_nearest_on() {
-                l.f16_nearest(f)
-            } else {
-                l.s.op(l.cur, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
-            };
+            // (NVIDIA's and Metal Shader Converter's do), one step of the last place lower
+            // where the two differ ([`f16_nearest_on`]).
+            let h = l.f16_result(f); // mac F1
             l.write_half(inst, h, guard)
         };
         if name == "v_cvt_f16_f32" {
@@ -10306,7 +10321,7 @@ impl<'a> Lower<'a> {
             return Err("modifiers on a packed integer operation");
         }
         let c = self.cur;
-        let (i32t, f32t) = (self.s.t.i32, self.s.t.f32);
+        let f32t = self.s.t.f32;
         let mut halves = Vec::new();
         for high in [false, true] {
             let mut xs = Vec::new();
@@ -10342,8 +10357,7 @@ impl<'a> Lower<'a> {
                 if v.clamp {
                     f = self.unary(7, f);
                 }
-                self.s
-                    .op(c, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
+                self.f16_result(f) // mac F1
             } else {
                 let k16 = self.s.m.i32(16);
                 let sext = |l: &mut Self, x: V| {
@@ -11215,10 +11229,11 @@ impl<'a> Lower<'a> {
                         if clamp {
                             f = self.unary(7, f);
                         }
-                        let lo = to_f16(self, f);
+                        // (an interpolated value: rounded as the console rounds it)
+                        let lo = self.f16_result(f); // mac F1
                         return self.write_half(inst, lo, None);
                     }
-                    let lo = to_f16(self, f);
+                    let lo = self.f16_result(f); // mac F1
                     self.low_half(inst, reg, lo)
                 } else if matches!(eval, Eval::Mode(1)) {
                     // The whole dword of a flat input: both halves.
@@ -13628,6 +13643,18 @@ mod tests {
     use crate::{io, ir, resource, structure};
 
     const S_ENDPGM: u32 = 0xBF81_0000;
+
+    /// mac F1: rounding of 16-bit results to nearest is on unless the variable is exactly "0".
+    #[test]
+    fn f16_nearest_is_on_unless_switched_off() {
+        use super::f16_nearest_for;
+        assert!(f16_nearest_for(None));
+        assert!(f16_nearest_for(Some("1")));
+        assert!(f16_nearest_for(Some("")));
+        assert!(f16_nearest_for(Some("yes")));
+        assert!(!f16_nearest_for(Some("0")));
+        assert!(!f16_nearest_for(Some(" 0 ")));
+    }
 
     #[test]
     fn packed_pixel_inputs_find_their_second_row() {

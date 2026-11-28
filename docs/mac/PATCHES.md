@@ -1374,6 +1374,32 @@ Tests: `emit/mesh_cs_tests.rs` 13 unit tests; Wine/D3DMetal: the compute pass pl
 *Why not needed on Windows.* Windows has D3D12 and the DXIL validator; the tests run there as they were.
 *Remove when.* A Windows-independent device for the proofs exists upstream (or the Windows host is rebuilt on the same pipe).
 
+### F1 — 16-bit float results rounded to nearest by default (`victory-shader` `emit/lower.rs`, 1 line each in `emit/mod.rs` and `victory-gpu` `shader_cache.rs`)
+
+*What.* The translator's `VICTORY_F16_NEAREST` (round the result of a 16-bit float operation to nearest even, `Lower::f16_nearest`) is **on by
+default**; `VICTORY_F16_NEAREST=0` turns it off. It now covers every result rounding of the title's code: `v_cvt_f16_f32`, the VOP f16 arithmetic
+(`v_add/sub/mul/fma/fmac/mad/min/max/med3/rcp... _f16`, `v_pk_*_f16`), `v_fma_mixlo/mixhi_f16` and `v_interp_p2_f16` (these last three used the host's
+plain `legacyF32ToF16`; one helper, `Lower::f16_result`, is now the only place that picks). Not touched: `v_cvt_pkrtz_f16_f32` (round toward zero on
+the console too, `f16_toward_zero`), the format conversions of d16 stores, and the wave sum of halves (already exact). The shader cache key holds the
+effective state (`emit::f16_nearest()`), as for `VICTORY_EXPORT_F16_SAT`, so a default flip or a `=0` run never reuses the other's translations.
+
+*Why not needed on Windows.* The Windows line keeps the switch off (exact but untried in a game run; the upstream comment: the host's `f32tof16` is also
+toward zero on NVIDIA); there it is a choice, not a fix. On the Mac, Metal Shader Converter's `f32tof16` is round toward zero (D3D11.3 Functional Spec 3.2.2
+allows it) with a double rounding for half denormals: a result that is not exact is 1 ULP (2^-10 relative) lower than the console's, in
+about 37 % of f32 inputs (measured: 50,329,600 of 134,217,728 sampled inputs differ from nearest). 11,642 of 26,177 translated programs (44 %)
+have such a rounding (11,621 of the 25,756 translated census programs change by it).
+
+*Remove when.* The Windows line turns the same switch on (merge conflict at the `mac F1` lines) or MSC rounds to nearest.
+
+*Evidence (2026-11-28).* Hardware proof on the Mac GPU (Apple M5 Max, macOS 27.2.1, MSC 4.0.3, through the S6 executor; test
+`emit::f16_hw_tests`, branch `mac/f16-hw-proof` over `mac/shader-harness`): the real translator output of `v_cvt_f16_f32`, `v_fma_mixlo_f16`
+(f32 operands) and `v_add_f16` against the exact CPU nearest-even rounding, 1.87 billion inputs of each (111 of the 256 chunks of 2^24: every
+exponent range of both signs, denormals, 65520, Inf, NaN, -0): **0 differences**, NaN gives NaN, an f32 denormal input may give either zero; the same programs with the switch off differ in 37 % of inputs, so the test can fail. Census (`victory-census translate`, 25,985
+containers): translated 25,760 on and off, failed 225 on and off, the same programs; 11,621 translations change; DXIL bytes of those +4.4 % in
+total (median +6 %, 90th percentile +14 %, largest 2.9x). MSC/Metal on a 20 % sample of the changed programs (2,325): cs 198/198, vs 165/165,
+ps 104/1,028, ms 917/934 on **and** off, the same programs; pipeline build time of the sample (a loaded machine, noisy): cs +57 %, vs +17 %,
+ps +59 %, ms +43 %. GPU run time of the added ~12 operations per result is not measured. Unit test `lower::tests::f16_nearest_is_on_unless_switched_off`.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

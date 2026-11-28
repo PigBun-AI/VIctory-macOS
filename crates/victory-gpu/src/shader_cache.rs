@@ -69,7 +69,6 @@ fn build() -> [u8; 32] {
             "VICTORY_WAVE_DEEP_SKIPS",
             "VICTORY_WAVE_OWN_BITS",
             "VICTORY_WAVE_LOCAL",
-            "VICTORY_F16_NEAREST",
             "VICTORY_HELPER_OWN",
             "VICTORY_FIRSTLANE_OWN",
             "VICTORY_FIRST_HALF",
@@ -87,6 +86,11 @@ fn build() -> [u8; 32] {
             }
             bytes.push(0);
         }
+        // 16-bit float results rounded to nearest as the console does (mac F1), default on: keyed
+        // by the effective state like the one below.
+        bytes.extend_from_slice(b"VICTORY_F16_NEAREST=");
+        bytes.push(victory_shader::emit::f16_nearest() as u8);
+        bytes.push(0);
         // Colour exports clamped to +-65504, NaN -> 0 (emit::lower::sunclamp), default on:
         // keyed by the effective state, so unset and "1" share entries and "0" differs.
         bytes.extend_from_slice(b"VICTORY_EXPORT_F16_SAT=");
