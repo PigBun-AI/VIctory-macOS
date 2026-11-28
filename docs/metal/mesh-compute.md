@@ -287,3 +287,182 @@ pre-scan (back), real group counts and bandwidth (performance), amplification st
 
 Open: does the title's pixel shader UAV output feed later mesh shaders in one pass?
 (decides 3.3 option 1 versus the split). Not yet checked in a replay.
+
+## 8. Interface v1 (接口 v1: translator <-> back)
+
+Owner: the back-runtime hand (branch `mc-back`, 2026-11-28). The prototype
+(`ms2cs.py`, `back/src/mesh_compute.rs`, `tests/mesh_compute.rs`) is the reference where
+this section is silent; where it disagrees, **this section wins** and the prototype is
+changed to match. A change request from the translator side goes to the back-runtime
+hand, who decides. Versions: the layout text is `vmcl 1`, the container part is `VMCS`
+version 1; a reader that meets another version refuses the emulation (the pair stays
+refused, as before), it never guesses.
+
+### 8.1 What travels, and how (delivery)
+
+Between victory-gpu (L6) and the back the only channel is the shader bytes of the D3D12
+pipeline description. So the three products travel **inside the mesh shader's own DXIL
+container** as one extra container part, FourCC `VMCS`, appended by the translator:
+
+```text
+VMCS part payload (little endian, every offset from the start of the payload, 4-aligned)
+   0  u32 version            = 1
+   4  u32 flags              = 0 (reserved, must be 0)
+   8  u32 layout_off, u32 layout_len   the `vmcl 1` text (8.3), UTF-8, no NUL
+  16  u32 cs_off,     u32 cs_len       a complete DXIL container: the compute form (8.4)
+  24  u32 vs_off,     u32 vs_len       a complete DXIL container: the vertex-fetch shader (8.5)
+  32  data
+```
+
+* The container stays a valid mesh container: the `DXIL`, `SFI0`, `PSV0`, ... parts are the
+  native mesh shader, unchanged, so the native path (and `mesh_fit`, which edits the
+  `DXIL` part in place) works as it does today. The converter ignores unknown parts (as it
+  ignores the hash, `mesh_fit.rs`); the back strips nothing.
+* The translator recomputes the container hash over the final bytes if it signs at all.
+* The part is optional. No `VMCS`: the back behaves as before the emulation (the problem
+  pair is refused). `VICTORY_METAL_MESH_COMPUTE=0` also ignores it.
+* The translator may attach it to every mesh shader it can lower (the back only reads it
+  for pairs it must emulate: size refusal after `mesh_fit::retry`, AGX crash cache, pair
+  denylist). A shader it cannot lower (payload / object stage, 16- or 64-bit outputs it
+  does not widen, more than 256 vertices, non-triangle topology) simply gets no part.
+* Both inner containers are ordinary DXIL (`cs_6_6`, `vs_6_6`, entry `main`), valid for
+  MSC 4.0.3 on their own, **against the root signature of 8.2**.
+
+### 8.2 Binding convention (root signature)
+
+Let `N` be the number of root parameters of the application's root signature, `space`
+and `register` the two numbers of the layout text (`space` 4000000000, `register` 0;
+reserved so they cannot collide with the title's registers). The back builds a *second*
+root signature for the emulation: the application's, byte for byte (flags, parameters,
+ranges, static samplers), plus two parameters **appended last** (so the offsets of the
+application's parameters in the top-level argument buffer do not move):
+
+| root index | compute form (8.4) | vertex-fetch VS (8.5) and the pixel shader | what the back puts there |
+|---|---|---|---|
+| `N`   | root **UAV** `u<register>, space<space>`: the scratch (a `RWByteAddressBuffer`) | root **SRV** `t<register>, space<space>`: the same bytes (a `ByteAddressBuffer`) | GPU address of this dispatch's group 0 (8.6) |
+| `N+1` | root **CBV** `b0, space<space>`: 16 bytes `{dim_x, dim_y, dim_z, 0}` | declared (CBV `b0, space<space>`), not read | GPU address of the dispatch dimensions |
+
+Both extended signatures give the **same** top-level argument buffer layout (all new
+parameters are 8-byte root descriptors in the same places), so one argument buffer serves
+the compute dispatch and the draw; the back checks that and refuses the emulation if MSC
+reflects otherwise. Visibility is ALL. The kernel and the VS never see any other
+parameter of the extension; the pixel shader is the unchanged S1 pixel shader and does not
+read the scratch. The application's heap-indexed flags are kept (the mesh body still reads
+`ResourceDescriptorHeap[]`).
+
+### 8.3 Scratch layout (the `vmcl 1` text, as the prototype)
+
+Keys, one per line after the line `vmcl 1`: `threads X Y Z`, `maxv`, `maxp`, `vstride`,
+`pstride`, `vhead`, `parea`, `gstride`, `space`, `register`, then one line per element
+`v|p NAME INDEX KIND TYPE ROWS COLS OFFSET INTERP` (`KIND` = `DXIL::SemanticKind`, `TYPE`
+= `float|uint|int|bool`, `INTERP` = `DXIL::InterpolationMode`). One new optional key:
+
+* `reads MASK` (hex): the DXIL `ResourceKind`s the **compute form** can read through
+  heap-indexed or table SRVs, as a bit set (bit `k` = kind `k`: 1 Texture1D, 2 Texture2D,
+  3 Texture2DMS, 4 Texture3D, 5 TextureCube, 6 Texture1DArray, 7 Texture2DArray, 10
+  TypedBuffer, 11 RawBuffer, 12 StructuredBuffer; bit 0 = "something not listed").
+  Absent = all bits. The back uses it only for the pass-split safety rule (8.8); a too
+  small mask is a correctness bug of the translator, a too large one only costs splits.
+
+Per group `g` (flat index, 8.4) at byte `g * gstride`:
+
+```text
+   0                          u32 vertex count, u32 primitive count, 2 x u32 reserved
+   vhead + v * vstride        vertex v: its elements
+   parea + p * pstride        primitive p: u32 indices (v0 | v1<<8 | v2<<16), then its elements
+   gstride = parea + maxp * pstride
+```
+
+* Every component is 4 bytes (`half`/16-bit outputs are widened to `float`; `bool` is a
+  `u32`, 0 or 1). All offsets and strides are multiples of 4 (the prototype uses 16;
+  translators may pack tighter). `vhead >= 16`, `maxv <= 256`, triangle lists only.
+* Elements of a record are in the mesh signature's id order, `OFFSET` is the byte offset
+  inside the record (`>= 4` in a primitive record). `SV_Position` is the vertex element
+  of kind 3, `SV_CullPrimitive` the primitive element of kind 30 (a `bool` stored as `u32`).
+  Every other element is carried to the pixel shader under its own semantic name and index.
+  **Per-primitive elements are always flat**; this includes S1's `uint4` records. Per-vertex
+  elements keep their interpolation mode from the signature (`INTERP`).
+* The scratch is **not cleared**. The kernel writes the counts of every group, even
+  when they are zero (`SetMeshOutputCounts` is group-uniform); a primitive `p < count`
+  must have its indices written (D3D12 requires it). Whatever else is in the region is
+  garbage and is never read.
+* A group's scratch is addressed with 32-bit byte offsets in the kernel (`g * gstride`):
+  the back keeps one dispatch's scratch under 2 GiB.
+
+### 8.4 The compute form (kernel)
+
+* `cs_6_6`, `numthreads` = the mesh shader's, entry `main`. The body is the mesh body
+  (resource loads through the heap, wave operations, groupshared, `SV_GroupIndex`,
+  `SV_GroupThreadID`, `SV_GroupID` all unchanged); only these operations change:
+  `setMeshOutputCounts(v, p)` -> store `v, p` at the group header; `emitIndices` ->
+  store the packed indices; `storeVertexOutput` / `storePrimitiveOutput` -> `rawBufferStore`
+  of the 4-byte component at its offset. Output stores need no bounds check (D3D12 makes
+  out of range output writes undefined).
+* **Group slot.** `g = id.x + dim_x * (id.y + dim_y * id.z)`, `base = g * gstride`, with `id` =
+  `SV_GroupID` and `dim_*` from the `b0` block of 8.2 (offsets 0, 4). The prototype
+  computes `g = id.x`, which is the same for `y = z = 1`; the dimension block is what
+  makes `DispatchMesh(x, y, z)` with `y, z > 1` work and what the back writes in every
+  case. A dispatch of zero groups is never issued.
+* No resource of the application may be bound at `space` (the back would refuse the pipeline
+  with a clear text if MSC reflects a clash).
+* An amplification (object) stage, payloads, `SV_ViewID`: not lowered (no `VMCS` part).
+
+### 8.5 The vertex-fetch shader
+
+* `vs_6_6`, entry `main`, **no input layout, no vertex buffers**. Inputs: `SV_VertexID` and
+  `SV_InstanceID` only. The back issues one **non-indexed `Draw(3 * maxp, groups, 0, 0)`
+  with a triangle-list topology** whatever the title set (a mesh pipeline has none), where
+  `groups = dim_x * dim_y * dim_z`:
+  `SV_InstanceID` = `g` (the flat group of 8.4), `SV_VertexID` = `3 * p + corner`.
+* It reads the scratch (root SRV of 8.2) as a `ByteAddressBuffer`: `base = g * gstride`;
+  `dead = p >= prim_count || any index >= vertex_count || cull flag != 0`; a dead primitive
+  returns `SV_Position = (0,0,0,0)` and zeros elsewhere (a degenerate triangle: the
+  rasterizer drops it). Otherwise it returns, with `corner`'s vertex record `v`: the
+  position, every per-vertex element of `v`, every per-primitive element of `p`.
+* Its output signature is exactly the signature the pixel shader reads: same semantic
+  names, indices, component types, and interpolation modes (per-primitive and integer ones
+  `nointerpolation`). Outputs the pixel shader does not read may be dropped (pruning is
+  optional; the layout still holds them, the scratch is written in full).
+* Flat attributes take the provoking vertex of the triangle, the first corner (D3D12 and
+  Metal agree by default); per-primitive values are equal at the three corners, so
+  nothing depends on it. `SV_PrimitiveID` in the pixel shader is `p` (the slot), as in the
+  native path, per instance.
+
+### 8.6 What the back does (its side of the contract)
+
+1. At pipeline creation of a pair that needs it: reads `VMCS`, parses the layout, builds
+   the extended root signature (8.2), converts `cs` against it, converts `vs` + the
+   unchanged `ps` against it (topology triangle, the pair's blend/depth/raster state), and
+   checks that the thread-group size equals `threads`, that both argument-buffer layouts are
+   identical and agree with the application's for parameters `0..N`.
+2. Per `DispatchMesh(x, y, z)`: scratch from the back's ring: `x*y*z*gstride` bytes (16-aligned);
+   argument buffer = the application's current root arguments (as the shadow holds them
+   at that point of the command stream) + the two trailing addresses; compute dispatch of
+   `x, y, z` groups; barrier compute -> vertex stage; the draw of 8.5.
+3. Per `ExecuteIndirect` with a `DISPATCH_MESH` action: the same on the GPU, one record at a
+   time; scratch for the records of one call is one arena sub-allocated on the GPU, a
+   record whose groups do not fit gets zero groups (counted, not silent: `ListStats`).
+4. Pass structure: all kernels of one front pass are encoded in one compute encoder
+   *before* the render encoder (pre-scan); a draw that may read what an earlier draw of
+   the same pass wrote through a UAV gets its kernel encoded just before it instead,
+   which splits the pass there (8.8).
+
+### 8.7 Failure behaviour
+
+An emulated pair that cannot be built (missing/foreign `VMCS`, MSC refuses the compute
+form or the VS, layouts disagree) keeps the old refusal for the pair. A draw whose
+scratch cannot be had (ring too small for it) is dropped with a drop-statistics reason.
+Nothing here aborts the process.
+
+### 8.8 Safety rule (back internal, listed for the translator's `reads`)
+
+Offline check (`research/mesh-compute-check/REPORT.md`): zero real dependencies of
+"UAV written earlier in the front pass, read by a problem mesh". The runtime insurance is
+one rule: a problem-mesh draw whose kernel may read (SRV/CBV: root descriptors, bounded
+table ranges, and the heap-indexed kinds in `reads`) a resource that an earlier draw of the
+same front pass may have written through a UAV is **not** hoisted: its kernel is encoded
+right before it (the render encoder ends and the pass continues with `Load` actions),
+so the kernel sees the writes. Resources are matched by identity (buffer range / texture);
+accesses the back cannot resolve (heap-indexed UAV writes by the pixel shader against
+heap-indexed reads by the kernel) are counted as `unproven` and do not split by default
+(`VICTORY_METAL_MESH_COMPUTE_SPLIT=unproven` splits on them, for A/B).
