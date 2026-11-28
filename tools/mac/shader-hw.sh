@@ -12,7 +12,7 @@
 # Without an executor the tests skip (that is what tools/mac/check.sh sees).
 #
 # Prints: passed / failed / skipped counts and each failure's class from
-# tools/mac/shader-hw-known.tsv (an unlisted failure is "UNCLASSIFIED").
+# tools/mac/shader-hw-known.txt (an unlisted failure is "UNCLASSIFIED").
 # Exit 0 only when every failure is listed in the table as base / semantic
 # (a "bug" row is a translator bug handed over, and keeps the exit at 1).
 # Rules: cargo runs niced with 2 jobs (the machine is shared); no game.
@@ -39,7 +39,7 @@ rm -f "$LOG/exec.tsv"
 echo "== run the tests"
 VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec.tsv" \
     nice -n 15 cargo test -p victory-shader --lib -j 2 -- $FILTER "$@" 2>&1 | tee "$LOG/test.txt" | grep -E '^test result|FAILED'
-python3 tools/mac/shader-hw-tally.py "$LOG/test.txt" "$LOG/exec.tsv" tools/mac/shader-hw-known.tsv
+python3 tools/mac/shader-hw-tally.py "$LOG/test.txt" "$LOG/exec.tsv" tools/mac/shader-hw-known.txt
 rc=$?
 # The wide-load pass the test asks for (its doc comment): once with VICTORY_SHADER_OPT=127.
 if [ -z "$FILTER" ]; then
@@ -47,6 +47,6 @@ if [ -z "$FILTER" ]; then
     rm -f "$LOG/exec127.tsv"
     VICTORY_SHADER_OPT=127 VICTORY_SHADER_EXEC="$EXEC" VICTORY_SHADER_EXEC_LOG="$LOG/exec127.tsv" \
         nice -n 15 cargo test -p victory-shader --lib -j 2 -- scalar_buffer_loads 2>&1 | tee "$LOG/test127.txt" | grep -E '^test result|FAILED'
-    python3 tools/mac/shader-hw-tally.py "$LOG/test127.txt" "$LOG/exec127.tsv" tools/mac/shader-hw-known.tsv @opt127 || rc=1
+    python3 tools/mac/shader-hw-tally.py "$LOG/test127.txt" "$LOG/exec127.tsv" tools/mac/shader-hw-known.txt @opt127 || rc=1
 fi
 exit $rc

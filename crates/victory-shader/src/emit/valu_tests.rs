@@ -256,7 +256,8 @@ fn run_cases_on(
         }
         ran += 1;
     }
-    if ran == 0 && devices.iter().all(|&(_, warp)| !warp) {
+    // mac S6: a Mac without the executor (tools/mac/shader-hw.sh) has no device: the tests skip.
+    if ran == 0 && (cfg!(target_os = "macos") || devices.iter().all(|&(_, warp)| !warp)) {
         // A case for the hardware adapter alone, on a machine without one.
         eprintln!("no SM 6.6 hardware device; a hardware-only case not run");
         return;
