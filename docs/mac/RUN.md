@@ -345,6 +345,32 @@ Every round of a series carries `--until-capture`, so a round costs the time to 
 `tools/mac/test-run-until.sh` tests all of this with a fake Wine (no game): `--until-log`, `-world`, `-capture` (log, file, `w<N>`,
 recording), `-present`, not met (exit 6), `--linger`, and that a run without `--until-*` is as before.
 
+## Batch acceptance: `tools/mac/accept-batch.sh`
+
+After each merged block, one command, no one watching, and the numbers are ready to send:
+
+```sh
+tools/mac/accept-batch.sh [--exe PATH] [--stage DIR|NAME] [--label TEXT] [--world N] [--timeout SEC]
+tools/mac/accept-batch.sh --summarize RUN_DIR --out DIR      # summary of a finished run, no game
+```
+
+It runs ONE round with `run.sh --backend metal --perf --new-game --no-watchdog --frametime-log --until-world 300 --timeout 720`
+(the default keys and input: the prologue runs by itself; the cap is 12 minutes, the round ends as soon as world frame 300 is
+logged), with `VICTORY_MAC_DROP_STATS=2` (G8) and `VICTORY_METAL_DROPSTATS=<run>/dropstats` (the Metal back's counts). The exe
+defaults to the release build of `worktrees/mac/int` (an error if there is none), the stage to `research/metal-stage/current`
+(`--stage NAME` is a folder there). The game lock is run.sh's: it queues behind a running game. Results go to
+`research/accept/<yyyymmdd-hhmmss>-<short mac/livetr commit>/` (`--accept-dir` or `VICTORY_ACCEPT_DIR` change the place):
+`summary.md`, `summary.json`, `run/` (the run's logs and `dropstats/`), `run.sh.out`.
+
+`summary.md`: the version (mac/livetr commit, the stage with `current` resolved, exe sha, `VICTORY_WAVE_WIDE`, the denylist); alive or
+not and the highest world frame; time to world frame 1; frame-time median and p90 and the number of frames over 5 s in world
+frames 1..300 (and over the whole run); the load average; the shared layer's draws and dispatches, drop rate and top 10 reasons
+(the classes of `drop-stats-report.sh`, plus the detailed `drop-stats top` lines); the Metal back's counts and top 10 reasons; and the
+differences to the last acceptance in the folder (found by `"accept_batch": 1` in its `summary.json`). Exit status: 0 the round
+reached world frame N and was alive, 1 it did not (died, or the cap came first: the summary says which and how far), 2 bad
+options or no exe/stage, 4 the lock wait ran out. It writes the summary also when the round failed. No picture is taken.
+`tools/mac/test-accept-batch.sh` tests it with a fake Wine (about 30 s, no game).
+
 ## What a run leaves in its out directory
 
 `RUN.txt` (first line: the `--purpose`), `stdout.log`, `stderr.log` (the title and Wine), `start.txt` (time, backend, profile, checkout commit and number of changed files, exe
