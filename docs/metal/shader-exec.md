@@ -41,6 +41,8 @@ bit 0x80, comparison function) it is what `image_sample_c*` / `SampleCmp` need o
 (MSC's `sample_compare` takes a depth texture). The sampler side was there already
 (`sampler_spec`: the comparison function and the compare bit).
 
+**Shaped textures (view kinds 10..13).** `Shaped` binds an RGBA32F Texture1D (kind 10: width, texels), Texture2DArray (kind 11: width, height, layers) or Texture3D (kind 12: width, height, depth) as an SRV, uploaded slice by slice; `Uav3d` (kind 13) is a zeroed RGBA32F RWTexture3D that comes back as `depth` slices of `height` rows. The wire form is pinned on both sides.
+
 **Graphics (ops 4 and 5).** A pipeline request carries the root signature, a vertex
 or mesh shader, an optional geometry shader, the pixel shader, the render targets' DXGI
 formats (RGBA32 float, sint or uint, read from the pixel shader's output signature), a depth

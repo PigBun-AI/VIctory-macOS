@@ -6,6 +6,7 @@ with the Mac lead's `docs/mac/translation-matrix-mac.csv` and writes the lists t
 
 * `docs/metal/translation-unproven.md` — used=yes and not proven, by frequency. **The only source of bug-fix work.**
 * `docs/metal/translation-stubbed.md` — rows with disposition=stubbed (what is skipped or faked), with the way out.
+* `docs/metal/translation-priority.md` — the same rows (used, not proven) sorted by priority = log10(freq+1) × max(symptom) ÷ cost; columns `symptom` and `cost`, format in `docs/metal/symptom-format.md`.
 
 Working method: make each node right, in order; when every node is right, the picture is right.
 
@@ -19,6 +20,8 @@ Working method: make each node right, in order; when every node is right, the pi
 | disposition | how the AMD hardware/driver part of the node is handled on the Mac path: `mapped` (same thing, other name), `translated` (rule-based conversion), `emulated` (done in software, differs in cost or edge cases), `stubbed` (accepted and ignored, or skipped), `unsupported` (refused) |
 | reference | `hw` the test runs the translated program on a real GPU and compares with expected values from the ISA rules (the GPU is the host's, not an Xbox: no measured Xbox value exists), `spec` the expected value is computed from the D3D12/ISA rules, `d3dmetal` the same test run against D3DMetal, `none` |
 | xbox_hw / deviation / restore_plan | what AMD hardware or driver does implicitly in this node / what is different on the Mac and what may show / highest-fidelity Metal 4 route with cost and feasibility (可行 / 待验证 / 不可行) and dated sources. Cost is recorded, never a reason to choose |
+| symptom | what the title shows when this node is wrong: `geomN colorN flickerN slowN crashN`, each 0–3 (geom: missing geometry; color: wrong, white or dark color; flicker: flicker, an unstable picture; slow: slow frames; crash: crash). Then optional tags: `估` the scores are an estimate, `freq=floor` a measured reproducible symptom whose freq is words only, `closed` fixed today and not ranked, `summary` a row that stands for rows of its own |
+| cost | person-hours to close the node (from `research/map-plan/plan.tsv`, 1 d = 8 h, ranges take the middle); `估` after the number when the plan has none (4 h when nobody is on it) |
 
 Frequencies come from: `callstats:20261127-221938-map` (calls at seam A in one game run, 370 s, the title still early),
 `census:2026-11-27` (programs of the package, `research/census/census.json`), run logs (r6, the map run). Frequencies of
