@@ -92,7 +92,10 @@ pub fn run(
         // SAFETY: nothing else runs yet; the title and the display mode list
         // read these later.
         unsafe {
-            std::env::set_var("VICTORY_DISPLAY_MODE", format!("{}x{}", native_1440p::WIDTH, native_1440p::HEIGHT));
+            // A value set by hand stays (a control run: native 1440p with the reported mode left at 4K; mac X13).
+            if std::env::var_os("VICTORY_DISPLAY_MODE").is_none() {
+                std::env::set_var("VICTORY_DISPLAY_MODE", format!("{}x{}", native_1440p::WIDTH, native_1440p::HEIGHT));
+            }
             std::env::set_var("VICTORY_NATIVE_1440P", "1");
         }
         println!("display        {}x{} SDR, scene {w}x{h}", native_1440p::WIDTH, native_1440p::HEIGHT);
