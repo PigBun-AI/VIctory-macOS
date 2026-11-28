@@ -202,6 +202,7 @@ gd_install() {
     mkdir -p "$GUARD_PLIST_DIR" "$HV_DIR" || return 1
     gd_plist >"$plist" || return 1
     plutil -lint "$plist" >/dev/null || { echo "heavy-guard: the plist is not valid" >&2; return 1; }
+    : >"$HV_DIR/guard.out" 2>/dev/null
     launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || launchctl load -w "$plist" || { echo "heavy-guard: launchctl could not load $plist" >&2; return 1; }
     sleep 3
     if gd_loaded; then
