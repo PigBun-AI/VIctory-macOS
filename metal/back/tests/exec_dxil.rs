@@ -91,6 +91,69 @@ fn a_root_uav_and_a_root_constant() {
     );
 }
 
+/// GPU readback, not just descriptor bytes: both forms of b0 must preserve
+/// a 16-byte lane offset, including the two sides of a 256-byte boundary.
+#[test]
+fn cbv_suballocation_offsets_survive_table_and_root_binding() {
+    let shader = "cbuffer C : register(b0) { uint4 sentinel; };\n\
+                  RWByteAddressBuffer dst : register(u0);\n\
+                  [numthreads(1,1,1)] void main() { dst.Store4(0, sentinel); }";
+    let Some(dxil) = dxil_or_skip("exec_cbv_suballocation", "cs_6_6", shader) else {
+        return;
+    };
+    let fx = Fx::new();
+    let q = fx.queue();
+    let src = fx.buffer(BufferKind::SHARED, 512);
+    let out = fx.buffer(BufferKind::SHARED, 48);
+    assert_eq!(src.gpu_va % 256, 0, "aligned control must be aligned");
+    let offsets = [16u64, 240, 256];
+    let expected: [u32; 12] = std::array::from_fn(|i| 0xa511_0001 + i as u32);
+    cpu_write(src.cpu_addr, &[0xabad_1dea; 128]);
+    let heap = fx.heap(HeapKind::CBV_SRV_UAV, 3, true);
+    for (i, offset) in offsets.into_iter().enumerate() {
+        cpu_write(src.cpu_addr + offset, &expected[i * 4..i * 4 + 4]);
+        fx.write_view(heap.heap, i as u32, ViewDesc::cbv(src.gpu_va + offset, 16));
+    }
+    for table in [true, false] {
+        let mut sig = RootSigDesc::default();
+        if table {
+            sig.params.push(table_param(0, 1));
+            sig.ranges.push(DescriptorRange {
+                num_descriptors: 1,
+                ..range(RangeKind::CBV)
+            });
+        } else {
+            sig.params.push(descriptor_param(RootParamKind::CBV));
+        }
+        sig.params.push(descriptor_param(RootParamKind::UAV));
+        let sig = fx.root_sig(&sig);
+        let mut c = set_up(sig, pipeline(&fx, sig, &dxil), q);
+        cpu_write(out.cpu_addr, &[0xdead_beef; 12]);
+        if table {
+            c.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+                cbv_srv_uav: heap.heap,
+                sampler: HeapId::NULL,
+            }));
+        }
+        for (i, offset) in offsets.into_iter().enumerate() {
+            c.push(if table {
+                Command::SetRootTable(SetRootTable {
+                    bind_point: BindPoint::COMPUTE,
+                    root_index: 0,
+                    heap: heap.heap,
+                    index: i as u32,
+                })
+            } else {
+                root_va(0, RootParamKind::CBV, src.gpu_va + offset)
+            });
+            c.push(root_va(1, RootParamKind::UAV, out.gpu_va + i as u64 * 16));
+            c.push(dispatch(1, 1, 1));
+        }
+        finish(&fx, q, c);
+        assert_eq!(cpu_read(out.cpu_addr, 12), expected, "table={table}");
+    }
+}
+
 const HEAP_INDEXED: &str = "cbuffer c : register(b0) { uint si; uint di; uint k; uint pad; }\n\
 [numthreads(32,1,1)] void main(uint3 t : SV_DispatchThreadID) {\n\
   ByteAddressBuffer src = ResourceDescriptorHeap[si];\n\
