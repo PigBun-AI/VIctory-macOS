@@ -471,7 +471,13 @@ fn absorb(w: &mut Window, p: &Pending) {
             ) && !split_snap(&p.prof.labels[k]).0.contains("graphics-gs")
             {
                 let a = sn.read(i);
-                if a.len() >= 3 && a[0] >= 60_000 {
+                if a.len() >= 3
+                    && a[0]
+                        >= std::env::var("VICTORY_METAL_GPUPROF_ARGS_MINX")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(60_000)
+                {
                     static SEEN: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
                     let head = split_snap(&p.prof.labels[k]).0.to_string();
                     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
