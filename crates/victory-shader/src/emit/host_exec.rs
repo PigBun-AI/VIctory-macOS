@@ -616,6 +616,12 @@ fn put_bindings(
                     w.u32(u32::from(*mips));
                     w.f32s(&t.iter().flatten().copied().collect::<Vec<_>>());
                 }
+                View::Depth(wd, h, d) => {
+                    w.u8(9);
+                    w.u32(*wd);
+                    w.u32(*h);
+                    w.f32s(d);
+                }
                 View::RawUav(n) => {
                     w.u8(2);
                     w.u32(*n);
@@ -756,6 +762,9 @@ pub enum View<'a> {
     Texture(u32, u32, &'a [[f32; 4]]),
     /// An RGBA32F cube SRV (face size, mip count, texels in D3D subresource order).
     Cube(u32, u16, &'a [[f32; 4]]),
+    /// A depth texture SRV (width, height, depth values; D32_FLOAT read as R32_FLOAT): what a
+    /// comparison sampler reads.
+    Depth(u32, u32, &'a [f32]),
     /// A raw buffer UAV of this many dwords, zeroed.
     RawUav(u32),
     /// An RGBA32F texture UAV (width, height), zeroed.

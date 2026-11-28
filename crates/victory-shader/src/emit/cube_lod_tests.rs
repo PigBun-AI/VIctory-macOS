@@ -137,3 +137,115 @@ fn guest_cube_gradient_selects_mip_by_footprint() {
         assert_eq!(levels.as_slice(), expected, "{name}");
     }
 }
+
+/// A comparison sampler over a depth texture (`image_sample_c_lz`, the title's most used sample
+/// with 15 083 uses): the depth view is a D32_FLOAT texture on the Mac host. mac S6.
+#[test]
+#[cfg(target_os = "macos")]
+fn comparison_sampler_reads_a_depth_texture() {
+    const N: usize = 16;
+    let mut words = vec![
+        0xBE81_0380,
+        0xBE83_0380, // s1, s3 = 0 (upper halves of the tables)
+        0xF40C_0400,
+        0xFA00_0000, // depth SRV to s[16:23] from s[0:1]
+        0xF408_0300,
+        0xFA00_0020, // raw output UAV to s[12:15] from s[0:1]+32
+        0xF408_0601,
+        0xFA00_0000, // sampler to s[24:27] from s[2:3]
+        0x7E1E_0280, // v15 = 0 for output byte offsets
+    ];
+    let reference = |i: usize| (i % 5) as f32 * 0.25;
+    for i in 0..N {
+        let addr = [
+            reference(i),
+            ((i % 4) as f32 + 0.5) / 4.0,
+            ((i / 4) as f32 + 0.5) / 4.0,
+        ];
+        for (reg, value) in addr.iter().enumerate() {
+            words.extend([0x7E00_02FF | ((reg as u32) << 17), value.to_bits()]);
+        }
+        // MIMG, 2D, dmask:R, image_sample_c_lz v10, v[0:2], s[16:23], s[24:27]
+        words.extend([0xF000_0108 | (0x2F << 18), 0x00C4_0A00]);
+        // buffer_store_dword v10, v15, s[12:15], 0 offen offset:i*4
+        words.extend([0xE070_1000 | (i as u32 * 4), 0x8003_0A0F]);
+    }
+    words.push(0xBF81_0000); // s_endpgm
+    let table = |slot, user_data| RootParam {
+        root: RootType::Table,
+        table_offset_dwords: 0,
+        sgprs: 1,
+        base_register: 0,
+        user_data,
+        slot,
+    };
+    let range = |kind, at, words, slot, user_data| UsedResource {
+        kind,
+        root: RootType::Table,
+        table_offset_dwords: at,
+        lower_bound: 0,
+        stride: 0,
+        dwords: words,
+        user_data,
+        slot,
+    };
+    let native = NativeProgram {
+        stage: HwStage::Cs,
+        wave64: false,
+        vgprs: 16,
+        layout: vec![table(0, 0), table(1, 2)],
+        used: vec![
+            range(ResourceType::Srv, 0, 8, 0, 0),
+            range(ResourceType::Uav, 8, 4, 0, 0),
+            range(ResourceType::Sampler, 0, 4, 1, 2),
+        ],
+        io: StageIo::Cs(ComputeIo {
+            rsrc2: 3 << 1,
+            threads: [1, 1, 1],
+        }),
+        code: words.into_iter().flat_map(u32::to_le_bytes).collect(),
+    };
+    let (shader, _) = build_compute_shader(&native).unwrap();
+    let depth: Vec<f32> = (0..N).map(|i| i as f32 / N as f32).collect();
+    let sampler = D3D12_SAMPLER_DESC {
+        Filter: D3D12_FILTER(0x80), // COMPARISON_MIN_MAG_MIP_POINT
+        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        ComparisonFunc: D3D12_COMPARISON_FUNC(4), // LESS_EQUAL
+        MaxLOD: f32::MAX,
+        MaxAnisotropy: 1,
+        ..Default::default()
+    };
+    let Ok(host) = Host::new(false) else {
+        eprintln!("no SM 6.6 device; skipped");
+        return;
+    };
+    let (root, pso) = match host.compute_pipeline(&shader) {
+        Err(e) if e.starts_with("unsupported") => {
+            eprintln!("{e}; skipped");
+            return;
+        }
+        made => made.unwrap(),
+    };
+    let out = host
+        .dispatch(
+            &root,
+            &pso,
+            &Dispatch {
+                roots: vec![(
+                    0,
+                    Root::Constants(vec![0; shader.user_data_dwords() as usize]),
+                )],
+                views: &[View::Depth(4, 4, &depth), View::RawUav(N as u32)],
+                samplers: &[sampler],
+                groups: [1, 1, 1],
+            },
+        )
+        .unwrap();
+    let got: Vec<f32> = out[0].iter().copied().map(f32::from_bits).collect();
+    let want: Vec<f32> = (0..N)
+        .map(|i| if reference(i) <= depth[i] { 1.0 } else { 0.0 })
+        .collect();
+    assert_eq!(got, want);
+}
