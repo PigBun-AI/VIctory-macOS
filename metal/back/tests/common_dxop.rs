@@ -314,6 +314,8 @@ pub struct PixProg {
     pub pipeline: GraphicsPipeline,
     /// A mesh pipeline: `run_pixels` calls its `size` the group count x.
     pub mesh: bool,
+    /// Vertices a draw has (3 by default; the shader may draw more triangles).
+    pub vertices: std::cell::Cell<u32>,
     pub layout_size: u32,
     pub consts_at: u64,
     pub srv_at: u64,
@@ -371,6 +373,7 @@ impl Rig {
             uav_at: at(ArgKind::Uav),
             layout_size: layout.size,
             mesh: false,
+            vertices: std::cell::Cell::new(3),
             pipeline,
         })
     }
@@ -413,6 +416,7 @@ impl Rig {
             uav_at: at(ArgKind::Uav),
             layout_size: layout.size,
             mesh: true,
+            vertices: std::cell::Cell::new(3),
             pipeline,
         })
     }
@@ -481,7 +485,7 @@ impl Rig {
         if p.mesh {
             l.dispatch_mesh(&p.pipeline, [groups, 1, 1]).unwrap();
         } else {
-            l.draw(&p.pipeline, DrawArgs { vertex_count: 3, instance_count: 1, start_vertex: 0, start_instance: 0 }).unwrap();
+            l.draw(&p.pipeline, DrawArgs { vertex_count: p.vertices.get(), instance_count: 1, start_vertex: 0, start_instance: 0 }).unwrap();
         }
         l.end_pass(&Stores::default()).unwrap();
         l.end().unwrap();
