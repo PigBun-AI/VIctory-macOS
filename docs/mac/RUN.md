@@ -157,6 +157,10 @@ not squeezed.
    touches the game (`victory.exe run --execute`), `wineserver`, `winedevice`, any `run.sh` and what runs below one or below the lock holder,
    never kills, and only continues what it stopped itself. Each action is a line of `<state dir>/guard.log` (time, pid, command, action, load,
    lock). `heavy-guard.sh install|uninstall|status`; install refuses if an agent of that label is already loaded.
+   **macOS needs a one-time permission for the launchd agent**: a launchd job's `/bin/bash` may not read `~/Documents` (checkout, lock and state
+   directory are there) until `/bin/bash` has *Full Disk Access* (System Settings > Privacy & Security > Full Disk Access); without it the agent dies
+   with "Operation not permitted" and `install` says so (exit 3). The permission is the user's to give; `heavy-guard.sh run` started from an app that
+   may read `~/Documents` works meanwhile.
 7. **Frame times and load**: `run.sh` already logs the load average every 10 s (`load.log`); at the end it lines the frame times (`frametime.log`,
    `--frametime-log`) up with it (`tools/mac/frametime-summary.sh`). A frame that falls into a 10-second stretch whose 1-minute load average is
    above 30 is **invalid** (`frametime-annot.csv`: frame, frame_us, draws, time, load, valid). The median and p90 in `summary.txt` use the valid

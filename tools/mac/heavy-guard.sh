@@ -7,6 +7,7 @@
 #   tools/mac/heavy-guard.sh once         one scan, then exit (tests; what it stopped stays stopped, `once` again with the lock free resumes it)
 #   tools/mac/heavy-guard.sh install      write ~/Library/LaunchAgents/com.gta6project.heavy-guard.plist and start it (refuses if an agent
 #                                         of that label is already loaded; --dry-run prints the plist and does nothing)
+#                                         (exit 3: loaded but macOS keeps launchd's /bin/bash out of ~/Documents until it has Full Disk Access)
 #   tools/mac/heavy-guard.sh uninstall    stop it, remove the plist (what it had stopped is resumed first)
 #   tools/mac/heavy-guard.sh status       the agent's state (launchctl), the mode, the stopped list, the last log lines
 #
@@ -202,10 +203,18 @@ gd_install() {
     gd_plist >"$plist" || return 1
     plutil -lint "$plist" >/dev/null || { echo "heavy-guard: the plist is not valid" >&2; return 1; }
     launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || launchctl load -w "$plist" || { echo "heavy-guard: launchctl could not load $plist" >&2; return 1; }
-    sleep 2
+    sleep 3
     if gd_loaded; then
         pid=$(gd_agent_pid)
         echo "heavy-guard: installed $plist; launchctl list: label $GUARD_LABEL pid ${pid:-?}; log $GUARD_LOG"
+        # macOS (TCC) keeps a launchd job's /bin/bash out of ~/Documents (the checkout, the game lock and this state directory are there) until
+        # /bin/bash has Full Disk Access: then the job dies at once with "Operation not permitted" (status 126) and launchd retries every 10 s
+        if [ -z "$pid" ] && tail -n 3 "$HV_DIR/guard.out" 2>/dev/null | grep -q "Operation not permitted"; then
+            echo "heavy-guard: BUT the agent cannot run: macOS does not let a launchd job read ~/Documents (\"Operation not permitted\", see $HV_DIR/guard.out)." >&2
+            echo "  Fix (once, by the user): System Settings > Privacy & Security > Full Disk Access > + > Cmd-Shift-G /bin/bash > switch it on;" >&2
+            echo "  launchd retries every 10 s, so the guard then starts by itself. Until then '$0 run' from a terminal/app that may read ~/Documents works (not restarted by launchd)." >&2
+            return 3
+        fi
     else
         echo "heavy-guard: loaded, but launchctl list does not show $GUARD_LABEL" >&2; return 1
     fi
