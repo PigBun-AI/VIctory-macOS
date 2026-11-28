@@ -715,7 +715,11 @@ impl CommandList {
         self.barrier(DISPATCH, DISPATCH, VIS_DEVICE)?;
         let params = self.alloc_constants(16, 16)?;
         let at = action_va;
-        params.write_u32s(0, &[at as u32, (at >> 32) as u32, cap, 0])?;
+        let count: u32 = std::env::var("VICTORY_METAL_GS_SET_COUNT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        params.write_u32s(0, &[at as u32, (at >> 32) as u32, cap, count])?;
         self.set_address(30, params.gpu_va)?;
         self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
         // The draw reads the threadgroup counts next.

@@ -731,8 +731,9 @@ thread_local! {
 
 const CAP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
 kernel void capk(constant ulong2& p [[buffer(30)]]) {\n\
-  device uint* d = (device uint*)p.x; uint cap = (uint)p.y;\n\
-  for (int i = 5; i < 8; i++) if (d[i] > cap) d[i] = cap;\n}\n";
+  device uint* d = (device uint*)p.x; uint cap = (uint)p.y; uint cnt = (uint)(p.y >> 32);\n\
+  for (int i = 5; i < 8; i++) if (d[i] > cap) d[i] = cap;\n\
+  if (cnt != 0) d[0] = cnt;\n}\n";
 
 pub(crate) fn cap_kernel(
     device: &crate::device::Device,
