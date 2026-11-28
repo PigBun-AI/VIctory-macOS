@@ -35,6 +35,8 @@ file with the hash first on each line; a failure sample or a program family can 
 the row file is overwritten: always give a new `--tag`).
 `VICTORY_ATTRIBUTE_AT_VERTEX=0` makes `translate` emit the Metal form of `GetAttributeAtVertex` (mac S1,
 docs/metal/attribute-at-vertex.md; the default is the Windows form, which MSC refuses).
+The 16-bit float rounding (mac F1) is the 12-operation sequence unless the Metal chain is named: set `VICTORY_METAL_OUT` (non-empty) or `VICTORY_F16_NATIVE=1` for the one-`fptrunc`
+form (native 16-bit module) the Metal line runs; `VICTORY_ATTRIBUTE_AT_VERTEX=0` no longer implies it (mac S7, `on_metal_chain()`). A census meant to represent the Metal chain sets one of them.
 
 `--isolate` runs the conversion in a child (one thread) and starts it again after the shader it died on: an
 `MscFatal` row when the child's stderr has Metal Shader Converter's `Fatal` line (`SIGABRT`), `ProcessAbort` for
