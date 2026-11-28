@@ -346,6 +346,7 @@ if [ "$backend" = metal ]; then
     export WINEDLLPATH="$stage${WINEDLLPATH:+:$WINEDLLPATH}"
     export VICTORY_METAL_OUT="$stage"
     export VICTORY_METAL_LOG=1
+    export VICTORY_METAL_DROPSTATS="${VICTORY_METAL_DROPSTATS-$out/dropstats}"
     export VICTORY_METAL_NOTIMPL_LOG="$(winpath "$out/notimpl.log")"
 else
     export WINEDLLOVERRIDES="$base_overrides;d3d12,d3d12core,dxgi=b"

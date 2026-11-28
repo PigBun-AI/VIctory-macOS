@@ -844,6 +844,8 @@ first line when more than 20% are invalid. `frametime-annot.csv` has the marking
 10 s) is the load.log interval. Test: `tools/mac/test-frametime-summary.sh` (made-up logs, and `run.sh` with a fake Wine and a fake `uptime`).
 Pure Mac tooling.
 
+Metal run evidence (M11): `run.sh` exports `VICTORY_METAL_DROPSTATS=<out>/dropstats` when unset, preserving explicit values. The path appears in `run-env.txt`; `test-run-until.sh` checks it. Remove when the backend collects per-run drop counts without an environment override.
+
 ### M11 — the stage's capability file `CAPS`: `run.sh` exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` only for a stage that says `mesh_compute`
 
 Only `run.sh` (after the stage is known), `test-run-until.sh` and `docs/mac/RUN.md` change. If `$stage/CAPS` has a whole line `mesh_compute` (lines

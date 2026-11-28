@@ -222,7 +222,8 @@ caps_run() { # NAME STAGE-NAME
     VICTORY_METAL_OUT="$T/stage-$2" FAKE_MODE=caps env -u VICTORY_METAL_MESH_COMPUTE_SUPPORTED bash "$P" --purpose "freq: mac.test.caps" --backend metal --exe "$T/victory-fake-until-test.exe" \
         --prefix "$T/prefix-$1" --out "$T/$1" --no-keys --input none --timeout 20 >"$T/$1.console" 2>"$T/$1.console.err"; rc=$?
 }
-caps_run runcaps caps
+(unset VICTORY_METAL_DROPSTATS; caps_run runcaps caps)
+expect "metal back drop counts default to this run's output" "grep -Fxq 'VICTORY_METAL_DROPSTATS=$T/runcaps/dropstats' $T/runcaps/run-env.txt"
 expect "run, CAPS with mesh_compute: the title gets VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1" "grep -q 'title sees VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1' $T/runcaps.console $T/runcaps/stderr.log $T/runcaps/stdout.log 2>/dev/null"
 expect "run, CAPS with mesh_compute: run-env.txt (the record of the run) has it" "grep -qx 'VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1' $T/runcaps/run-env.txt"
 caps_run runother other
