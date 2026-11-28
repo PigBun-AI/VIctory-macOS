@@ -570,6 +570,7 @@ impl CommandList {
         // The object stage of a geometry pipeline (a vertex shader made
         // for the emulation) reads the same arguments at the hull/domain
         // point, too.
+        crate::prof::LAST_ARGS_VA.store(tlab.gpu_va, std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER_HULL_DOMAIN as u32, tlab.gpu_va)?;
         self.table
