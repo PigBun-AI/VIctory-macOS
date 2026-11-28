@@ -733,11 +733,7 @@ pub(super) fn app_layout(sig: &RootSig) -> mesh_emu::AppLayout {
 /// over Metal's output size after the repack, or Apple's GPU compiler crashes
 /// on it (seen in this process, or on the census's denylist).
 pub(super) fn is_problem_pair(e: &crate::msc::MscError) -> bool {
-    if crate::mesh_fit::is_size_refusal(e) {
-        return true;
-    }
-    matches!(e, crate::msc::MscError::Unsupported(m)
-        if m.contains("crash Apple's GPU compiler") || m.contains("crashed on this mesh"))
+    mesh_emu::is_problem_refusal(e)
 }
 
 #[cfg(test)]

@@ -453,6 +453,41 @@ pub struct AppLayout {
     pub static_table: Option<u32>,
 }
 
+impl AppLayout {
+    /// The layout the back gives a root signature before MSC's reflection
+    /// refines it (`exec/tlab.rs`, the binding-model rules): parameters in
+    /// order, constants 4-aligned, everything else a pointer at 8; no static
+    /// sampler table pointer is known. For tools that have the root signature
+    /// as MSC takes it and no executor (the census).
+    pub fn from_root(root: &RootSignatureDesc) -> AppLayout {
+        let mut at = 0u32;
+        let mut offsets = Vec::with_capacity(root.params.len());
+        for p in &root.params {
+            let (size, align) = match &p.kind {
+                ParamKind::Constants { num_32bit, .. } => (4 * num_32bit, 4),
+                _ => (8, 8),
+            };
+            at = at.next_multiple_of(align);
+            offsets.push(at);
+            at += size;
+        }
+        AppLayout {
+            offsets,
+            size: at.next_multiple_of(8),
+            static_table: None,
+        }
+    }
+}
+
+/// Whether a refusal of a mesh pipeline is the kind the emulation answers:
+/// over Metal's output size after the repack, or Apple's GPU compiler crashes
+/// on it (seen in this process, or on the census's denylist).
+pub fn is_problem_refusal(e: &MscError) -> bool {
+    crate::mesh_fit::is_size_refusal(e)
+        || matches!(e, MscError::Unsupported(m)
+            if m.contains("crash Apple's GPU compiler") || m.contains("crashed on this mesh"))
+}
+
 /// The extended argument buffer: the application's, then the two new
 /// parameters, then (when the signature has static samplers) the table pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1121,6 +1156,40 @@ mod tests {
         assert_eq!(g.params[0].visibility, Visibility::Mesh);
         assert!(matches!(g.params[1].kind, ParamKind::Srv { .. }));
         assert_eq!(g.flags, 1);
+    }
+
+    #[test]
+    fn the_applications_layout_follows_the_binding_model_rules() {
+        let p = |kind| Param {
+            kind,
+            visibility: Visibility::All,
+        };
+        let root = RootSignatureDesc {
+            flags: 0,
+            params: vec![
+                p(ParamKind::Constants {
+                    register: 0,
+                    space: 0,
+                    num_32bit: 1,
+                }),
+                p(ParamKind::Cbv {
+                    register: 0,
+                    space: 0,
+                }),
+                p(ParamKind::Constants {
+                    register: 1,
+                    space: 0,
+                    num_32bit: 3,
+                }),
+                p(ParamKind::Table(vec![])),
+            ],
+            static_samplers: vec![],
+        };
+        let a = AppLayout::from_root(&root);
+        // 4 bytes, pad to 8, 8 bytes CBV, 12 bytes of constants, pad, table
+        assert_eq!(a.offsets, vec![0, 8, 16, 32]);
+        assert_eq!(a.size, 40);
+        assert_eq!(a.static_table, None);
     }
 
     #[test]
