@@ -809,6 +809,7 @@ pub(crate) fn upload_from(list: &HostList, resource: This, first: u32) {
         let Some(source) = list.plane_upload(bytes as u64, (at, len), move |dst| {
             fill_plane(&plane.layout, at, len, dst, bytes, pitch);
         }) else {
+            crate::mac::drop_stats::silent!("texture.movie_plane", "no_upload_buffer");
             once!("no upload buffer for a CPU-written movie plane");
             return;
         };
@@ -985,6 +986,7 @@ fn fill_plane(
         crate::host::copy_mapped(read.as_mut_ptr(), at as *const u8, len, false);
         if let Err(error) = layout.detile(read, 0, 0, out, pitch, bytes) {
             out.fill(0);
+            crate::mac::drop_stats::silent!("texture.movie_plane", "copy_failed");
             once!("could not copy the linear plane into the list's upload buffer: {error:?}");
         }
     });
@@ -1849,6 +1851,7 @@ fn staging(resource: This, copy: &crate::resource::HostTexture, first: u32) -> O
     let (memory, desc) = crate::resource::texture_memory(resource)?;
     let Some(layout) = crate::resource::texture_layout(&desc).map(|t| t.planes[0].layout.clone())
     else {
+        crate::mac::drop_stats::silent!("texture.upload", "no_layout");
         once!(
             ?desc,
             "texture contents without a console layout not uploaded"
@@ -1856,6 +1859,7 @@ fn staging(resource: This, copy: &crate::resource::HostTexture, first: u32) -> O
         return None;
     };
     if layout.desc.swizzle.xor() {
+        crate::mac::drop_stats::silent!("texture.upload", "xor_mode");
         once!(?desc, "texture contents in an XOR mode not uploaded");
         return None;
     }

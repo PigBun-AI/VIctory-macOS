@@ -47,6 +47,46 @@ use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+// Each site registers its process-lifetime counter only on the first hit.
+// Repeated hits use a relaxed increment, without locking or formatting.
+struct SilentSite(&'static str, &'static AtomicU64);
+static SILENT: Mutex<Vec<SilentSite>> = Mutex::new(Vec::new());
+pub(crate) fn register_silent(name: &'static str, counter: &'static AtomicU64) {
+    SILENT.lock().unwrap_or_else(|e| e.into_inner()).push(SilentSite(name, counter));
+}
+macro_rules! silent {
+    ($site:literal, $reason:literal) => {{
+        static HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            $crate::mac::drop_stats::register_silent(concat!($site, ":", $reason), &HITS);
+        }
+    }};
+}
+pub(crate) use silent;
+
+#[cfg(test)]
+pub(crate) fn silent_hits(name: &str) -> u64 {
+    SILENT.lock().unwrap_or_else(|e| e.into_inner()).iter()
+        .filter(|s| s.0 == name).map(|s| s.1.load(Relaxed)).sum()
+}
+
+#[cfg(test)]
+#[test]
+fn repeated_silent_hits_register_once() {
+    for _ in 0..3 { silent!("test.repeated", "reason"); }
+    let sites = SILENT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut hits = sites.iter().filter(|site| site.0 == "test.repeated:reason");
+    assert_eq!(hits.next().unwrap().1.load(Relaxed), 3);
+    assert!(hits.next().is_none());
+}
+
+thread_local! {
+    static BIND_WHY: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+pub(crate) fn bind_reason(why: Option<&'static str>) {
+    if enabled() { BIND_WHY.set(why); }
+}
+
 /// What the title asked the host to do.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum Op {
@@ -438,6 +478,13 @@ pub(crate) fn on_present(present: u64) {
         if now.duration_since(last) >= Duration::from_secs(5) {
             s.last_tick = Some(now);
             summary(s, "all");
+            let mut silent = std::collections::BTreeMap::new();
+            for SilentSite(name, counter) in SILENT.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+                *silent.entry(*name).or_insert(0u64) += counter.load(Relaxed);
+            }
+            for (name, hits) in silent {
+                tracing::info!("drop-stats silent {name}={hits}");
+            }
             if world > 0 {
                 summary_world(s);
             }
@@ -591,7 +638,7 @@ mod glue {
                     Wants::Mesh => !compute && mesh,
                     Wants::Graphics => !compute && !mesh,
                 };
-                if right { "bind_or_index_failed" } else { "kind_mismatch" }
+                if right { super::BIND_WHY.take().unwrap_or("bind_or_index_failed") } else { "kind_mismatch" }
             }
         };
         (kind, origin, why.into(), hashes)

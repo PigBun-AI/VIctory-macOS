@@ -1808,6 +1808,7 @@ impl HostHeap {
                 self.too_long.fetch_min(n as u32, std::sync::atomic::Ordering::Relaxed);
             }
             static ONCE: std::sync::Once = std::sync::Once::new();
+            crate::mac::drop_stats::silent!("descriptor.dynamic_slots", "exhausted");
             ONCE.call_once(|| tracing::warn!(n, "no free dynamic descriptor slots: a table is not made"));
             note_dynamic_refused();
             #[cfg(feature = "diagnostics")]
@@ -3904,6 +3905,7 @@ fn buffer_srv(
     let buffer = unsafe { &mut desc.Anonymous.Buffer };
     if window.is_none() {
         if element == 0 || offset % element != 0 {
+            crate::mac::drop_stats::silent!("descriptor.buffer_view", "off_element");
             once!(
                 offset,
                 element,
@@ -3917,6 +3919,7 @@ fn buffer_srv(
     let raw = buffer.Flags.0 & D3D12_BUFFER_SRV_FLAG_RAW.0 != 0;
     let width = shadow.width();
     if !buffer_view_ok(desc.Format, first, count, stride, raw, width) {
+        crate::mac::drop_stats::silent!("descriptor.buffer_view", "refused");
         REFUSED_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         once!(
             format = desc.Format.0,
@@ -4004,6 +4007,7 @@ fn buffer_uav(
     // SAFETY: a live buffer.
     let flags = unsafe { shadow.buffer.GetDesc() }.Flags;
     if flags.0 & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.0 == 0 {
+        crate::mac::drop_stats::silent!("descriptor.uav", "buffer_not_writable");
         once!("unordered access to a buffer whose host copy shaders cannot write");
         return None;
     }
@@ -4028,6 +4032,7 @@ fn buffer_uav(
         buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
     } else {
         if element == 0 || offset % element != 0 {
+            crate::mac::drop_stats::silent!("descriptor.buffer_view", "off_element");
             once!(offset, element, "unordered buffer view not on an element of its host copy");
             return None;
         }
@@ -4044,6 +4049,7 @@ fn buffer_uav(
     // SAFETY: a live buffer.
     let width = unsafe { shadow.buffer.GetDesc() }.Width;
     if !buffer_view_ok(desc.Format, first, count, stride, raw, width) {
+        crate::mac::drop_stats::silent!("descriptor.buffer_view", "refused");
         REFUSED_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         once!(
             format = desc.Format.0,
@@ -4109,6 +4115,7 @@ fn fits(texture: &ID3D12Resource, mut format: Option<&mut DXGI_FORMAT>, unordere
     };
     let own = d.Format.0 as u32;
     if !allowed || DEPTH_FORMATS.iter().any(|&(typed, _)| typed == own) {
+        crate::mac::drop_stats::silent!("descriptor.view_ok", "not_allowed");
         if unordered {
             crate::resource::DEPTH_UNORDERED[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -4143,6 +4150,7 @@ fn fits(texture: &ID3D12Resource, mut format: Option<&mut DXGI_FORMAT>, unordere
         return true;
     }
     if family(view) != family(own) {
+        crate::mac::drop_stats::silent!("descriptor.view_ok", "format_family");
         once!(view, own, "view format of another family");
         return false;
     }
@@ -4251,6 +4259,7 @@ fn make_twinned(
             let shadow = crate::shadow::find(address, u64::from(size))?;
             let gpu = shadow.gpu(address);
             if gpu % 256 != 0 {
+                crate::mac::drop_stats::silent!("descriptor.cbv", "unaligned");
                 once!(
                     address = format_args!("{address:#x}"),
                     "constant buffer not 256-byte aligned on the host"

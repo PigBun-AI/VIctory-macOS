@@ -332,6 +332,7 @@ fn cut(this: This, wait: ValueWait) {
         // shortcut: without a new host list the wait stands before the part
         // it was recorded in.
         static ONCE: std::sync::Once = std::sync::Once::new();
+        crate::mac::drop_stats::silent!("list.cut", "no_fresh_list");
         ONCE.call_once(|| tracing::warn!("no host list for the part after a wait: the wait moves to the part's start"));
         list.gate.push(wait);
         return;
@@ -397,6 +398,7 @@ pub(crate) fn detach_parts(lists: &[This]) -> Parts {
             match at {
                 Some((entry, place)) if entry + 1 == parts.len() => parts[entry].2.push(place),
                 _ => {
+                    crate::mac::drop_stats::silent!("list.detach_parts", "second_naming_dropped");
                     static ONCE: std::sync::Once = std::sync::Once::new();
                     ONCE.call_once(|| {
                         tracing::warn!("a list named twice by a submission that waits for memory values runs once")
@@ -890,6 +892,7 @@ extern "system" fn copy_buffer_region(
 fn unlike(dst: This, src: This) -> bool {
     let unlike = crate::resource::stands_in(dst) != crate::resource::stands_in(src);
     if unlike {
+        crate::mac::drop_stats::silent!("list.copy", "unlike_formats");
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             tracing::warn!(?dst, ?src, "copy between a stand-in target and title-format texels skipped")
@@ -940,7 +943,9 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             crate::texture::card_writes(list, dst, to, None);
             crate::texture::host_written(dst);
             if same {
-                SELF_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if SELF_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    crate::mac::drop_stats::register_silent("list.copy:self_copy", &SELF_COPIES);
+                }
                 static ONCE: std::sync::Once = std::sync::Once::new();
                 ONCE.call_once(|| {
                     tracing::info!(
@@ -962,6 +967,8 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             crate::resource::buffer_bytes(src),
         ) {
             buffer_copy(this, list, to, from, a.min(b) as usize);
+        } else {
+            crate::mac::drop_stats::silent!("list.copy_resource", "no_pair");
         }
     }
     #[cfg(not(windows))]
@@ -1052,9 +1059,11 @@ extern "system" fn copy_texture_region(
         let mut read = None;
         if src.kind == FOOTPRINT {
             let (Some(host), Some(bytes)) = (crate::host::host(), src.footprint.bytes()) else {
+                crate::mac::drop_stats::silent!("list.copy_texture_region", "no_host_or_size");
                 return;
             };
             let Some(data) = buffer_range(src.resource, src.footprint.offset, bytes) else {
+                crate::mac::drop_stats::silent!("list.copy_texture_region", "no_range");
                 return;
             };
             let buffer = match list.place_source(data as usize, bytes as usize) {
@@ -1062,6 +1071,7 @@ extern "system" fn copy_texture_region(
                 Some(buffer) => buffer,
                 None => {
                     let Some((buffer, staging)) = list.upload(host, bytes) else {
+                        crate::mac::drop_stats::silent!("list.copy_texture_region", "no_upload");
                         return;
                     };
                     // The list owns this mapped D3D12 upload buffer. Wine can
@@ -1081,6 +1091,7 @@ extern "system" fn copy_texture_region(
             _upload = buffer;
         } else {
             let Some(texture) = crate::resource::host_resource(src.resource) else {
+                crate::mac::drop_stats::silent!("list.copy_texture_region", "no_source");
                 return;
             };
             // The same subresource of one host texture on both sides (two
@@ -1143,7 +1154,9 @@ extern "system" fn copy_texture_region(
         crate::texture::card_writes(list, dst.resource, to, Some(dst.footprint.offset as u32));
         crate::texture::host_written(dst.resource);
         if same {
-            SELF_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if SELF_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                crate::mac::drop_stats::register_silent("list.copy:self_copy", &SELF_COPIES);
+            }
             return;
         }
         ensure_state(list, dst.resource, COPY_DEST);
@@ -1357,16 +1370,19 @@ extern "system" fn clear_rtv(
     {
         let (Some(list), Some(record)) = (host_list(this), crate::descriptor::rtv_record(handle))
         else {
+            crate::mac::drop_stats::silent!("list.clear", "no_list_or_rtv_record");
             return;
         };
         let (Some(texture), Some(host)) = (
             crate::resource::host_resource(record.resource),
             crate::host::host(),
         ) else {
+            crate::mac::drop_stats::silent!("list.clear", "no_host_or_texture");
             return;
         };
         // SAFETY: the title passes four floats (null is tolerated).
         let Some(color) = (unsafe { color.as_ref() }) else {
+            crate::mac::drop_stats::silent!("list.clear", "null_color");
             return;
         };
         let rects = (count > 0 && !rects.is_null()).then(|| {
@@ -1408,12 +1424,14 @@ extern "system" fn clear_dsv(
         use windows::Win32::Graphics::Direct3D12::D3D12_CLEAR_FLAGS;
         let (Some(list), Some(record)) = (host_list(this), crate::descriptor::dsv_record(handle))
         else {
+            crate::mac::drop_stats::silent!("list.clear", "no_list_or_dsv_record");
             return;
         };
         let (Some(texture), Some(host)) = (
             crate::resource::host_resource(record.resource),
             crate::host::host(),
         ) else {
+            crate::mac::drop_stats::silent!("list.clear", "no_host_or_texture");
             return;
         };
         let rects = (count > 0 && !rects.is_null()).then(|| {
@@ -1506,6 +1524,7 @@ extern "system" fn resolve_queries(
     const TIMESTAMP: u32 = 2;
     const PIPELINE_STATISTICS: u32 = 3;
     let Some((data, size)) = crate::resource::buffer_bytes(buffer) else {
+        crate::mac::drop_stats::silent!("list.resolve_queries", "no_buffer");
         return;
     };
     let (what, bytes) = match kind {
@@ -1516,9 +1535,11 @@ extern "system" fn resolve_queries(
         _ => (Written::Value(0), 16),
     };
     let Some(end) = offset.checked_add(u64::from(count) * bytes) else {
+        crate::mac::drop_stats::silent!("list.resolve_queries", "offset_overflow");
         return;
     };
     if end > size {
+        crate::mac::drop_stats::silent!("list.resolve_queries", "out_of_range");
         return;
     }
     for i in 0..u64::from(count) {
@@ -1800,6 +1821,7 @@ mod state {
     pub(super) extern "system" fn dispatch_mesh(this: This, x: u32, y: u32, z: u32) {
         super::count_draw();
         if y * z != 1 {
+            crate::mac::drop_stats::silent!("list.dispatch_mesh", "yz_ignored");
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(x, y, z, "a mesh dispatch with y or z groups"));
         }
@@ -2031,17 +2053,20 @@ impl ValueWait {
     fn holds(&self) -> bool {
         let bytes = if self.wide { 8 } else { 4 };
         if self.address == 0 {
+            crate::mac::drop_stats::silent!("list.value_wait", "null_address");
             return true;
         }
         static ASK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if *ASK.get_or_init(|| std::env::var_os("VICTORY_WAIT_ASK").is_some_and(|v| v == "1"))
             && !crate::texture::committed(self.address as *const u8, bytes)
         {
+            crate::mac::drop_stats::silent!("list.value_wait", "unmapped");
             return true;
         }
         // The low `bytes` bytes; the rest stays zero.
         let mut raw = [0u8; 8];
         if !crate::host::read_into(self.address as *const u8, &mut raw[..bytes]) {
+            crate::mac::drop_stats::silent!("list.value_wait", "read_failed");
             return true;
         }
         self.holds_for(u64::from_le_bytes(raw))
@@ -2069,7 +2094,11 @@ impl ValueWait {
             5 => value > reference,
             6 => value != reference,
             7 => value >= reference,
-            _ => true,
+            8 => true,
+            _ => {
+                crate::mac::drop_stats::silent!("list.value_wait", "unknown_compare");
+                true
+            }
         }
     }
 }
@@ -2410,6 +2439,19 @@ static NEWER_THIN_FUNCTIONS: Table<160> = Table(thin::table(true));
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unknown_wait_comparison_still_passes_and_counts_every_poll() {
+        let hits = || crate::mac::drop_stats::silent_hits("list.value_wait:unknown_compare");
+        let mut wait = super::ValueWait { address: 0, reference: 3, wide: false, comparison: 8 };
+        let before = hits();
+        assert!(wait.holds_for(0)); // known ALWAYS comparison, no drop
+        assert_eq!(hits(), before);
+        wait.comparison = 99;
+        assert!(wait.holds_for(0));
+        assert!(wait.holds_for(1));
+        assert_eq!(hits(), before + 2);
+    }
+
     use super::*;
     use crate::object::slot;
 

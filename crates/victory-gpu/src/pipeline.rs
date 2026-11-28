@@ -962,6 +962,7 @@ pub(crate) extern "system" fn create_compute_x(
     iid: *const Iid,
     out: *mut This,
 ) -> HRESULT {
+    if _extensions != 0 { crate::mac::drop_stats::silent!("pipeline.compute_x", "extensions_ignored"); }
     crate::mac::drop_stats::creating("compute@0x1f0");
     compute_pipeline(desc, iid, out)
 }

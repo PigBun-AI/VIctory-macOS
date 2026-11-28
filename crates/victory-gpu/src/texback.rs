@@ -233,6 +233,7 @@ pub(crate) fn land(back: &Back) {
         let linear = unsafe { std::slice::from_raw_parts(data.cast::<u8>().add(footprint.Offset as usize), len) };
         if let Err(e) = back.layout.tile(&mut tiled, mip, slice, linear, pitch, pitch * rows as usize) {
             static ONCE: std::sync::Once = std::sync::Once::new();
+            crate::mac::drop_stats::silent!("texback", "tile_failed");
             ONCE.call_once(|| tracing::warn!(?e, mip, slice, "a texture copied back could not be tiled"));
             // SAFETY: mapped above.
             unsafe { back.buffer.Unmap(0, None) };

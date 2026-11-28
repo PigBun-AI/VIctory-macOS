@@ -293,6 +293,15 @@ static REPORTED: [[AtomicBool; MAX_SLOTS]; KINDS.len()] =
 /// image for title calls). Wrong for a slot that returns a value instead of
 /// an `HRESULT`.
 extern "system" fn missing<const KIND: usize, const SLOT: usize>() -> HRESULT {
+    use std::sync::atomic::AtomicU64;
+    static HITS: [[AtomicU64; MAX_SLOTS]; KINDS.len()] =
+        [const { [const { AtomicU64::new(0) }; MAX_SLOTS] }; KINDS.len()];
+    let hits = &HITS[KIND][SLOT];
+    if hits.fetch_add(1, Ordering::Relaxed) == 0 {
+        // At most KINDS.len() * MAX_SLOTS lifetime labels; allocated on first hit only.
+        let label = format!("object.missing.{KIND}:0x{:x}", SLOT * 8);
+        crate::mac::drop_stats::register_silent(Box::leak(label.into_boxed_str()), hits);
+    }
     if !REPORTED[KIND][SLOT].swap(true, Ordering::Relaxed) {
         tracing::warn!(
             object = KINDS[KIND],

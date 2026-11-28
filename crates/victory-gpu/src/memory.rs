@@ -303,6 +303,7 @@ impl Memory {
             return Some(n);
         }
         if self.copies.len() >= COPIES as usize {
+            crate::mac::drop_stats::silent!("memory.by_address", "no_number");
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(COPIES, "title memory by address: no number left for another copy; its pages read zeros"));
             return None;
@@ -370,6 +371,7 @@ impl Memory {
             return false;
         }
         if self.pages.len() >= MOST {
+            crate::mac::drop_stats::silent!("memory.by_address", "page_limit");
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(MOST, "title memory by address: no more pages are taken; others read zeros"));
             return false;

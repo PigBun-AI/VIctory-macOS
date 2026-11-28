@@ -498,6 +498,7 @@ impl State {
         }
         if self.tables_gone {
             static ONCE: std::sync::Once = std::sync::Once::new();
+            crate::mac::drop_stats::silent!("draw.tables_done", "ran_again");
             ONCE.call_once(|| tracing::warn!("a list ran again after its descriptor tables were given back"));
         }
         for (heap, first, n) in self.dynamic.drain(..) {
@@ -1050,6 +1051,7 @@ impl State {
         let host = match topology {
             RECTANGLES => 4,
             TRIANGLE_FAN | LINE_LOOP | QUADS | QUAD_STRIP => {
+                crate::mac::drop_stats::silent!("draw.topology", "fan_loop_quad");
                 once!(topology, "console topology drawn as a triangle list");
                 4
             }
@@ -1143,6 +1145,7 @@ impl State {
         let mut keys = Vec::with_capacity(handles.len());
         for &h in handles {
             let Some(record) = crate::descriptor::rtv_record(h) else {
+                crate::mac::drop_stats::silent!("draw.set_targets", "no_rtv_record");
                 once!(
                     handle = format_args!("{h:#x}"),
                     "render target without a recorded view"
@@ -1162,6 +1165,8 @@ impl State {
                 if let Some(desc) = null {
                     views.push((None, Some(desc)));
                     keys.push((0, record.key()));
+                } else {
+                    crate::mac::drop_stats::silent!("draw.set_targets", "no_host_no_null_view");
                 }
                 continue;
             };
@@ -1302,6 +1307,7 @@ impl State {
             (Some(Root::Table(handle)), RootType::Table) => match self.heap_of(*handle) {
                 Some(heap) => (handle - heap.start) as u32,
                 None => {
+                    crate::mac::drop_stats::silent!("draw.user_value", "table_outside_heaps");
                     once!(
                         handle = format_args!("{handle:#x}"),
                         "descriptor table outside the bound heaps"
@@ -1315,6 +1321,7 @@ impl State {
             // The host's own ([`Self::host_word`]): no root argument.
             (_, RootType::Other(_)) => 0,
             _ => {
+                crate::mac::drop_stats::silent!("draw.user_value", "root_unset");
                 once!(
                     slot,
                     ?root,
@@ -1364,6 +1371,7 @@ impl State {
             };
         }
         if kind != USER_VIEW_ADDRESS && kind != USER_VIEW_ADDRESS + 1 {
+            crate::mac::drop_stats::silent!("draw.host_value", "unknown_kind");
             once!(kind, "a shader reads a host value this build does not know");
             return 0;
         }
@@ -1651,6 +1659,7 @@ impl State {
             let made = self.tables(list, &t.tables, compute);
             STORES.set(true);
             if made.iter().any(|m| m.1 == u32::MAX) {
+                crate::mac::drop_stats::bind_reason(Some("bind:no_free_slots"));
                 once!("a draw whose descriptor table found no free slots is dropped");
                 return false;
             }
@@ -1672,6 +1681,7 @@ impl State {
                     crate::memory::Use::Reads
                 };
                 let Some(ready) = self.memory_ready(list, &t, compute, use_) else {
+                    crate::mac::drop_stats::bind_reason(Some("bind:memory_no_view_heap"));
                     once!("a shader that reads title memory by address without a view heap to hold its views: the draw is dropped");
                     return false;
                 };
@@ -1793,6 +1803,7 @@ impl State {
                     let tabled = srv && crate::pipeline::host::bounded_root_srvs();
                     let Some(&Root::View(address)) = self.roots_ref(compute).get(usize::from(slot))
                     else {
+                        crate::mac::drop_stats::silent!("draw.root_view", "unset_read");
                         once!(slot, "a shader reads a root view the title did not set");
                         // A table left unset is undefined: a null view.
                         if tabled && !self.root_srv_table(list, None, param, compute, false) {
@@ -1854,6 +1865,7 @@ impl State {
                 let address = match self.roots_ref(compute).get(usize::from(slot)) {
                     Some(&Root::View(address)) => Some(address),
                     _ => {
+                        crate::mac::drop_stats::silent!("draw.root_view", "unset_write");
                         once!(slot, "a shader writes through a root view the title did not set");
                         None
                     }
@@ -1917,6 +1929,7 @@ impl State {
         };
         if !crate::pipeline::host::bounded_root_srvs() {
             let Some((a, s)) = address.and_then(|a| Some((a, find(a)?))) else {
+                crate::mac::drop_stats::bind_reason(Some("bind:root_uav_nothing"));
                 once!("a root UAV with nothing to bind: the draw is dropped");
                 return false;
             };
@@ -1940,6 +1953,7 @@ impl State {
             h => Some(crate::descriptor::heap(h as This)),
         };
         let Some((heap, host)) = heap.and_then(|h| Some((h, h.host()?))) else {
+            crate::mac::drop_stats::bind_reason(Some("bind:root_uav_no_heap"));
             once!("a root UAV without a bound view heap: the draw is dropped");
             return false;
         };
@@ -2009,6 +2023,7 @@ impl State {
             h => Some(crate::descriptor::heap(h as This)),
         };
         let Some((heap, host)) = heap.and_then(|h| Some((h, h.host()?))) else {
+            crate::mac::drop_stats::bind_reason(Some("bind:root_srv_no_heap"));
             once!("a root SRV without a bound view heap: the draw is dropped");
             return false;
         };
@@ -2046,6 +2061,7 @@ impl State {
                         } else {
                             // Raw views start on 16 bytes; one from the
                             // aligned start would shift every read.
+                            crate::mac::drop_stats::silent!("draw.root_srv", "unaligned");
                             once!(
                                 address = format_args!("{a:#x}"),
                                 "a root SRV not on 16 bytes reads zeros"
@@ -3143,6 +3159,7 @@ impl State {
 
     /// Runs a dispatch on the host.
     pub(crate) fn dispatch(&mut self, list: &HostList, x: u32, y: u32, z: u32, flags: u32) {
+        crate::mac::drop_stats::bind_reason(None);
         // It may write the arguments a window holds clamped.
         self.window = None;
         #[cfg(feature = "diagnostics")]
@@ -3550,6 +3567,7 @@ impl State {
     /// Runs a mesh dispatch of `x` groups on the host (the title's mesh
     /// programs are one-dimensional).
     pub(crate) fn dispatch_mesh(&mut self, list: &HostList, x: u32) {
+        crate::mac::drop_stats::bind_reason(None);
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
@@ -3568,6 +3586,7 @@ impl State {
                     // (The host takes 65,535 groups in a dimension: more is
                     // undefined there.)
                     if x > 65_535 {
+                        crate::mac::drop_stats::silent!("draw.dispatch_mesh", "x_cut");
                         once!(x, "a mesh dispatch of more groups than the host takes: cut");
                     }
                     // SAFETY: an open list with everything set.
@@ -3767,6 +3786,7 @@ impl State {
             if n > crate::descriptor::host::DYNAMIC
                 || last.and_then(|handle| heap.index(handle)).is_none()
             {
+                crate::mac::drop_stats::silent!("draw.tables", "span_exceeded");
                 once!(slot, n, "fresh descriptor table exceeds the available span");
                 continue;
             }
@@ -3945,6 +3965,7 @@ impl State {
                     None => {
                         host.make_null(index);
                         if used.is_some() {
+                            crate::mac::drop_stats::silent!("draw.tables", "entry_without_view");
                             once!(slot, "a table entry without a view");
                         }
                     }
@@ -4029,6 +4050,7 @@ impl State {
         first: u32,
         first_instance: u32,
     ) {
+        crate::mac::drop_stats::bind_reason(None);
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
@@ -4156,6 +4178,7 @@ impl State {
                 || u64::from(first + count) * stride > u64::from(v.size)
                 || crate::shadow::find(from, rects * 3 * stride).is_none()
             {
+                crate::mac::drop_stats::bind_reason(Some("bind:rect_vertices_outside"));
                 once!(slot, "rectangle vertices outside their buffer");
                 return false;
             }
@@ -4202,6 +4225,7 @@ impl State {
         base: i32,
         first_instance: u32,
     ) {
+        crate::mac::drop_stats::bind_reason(None);
         self.window = None;
         #[cfg(feature = "diagnostics")]
         self.trace("indexed", indices, first);
@@ -4209,6 +4233,7 @@ impl State {
         // alone (nothing expands them on the CPU).
         let lost = self.topology == RECTANGLES && !self.completes_rects();
         if lost {
+            crate::mac::drop_stats::bind_reason(Some("bind:indexed_rects"));
             once!("indexed rectangles not drawn");
         }
         let ran = !lost && self.prepare(list, true);
@@ -4317,6 +4342,7 @@ impl State {
         arguments: u64,
         count: Option<u64>,
     ) -> bool {
+        crate::mac::drop_stats::bind_reason(None);
         // Skip before the argument clamp can mutate the indirect buffer.
         #[cfg(feature = "diagnostics")]
         if crate::pipeline::is_skipped(self.pipeline as This) {
@@ -4355,6 +4381,7 @@ impl State {
             && self.topology == RECTANGLES
             && !p.inputs.iter().any(|e| !e.per_instance);
         if made_rects {
+            crate::mac::drop_stats::silent!("draw.indirect_rect", "first_triangle");
             once!("indirect rectangles without vertex inputs drawn as their first triangle");
         }
         let matches_kind = match kind {

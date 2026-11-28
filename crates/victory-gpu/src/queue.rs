@@ -902,6 +902,9 @@ extern "system" fn present(
     let _ = this;
     #[cfg(all(windows, feature = "diagnostics"))]
     crate::copystat::present_begins();
+    if planes > 1 {
+        crate::mac::drop_stats::silent!("queue.present", "extra_planes");
+    }
     let called = crate::timeline::span("the title's Present");
     #[cfg(all(windows, feature = "diagnostics"))]
     crate::timeline::title_thread();
@@ -1210,6 +1213,7 @@ extern "system" fn copy_page_mappings(
     }
     if !ok {
         static ONCE: std::sync::Once = std::sync::Once::new();
+        crate::mac::drop_stats::silent!("queue.tile_mapping", "failed");
         ONCE.call_once(|| tracing::warn!(pool = format_args!("{pool:#x}"), "a page mapping failed"));
     }
     S_OK

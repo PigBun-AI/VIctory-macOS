@@ -342,6 +342,8 @@ on to the world. No allocation failed (xmem logs no refusal).
 
 ### G8 — where the title's draws go: `VICTORY_MAC_DROP_STATS` (`victory-gpu/src/mac/drop_stats.rs`, `tools/mac/drop-ab.sh`)
 
+`drop-stats silent site:reason=n` reports cumulative site hits at the five-second summary, including descriptor fallbacks and missing object slots (numeric kind and byte offset). A hit measures a rejected request or discarded state, not necessarily one draw. Do not sum these with dropped draws. Direct draw/dispatch failures with a known binding cause keep their original operation count and name the reason as `bind:...`.
+
 *What.* A runtime switch (not the `diagnostics` feature: that one is Windows-only code that needs a diag build, and
 `note_drop` / `note_why` print nothing in a release exe), so a plain `check.sh` release exe has it. `VICTORY_MAC_DROP_STATS=1` logs, per
 present, `drop-stats present=P world_frame=W recorded=D+X ran=R dropped=N notimpl[0x1c8=a 0x218=b] why[class=n ...] kind[kind=n ...]`
