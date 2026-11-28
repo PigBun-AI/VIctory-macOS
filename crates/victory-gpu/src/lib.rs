@@ -94,6 +94,8 @@ pub mod timeline;
 pub mod titlewrite;
 #[cfg(windows)]
 mod upload;
+#[cfg(any(windows, test))]
+mod upload_growth;
 #[cfg(windows)]
 mod watch;
 #[cfg(windows)]

@@ -98,8 +98,15 @@ impl Upload {
         let (a, first) = match found {
             Some(place) => place,
             None => {
-                let blocks = n.max(ARENA / BLOCK);
-                let at = reserve(blocks * BLOCK)?;
+                let (at, blocks) = crate::upload_growth::grow(n, ARENA / BLOCK, |blocks| {
+                    let bytes = blocks.checked_mul(BLOCK)?;
+                    let at = reserve(bytes);
+                    if at.is_none() {
+                        let error = std::io::Error::last_os_error().raw_os_error();
+                        tracing::warn!(len, bytes, ?error, arenas = arenas.len(), "low upload reservation failed");
+                    }
+                    at
+                })?;
                 crate::shadow::register(at, at as u64, (blocks * BLOCK) as u64);
                 tracing::info!(at = format_args!("{at:#x}"), bytes = blocks * BLOCK, "memory for lists' uploads, where shaders reach it by address");
                 arenas.push(Arena { at, taken: vec![false; blocks] });
