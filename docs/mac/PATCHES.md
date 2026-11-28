@@ -499,6 +499,12 @@ loop), fine on a PC but too slow through Wine, so the 8 loops of the supported b
 out at load (nothing is patched unless exactly 8 are found). The loop scan is a copy of
 `crash.rs`'s `clwb_loop` (test included) so `crash.rs` is untouched; if the Windows line changes
 the pattern, change the copy. `VICTORY_NOP_CLWB=0/1`. Remove with G2, or if Rosetta handles `clwb`.
+*Log (11-28).* `clwb: 8 loops replaced` (the count is the number patched; exactly 8 are required). Any other count
+patches nothing and logs `clwb: 0 loops replaced (found N, expected 8: not the build they were counted in, nothing
+patched)`; off (not Rosetta or `VICTORY_NOP_CLWB=0`): `clwb: 0 loops replaced (left as they are: ...)`. *Tests*
+(native, `clwb::tests`): `eight_loops_are_replaced_and_logged_with_the_count` (8 loops in two sections, 4- and 5-byte
+forms, become NOPs of their length and the `add`/`cmp`/`jbe` stay), `any_other_count_patches_nothing_and_says_what_it_found`
+(0, 7, 9), `the_patch_is_wanted_under_rosetta_and_the_variable_decides`.
 
 ### L5 — the title's hang watchdog off, `VICTORY_MAC_NO_WATCHDOG=1` (`mac/watchdog.rs`, hook in `apps/victory/src/mac.rs`)
 

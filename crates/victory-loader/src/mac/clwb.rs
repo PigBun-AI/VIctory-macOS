@@ -72,39 +72,115 @@ pub fn clwb_loop_sites(code: &[u8]) -> Vec<(usize, usize)> {
         .collect()
 }
 
+/// `clwb` of 4 bytes (`66 0f ae /6`) and of 5 (`66 REX 0f ae /6`) as NOPs of the same length.
+const NOP4: [u8; 4] = [0x0f, 0x1f, 0x40, 0x00];
+const NOP5: [u8; 5] = [0x0f, 0x1f, 0x44, 0x00, 0x00];
+
+/// The NOP that replaces a `clwb` of `len` bytes.
+fn nop_for(len: usize) -> &'static [u8] {
+    if len == 5 { &NOP5 } else { &NOP4 }
+}
+
+/// What a pass over the title's code found and did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Outcome {
+    /// Write-back loops the scan found.
+    pub found: usize,
+    /// Loops turned into NOPs: all of them if exactly [`CLWB_LOOPS`] were found, else none.
+    pub patched: usize,
+}
+
+impl Outcome {
+    /// The log line, with the count: `clwb: 8 loops replaced`, or why not.
+    pub fn line(&self) -> String {
+        if self.found == CLWB_LOOPS && self.patched == CLWB_LOOPS {
+            format!("clwb: {} loops replaced", self.patched)
+        } else {
+            format!(
+                "clwb: {} loops replaced (found {}, expected {CLWB_LOOPS}: not the build they were counted in, nothing patched)",
+                self.patched, self.found
+            )
+        }
+    }
+}
+
+/// The log line when the patch is left off.
+pub const LEFT_AS_THEY_ARE: &str = "clwb: 0 loops replaced (left as they are: not under Rosetta, or VICTORY_NOP_CLWB=0)";
+
+/// Whether the loops are patched: under Rosetta (`clwb` faults there), `VICTORY_NOP_CLWB=0`
+/// turns it off and `1` turns it on elsewhere.
+pub fn wanted(var: Option<&str>, under_rosetta: bool) -> bool {
+    match var {
+        Some("0") => false,
+        Some("1") => true,
+        _ => under_rosetta,
+    }
+}
+
+/// The sites of every loop in `sections` (the executable sections of the image, as
+/// `(section, offset, clwb length)`), and whether that is the count of the supported build.
+fn sites_in(sections: &[&[u8]]) -> (Vec<(usize, usize, usize)>, bool) {
+    let sites: Vec<_> = sections
+        .iter()
+        .enumerate()
+        .flat_map(|(i, code)| clwb_loop_sites(code).into_iter().map(move |(at, n)| (i, at, n)))
+        .collect();
+    let ok = sites.len() == CLWB_LOOPS;
+    (sites, ok)
+}
+
+/// The loops of `sections` turned into NOPs of their length, in plain memory: nothing is
+/// patched unless exactly [`CLWB_LOOPS`] loops are found. (The loader's own pass,
+/// [`nop_clwb_loops`], does the same to the mapped image and needs `VirtualProtect`; this one
+/// is what tests and any buffer copy of the exe can use.)
+pub fn nop_in_buffers(sections: &mut [&mut [u8]]) -> Outcome {
+    let (sites, ok) = {
+        let views: Vec<&[u8]> = sections.iter().map(|s| &**s).collect();
+        sites_in(&views)
+    };
+    if !ok {
+        return Outcome { found: sites.len(), patched: 0 };
+    }
+    for &(i, at, n) in &sites {
+        sections[i][at..at + n].copy_from_slice(nop_for(n));
+    }
+    Outcome { found: sites.len(), patched: sites.len() }
+}
+
 /// Turns the `clwb` of every loop in the executable sections of the image
-/// mapped at `base` into a NOP of its length, and returns how many. The
+/// mapped at `base` into a NOP of its length. The
 /// loop's `add`/`cmp`/`jbe` stay, so its registers end as before. Before any
 /// title thread runs.
 ///
-/// Nothing is patched, and 0 returned, unless exactly [`CLWB_LOOPS`] loops
-/// are found: the count found is logged otherwise.
+/// Nothing is patched, and `patched` is 0, unless exactly [`CLWB_LOOPS`] loops
+/// are found: the count found is logged otherwise (and is in [`Outcome::line`]).
 #[cfg(windows)]
-pub fn nop_clwb_loops(base: u64, info: &victory_pe::ImageInfo) -> usize {
+pub fn nop_clwb_loops(base: u64, info: &victory_pe::ImageInfo) -> Outcome {
     use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
     use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let mut sites = Vec::new();
-    for s in info.sections.iter().filter(|s| s.characteristics & super::MEM_EXECUTE != 0) {
-        let start = base + u64::from(s.rva);
-        let len = s.virtual_size.min(s.file_size) as usize;
-        // SAFETY: the mapped section, readable code.
-        let code = unsafe { std::slice::from_raw_parts(start as *const u8, len) };
-        sites.extend(clwb_loop_sites(code).into_iter().map(|(at, n)| (start, at, n)));
-    }
-    if sites.len() != CLWB_LOOPS {
+    let execs: Vec<_> = info.sections.iter().filter(|s| s.characteristics & super::MEM_EXECUTE != 0).collect();
+    let starts: Vec<u64> = execs.iter().map(|s| base + u64::from(s.rva)).collect();
+    // SAFETY: the mapped sections, readable code.
+    let views: Vec<&[u8]> = execs
+        .iter()
+        .zip(&starts)
+        .map(|(s, &start)| unsafe {
+            std::slice::from_raw_parts(start as *const u8, s.virtual_size.min(s.file_size) as usize)
+        })
+        .collect();
+    let (sites, ok) = sites_in(&views);
+    if !ok {
         tracing::warn!(
             found = sites.len(),
             expected = CLWB_LOOPS,
             "clwb write-back loops are not patched: this is not the build they were counted in"
         );
-        return 0;
+        return Outcome { found: sites.len(), patched: 0 };
     }
     let mut patched = 0;
-    for (start, at, n) in sites {
-        const NOP4: [u8; 4] = [0x0f, 0x1f, 0x40, 0x00];
-        const NOP5: [u8; 5] = [0x0f, 0x1f, 0x44, 0x00, 0x00];
-        let site = (start + at as u64) as *mut u8;
+    for &(i, at, n) in &sites {
+        let site = (starts[i] + at as u64) as *mut u8;
         let mut old = 0;
         // SAFETY: the title's code, writable for the moment of the
         // write, before any title thread runs.
@@ -112,7 +188,7 @@ pub fn nop_clwb_loops(base: u64, info: &victory_pe::ImageInfo) -> usize {
             if VirtualProtect(site.cast(), n, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
                 continue;
             }
-            let nop: &[u8] = if n == 5 { &NOP5 } else { &NOP4 };
+            let nop = nop_for(n);
             std::ptr::copy_nonoverlapping(nop.as_ptr(), site, n);
             VirtualProtect(site.cast(), n, old, &mut old);
         }
@@ -120,7 +196,7 @@ pub fn nop_clwb_loops(base: u64, info: &victory_pe::ImageInfo) -> usize {
     }
     // SAFETY: flushes the whole instruction cache of our process.
     unsafe { FlushInstructionCache(GetCurrentProcess(), std::ptr::null(), 0) };
-    patched
+    Outcome { found: sites.len(), patched }
 }
 
 #[cfg(test)]
@@ -148,5 +224,58 @@ mod tests {
         let mut code = vec![0x90];
         code.extend_from_slice(&r9);
         assert_eq!(clwb_loop_sites(&code), vec![(1, 5)]);
+    }
+
+    /// A section with `n` loops, alternating the 4-byte (rcx) and 5-byte (r9) forms, with a
+    /// `ret` and a `nop` between them.
+    fn section_with(n: usize) -> Vec<u8> {
+        let rcx = [0x66, 0x0f, 0xae, 0x31, 0x48, 0x83, 0xc1, 0x40, 0x48, 0x39, 0xc1, 0x76, 0xf3];
+        let r9 = [0x66, 0x41, 0x0f, 0xae, 0x31, 0x49, 0x83, 0xc1, 0x40, 0x49, 0x39, 0xc1, 0x76, 0xf2];
+        let mut code = vec![0x90];
+        for i in 0..n {
+            code.extend_from_slice(if i % 2 == 0 { &rcx[..] } else { &r9[..] });
+            code.extend_from_slice(&[0xc3, 0x90]);
+        }
+        code
+    }
+
+    #[test]
+    fn eight_loops_are_replaced_and_logged_with_the_count() {
+        // 8 loops over two sections (5 + 3), as the title has them in several functions.
+        let (mut a, mut b) = (section_with(5), section_with(3));
+        let before = (a.clone(), b.clone());
+        let out = nop_in_buffers(&mut [&mut a, &mut b]);
+        assert_eq!(out, Outcome { found: 8, patched: 8 });
+        assert_eq!(out.line(), "clwb: 8 loops replaced");
+        // No clwb is left, each was swapped for a NOP of its own length, and the rest is as it was.
+        assert!(clwb_loop_sites(&a).is_empty() && clwb_loop_sites(&b).is_empty());
+        assert_eq!(&a[1..5], &NOP4[..]);
+        assert_eq!(&a[16..21], &NOP5[..]);
+        assert_eq!(a.len(), before.0.len());
+        let changed = |x: &[u8], y: &[u8]| x.iter().zip(y).filter(|(p, q)| p != q).count();
+        assert!(changed(&a, &before.0) + changed(&b, &before.1) <= 8 * 5);
+        assert_eq!(&a[5..13 + 1], &before.0[5..13 + 1], "add/cmp/jbe stay");
+    }
+
+    #[test]
+    fn any_other_count_patches_nothing_and_says_what_it_found() {
+        for n in [0, 7, 9] {
+            let mut a = section_with(n);
+            let before = a.clone();
+            let out = nop_in_buffers(&mut [&mut a]);
+            assert_eq!(out, Outcome { found: n, patched: 0 });
+            assert_eq!(a, before, "{n} loops: untouched");
+            let line = out.line();
+            assert!(line.starts_with("clwb: 0 loops replaced (found "), "{line}");
+            assert!(line.contains(&format!("found {n}, expected 8")), "{line}");
+        }
+    }
+
+    #[test]
+    fn the_patch_is_wanted_under_rosetta_and_the_variable_decides() {
+        assert!(wanted(None, true) && !wanted(None, false));
+        assert!(!wanted(Some("0"), true) && wanted(Some("1"), false));
+        assert!(wanted(Some("x"), true) && !wanted(Some("x"), false));
+        assert!(LEFT_AS_THEY_ARE.starts_with("clwb: 0 loops replaced (left as they are"));
     }
 }

@@ -60,14 +60,10 @@ pub fn plan(info: &victory_pe::ImageInfo, original: &mut Vec<u8>, hash: &str) ->
 pub fn apply(plan: Plan, image: &victory_loader::LoadedImage, execute: bool) {
     // clwb faults under Rosetta, an exception per write-back loop (#135).
     // Only there; `VICTORY_NOP_CLWB=0` turns it off and `1` turns it on elsewhere.
-    if match std::env::var("VICTORY_NOP_CLWB").ok().as_deref() {
-        Some("0") => false,
-        Some("1") => true,
-        _ => victory_hle::rosetta::rosetta(),
-    } {
-        println!("clwb loops     {} made NOPs", clwb::nop_clwb_loops(image.base() as u64, image.info()));
+    if clwb::wanted(std::env::var("VICTORY_NOP_CLWB").ok().as_deref(), victory_hle::rosetta::rosetta()) {
+        println!("{}", clwb::nop_clwb_loops(image.base() as u64, image.info()).line());
     } else {
-        println!("clwb loops     left as they are");
+        println!("{}", clwb::LEFT_AS_THEY_ARE);
     }
     // The title's output size, render scale and upscaler (`VICTORY_OUTPUT`,
     // `VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`; the output size 1280x720

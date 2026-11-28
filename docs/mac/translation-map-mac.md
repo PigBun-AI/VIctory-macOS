@@ -44,7 +44,7 @@
 | mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | gap | unsupported |
 | mac.isa.vextract128_mem | vextractf128/vextracti128 store to memory (xmm half of ymm) | 33 | static-census | proven | translated |
 | mac.isa.store256_plain | plain 256-bit vector stores (vmovups/vmovdqu/vmovaps ymm to memory), crossing into a protected page | 119,255 | static-census | proven | translated |
-| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | gap | unsupported |
+| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | unproven | stubbed |
 | mac.isa.nontemporal_store | non-temporal stores (vmovntps/vmovntdq ymm, movnti, movntdq) | 53 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_semantics | lock cmpxchg / cmpxchg16b: memory result and ZF | 28,361 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | gap | emulated |
