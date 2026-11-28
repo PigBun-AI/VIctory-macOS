@@ -81,7 +81,7 @@ KM(m_pd2ps_x, "vcvtpd2psx", "xmm1", "vmovups", 16, 16) KM(m_pd2ps_y, "vcvtpd2psy
 
 // ---------------- reporting ----------------
 #define MAXC 10
-typedef struct { char name[24]; int info; long long n, bad; char first[200]; } Cls;
+typedef struct { char name[24]; int info; long long n, bad; char first[360]; } Cls;
 typedef struct { Cls c[MAXC]; int nc; } Rep;
 static void rep_init(Rep *r, const char *names) {      // "name,name,..."; a leading '~' marks an informational class (differences do not fail)
     memset(r, 0, sizeof *r); const char *p = names;
@@ -93,7 +93,7 @@ static void rep_init(Rep *r, const char *names) {      // "name,name,..."; a lea
 }
 #define NOTE(R, K, BAD, ...) do { Cls *c_ = &(R)->c[K]; c_->n++; if (BAD) { c_->bad++; if (!c_->first[0]) snprintf(c_->first, sizeof c_->first, __VA_ARGS__); } } while (0)
 static int rep_emit(const char *fam, const char *batch, const char *mode, Rep *r, const char *extra) {
-    long long n = 0, bad = 0, ibad = 0; char cls[700] = "", first[260] = "";
+    long long n = 0, bad = 0, ibad = 0; char cls[900] = "", first[380] = "";
     for (int i = 0; i < r->nc; i++) {
         Cls *c = &r->c[i]; if (!c->n) continue;
         if (c->info) ibad += c->bad; else { bad += c->bad; n += c->n; }

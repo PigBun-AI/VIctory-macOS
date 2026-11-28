@@ -138,4 +138,22 @@ if fam_rows:
             print('- %s: **%s** (%d forms, %d elements, %d mismatches)' % (g, 'PASS' if nb == 0 else 'GAP', len(fs), n, sum(agg[f]['bad'] for f in fs)))
         allbad = sum(a['bad'] + len(a['bad_modes']) for a in agg.values())
         print('\n**Verdict mac.isa.avx.convert: %s** (%d forms, %d elements)\n' % ('PASS: bit-exact against the x86 model in every RC / DAZ / FTZ variant' if not allbad else 'GAP', len(agg), sum(a['n'] for a in agg.values())))
+    # generic instruction families of isa-diff.h (avx_move, avx_fparith, ...): one table row per op, one verdict per family
+    for fam in collections.OrderedDict.fromkeys(d['fam'] for d in fam_rows if d['fam'] not in ('rcp_rsqrt', 'cvt')):
+        fr = [d for d in fam_rows if d['fam'] == fam]
+        agg = collections.OrderedDict()
+        for d in fr:
+            a = agg.setdefault(d['batch'], {'passes': 0, 'el': 0, 'rec': 0, 'bad': 0, 'badmodes': [], 'first': '', 'strad': 0})
+            a['passes'] += 1; a['rec'] += int(d.get('records', d.get('n', 0))); a['el'] += int(d.get('elements', d.get('n', 0))); a['bad'] += int(d.get('mismatches', 0))
+            if d.get('mode', '').startswith('straddle'): a['strad'] += int(d.get('n', 0))
+            if d.get('status') != 'PASS': a['badmodes'].append(d.get('mode', '?')); a['first'] = a['first'] or d.get('first', '')
+        print('## %s (per op: all passes, every MXCSR variant)\n' % fam)
+        print('| op | passes | records | elements | page-straddle cases | mismatches | verdict |'); print('|---|---|---|---|---|---|---|')
+        for f, a in agg.items():
+            print('| %s | %d | %d | %d | %d | %d | **%s** |' % (f, a['passes'], a['rec'], a['el'], a['strad'], a['bad'], 'PASS' if a['bad'] == 0 and not a['badmodes'] else 'GAP'))
+        print()
+        for f, a in agg.items():
+            if a['bad'] or a['badmodes']: print('- **%s GAP** in modes %s; first: %s' % (f, ', '.join(a['badmodes'][:6]), a['first']))
+        nb = sum(a['bad'] + len(a['badmodes']) for a in agg.values())
+        print('\n**Verdict %s: %s** (%d ops, %d records, %d elements, %d page-straddle cases, %d mismatches)\n' % (fam, 'PASS' if not nb else 'GAP', len(agg), sum(a['rec'] for a in agg.values()), sum(a['el'] for a in agg.values()), sum(a['strad'] for a in agg.values()), sum(a['bad'] for a in agg.values())))
     for d in crash: print('- **CRASH** %s %s: %s' % (d.get('fam'), d.get('batch'), d.get('stderr', '')))
