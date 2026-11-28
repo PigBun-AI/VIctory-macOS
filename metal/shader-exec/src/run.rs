@@ -214,6 +214,7 @@ struct TexUav {
     texture: Texture,
     width: u32,
     height: u32,
+    depth: u32,
     /// dwords per texel
     words: u32,
     format: u32,
@@ -341,7 +342,7 @@ impl Runner {
                             plane: 0,
                             origin: [0; 3],
                         },
-                        [t.width, t.height, 1],
+                        [t.width, t.height, t.depth],
                     )
                     .map_err(from_back)?;
                 }
@@ -354,8 +355,8 @@ impl Runner {
                 Out::Buffer(b, n) => b.read_u32s(0, *n as usize).map_err(from_back)?,
                 Out::Texture(t) => {
                     let row = (t.width * t.words) as usize;
-                    let mut all = Vec::with_capacity(row * t.height as usize);
-                    for y in 0..t.height {
+                    let mut all = Vec::with_capacity(row * (t.height * t.depth) as usize);
+                    for y in 0..t.height * t.depth {
                         all.extend(
                             t.readback
                                 .read_u32s(u64::from(y * t.pitch), row)
@@ -532,6 +533,114 @@ impl Runner {
                         .map_err(from_back)?;
                     keep_tex.push(tex);
                 }
+                View::Shaped {
+                    kind,
+                    w,
+                    h,
+                    d,
+                    texels,
+                } => {
+                    if texels.len() != (*w * *h * *d * 4) as usize {
+                        return Err(Failure::Failed("texture data is not w*h*d texels".into()));
+                    }
+                    let desc = TextureDesc {
+                        dim: match kind {
+                            req::Shape::D1 => TexDim::D1,
+                            req::Shape::D2Array => TexDim::D2,
+                            req::Shape::D3 => TexDim::D3,
+                        },
+                        format: dxgi::R32G32B32A32_FLOAT,
+                        width: *w,
+                        height: *h,
+                        depth_or_array: *d,
+                        mips: 1,
+                        samples: 1,
+                        usage: SRV,
+                    };
+                    let tex = dev.create_texture(&desc).map_err(from_back)?;
+                    let pitch = (*w * 16).next_multiple_of(256);
+                    for z in 0..*d {
+                        let at_z = (z * *w * *h * 4) as usize;
+                        let slice = &texels[at_z..at_z + (*w * *h * 4) as usize];
+                        let mut bytes = vec![0u8; (pitch * *h) as usize];
+                        for y in 0..*h as usize {
+                            let row = texels_bytes(
+                                &slice[y * *w as usize * 4..(y + 1) * *w as usize * 4],
+                            );
+                            bytes[y * pitch as usize..y * pitch as usize + row.len()]
+                                .copy_from_slice(&row);
+                        }
+                        let up = dev
+                            .create_buffer(BufferKind::Upload, bytes.len() as u64)
+                            .map_err(from_back)?;
+                        up.write(0, &bytes).map_err(from_back)?;
+                        let (slice_no, origin) = match kind {
+                            req::Shape::D3 => (0, [0, 0, z]),
+                            _ => (z, [0; 3]),
+                        };
+                        upload
+                            .copy_buffer_to_texture(
+                                &TexLoc {
+                                    texture: &tex,
+                                    mip: 0,
+                                    slice: slice_no,
+                                    plane: 0,
+                                    origin,
+                                },
+                                &BufLoc {
+                                    buffer: &up,
+                                    offset: 0,
+                                    format: desc.format,
+                                    row_pitch: pitch,
+                                    rows: *h,
+                                },
+                                [*w, *h, 1],
+                            )
+                            .map_err(from_back)?;
+                        uploads += 1;
+                        keep.push(up);
+                    }
+                    let dim = match kind {
+                        req::Shape::D1 => ViewDim::D1,
+                        req::Shape::D2Array => ViewDim::D2Array,
+                        req::Shape::D3 => ViewDim::D3,
+                    };
+                    let id = tex.view(&ViewSpec::whole(dim)).map_err(from_back)?;
+                    heap.write(at, IrDescriptorTableEntry::texture(id, 0.0, 0))
+                        .map_err(from_back)?;
+                    keep_tex.push(tex);
+                }
+                View::Uav3d { w, h, d } => {
+                    let desc = TextureDesc {
+                        dim: TexDim::D3,
+                        format: dxgi::R32G32B32A32_FLOAT,
+                        width: *w,
+                        height: *h,
+                        depth_or_array: *d,
+                        mips: 1,
+                        samples: 1,
+                        usage: UAV | SRV,
+                    };
+                    let tex = dev.create_texture(&desc).map_err(from_back)?;
+                    let id = tex.view(&ViewSpec::whole(ViewDim::D3)).map_err(from_back)?;
+                    heap.write(at, IrDescriptorTableEntry::texture(id, 0.0, 0))
+                        .map_err(from_back)?;
+                    let pitch = (*w * 16).next_multiple_of(256);
+                    // The copy back is `d` slices of `h` rows `pitch` apart.
+                    let readback = dev
+                        .create_buffer(BufferKind::Readback, u64::from(pitch * *h * *d))
+                        .map_err(from_back)?;
+                    outs.push(Out::Texture(TexUav {
+                        texture: tex,
+                        width: *w,
+                        height: *h,
+                        depth: *d,
+                        words: 4,
+                        format: dxgi::R32G32B32A32_FLOAT,
+                        pitch,
+                        readback,
+                    }));
+                }
                 View::RawUav(n) => {
                     let b = shared(dev, &[], *n as usize)?;
                     heap.write_buffer(at, &b, false).map_err(from_back)?;
@@ -581,6 +690,7 @@ impl Runner {
                         texture: tex,
                         width: *w,
                         height: *h,
+                        depth: 1,
                         words,
                         format,
                         pitch,

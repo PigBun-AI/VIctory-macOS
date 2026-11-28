@@ -63,6 +63,13 @@ pub enum Stride {
     Format(u32, u32),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    D1,
+    D2Array,
+    D3,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum View {
     /// RGBA32F texture SRV.
@@ -83,6 +90,21 @@ pub enum View {
         w: u32,
         h: u32,
         depth: Vec<f32>,
+    },
+    /// RGBA32F SRV of another shape: `kind` 1D (`h`, `d` are 1), 2D array (`d` layers) or 3D
+    /// (`d` slices); `texels` are `w*h*d*4` floats, slice after slice.
+    Shaped {
+        kind: Shape,
+        w: u32,
+        h: u32,
+        d: u32,
+        texels: Vec<f32>,
+    },
+    /// RGBA32F 3D texture UAV (width, height, depth), zeroed.
+    Uav3d {
+        w: u32,
+        h: u32,
+        d: u32,
     },
     RawUav(u32),
     TextureUav {
@@ -222,6 +244,24 @@ fn view(r: &mut R) -> Res<View> {
             w: r.u32()?,
             h: r.u32()?,
             depth: f32s(r)?,
+        },
+        k @ 10..=12 => {
+            let kind = [Shape::D1, Shape::D2Array, Shape::D3][usize::from(k) - 10];
+            let w = r.u32()?;
+            let h = if kind == Shape::D1 { 1 } else { r.u32()? };
+            let d = if kind == Shape::D1 { 1 } else { r.u32()? };
+            View::Shaped {
+                kind,
+                w,
+                h,
+                d,
+                texels: f32s(r)?,
+            }
+        }
+        13 => View::Uav3d {
+            w: r.u32()?,
+            h: r.u32()?,
+            d: r.u32()?,
         },
         k => return Err(format!("view kind {k}")),
     })
@@ -418,5 +458,46 @@ mod tests {
                 }],
             }
         );
+    }
+
+    /// The same bytes `victory-shader`'s `host_exec` pins (`the_shaped_view_wire_form_is_pinned`).
+    #[test]
+    fn the_shaped_views_wire_form_matches_the_hosts() {
+        let f = |x: f32| x.to_bits().to_le_bytes();
+        let mut texels = Vec::new();
+        for _ in 0..2 {
+            for x in [1.0, 2.0, 3.0, 4.0] {
+                texels.extend(f(x));
+            }
+        }
+        let mut bytes: Vec<u8> = vec![10, 2, 0, 0, 0, 8, 0, 0, 0];
+        bytes.extend(&texels);
+        bytes.extend([12, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 8, 0, 0, 0]);
+        bytes.extend(&texels);
+        bytes.extend([13, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0]);
+        let mut r = R::new(&bytes);
+        let one = vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0];
+        assert_eq!(
+            view(&mut r).unwrap(),
+            View::Shaped {
+                kind: Shape::D1,
+                w: 2,
+                h: 1,
+                d: 1,
+                texels: one.clone()
+            }
+        );
+        assert_eq!(
+            view(&mut r).unwrap(),
+            View::Shaped {
+                kind: Shape::D3,
+                w: 1,
+                h: 1,
+                d: 2,
+                texels: one
+            }
+        );
+        assert_eq!(view(&mut r).unwrap(), View::Uav3d { w: 1, h: 2, d: 3 });
+        r.end().unwrap();
     }
 }
