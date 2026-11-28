@@ -17,6 +17,7 @@ pub struct Plan {
     /// `VICTORY_MAC_NO_WATCHDOG` (L5): `None` unset (the default), else the
     /// hash of the exe the sites are compared against.
     watchdog: Option<String>,
+    prestream_known: bool,
 }
 
 /// Prints the status lines and decides what to patch. Takes the exe's bytes
@@ -52,7 +53,7 @@ pub fn plan(info: &victory_pe::ImageInfo, original: &mut Vec<u8>, hash: &str) ->
     let cmpxchg16 = cmpxchg16::wanted();
     let original = if masked.is_some() || cmpxchg16 { std::mem::take(original) } else { Vec::new() };
     let watchdog = watchdog::wanted().then(|| hash.to_string());
-    Plan { masked, cmpxchg16, original, watchdog }
+    Plan { masked, cmpxchg16, original, watchdog, prestream_known: hash.eq_ignore_ascii_case(watchdog::BUILD_1_0_2_1) }
 }
 
 /// Applies the plan to the image mapped at `image.base()`, before any title
@@ -98,6 +99,14 @@ pub fn apply(plan: Plan, image: &victory_loader::LoadedImage, execute: bool) {
     if plan.cmpxchg16 {
         let n = cmpxchg16::patch(image.base() as u64, image.info(), &plan.original);
         println!("cmpxchg16      {n} sites counted (VICTORY_MAC_CMPXCHG16_CHECK=1)");
+    }
+    #[cfg(target_arch="x86_64")]
+    if execute && std::env::var("VICTORY_PRESTREAM_PROBE").as_deref() == Ok("1") {
+        // mac L8: mapped image, before starting title threads.
+        match unsafe { victory_loader::mac::prestream::install(image.base() as usize, image.info().size_of_image as usize, plan.prestream_known) } {
+            Ok(()) => eprintln!("VIctory prestream: L8 installed"),
+            Err(reason) => eprintln!("VIctory prestream: warn: {reason}"),
+        }
     }
     // Every other 256-bit store of the title split into 128-bit halves, from
     // a list made offline (`cargo xtask wide-stores`): Rosetta cannot resume

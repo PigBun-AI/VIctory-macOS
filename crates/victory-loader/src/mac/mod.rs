@@ -26,6 +26,7 @@ pub mod int3dump;
 pub mod masked;
 pub mod output_chain;
 pub mod resolution;
+pub mod prestream; // mac L8
 pub mod watchdog;
 pub mod wide;
 

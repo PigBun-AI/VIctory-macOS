@@ -687,6 +687,8 @@ mod hook {
                 return;
             }
             *dumps += 1;
+            #[cfg(target_arch="x86_64")]
+            if trap - base as u64 == 0x5149aec { crate::mac::prestream::summary("5149aec"); } // mac L8
             let regs = Regs {
                 rax: context.Rax,
                 rbx: context.Rbx,

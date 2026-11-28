@@ -659,6 +659,19 @@ It never fails the run.
 
 *Remove when* `mac.title.int3_self_exit_r6` and `mac.title.srl_prestream_stall` are closed (the cause is found and fixed or the node is proved harmless); the module is self-contained.
 
+### L8 — observe the SRL readiness predicate (`VICTORY_PRESTREAM_PROBE=1`)
+
+Diagnostic only; no forced ready, pool resize, skipped trap or lifecycle transition. Off unless explicitly enabled or `run.sh --purpose` names `mac.title.srl_prestream_stall` or `mac.title.int3_self_exit_r6`. Use `VICTORY_MAC_INT3_DUMP=0x5149aec` alongside it. The loader checks the original title build hash and **all** mapped site bytes (including the phase relay) before installing anything. Reclaim/remove when the first missing producer, its consumption and entity release are proven, or re-derive on build change.
+
+| RVA | evidence (Series 1.0.2.1 only) |
+|---|---|
+| `4c3cf54/59` | ECX=ID, EDX=entry key (caller local +24h), original AL result before xor. Per-pair false and true counters, independent of query interleaving. |
+| `227f357` | first observed signed grade failure on one of six verified generic-loop callers, by its own object's ID and runtime entry key (not the most recent polling thread); lane, R15 lookup key, payload cursor/target/grade/+e and manager threshold. Absence of a sample does not exclude missing keys, linked SRLs or the separate type-1 predicate. |
+| `2299582` | latest actual setter write, ID, old/new phase, ref after decrement if applicable. Three-byte store via short jump to checked padding at `2299598`; bypasses into `2299585` remain intact. |
+| `227cec0` | latest entry to removal, ID/phase/ref, not proof that BUILDING was released. Both lifecycle events include raw TSC and an approximate elapsed-ms conversion. |
+
+Fixed 4096-slot open-addressed table plus a zero-key slot; at most 32 probes, loss reported. No host calls or SIMD in the title path. Background reader prints each crossed power of two per tuple; CRT exit and L7 dump print the eight most often observed false keys with **no observed true**. Concurrent snapshot, not a frozen title; no forced-kill exit callback. `VIctory prestream:` in `stderr.log`. Wine synthetic test exercises all live transfers; `prestream_fixture` writes a disassembly-only copy, never run it as a title.
+
 ### G11 — `VICTORY_MAC_LAYOUT_STATS=1`: which texture layouts the title creates (`victory-gpu/src/mac/layout_stats.rs`, 1 hook in `resource.rs` `hand_out_resource`)
 
 *What.* Counts every texture the title creates by dimension, layout field (`0x100 | swizzle mode`), render-target/depth flags,

@@ -194,6 +194,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 title_args=("$@")
+case "$purpose" in *mac.title.srl_prestream_stall*|*mac.title.int3_self_exit_r6*) export VICTORY_PRESTREAM_PROBE=1 ;; esac # mac L8; included by print_environment
 # --purpose: required for every run that would start the game (not --print-env); exit status 7
 . "$ROOT/tools/mac/purpose.sh"
 if [ "$print_env" = 0 ]; then purpose_check "$purpose" || { echo "tools/mac/run.sh: refused" >&2; exit "$PURPOSE_EXIT"; }; fi
