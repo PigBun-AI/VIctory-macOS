@@ -756,6 +756,22 @@ when it is unset the container test returns with a "skipped" message instead of 
 the old behaviour on the Windows machine, set `VICTORY_LIVE_CORPUS` to the two folders. Remove this
 patch if the Windows line makes the same change.
 
+### T2 — the Wine run of the victory-hle and victory-loader tests: what failed there and what was changed (2026-11-28, branch `mac/wine-test-fixes`)
+
+Four tests failed under Wine on Rosetta (`tools/mac/wine-tests.sh -p victory-hle -p victory-loader`); a fifth group of flakes showed once they were
+repeated. Report: `GTA6-Mac集成/reports/2026-11-28-wine-fail.md`. One `mac:` commit each, `git log --oneline mac/livetr..mac/wine-test-fixes`.
+
+| test | cause | change |
+|---|---|---|
+| `write_sites::changed_moves_and_vector_stores_do_what_they_did` | Rosetta hides AVX (cpuid leaf 1 ecx bit 28 and OSXSAVE 0, leaf 7 ebx 0) unless `ROSETTA_ADVERTISE_AVX=1` is set; the game runs set it, the test runs did not, so `is_x86_feature_detected!("avx2")` was false and the vector stub (correctly) was not made | `tools/macos/test-wine.sh` exports it (default 1); the test says so in its assert. Also turns on the avx2 paths of `victory-gpu` `torn.rs` and `shadow.rs` in Wine runs |
+| `net::only_loopback_is_reachable` | environment: CrossOver Wine's ws2_32 lacks `WSAConnectByList` and `GetAddrInfoExA`, winhttp lacks `WinHttpGetProxySettingsEx`; the title imports none of them (0 call sites in the import census) | the test allows exactly those three on Wine, lists all missing names otherwise |
+| `xgamesave::a_kept_blob_past_the_link_limit_is_copied` | environment: the temp folder is APFS, which has no 1024-link limit, so the premise (the 1025th link is refused) cannot be made | `link_or_copy` is a function; `a_link_that_fails_is_copied` tests the copy on every host; the NTFS test skips where the host has no limit |
+| `xmem::a_title_thread_goes_on_using_the_rest_of_a_view` | a defect of Wine's view replacement (shown with no code of ours: `tools/mac/view-replace-probe.sh`), not of the HLE bookkeeping | the test keeps the fault-resume assert everywhere and counts lost data on Wine only; `xmem.rs` says (1st, 2nd, 4th.. time) when `unmap()` cut a view, the exposure count of `mac.hle.xmem_map_partial_view` (5 lines, `cut_a_view`) |
+| `console_insn::a_clzero_loop_becomes_plain_stores` (11 of 15 suite runs) | the stub room was kept near the first site that asked; a site out of `jmp rel32` reach of it silently was not patched | a site out of reach gets a room of its own (`near()` call in `patch_clzero`, real code, also in the game) |
+| `publish::concurrent_publishers...` (1 in 60), `crash::memory_at_names_what_an_access_hit` (1 in 25), `xgameui::dialogs_end_with_what_was_typed` (1 in 40), `files::long_title_paths_work_on_the_host` (1 in 37), `load_probe::loads_binds_and_calls_probe` (always) | a rename refused for the moment; a freed address reserved again by a neighbouring test; `XAsyncGetStatus(wait)` between `complete_call` removing the call and publishing the status (a race on Windows too); a sharing violation after fclose (Wine); cargo spawned from Wine | retry of the rename (`publish.rs`, real code); tolerant test; wait for the status (`xasync.rs`, real code); retry in the test; the fixture DLL that `test-wine.sh` already built is used |
+
+*Retire when:* the Windows line makes the same changes (the two `victory-loader` and one `xasync` code changes are not Mac specific and can go upstream).
+
 ### M6 — `tools/mac/push-check.sh`, `docs/mac/PUSH.md`
 
 The check before a push to the public `fork`: policy, credential scan, privacy scan (internal
