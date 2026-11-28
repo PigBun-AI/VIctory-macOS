@@ -586,6 +586,7 @@ impl CommandList {
     /// allocation, or a copy of one made on the GPU).
     pub(crate) fn set_root_arguments_va(&mut self, gpu_va: u64) -> Result<()> {
         self.live()?;
+        crate::prof::LAST_ARGS_VA.store(gpu_va, std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER as u32, gpu_va)
     }

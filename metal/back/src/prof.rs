@@ -814,6 +814,7 @@ pub(crate) fn dump_buffer(
     .as_ref()
 }
 
+pub(crate) static LAST_ARGS_VA: AtomicU64 = AtomicU64::new(0);
 pub(crate) static LAST_HEAP_VA: AtomicU64 = AtomicU64::new(0);
 
 const DUMP2_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\

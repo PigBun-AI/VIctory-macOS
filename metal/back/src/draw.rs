@@ -1171,7 +1171,17 @@ impl crate::record::CommandList {
             self.set_address(30, params.gpu_va)?;
             self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
         }
-        if let (Some(t), Some(k2)) = (tlab_va, crate::prof::dump2_kernel(&dev)) {
+        let args_va = tlab_va.unwrap_or_else(|| {
+            crate::prof::LAST_ARGS_VA.load(std::sync::atomic::Ordering::Relaxed)
+        });
+        meta_push(&format!(
+            "\n  root arguments va {args_va:#x} (record's: {})",
+            tlab_va.is_some()
+        ));
+        if let (Some(t), Some(k2)) = (
+            Some(args_va).filter(|v| *v != 0),
+            crate::prof::dump2_kernel(&dev),
+        ) {
             let heap = crate::prof::LAST_HEAP_VA.load(std::sync::atomic::Ordering::Relaxed);
             let params = self.alloc_constants(32, 16)?;
             let dst = buf.gpu_va() + 5 * 64;
