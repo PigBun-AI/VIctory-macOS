@@ -13103,8 +13103,10 @@ impl<'a> Lower<'a> {
             .exports
             .get(&(b, i))
             .ok_or("an export I/O raising did not see")?;
-        if e.compressed {
-            return Err("a compressed export");
+        // mac S6: the packed pair is FP16 only when that representation is known. Do not
+        // reinterpret untyped bits as floats: a pipeline could have selected UNORM/SINT/etc.
+        if e.compressed && (!self.s.pixel || !matches!(e.target, Target::Color(_)) || !e.values.iter().flatten().all(|v| self.x.p.blocks[b].insts[..i].iter().rev().any(|inst| inst.name() == "v_cvt_pkrtz_f16_f32" && inst.writes.iter().any(|(_, w)| w == v)))) {
+            return Err("a compressed export of unknown format");
         }
         let guard = self.guard(b, i)?;
         let mesh = self.s.mesh.is_some();
@@ -13235,7 +13237,8 @@ impl<'a> Lower<'a> {
                 Target::Primitive => return Err("a primitive export"),
             };
             if let Some((id, col)) = found {
-                stores.push((id, col, value, None));
+                if e.compressed && outputs[id].comp != 9 { return Err("a compressed export to a non-float target"); }
+                stores.push((id, col, value, e.compressed.then_some(ch % 2 != 0)));
             }
         }
         fn elements<'l>(l: &'l mut Lower, primitive: bool) -> &'l mut Vec<SigElement> {

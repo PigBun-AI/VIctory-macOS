@@ -327,13 +327,7 @@ fn run_case(host: &Host, c: &Case) -> Outcome {
 }
 
 /// Differences that are known: (mnemonic, reason).
-const KNOWN: &[(&str, &str)] = &[(
-    "s_swappc_b64",
-    "translator limit: s_swappc_b64 is not a call here (the program falls through it: the callee is skipped, 2.0 instead of 5.0); the title uses it only to hand over between the halves of a merged hardware stage (es/vs), which the translator splits itself; handed over as a finding, not fixed",
-), (
-    "exp mrt0 compr",
-    "translator limit: a compressed (16-bit pair) colour export is refused (\"a compressed export is not supported\"); the title's 16-bit targets are patched to full-format exports (StageIo::Ps patches) before translation",
-)];
+const KNOWN: &[(&str, &str)] = &[];
 
 fn run_family(family: &str, cases: &[Case]) {
     let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());

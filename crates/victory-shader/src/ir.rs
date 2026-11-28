@@ -130,7 +130,13 @@ impl Inst {
 /// count. Fails on instructions the IR cannot express yet
 /// ([`ShaderError::Unsupported`]).
 pub fn build(code: &[u8], wave64: bool, vgprs: u16) -> Result<Program, ShaderError> {
+    build_for_stage(code, wave64, vgprs, None)
+}
+
+pub(crate) fn build_for_stage(code: &[u8], wave64: bool, vgprs: u16, stage: Option<crate::HwStage>) -> Result<Program, ShaderError> {
     let mut list = gfx10::decode(code)?;
+    let expanded = gfx10::local_calls(code, &list, stage)?; // mac S6: expose local calls and returns to SSA
+    let code = if let Some(bytes) = expanded.as_deref() { list = gfx10::decode(bytes)?; bytes } else { code };
     let lanes = 1 + u8::from(wave64);
     let isa = |offset, reason| ShaderError::Isa { offset, reason };
 
