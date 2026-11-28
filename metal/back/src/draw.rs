@@ -47,7 +47,7 @@ use objc2_metal::{
     MTLDepthStencilState, MTLDevice, MTLIndexType, MTLLoadAction, MTLPixelFormat,
     MTLPrimitiveTopologyClass, MTLPrimitiveType, MTLRenderPipelineState, MTLRenderStages,
     MTLScissorRect, MTLSize, MTLStencilDescriptor, MTLStencilOperation, MTLStoreAction, MTLTexture,
-    MTLTriangleFillMode, MTLViewport,
+    MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode,
 };
 
 use crate::descriptors::{RingAlloc, bind_point};
@@ -545,6 +545,11 @@ impl crate::record::CommandList {
 
     /// Creates the render encoder of the open pass (the tracker asked for it).
     pub(crate) fn open_render(&mut self) -> Result<()> {
+        let vis_buf = if crate::prof::vis_enabled() {
+            crate::prof::vis_buffer(&self.queue().device().clone())
+        } else {
+            None
+        };
         let pass = self
             .pass
             .as_mut()
@@ -607,6 +612,10 @@ impl crate::record::CommandList {
             desc.setRenderTargetHeight(pass.size[1] as usize);
             // SAFETY: a plain count, 1 is always valid.
             unsafe { desc.setDefaultRasterSampleCount(1) };
+        }
+        if let Some(b) = vis_buf {
+            // SAFETY: a shared buffer of 4096 bytes, kept for the process.
+            unsafe { desc.setVisibilityResultBuffer(Some(b.raw())) };
         }
         pass.opened = true;
         let encoder = self
@@ -1050,8 +1059,10 @@ impl crate::record::CommandList {
             return Ok(());
         }
         let object_groups = (count - plan.non_provoking).div_ceil(plan.stride);
+        // `gsInstanceCount` is the shader's own (plan.info has it); the draw's instances are the
+        // grid's height. Passing the draw's here, as the runtime header's helper does, made every
+        // instance's threadgroup draw all of them (instances squared).
         let mut info = plan.info;
-        info[10..12].copy_from_slice(&(words[1] as u16).to_le_bytes());
         info[16..24].copy_from_slice(&index.map_or(0, |(va, _)| va).to_le_bytes());
 
         self.bind_geometry_vertex_buffers()?;
@@ -1086,6 +1097,122 @@ impl crate::record::CommandList {
     /// The vertex buffers of a geometry pipeline as one
     /// `IRRuntimeVertexBuffers` block (31 of { address, length, stride }), at
     /// the vertex buffer bind point.
+    /// `VICTORY_METAL_GS_VISIBILITY`: copies the first words of the bound vertex and index
+    /// buffers where the profiler prints them, and notes the state's viewports and scissors.
+    fn dump_gs_inputs(&mut self, tlab_va: Option<u64>) -> Result<()> {
+        let dev = self.queue().device().clone();
+        let (Some(k), Some(buf)) = (
+            crate::prof::dump_kernel(&dev),
+            crate::prof::dump_buffer(&dev),
+        ) else {
+            return Ok(());
+        };
+        let mut meta = String::new();
+        for (i, v) in self.rstate.viewports.iter().enumerate() {
+            meta.push_str(&format!(
+                "\n  viewport {i}: x {} y {} w {} h {} z {}..{}",
+                v.originX, v.originY, v.width, v.height, v.znear, v.zfar
+            ));
+        }
+        for (i, s) in self.rstate.scissors.iter().enumerate() {
+            meta.push_str(&format!("\n  scissor {i}: {s:?}"));
+        }
+        let mut regions: Vec<(u64, u32)> = Vec::new();
+        for (slot, vb) in self.rstate.vertex.iter().enumerate().take(4) {
+            match vb {
+                Some(vb) => {
+                    meta.push_str(&format!(
+                        "\n  vertex slot {slot}: va {:#x} size {} stride {}",
+                        vb.va, vb.size, vb.stride
+                    ));
+                    regions.push((vb.va, vb.size.min(64) / 4));
+                }
+                None => regions.push((0, 0)),
+            }
+        }
+        while regions.len() < 4 {
+            regions.push((0, 0));
+        }
+        match self.rstate.index {
+            Some(ib) => {
+                meta.push_str(&format!(
+                    "\n  index buffer: va {:#x} size {} wide {}",
+                    ib.va, ib.size, ib.wide
+                ));
+                regions.push((ib.va, ib.size.min(64) / 4));
+            }
+            None => regions.push((0, 0)),
+        }
+        *crate::prof::DUMP_META
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = meta;
+        self.barrier(
+            crate::stages::DISPATCH,
+            crate::stages::DISPATCH,
+            crate::stages::VIS_DEVICE,
+        )?;
+        for (k_i, (va, words)) in regions.into_iter().enumerate() {
+            if words == 0 {
+                continue;
+            }
+            let params = self.alloc_constants(32, 16)?;
+            let dst = buf.gpu_va() + (k_i as u64) * 64;
+            params.write_u32s(
+                0,
+                &[
+                    va as u32,
+                    (va >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                    words,
+                    0,
+                    0,
+                    0,
+                ],
+            )?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
+        }
+        let args_va = tlab_va.unwrap_or_else(|| {
+            crate::prof::LAST_ARGS_VA.load(std::sync::atomic::Ordering::Relaxed)
+        });
+        let meta_push = |t: &str| {
+            crate::prof::DUMP_META
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push_str(t);
+        };
+        meta_push(&format!(
+            "\n  root arguments va {args_va:#x} (record's: {})",
+            tlab_va.is_some()
+        ));
+        if let (Some(t), Some(k2)) = (
+            Some(args_va).filter(|v| *v != 0),
+            crate::prof::dump2_kernel(&dev),
+        ) {
+            let heap = crate::prof::LAST_HEAP_VA.load(std::sync::atomic::Ordering::Relaxed);
+            let params = self.alloc_constants(32, 16)?;
+            let dst = buf.gpu_va() + 5 * 64;
+            params.write_u32s(
+                0,
+                &[
+                    t as u32,
+                    (t >> 32) as u32,
+                    heap as u32,
+                    (heap >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                    0,
+                    0,
+                ],
+            )?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(k2, [1, 1, 1], [1, 1, 1])?;
+        }
+        self.keep_buffers.push(buf.clone());
+        Ok(())
+    }
+
     fn bind_geometry_vertex_buffers(&mut self) -> Result<()> {
         let vb_block: RingAlloc = self.alloc_constants(31 * 16, 16)?;
         let mut vbs = [0u8; 31 * 16];
@@ -1222,12 +1349,38 @@ impl crate::record::CommandList {
                 .set_address(bind_point::UNIFORMS as u32, r.action_va + UNIFORMS_AT)?;
             l.cap_gs_groups(r.action_va)?;
             l.snap_gs_record(r.action_va)?;
+            if crate::prof::GS_VIS.with(|c| c.get()) {
+                l.dump_gs_inputs(r.tlab_va)?;
+            }
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
+            let vis = crate::prof::GS_VIS.with(|c| c.get());
+            if vis && let Ok(v) = std::env::var("VICTORY_METAL_GS_SCISSOR") {
+                // `x,y,w,h`: a diagnostic scissor for the counted draw (where do its samples fall).
+                let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                if n.len() == 4 {
+                    let mut sc = MTLScissorRect {
+                        x: n[0],
+                        y: n[1],
+                        width: n[2],
+                        height: n[3],
+                    };
+                    // SAFETY: one rectangle.
+                    unsafe { enc.setScissorRects_count(std::ptr::NonNull::from(&mut sc), 1) };
+                }
+            }
+            if vis {
+                // SAFETY: slot 0 of the visibility buffer the pass was made with.
+                unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Counting, 0) };
+            }
             enc.drawMeshThreadgroupsWithIndirectBuffer_threadsPerObjectThreadgroup_threadsPerMeshThreadgroup(
                 r.action_va + GS_GROUPS_AT,
                 size(plan.object_threads),
                 size(plan.mesh_threads),
             );
+            if vis {
+                // SAFETY: as above.
+                unsafe { enc.setVisibilityResultMode_offset(MTLVisibilityResultMode::Disabled, 0) };
+            }
             l.stats.draws += 1;
             Ok(())
         })
@@ -1445,6 +1598,7 @@ pub(crate) fn geometry_plan(
     info[4..6].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
     info[6..8].copy_from_slice(&(stride as u16).to_le_bytes());
     info[8..10].copy_from_slice(&(mesh_threads as u16).to_le_bytes());
+    info[10..12].copy_from_slice(&(g.gs_instances as u16).to_le_bytes());
     info[12..14].copy_from_slice(&(prims_per_object as u16).to_le_bytes());
     info[14..16].copy_from_slice(&(verts as u16).to_le_bytes());
     Ok(GeometryPlan {

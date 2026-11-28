@@ -115,7 +115,7 @@ The 12-operation sequence is correct but costs DXIL size and pipeline build time
 (`metal/back/tests/dxop_fptrunc.rs`, 1,239,104 inputs: 1 M spread over the f32 space and the tie of every half pair +-1 ulp, plus the edge values; skipped without a DXC helper built with
 `-enable-16bit-types`, `VICTORY_HELPER_DXC16`): 0 differences from nearest-even, the call is not `legacyF32ToF16`. In the translator (mac F1): the same hardware proof as above with
 this form: 0 differences; census: DXIL -0.04 % over the 11,621 changed programs (median -0.05 %, p90 +0.1 %, max +2.4 %), pass counts unchanged, pipeline build time of the sample
-cs 166 s / vs 5.8 s / ps 33 s / ms 56 s against 174 / 4.9 / 27 / 62 with the switch off. So F1 uses `fptrunc` on the Metal chain and keeps the sequence for other hosts.
+cs 166 s / vs 5.8 s / ps 33 s / ms 56 s against 174 / 4.9 / 27 / 62 with the switch off. So F1 uses `fptrunc` on the Metal chain (`VICTORY_METAL_OUT` set, or `VICTORY_F16_NATIVE=1`; since mac S7 `VICTORY_ATTRIBUTE_AT_VERTEX=0` alone does not imply it) and keeps the sequence for other hosts.
 Delivered as `mac: F1` on branch `mac/f16-nearest` (default on, `=0` off).
 
 ## Typed UAV additional formats, ROV

@@ -92,7 +92,7 @@ kernel void expand(constant P& p [[buffer(30)]], uint i [[thread_position_in_gri
     if (indexed) { disp[2] = 0; }\n\
     disp[5] = groups; disp[6] = groups != 0 ? inst : 0; disp[7] = groups != 0 ? 1 : 0;\n\
     for (uint k = 0; k < 6; k++) { disp[8 + k] = p.gs_info[k]; }\n\
-    disp[10] = (p.gs_info[2] & 0xffffu) | ((inst & 0xffffu) << 16);\n\
+    // disp[10] is the info's word 2: gsInstanceCount (hi16) is the shader's own, from the plan.\n\
     ulong ib = p.gs_ib_va + (ulong)start * (ulong)p.gs_ib_width;\n\
     disp[12] = (uint)(ib & 0xffffffffUL); disp[13] = (uint)(ib >> 32);\n\
   }\n\

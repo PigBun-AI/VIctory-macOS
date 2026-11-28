@@ -540,6 +540,7 @@ impl CommandList {
         samplers: Option<&DescriptorHeap>,
     ) -> Result<()> {
         self.live()?;
+        crate::prof::LAST_HEAP_VA.store(resources.gpu_va(), std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::DESCRIPTOR_HEAP as u32, resources.gpu_va())?;
         self.keep_buffers.push(resources.buffer().clone());
@@ -569,6 +570,7 @@ impl CommandList {
         // The object stage of a geometry pipeline (a vertex shader made
         // for the emulation) reads the same arguments at the hull/domain
         // point, too.
+        crate::prof::LAST_ARGS_VA.store(tlab.gpu_va, std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER_HULL_DOMAIN as u32, tlab.gpu_va)?;
         self.table
@@ -585,6 +587,7 @@ impl CommandList {
     /// allocation, or a copy of one made on the GPU).
     pub(crate) fn set_root_arguments_va(&mut self, gpu_va: u64) -> Result<()> {
         self.live()?;
+        crate::prof::LAST_ARGS_VA.store(gpu_va, std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::ARGUMENT_BUFFER as u32, gpu_va)
     }
@@ -710,9 +713,20 @@ impl CommandList {
             return Ok(());
         };
         self.barrier(DISPATCH, DISPATCH, VIS_DEVICE)?;
-        let params = self.alloc_constants(16, 16)?;
+        let params = self.alloc_constants(32, 16)?;
         let at = action_va;
-        params.write_u32s(0, &[at as u32, (at >> 32) as u32, cap, 0])?;
+        let count: u32 = std::env::var("VICTORY_METAL_GS_SET_COUNT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let ginst: u32 = std::env::var("VICTORY_METAL_GS_INFO_INST")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        params.write_u32s(
+            0,
+            &[at as u32, (at >> 32) as u32, cap, count, ginst, 0, 0, 0],
+        )?;
         self.set_address(30, params.gpu_va)?;
         self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
         // The draw reads the threadgroup counts next.

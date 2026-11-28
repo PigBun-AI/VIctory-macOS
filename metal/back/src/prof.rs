@@ -489,6 +489,16 @@ fn absorb(w: &mut Window, p: &Pending) {
             RAW_LEFT.store(0, Ordering::Relaxed);
         }
     }
+    if vis_enabled()
+        && p.prof
+            .labels
+            .iter()
+            .any(|l| l.contains("execute-indirect graphics-gs"))
+        && let Some(n) = vis_last()
+    {
+        eprintln!("victory-metal gpuprof: visibility samples of the last counted GS draw: {n}");
+        eprintln!("victory-metal gpuprof: that draw read:{}", dump_text());
+    }
     for (ns, label) in slow {
         let (head, snapped) = split_snap(label);
         let args = match (snapped, SNAP.get().and_then(|s| s.as_ref())) {
@@ -501,6 +511,10 @@ fn absorb(w: &mut Window, p: &Pending) {
                 format!(" dispatch arguments (now in the ring) {:?}", sn.read(i))
             }
             _ => String::new(),
+        };
+        let args = match vis_last().filter(|_| vis_enabled()) {
+            Some(n) => format!("{args} [visibility samples {n}]"),
+            None => args,
         };
         eprintln!(
             "victory-metal gpuprof: a scope took {:.1} ms on the card: {head}{args} (list of {} scopes, queued {:.1} s ago)",
@@ -614,6 +628,13 @@ fn table(w: &Window, pending: usize) -> String {
             ));
         }
     }
+    if vis_enabled()
+        && let Some(n) = vis_last()
+    {
+        out.push_str(&format!(
+            "\n  visibility samples of the last counted GS draw: {n}"
+        ));
+    }
     out
 }
 
@@ -708,9 +729,11 @@ thread_local! {
 }
 
 const CAP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
-kernel void capk(constant ulong2& p [[buffer(30)]]) {\n\
-  device uint* d = (device uint*)p.x; uint cap = (uint)p.y;\n\
-  for (int i = 5; i < 8; i++) if (d[i] > cap) d[i] = cap;\n}\n";
+kernel void capk(constant ulong4& p [[buffer(30)]]) {\n\
+  device uint* d = (device uint*)p.x; uint cap = (uint)p.y; uint cnt = (uint)(p.y >> 32);\n\
+  for (int i = 5; i < 8; i++) if (d[i] > cap) d[i] = cap;\n\
+  if (cnt != 0) d[0] = cnt;\n\
+  if (p.z != 0) d[10] = (d[10] & 0xffffu) | (((uint)p.z & 0xffffu) << 16);\n}\n";
 
 pub(crate) fn cap_kernel(
     device: &crate::device::Device,
@@ -728,4 +751,119 @@ thread_local! {
     /// `VICTORY_METAL_NO_PS=<hash>[,..]`: the same pipelines without their fragment function,
     /// rasterization on (blending and the colour writes stay): the pixel shader's own cost.
     pub(crate) static NO_PS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// `VICTORY_METAL_GS_VISIBILITY=<hash>[,..]` (a diagnostic): counts the samples the geometry
+// pipelines with these label hashes rasterize (Metal's visibility result, counting mode) and
+// prints the last count with the GPU time table. A pixel drawn once per sample: the draw's
+// coverage; a draw of tiles with more samples than the target has pixels overdraws.
+thread_local! {
+    pub(crate) static GS_VIS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn vis_enabled() -> bool {
+    static E: OnceLock<bool> = OnceLock::new();
+    *E.get_or_init(|| {
+        std::env::var_os("VICTORY_METAL_GS_VISIBILITY").is_some_and(|v| !v.is_empty())
+    })
+}
+
+static VIS: OnceLock<Option<crate::memory::Buffer>> = OnceLock::new();
+
+/// The buffer the render passes write visibility results to (one 8-byte slot).
+pub(crate) fn vis_buffer(device: &crate::device::Device) -> Option<&'static crate::memory::Buffer> {
+    VIS.get_or_init(|| {
+        device
+            .create_buffer(crate::memory::BufferKind::Shared, 4096)
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The last visibility count, if a pass wrote one.
+pub(crate) fn vis_last() -> Option<u64> {
+    let w = VIS.get()?.as_ref()?.read_u32s(0, 2).ok()?;
+    Some(u64::from(w[0]) | (u64::from(w[1]) << 32))
+}
+
+// `VICTORY_METAL_GS_VISIBILITY` also dumps what the counted draw reads: the first 64 bytes of each
+// bound vertex buffer and the first 32 of the index buffer (a kernel copies them in the list), with
+// the viewports and scissors of the state, printed with the count.
+const DUMP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void dumpk(constant ulong4& p [[buffer(30)]]) {\n\
+  device const uint* s = (device const uint*)p.x; device uint* d = (device uint*)p.y;\n\
+  uint n = (uint)p.z; for (uint i = 0; i < n; i++) d[i] = s[i];\n}\n";
+
+pub(crate) fn dump_kernel(
+    device: &crate::device::Device,
+) -> Option<&'static crate::pipeline::ComputePipeline> {
+    static K: OnceLock<Option<crate::pipeline::ComputePipeline>> = OnceLock::new();
+    K.get_or_init(|| device.compute_pipeline_from_msl(DUMP_SOURCE, "dumpk").ok())
+        .as_ref()
+}
+
+static DUMP: OnceLock<Option<crate::memory::Buffer>> = OnceLock::new();
+
+pub(crate) fn dump_buffer(
+    device: &crate::device::Device,
+) -> Option<&'static crate::memory::Buffer> {
+    DUMP.get_or_init(|| {
+        device
+            .create_buffer(crate::memory::BufferKind::Shared, 4096)
+            .ok()
+    })
+    .as_ref()
+}
+
+pub(crate) static LAST_ARGS_VA: AtomicU64 = AtomicU64::new(0);
+pub(crate) static LAST_HEAP_VA: AtomicU64 = AtomicU64::new(0);
+
+const DUMP2_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void dump2k(constant ulong4& p [[buffer(30)]]) {\n\
+  device const uint* a = (device const uint*)p.x; device uint* d = (device uint*)p.z;\n\
+  for (uint i = 0; i < 12; i++) d[i] = a[i];\n\
+  uint base = a[9];\n\
+  for (uint k = 0; k < 2; k++) {\n\
+    uint idx = ((base + (k == 0 ? 224u : 32u)) >> 5) & 0x1fffffu;\n\
+    device const ulong* e = (device const ulong*)(p.y + (ulong)idx * 24);\n\
+    device const uint* s = (device const uint*)e[0];\n\
+    d[16 + k * 16] = (uint)(e[0]); d[17 + k * 16] = (uint)(e[0] >> 32); d[18 + k * 16] = (uint)e[2]; d[19 + k * 16] = idx;\n\
+    for (uint i = 0; i < 12; i++) d[20 + k * 16 + i] = s[i];\n\
+  }\n}\n";
+
+pub(crate) fn dump2_kernel(
+    device: &crate::device::Device,
+) -> Option<&'static crate::pipeline::ComputePipeline> {
+    static K: OnceLock<Option<crate::pipeline::ComputePipeline>> = OnceLock::new();
+    K.get_or_init(|| {
+        device
+            .compute_pipeline_from_msl(DUMP2_SOURCE, "dump2k")
+            .ok()
+    })
+    .as_ref()
+}
+
+pub(crate) static DUMP_META: Mutex<String> = Mutex::new(String::new());
+
+/// The dump as text: the state's facts, then each region's words (floats when they look like
+/// floats).
+pub(crate) fn dump_text() -> String {
+    let Some(Some(b)) = DUMP.get() else {
+        return String::new();
+    };
+    let meta = lock(&DUMP_META).clone();
+    let mut out = meta;
+    for k in 0..8u64 {
+        let words = b.read_u32s(k * 64, 16).unwrap_or_default();
+        let f: Vec<String> = words
+            .iter()
+            .map(|w| format!("{:.3}", f32::from_bits(*w)))
+            .collect();
+        out.push_str(&format!(
+            "\n  region {k}: hex {:x?}\n            f32 {}",
+            words,
+            f.join(" ")
+        ));
+    }
+    out
 }
