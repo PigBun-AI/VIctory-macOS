@@ -269,6 +269,23 @@ pub const OWN_SCALE: Site = Site {
     bytes: &[0xc7, 0x81, 0x90, 0x00, 0x00, 0x00, 0xab, 0xaa, 0x2a, 0x3f],
 };
 
+/// The upscaler's `divl 0x10c(%rdi)` (a round-robin distributor's divisor),
+/// +0x28f03e8. When the resolution patch shrinks the output the divisor can
+/// be zero, which traps (0xc0000094); the patch redirects it to a trampoline
+/// that clamps the divisor to 1.
+pub const DIV_ZERO: Site = Site {
+    at: 0x28f03e8,
+    what: "the upscaler's divide by the bucket count",
+    bytes: &[0xf7, 0xb7, 0x0c, 0x01, 0x00, 0x00],
+};
+
+/// Padding at the end of `.text` that holds the divide-clamp trampoline.
+pub const DIV_TRAMP: Site = Site {
+    at: 0x5f40966,
+    what: "padding for the divide-clamp trampoline",
+    bytes: &[0xcc; 16],
+};
+
 /// The upscaler picker, +0x7e93f0, to its first `ret`.
 pub const PICKER: Site = Site {
     at: 0x7e93f0,
@@ -315,6 +332,28 @@ pub fn output_code(width: u32, height: u32) -> Vec<u8> {
 pub fn own_scale_code(scale: f32) -> Vec<u8> {
     let mut c = OWN_SCALE.bytes[..6].to_vec();
     c.extend(scale.to_le_bytes());
+    c
+}
+
+/// The trampoline written at [`DIV_TRAMP`]: divides `edx:eax` by the
+/// divisor in `[rdi+0x10c]`, clamped to 1 when it is zero (the quotient in
+/// `eax` is discarded by the caller; only the remainder in `edx` matters).
+pub fn div_trampoline_code() -> Vec<u8> {
+    vec![
+        0x8b, 0x8f, 0x0c, 0x01, 0x00, 0x00, // mov ecx, [rdi+0x10c]
+        0x85, 0xc9, // test ecx, ecx
+        0x75, 0x02, // jnz +2
+        0xb1, 0x01, // mov cl, 1
+        0xf7, 0xf1, // div ecx
+        0xc3, // ret
+    ]
+}
+
+/// What goes at [`DIV_ZERO`]: a 5-byte `call` to the trampoline and a NOP.
+pub fn div_call_code() -> Vec<u8> {
+    let mut c = vec![0xe8];
+    c.extend(rel(DIV_TRAMP.at, DIV_ZERO.at + 5));
+    c.push(0x90);
     c
 }
 
@@ -445,6 +484,19 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
         asked.push((
             vec![(&PICKER, picker_code(kind))],
             format!("returns {kind}"),
+        ));
+    }
+    // The divide-clamp: with any of the above, so a small output that zeroes
+    // the distributor's divisor does not trap with 0xc0000094. mac: not on a
+    // fidelity run (VICTORY_OUTPUT=0, nothing asked) that must leave the title's
+    // code alone and log no `resolution:` line.
+    if !asked.is_empty() {
+        asked.push((
+            vec![
+                (&DIV_TRAMP, div_trampoline_code()),
+                (&DIV_ZERO, div_call_code()),
+            ],
+            "div-by-zero clamp".into(),
         ));
     }
     for (group, value) in asked {
@@ -606,6 +658,28 @@ mod tests {
         assert_eq!(c[48], 0xeb);
         assert_eq!(50 + c[49] as usize, 61, "jmp lands at the end");
         assert!(c[50..].iter().all(|&x| x == 0xcc));
+    }
+
+    /// The divide-clamp: the call lands on the trampoline, which keeps the
+    /// title's `div` on `[rdi+0x10c]` but never by zero.
+    #[test]
+    fn the_divide_clamp_calls_its_trampoline() {
+        assert_eq!(DIV_ZERO.bytes, [0xf7, 0xb7, 0x0c, 0x01, 0x00, 0x00]); // div dword [rdi+0x10c]
+        let call = div_call_code();
+        assert_eq!(call.len(), DIV_ZERO.bytes.len(), "the same length as the site");
+        assert_eq!(call[0], 0xe8);
+        let target = (DIV_ZERO.at + 5) as i64
+            + i64::from(i32::from_le_bytes(call[1..5].try_into().unwrap()));
+        assert_eq!(target, DIV_TRAMP.at as i64);
+        assert_eq!(call[5], 0x90);
+        let t = div_trampoline_code();
+        assert!(t.len() <= DIV_TRAMP.bytes.len(), "fits the padding");
+        assert_eq!(t[..6], [0x8b, 0x8f, 0x0c, 0x01, 0x00, 0x00]); // mov ecx, [rdi+0x10c]
+        assert_eq!(t[6..8], [0x85, 0xc9]); // test ecx, ecx
+        assert_eq!(t[8..10], [0x75, 0x02]); // jnz over the next
+        assert_eq!(t[10..12], [0xb1, 0x01]); // mov cl, 1
+        assert_eq!(t[12..14], [0xf7, 0xf1]); // div ecx
+        assert_eq!(t[14], 0xc3);
     }
 
     #[test]

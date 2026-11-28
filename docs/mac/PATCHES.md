@@ -977,6 +977,17 @@ is a `cfg(windows)` module), so no extra gate was needed for the native build. M
 `mac.title.hang_watchdog` (unproven, 待运行验证: unit tests `pipeline::builder_verdict_tests` only).
 *Retire when:* mac/livetr merges the Windows line that has it.
 
+### X2 — divide-by-zero clamp in the upscaler (`victory-loader` `mac/resolution.rs`; origin 0cc44dc6, #615)
+
+*What it is.* When the resolution patch shrinks the output, the upscaler's round-robin `div dword [rdi+0x10c]` (title
++0x28f03e8) can divide by zero and trap (0xc0000094; the "known divide by zero" of `mac.res.fsr`, PR #278/#362). `DIV_ZERO` is
+replaced by a `call` to a 15-byte trampoline in `.text` padding (`DIV_TRAMP`, +0x5f40966) that clamps the divisor to 1. Both sites are
+compared byte for byte (build 1.0.2.1 only), written together or not at all. *Mac change:* upstream applies it always; here only
+when a resolution patch is asked (`VICTORY_OUTPUT` size, render scale, upscaler, pool check), so a fidelity run
+(`VICTORY_OUTPUT=0`) still patches nothing and logs no `resolution:` line. Matrix: `mac.loader.resolution`, `mac.res.fsr`
+(unproven, 待运行验证: unit test of the bytes only).
+*Retire when:* the title no longer reaches the divide with the output patch (never expected), or mac/livetr merges #615.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
