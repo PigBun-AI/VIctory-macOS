@@ -121,6 +121,8 @@ mod oracle_ds_tests;
 mod oracle_img_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: the opcode oracle, batch B: global memory
 mod oracle_flat_tests;
+#[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: the opcode oracle, batch C: interpolation, export, control flow of pixel programs
+mod oracle_c_tests;
 #[cfg(all(test, any(windows, target_os = "macos")))] // mac S6: macOS has a host too (host_exec.rs)
 mod permlane_tests;
 mod rect;
