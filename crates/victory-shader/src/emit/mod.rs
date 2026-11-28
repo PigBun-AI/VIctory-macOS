@@ -239,6 +239,12 @@ pub fn viewaddr_table() -> bool {
     // mac S3: on unless `VICTORY_VIEWADDR_TABLE=0` (the shadow-mask ray programs are refused otherwise)
     switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), true) // mac S3
 }
+/// mac S3: whether `emit` tries the wave-wide branches ([`widen`]) for a wave64 program: only with
+/// `VICTORY_WAVE_WIDE=1`, and by default for the two scene kernels (upstream's rule). S3 had them on unless
+/// `=0`; on Apple GPUs they put a group barrier in a divergent path and hang single-thread groups.
+pub(crate) fn wide_branches_on(option: Option<&std::ffi::OsStr>, scene_kernel: bool) -> bool {
+    option.map_or(scene_kernel, |v| v == "1") // mac S3
+}
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
 pub(crate) fn switch(value: Option<&std::ffi::OsStr>, default: bool) -> bool {
@@ -643,9 +649,10 @@ pub fn emit(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
-        let _ = scene_kernel; // mac S3
-        let wide_on = wide_option.as_ref().is_none_or(|v| v != "0"); // mac S3
+        // mac S3: back to upstream's default (on for the two scene kernels, `=1` turns it on for the rest).
+        // S3 had it on unless `=0`; on Apple GPUs the wide branch puts a group barrier in a divergent
+        // path and `ptfx_CS_lightAtlas_Sprite` (single-thread group) hangs for ~100 s (prologue w54-70).
+        let wide_on = wide_branches_on(wide_option.as_deref(), scene_kernel); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
