@@ -257,6 +257,14 @@ fn mesh_hlsl(big: bool) -> String {
 /// `mesh_hlsl`, the tint scaled by the first word of a root SRV `src`
 /// (`t0`, space 0) when `reads`: with the word 1 the picture is the same.
 fn mesh_hlsl_reading(big: bool, reads: bool) -> String {
+    mesh_hlsl_with(big, reads, false)
+}
+
+/// `unfixable`: two `SV_ClipDistance` floats instead of two of the `float`
+/// members. D3D12 counts them once (the same 32000 bytes), Metal twice, which
+/// no order of the members repacks: the mesh Metal refuses for good, which
+/// only the compute form takes.
+fn mesh_hlsl_with(big: bool, reads: bool, unfixable: bool) -> String {
     let (decl, scale) = if reads {
         (
             "ByteAddressBuffer src : register(t0);\n",
@@ -271,14 +279,18 @@ fn mesh_hlsl_reading(big: bool, reads: bool) -> String {
         let mut m = String::from("  float4 c : COLOR0;\n");
         let mut w = String::from("      verts[v].c = float4(tf, 0, 0, 1);\n");
         for j in 0..8 {
-            m.push_str(&format!(
-                "  float s{j} : TEXCOORD{};\n  float3 v{j} : TEXCOORD{};\n",
-                2 * j,
-                2 * j + 1
-            ));
+            if !(unfixable && j >= 6) {
+                m.push_str(&format!("  float s{j} : TEXCOORD{};\n", 2 * j));
+                w.push_str(&format!("      verts[v].s{j} = {j}.0 * 0.01;\n"));
+            }
+            m.push_str(&format!("  float3 v{j} : TEXCOORD{};\n", 2 * j + 1));
             w.push_str(&format!(
-                "      verts[v].s{j} = {j}.0 * 0.01;\n      verts[v].v{j} = float3({j}.0 * 0.02, k * 0.5, 0.25 + 0.5 * tf);\n"
+                "      verts[v].v{j} = float3({j}.0 * 0.02, k * 0.5, 0.25 + 0.5 * tf);\n"
             ));
+        }
+        if unfixable {
+            m.push_str("  float2 clip : SV_ClipDistance;\n");
+            w.push_str("      verts[v].clip = float2(1, 1);\n");
         }
         (m, w)
     } else {
@@ -324,6 +336,30 @@ float4 main(I i) : SV_Target0 {\n\
   float3 c = float3(i.c.x, i.v3.y, i.v5.z) * i.tint.x;\n\
   c.z += (i.idv & 3) * 0.1;\n\
   return float4(c, 1); }\n";
+
+/// The pixel shader of the unfixable mesh: reads every output the mesh writes
+/// (an output the pixel shader does not read is dropped by `mesh_fit`, which
+/// would rescue the mesh), and draws what `PS_BIG` draws.
+fn ps_all() -> String {
+    let mut members = String::from("float4 pos : SV_Position; float4 c : COLOR0;\n");
+    let mut sum = String::new();
+    for j in 0..8 {
+        if j < 6 {
+            members.push_str(&format!("float s{j} : TEXCOORD{};\n", 2 * j));
+            sum.push_str(&format!(" + i.s{j}"));
+        }
+        members.push_str(&format!("float3 v{j} : TEXCOORD{};\n", 2 * j + 1));
+        sum.push_str(&format!(" + i.v{j}.x"));
+    }
+    format!(
+        "struct I {{ {members}nointerpolation float4 tint : COLOR2; nointerpolation uint idv : TEXCOORD30; }};\n\
+float4 main(I i) : SV_Target0 {{\n\
+  float3 c = float3(i.c.x, i.v3.y, i.v5.z) * i.tint.x;\n\
+  c.z += (i.idv & 3) * 0.1;\n\
+  c.x += 0.0 * (0.0{sum});\n\
+  return float4(c, 1); }}\n"
+    )
+}
 
 // ---------------------------------------------------------------------------
 // the machinery
@@ -1105,15 +1141,22 @@ struct Rig {
     native: Vec<u32>,
     ms: Vec<u8>,
     ps: Vec<u8>,
+    layout: Layout,
 }
 
 fn rig_with(fx: Fx, reads: bool) -> Option<Rig> {
     let g = setup_with(fx)?;
     let native = native_picture(&g)?;
-    let big = dxil_or_skip("mcb_ms_big", "ms_6_6", &mesh_hlsl_reading(true, reads))?;
-    let ps = dxil_or_skip("mcb_ps_big", "ps_6_6", PS_BIG)?;
-    let (ms, _) = with_vmcs("mcb", &big)?;
-    Some(Rig { g, native, ms, ps })
+    let big = dxil_or_skip("mcb_ms_big", "ms_6_6", &mesh_hlsl_with(true, reads, true))?;
+    let ps = dxil_or_skip("mcb_ps_all", "ps_6_6", &ps_all())?;
+    let (ms, layout) = with_vmcs("mcb", &big)?;
+    Some(Rig {
+        g,
+        native,
+        ms,
+        ps,
+        layout,
+    })
 }
 
 fn rig() -> Option<Rig> {
@@ -1318,13 +1361,14 @@ fn a_draw_that_reads_what_the_pass_wrote_splits_the_pass() {
         return;
     }
     let (got, c0, c1) = write_then_read(&r, true);
-    // The mesh read the 1 the pass stored: the pass was split before the draw
-    // (one more render encoder, the kernel between them) ...
+    same_picture(&got, &r.native, "split pass");
+    // The picture is the native one only if the kernel read the 1 the pass
+    // stored: a kernel hoisted before the pass reads the 0 and tints
+    // everything black (checked by making the rule say "no conflict").
+    // The rule says it split the pass before the draw, the kernel between
+    // the two render encoders:
     assert_eq!(c1.split, c0.split + 1, "the rule split the pass");
     assert_eq!(c1.hoisted, c0.hoisted, "nothing was hoisted past the write");
-    // ... and its result is the native picture (a hoisted kernel would have
-    // read the 0 and tinted everything black).
-    same_picture(&got, &r.native, "split pass");
 }
 
 #[test]
@@ -1396,4 +1440,74 @@ fn the_scratch_ring_does_not_hand_out_a_segment_a_submission_in_flight_may_use()
     );
     assert!(c.gpu_va == a.gpu_va || c.gpu_va == b.gpu_va);
     t.join().unwrap();
+}
+
+#[test]
+fn frames_in_flight_do_not_overwrite_each_others_scratch() {
+    let Some(r) = rig_with(Fx::new(), true) else {
+        return;
+    };
+    let g = &r.g;
+    // A ring of two segments, each just a frame's scratch: the third frame
+    // has to wait for the first to complete, and so on.
+    let queue = g.fx.executor().queue(g.q).expect("the queue");
+    let segment = r
+        .layout
+        .scratch_bytes(u64::from(GROUPS))
+        .next_multiple_of(256);
+    assert!(queue.configure_scratch(segment, 2));
+    let sig = graphics_root(&g.fx, vec![root_param(RootParamKind::SRV, 0, 0)], 0);
+    let pso = g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    // The mesh tints by the word it reads: every frame has its own picture.
+    let frames = 8u32;
+    let src: Vec<_> = (0..frames)
+        .map(|k| {
+            let b = g.fx.buffer(BufferKind::UPLOAD, 256);
+            cpu_write(b.cpu_addr, &[1 + k % 3, 0, 0, 0]);
+            b
+        })
+        .collect();
+    let frame = |k: u32, tex: ResId, rb: &CreateBufferArgs| {
+        let mut cmds = vec![
+            begin(1, g.q),
+            Command::SetRootSignature(SetRootSignature {
+                bind_point: BindPoint::GRAPHICS,
+                root_sig: sig,
+            }),
+            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
+            graphics_va(0, RootParamKind::SRV, src[k as usize].gpu_va),
+        ];
+        cmds.extend(g.pass_around(tex, vec![dispatch_mesh(GROUPS)]));
+        cmds.extend(g.read_back(tex, rb));
+        cmds.push(end(1));
+        cmds
+    };
+    // each frame alone first: the pictures to expect
+    let mut want = Vec::new();
+    for k in 0..frames {
+        let (tex, rb) = g.target();
+        assert_eq!(g.fx.submit(&frame(k, tex, &rb)), Status::OK);
+        g.settle();
+        want.push(cpu_read(rb.cpu_addr, (W * H) as usize));
+    }
+    assert_ne!(want[0], want[1], "the frames differ (tint 1 against 2)");
+    // all of them in flight at once
+    let targets: Vec<_> = (0..frames).map(|_| g.target()).collect();
+    for k in 0..frames {
+        let (tex, rb) = &targets[k as usize];
+        assert_eq!(
+            g.fx.submit(&frame(k, *tex, rb)),
+            Status::OK,
+            "{:?}",
+            g.fx.executor().last_error()
+        );
+    }
+    g.settle();
+    for k in 0..frames as usize {
+        let got = cpu_read(targets[k].1.cpu_addr, (W * H) as usize);
+        assert_eq!(
+            got, want[k],
+            "frame {k} was drawn from scratch another frame wrote"
+        );
+    }
 }
