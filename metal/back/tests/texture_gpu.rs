@@ -772,7 +772,7 @@ fn copy_resource_of_a_texture_onto_itself_is_accepted_and_does_nothing() {
 }
 
 #[test]
-fn depth_stencil_copies_planes_and_refuses_the_d24_depth_plane() {
+fn depth_stencil_copies_planes_and_the_d24_depth_plane_moves_floats() {
     let (_g, d, q) = setup();
     let t = d
         .create_texture(&TextureDesc::tex2d(
@@ -816,7 +816,8 @@ fn depth_stencil_copies_planes_and_refuses_the_d24_depth_plane() {
     rs.read(0, &mut got).unwrap();
     assert_eq!(got, stencil);
 
-    // D24S8: the stencil plane copies, the depth plane is refused.
+    // D24S8: both planes copy; the depth plane moves floats through an `R32`
+    // footprint (an `R24_UNORM_X8` one is converted: `copy_d24.rs`).
     let t24 = d
         .create_texture(&TextureDesc::tex2d(dxgi::D24_UNORM_S8_UINT, 8, 8, DS))
         .unwrap();
@@ -827,10 +828,16 @@ fn depth_stencil_copies_planes_and_refuses_the_d24_depth_plane() {
         .unwrap();
     let mut p0 = loc(&t24, 0, 0);
     p0.plane = 0;
-    let r = l.copy_buffer_to_texture(&p0, &buf_loc(&up_d, dxgi::R32_TYPELESS, 32, 8), [8, 8, 1]);
-    assert!(matches!(r, Err(Error::Unsupported(m)) if m.contains("depth plane")));
+    l.copy_buffer_to_texture(&p0, &buf_loc(&up_d, dxgi::R32_TYPELESS, 32, 8), [8, 8, 1])
+        .unwrap();
+    let rd24 = d.create_buffer(BufferKind::Readback, 256).unwrap();
+    l.copy_texture_to_buffer(&buf_loc(&rd24, dxgi::R32_TYPELESS, 32, 8), &p0, [8, 8, 1])
+        .unwrap();
     l.end().unwrap();
     run(&q, l);
+    let mut got = vec![0u8; 256];
+    rd24.read(0, &mut got).unwrap();
+    assert_eq!(got, depth);
 }
 
 #[test]

@@ -42,8 +42,11 @@
 //! * texels are 8 bytes (4 depth, 1 stencil, padding), not 4: the size
 //!   `GET_RESOURCE_ALLOCATION_INFO` gives is the real one;
 //! * a copy between a buffer and a depth/stencil texture moves floats for
-//!   depth (`R32_FLOAT` footprint) and bytes for stencil (`R8_UINT`); a
-//!   `R24_UNORM_X8_TYPELESS` footprint is refused, not converted.
+//!   depth (`R32_FLOAT` / `R32_TYPELESS` / `R32_FLOAT_X8X24_TYPELESS`
+//!   footprint) and bytes for stencil (`R8_*`, `X24_TYPELESS_G8_UINT`,
+//!   `X32_TYPELESS_G8X24_UINT`); a `R24_UNORM_X8_TYPELESS` footprint of a
+//!   D24S8 depth plane is converted (`round(d * 16777215)` in the low 24 bits,
+//!   top byte 0; `copy.rs`, `D24Kernels`).
 //!
 //! # `B8G8R8X8_*`
 //!

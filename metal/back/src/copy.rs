@@ -108,12 +108,6 @@ fn plane_layout(f: &Format, plane: u32) -> Result<PlaneLayout> {
         });
     }
     if plane == 0 {
-        if matches!(f.family, format::dxgi::R24G8_TYPELESS) {
-            return Err(Error::Unsupported(format!(
-                "copying the depth plane of {}: the texture holds 32-bit floats, the buffer layout is 24-bit fixed point",
-                f.name
-            )));
-        }
         Ok(PlaneLayout {
             bytes: 4,
             block: (1, 1),
@@ -132,6 +126,78 @@ fn plane_layout(f: &Format, plane: u32) -> Result<PlaneLayout> {
 /// the region in blocks-aligned Metal terms (`size` is returned unchanged;
 /// for compressed formats a region that reaches the mip's edge is rounded up
 /// to whole blocks, which is what Metal wants).
+/// D24S8 (`R24G8_TYPELESS` family) is made as `Depth32Float_Stencil8`
+/// (`format.rs`, "Depth and stencil"), so the depth plane holds 32-bit
+/// floats. A buffer footprint of it in `R32_TYPELESS` / `R32_FLOAT` moves
+/// those floats as they are (what the frame recorder and replay do); one in
+/// `R24_UNORM_X8_TYPELESS`, the D3D12 footprint of a D24S8 depth plane, is
+/// 24-bit fixed point in the low bits of a 32-bit word (`round(d * 16777215)`,
+/// the top byte 0) and goes through a conversion kernel ([`D24Kernels`]).
+fn is_d24_texture(t: &Texture) -> bool {
+    format::require(t.desc().format)
+        .is_ok_and(|f| matches!(f.family, format::dxgi::R24G8_TYPELESS) && f.planes() > 1)
+}
+
+fn is_d24_footprint(b: &BufLoc<'_>) -> bool {
+    b.format == format::dxgi::R24_UNORM_X8_TYPELESS
+}
+
+/// The footprint formats D3D12 names for the planes of a depth-stencil
+/// texture, as the plain ones the layout check knows (4 bytes for depth,
+/// 1 for stencil); `R24_UNORM_X8_TYPELESS` is left for the conversion.
+fn plane_footprint<'a>(loc: &TexLoc<'_>, b: &BufLoc<'a>) -> BufLoc<'a> {
+    use format::dxgi as d;
+    let planar = format::require(loc.texture.desc().format).is_ok_and(|f| f.planes() > 1);
+    if !planar {
+        return *b;
+    }
+    let format = match (loc.plane, b.format) {
+        (0, d::R32_FLOAT_X8X24_TYPELESS) => d::R32_TYPELESS,
+        (1, d::X32_TYPELESS_G8X24_UINT | d::X24_TYPELESS_G8_UINT) => d::R8_TYPELESS,
+        (_, f) => f,
+    };
+    BufLoc { format, ..*b }
+}
+
+/// Kernels that convert a region between 32-bit floats and 24-bit unorm
+/// words, per device, compiled on first use.
+#[derive(Default)]
+pub(crate) struct D24Kernels {
+    pack: Option<crate::pipeline::ComputePipeline>,
+    unpack: Option<crate::pipeline::ComputePipeline>,
+}
+
+const D24_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+struct P { uint w; uint h; uint d; uint src_row; uint src_image; uint dst_row; uint dst_image; uint pad; };\n\
+kernel void d24_pack(device const float* src [[buffer(29)]], device uint* dst [[buffer(30)]], \
+constant P& p [[buffer(28)]], uint3 t [[thread_position_in_grid]]) {\n\
+    if (t.x >= p.w || t.y >= p.h || t.z >= p.d) return;\n\
+    float v = clamp(src[t.z * p.src_image + t.y * p.src_row + t.x], 0.0f, 1.0f);\n\
+    dst[t.z * p.dst_image + t.y * p.dst_row + t.x] = uint(rint(v * 16777215.0f));\n}\n\
+kernel void d24_unpack(device const uint* src [[buffer(29)]], device float* dst [[buffer(30)]], \
+constant P& p [[buffer(28)]], uint3 t [[thread_position_in_grid]]) {\n\
+    if (t.x >= p.w || t.y >= p.h || t.z >= p.d) return;\n\
+    uint u = src[t.z * p.src_image + t.y * p.src_row + t.x] & 0xFFFFFFu;\n\
+    dst[t.z * p.dst_image + t.y * p.dst_row + t.x] = float(u) / 16777215.0f;\n}\n";
+
+impl crate::device::Device {
+    fn d24_pipeline(&self, pack: bool) -> Result<crate::pipeline::ComputePipeline> {
+        let mut k = self
+            .inner
+            .d24_kernels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let slot = if pack { &mut k.pack } else { &mut k.unpack };
+        if let Some(p) = slot {
+            return Ok(p.clone());
+        }
+        let p = self
+            .compute_pipeline_from_msl(D24_SOURCE, if pack { "d24_pack" } else { "d24_unpack" })?;
+        *slot = Some(p.clone());
+        Ok(p)
+    }
+}
+
 fn check_texture(
     list: &CommandList,
     loc: &TexLoc<'_>,
@@ -310,6 +376,10 @@ impl CommandList {
         size: [u32; 3],
     ) -> Result<()> {
         self.live()?;
+        let src = &plane_footprint(dst, src);
+        if is_d24_texture(dst.texture) && dst.plane == 0 && is_d24_footprint(src) {
+            return self.copy_buffer_to_d24_depth(dst, src, size);
+        }
         let (_, layout, size) = check_texture(self, dst, size, "texture upload")?;
         if size.contains(&0) {
             return Ok(());
@@ -364,6 +434,10 @@ impl CommandList {
         size: [u32; 3],
     ) -> Result<()> {
         self.live()?;
+        let dst = &plane_footprint(src, dst);
+        if is_d24_texture(src.texture) && src.plane == 0 && is_d24_footprint(dst) {
+            return self.copy_d24_depth_to_buffer(dst, src, size);
+        }
         let (_, layout, size) = check_texture(self, src, size, "texture download")?;
         if size.contains(&0) {
             return Ok(());
@@ -392,6 +466,132 @@ impl CommandList {
         self.stats.copies += 1;
         self.keep_buffers.push(b);
         self.copies.keep.push(t);
+        Ok(())
+    }
+
+    /// The depth plane of a D24S8 texture to a buffer in the D3D12 footprint
+    /// `R24_UNORM_X8_TYPELESS`: the plane is copied as floats into a private
+    /// buffer, a kernel packs them into `round(d * 16777215)` words.
+    fn copy_d24_depth_to_buffer(
+        &mut self,
+        dst: &BufLoc<'_>,
+        src: &TexLoc<'_>,
+        size: [u32; 3],
+    ) -> Result<()> {
+        let words = BufLoc {
+            format: format::dxgi::R32_TYPELESS,
+            ..*dst
+        };
+        let (_, layout, size) = check_texture(self, src, size, "depth download")?;
+        if size.contains(&0) {
+            return Ok(());
+        }
+        let (_, extent) = check_buffer(self, &words, &layout, size, "depth download")?;
+        let staging = self.d24_staging(size)?;
+        let flat = BufLoc {
+            buffer: &staging,
+            offset: 0,
+            format: format::dxgi::R32_TYPELESS,
+            row_pitch: size[0] * 4,
+            rows: size[1],
+        };
+        self.copy_texture_to_buffer(&flat, src, size)?;
+        self.blit_write_hazard(dst.buffer, dst.offset, extent);
+        self.d24_convert(true, &staging, dst, size)?;
+        self.keep_buffers.push(staging);
+        self.keep_buffers.push(dst.buffer.clone());
+        Ok(())
+    }
+
+    /// A buffer in the footprint `R24_UNORM_X8_TYPELESS` to the depth plane of
+    /// a D24S8 texture: a kernel unpacks the words to floats in a private
+    /// buffer, which is then copied to the plane.
+    fn copy_buffer_to_d24_depth(
+        &mut self,
+        dst: &TexLoc<'_>,
+        src: &BufLoc<'_>,
+        size: [u32; 3],
+    ) -> Result<()> {
+        let words = BufLoc {
+            format: format::dxgi::R32_TYPELESS,
+            ..*src
+        };
+        let (_, layout, size) = check_texture(self, dst, size, "depth upload")?;
+        if size.contains(&0) {
+            return Ok(());
+        }
+        let (_, extent) = check_buffer(self, &words, &layout, size, "depth upload")?;
+        let staging = self.d24_staging(size)?;
+        self.blit_read_hazard(src.buffer, src.offset, extent);
+        self.d24_convert(false, &staging, src, size)?;
+        let flat = BufLoc {
+            buffer: &staging,
+            offset: 0,
+            format: format::dxgi::R32_TYPELESS,
+            row_pitch: size[0] * 4,
+            rows: size[1],
+        };
+        self.copy_buffer_to_texture(dst, &flat, size)?;
+        self.keep_buffers.push(staging);
+        self.keep_buffers.push(src.buffer.clone());
+        Ok(())
+    }
+
+    fn d24_staging(&self, size: [u32; 3]) -> Result<Buffer> {
+        let bytes = u64::from(size[0]) * u64::from(size[1]) * u64::from(size[2]) * 4;
+        self.queue()
+            .device()
+            .create_buffer(crate::memory::BufferKind::Default, bytes.max(16))
+    }
+
+    /// One dispatch of the pack (`pack`: staging floats to the footprint) or
+    /// unpack kernel between the flat private buffer and the footprint
+    /// `foot`. Earlier copies are ordered before it and it before later ones.
+    fn d24_convert(
+        &mut self,
+        pack: bool,
+        flat: &Buffer,
+        foot: &BufLoc<'_>,
+        size: [u32; 3],
+    ) -> Result<()> {
+        use crate::stages::{DISPATCH, VIS_DEVICE};
+        let pso = self.queue().device().d24_pipeline(pack)?;
+        let foot_va = foot.buffer.gpu_va() + foot.offset;
+        let rows = foot.rows.max(size[1]);
+        let (foot_row, foot_image) = (foot.row_pitch / 4, foot.row_pitch / 4 * rows);
+        let (flat_row, flat_image) = (size[0], size[0] * size[1]);
+        let flat_va = flat.gpu_va();
+        // (source address, destination address, source row/image words, destination row/image words)
+        let (src_va, dst_va, src, dst) = if pack {
+            (
+                flat_va,
+                foot_va,
+                (flat_row, flat_image),
+                (foot_row, foot_image),
+            )
+        } else {
+            (
+                foot_va,
+                flat_va,
+                (foot_row, foot_image),
+                (flat_row, flat_image),
+            )
+        };
+        let ring = self.alloc_constants(32, 16)?;
+        ring.write_u32s(
+            0,
+            &[size[0], size[1], size[2], src.0, src.1, dst.0, dst.1, 0],
+        )?;
+        self.barrier(BLIT, DISPATCH, VIS_DEVICE)?;
+        self.set_address(28, ring.gpu_va)?;
+        self.set_address(29, src_va)?;
+        self.set_address(30, dst_va)?;
+        self.dispatch(
+            &pso,
+            [size[0].div_ceil(8), size[1].div_ceil(8), size[2]],
+            [8, 8, 1],
+        )?;
+        self.barrier(DISPATCH, BLIT | DISPATCH, VIS_DEVICE)?;
         Ok(())
     }
 

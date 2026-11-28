@@ -72,6 +72,8 @@ pub(crate) struct DeviceInner {
     pub(crate) clear_pipes: Mutex<crate::draw::ClearPipes>,
     /// Mirrors of misaligned typed views ([`crate::mirror`]).
     pub(crate) mirrors: crate::mirror::Registry,
+    /// Kernels that pack and unpack D24 depth ([`crate::copy`]).
+    pub(crate) d24_kernels: Mutex<crate::copy::D24Kernels>,
 }
 
 /// The device and everything shared between the objects made from it.
@@ -175,6 +177,7 @@ impl Device {
                 compiler,
                 clear_pipes: Mutex::new(Default::default()),
                 mirrors: Default::default(),
+                d24_kernels: Mutex::new(Default::default()),
             }),
         })
     }

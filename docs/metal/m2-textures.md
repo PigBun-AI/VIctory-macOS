@@ -43,7 +43,9 @@ Semantic differences, all written in the module docs:
   stencil, padding), so `GET_RESOURCE_ALLOCATION_INFO` gives the real size;
   copies between buffer and depth/stencil texture move floats for depth
   (`R32_FLOAT` footprint) and bytes for stencil (`R8_UINT`); an
-  `R24_UNORM_X8_TYPELESS` footprint is refused, not converted.
+  `R24_UNORM_X8_TYPELESS` footprint of a depth plane is converted
+  (`round(d * 16777215)` in the low 24 bits, top byte 0: `copy.rs` pack and
+  unpack kernels; `tests/copy_d24.rs`).
 * The front counts D24S8, D32S8X24 and the R24G8/R32G8X24 typeless/view
   families as two planes (depth, stencil), as D3D12 and D3DMetal do.
 * Block-compressed formats are counted in blocks (4×4). The front computes
