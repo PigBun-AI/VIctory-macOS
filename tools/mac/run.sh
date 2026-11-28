@@ -101,7 +101,7 @@
 # chosen prefix are ever stopped.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
+case "$ROOT" in */worktrees/mac/*|*/worktrees/metal/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/{mac,metal}/<name> or next to the main checkouts
 G="${GTA6_ROOT:-$(cd "$_g" && pwd)}"
 WDIR="${VICTORY_MAC_WINE_DIR:-$G/VIctory-macOS/target/wine-cx}"
 WINE="$WDIR/bin/wine"; SERVER="$WDIR/bin/wineserver"
