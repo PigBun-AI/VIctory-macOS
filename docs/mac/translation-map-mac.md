@@ -5,13 +5,13 @@
 
 ## 0. 一眼看结论
 
-- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 72 个单元里 proven 36（50.0%）、unproven 24（33.3%）、gap 12（16.7%）（2026-11-28 下午 mac/map-close1 两个 int3 节点后重算，已在 mac/livetr 48ee9251 之上；口径同 5.1）。按频次加权（仅指令类，静态普查，freq 列求和 3,840,791）proven 14.5%、unproven 85.5%、gap 0%。
+- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 75 个单元里 proven 39（52.0%）、unproven 24（32.0%）、gap 12（16.0%）（2026-11-28 isa-probe1 rebase 到 mac/livetr ebc5cfd4 之后按合并后的矩阵重算；口径同 5.1）。按频次加权（仅指令类，静态普查，freq 列求和 3,414,806）proven 15.7%、unproven 84.3%、gap 0%。
 - **Wine 下实测（本机 macOS 27.2.1 / M5 Max / CrossOver Wine 26.3，2026-11-27，tools/mac/rosetta-probe-wine.sh，一次 692 个 case 进程 + 数值批次）**：
   - 普通 store（mov、xmm/ymm 移动、vextract、非临时 store、rep movs/stos）在 fault/只读/跨页/16 KiB 宿主页内 4 KiB 保护下都恢复，VEH 看到的地址精确、异常地址 = 指令地址、类型 write，结果对。
   - **masked store 与 vcvtps2ph [mem] 在 Wine 下一样致命（EmulateForward 中止进程，VEH 不被调用）**：masked store 的规律是「**fault 的 lane 不是 lane 0 就致命**」，跟是否跨页无关（hi、last 掩码打到不可访问页也致命；full、lane 0、交替掩码的第一个 lane 在故障页上能恢复）；vcvtps2ph 写内存只要 fault 就致命（60/60）。16 KiB 宿主页内的 4 KiB 保护、16 KiB 边缘保护同样。对游戏：只有加载期补丁（mac.loader.masked_patch，把这些改成逐 lane 普通 store）或不让这些 store 碰被保护的页才安全；默认跟踪关时没有页被保护。
   - **lock cmpxchg 16 位在地址 = 15 mod 16 且成功时内存不写但 ZF=1（丢更新，新登记 mac.isa.lock_cmpxchg16_split）**；标题有 2,036 条 16 位 lock cmpxchg，是否有未对齐的未知。32 位 cmpxchg 成功时 RAX 高 32 位被清零（SDM 说不动），登记为 mac.isa.cmpxchg32_rax_hit。
   - **RMW 指令（cmpxchg、xadd、xchg [mem]、lock or/bts）在 PAGE_NOACCESS 页 fault 时 VEH 看到的类型是 read（x86 是 write）；跨页的 RMW 报 read + 页基址**，只读页则正确。victory-gpu 的 watch.rs 只处理 WRITE，所以保护用 PAGE_READONLY 不要用 NOACCESS（mac.isa.rmw_fault_access_type）。
-  - **rcp/rsqrt 与 vcvt* 差分探针（2026-11-28，tools/mac/rosetta-probe-wine.sh isa）**：vrcpps/vrsqrtps（xmm、ymm）和 vrcpss/vrsqrtss 每种形式遍历全部 2^32 个输入，最大相对误差 vrcp 1.2297×2^-12、vrsqrt 1.3358×2^-12（规范界 1.5×2^-12），±0/denormal/±inf/NaN/负数 rsqrt 都符合规范，MXCSR 的 FTZ/DAZ 不改变任何结果（每种形式 3×2^32 个输入）；没有真 x86 机器，所以结论是「在规范精度内」，不是与 Zen 2 逐位一致。标题里 30,806 个位点 95.9% 后面跟牛顿迭代（两个都合规的起点迭代一次后相差最多 3 到 6 个 ulp），约 1,260 个没有跟（窗口启发式的上限）。vcvt* 60 种形式（寄存器 + 内存源）共 1,555 亿个元素对软件模型 0 个不符（NaN/inf/越界 = 0x80000000，不像 Arm 饱和；RC 四种、DAZ、FTZ 都对）。矩阵新增 mac.isa.avx.rcp_rsqrt_packed、rcp_rsqrt_scalar、convert 三行，都是 proven（第 5 节的覆盖率数字未重算，proven 多 3 个）。
+  - **rcp/rsqrt 与 vcvt* 差分探针（2026-11-28，tools/mac/rosetta-probe-wine.sh isa）**：vrcpps/vrsqrtps（xmm、ymm）和 vrcpss/vrsqrtss 每种形式遍历全部 2^32 个输入，最大相对误差 vrcp 1.2297×2^-12、vrsqrt 1.3358×2^-12（规范界 1.5×2^-12），±0/denormal/±inf/NaN/负数 rsqrt 都符合规范，MXCSR 的 FTZ/DAZ 不改变任何结果（每种形式 3×2^32 个输入）；没有真 x86 机器，所以结论是「在规范精度内」，不是与 Zen 2 逐位一致。标题里 30,806 个位点 95.9% 后面跟牛顿迭代（两个都合规的起点迭代一次后相差最多 3 到 6 个 ulp），约 1,260 个没有跟（窗口启发式的上限）。vcvt* 60 种形式（寄存器 + 内存源）共 1,555 亿个元素对软件模型 0 个不符（NaN/inf/越界 = 0x80000000，不像 Arm 饱和；RC 四种、DAZ、FTZ 都对）。矩阵新增 mac.isa.avx.rcp_rsqrt_packed、rcp_rsqrt_scalar、convert 三行，都是 proven（第 5 节的覆盖率已按合并后的矩阵重算：proven 多 3 个）。
   - BMI/LZCNT/POPCNT 46 种形式各 60,000 组、FMA 60 种形式（随机 + 边界 + 4 种舍入 + FTZ/DAZ + NaN 规则）、vcvtph2ps 全部 65,536 个半精度、vcvtps2ph imm 0-4 × 4 种舍入各 320 万个，全部与软件模型逐位一致（0 个不符）；cpuid/xgetbv 和 4 KiB 页粒度也实测。失败的 cmpxchg 的 CF/OF/SF/AF/PF 在 8 种形式、各 2 万组随机下 100% 是操作数反了的结果（ZF 对），xadd 的标志全对。
 - 默认启动（Rosetta + 跟踪关）时 **1234 处 masked store 补丁一个都不打**（masked::choice(None,false)=None）。运行日志里看到“1234 patched”是因为 tools/mac/run.sh 和集成 runlt.sh 都 export 了 VICTORY_PATCH_MASKED=all。直接 `wine victory.exe` 或 tools/macos/victory.sh 启动则不打补丁。
 - **0x140456fe2 不是标题地址**：标题映像加载在 0x6fffecfc0000（首选 0x140000000），这个 rip 在 victory.exe 自己里。metal-livetr 的 release exe（582a646f，不含 G6）里它是 `vpmaskmovd ymmword ptr [rcx], ymm4, ymm3`，位于 `victory_safe_merge_at`（crates/victory-gpu/src/safecopy.rs 的 global_asm）。错误字节 c4e25d8e19 eb04 c5fe7f19 f30fb8c0 与之吻合。标题自己的 RVA 0x456fe2 只是一条 `jne`，且不在补丁范围。G6（b7943221）把这段改成 Rosetta 下逐 dword 的普通 mov，本分支已含 G6；metal-livetr 那个 exe 是否含 G6 没有核对。日志出处：game-runs 20261127-d3dmetal-livetr-ab/stderr.log:3651、metal-livetr-r4:5140、r5:4156（num_insts=34 inst_index=9）。不改代码。
@@ -276,11 +276,13 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 | 范围 | 单元数 | proven | unproven | gap |
 |---|---|---|---|---|
-| 全部 used=yes（不含仅参照） | 72 | 36 (50.0%) | 24 (33.3%) | 12 (16.7%) |
-| 指令类（mac.isa.*） | 21 | 17 (81.0%) | 4 | 0 |
+| 全部 used=yes（不含仅参照） | 75 | 39 (52.0%) | 24 (32.0%) | 12 (16.0%) |
+| 指令类（mac.isa.*） | 24 | 20 (83.3%) | 4 | 0 |
 | 其余（loader/fault/hle/res/title/shared/shader/metal） | 51 | 19 (37.3%) | 20 | 12 |
 
 上一版（本文件第 1 版，未跑 Wine 探针、未剔除仅参照行）：59 个单元 proven 12（20.3%）、unproven 31、gap 16。这版的变化：Wine 探针把 cpuid_xgetbv、bmi_lzcnt_popcnt、fma_f16c、page_size、wide_patch 从 unproven 变 proven；新登记 3 个指令类 gap（lock_cmpxchg16_split、cmpxchg32_rax_hit、rmw_fault_access_type）和 1 个 HLE gap（audio_timer_leak）；7 个 used=yes 的 D3DMetal 行移出统计。
+
+2026-11-28 下午（分支 mac/isa-probe1，rebase 到 mac/livetr ebc5cfd4，计数从合并后的矩阵重算）：新增 3 个 proven 指令类行 mac.isa.avx.rcp_rsqrt_packed、rcp_rsqrt_scalar、convert（75 个：proven 39、unproven 24、gap 12；指令类 24 个：proven 20、unproven 4）。
 
 2026-11-28 第二批闭环（mac/map-close2）后从矩阵重算：69 个，proven 25、unproven 32、gap 12（masked_default_off、isa.clwb、low_address_commit 三行 gap→unproven，代码与单元测试已做、待下午运行；新增 mac.hle.console_model 一行 unproven；表里 gap 数此前落后于矩阵，这次一并按矩阵校正）。
 
@@ -294,13 +296,13 @@ disposition 分布（全部 92 行，含仅参照行）：emulated 23，mapped 1
 
 ### 5.2 按频次加权（指令类，静态普查，每条指令只算一次）
 
-为避免重复计数，排除了和别的行同一批位点的 mac.isa.maskmov_ymm_store_nofault、mac.isa.lock_cmpxchg_flags、mac.isa.lock_cmpxchg16_split、mac.isa.cmpxchg32_rax_hit、mac.isa.rmw_fault_access_type、mac.isa.rdtsc（0 次）；mac.isa.avx_general 的权重取 VEX 总数扣掉 FMA/F16C、普通 256 位 store、masked store、vextract、非临时 store 后的剩余（2,950,582）。频次未知的单元（mac.isa.fault_resume_ordinary、mac.isa.page_size）不进分母
+为避免重复计数，排除了和别的行同一批位点的 mac.isa.maskmov_ymm_store_nofault、mac.isa.lock_cmpxchg_flags、mac.isa.lock_cmpxchg16_split、mac.isa.cmpxchg32_rax_hit、mac.isa.rmw_fault_access_type、mac.isa.rdtsc（0 次）；mac.isa.avx_general 的权重取 VEX 总数扣掉 FMA/F16C、普通 256 位 store、masked store、vextract、非临时 store、rcp/rsqrt 与 vcvt* 后的剩余（2,875,728）。频次未知的单元（mac.isa.fault_resume_ordinary、mac.isa.page_size）不进分母
 
 | 状态 | 加权频次 | 占比 |
 |---|---|---|
-| proven | 461,518 | 13.5% |
-| unproven | 2,953,280 | 86.5% |
-| gap | 8 | 0.0% |
+| proven | 536,380 | 15.7% |
+| unproven | 2,878,426 | 84.3% |
+| gap | 0 | 0.0% |
 | 合计 | 3,414,806 | 100% |
 
 说明：2026-11-28 重算（mac.isa.maskmov_ymm_store_fault_crossing 与 mac.isa.vcvtps2ph_mem_fault 由 gap 变 proven，gap 只剩 clwb 的 8 次）；v1 是 proven 5.2%、unproven 94.8%、gap 0.0%。加权结果仍被 unproven 的 avx_general（2,950,582，Rosetta 对 AVX/AVX2 的转译没有逐条差分测试）主导；把它拿掉，其余指令类的 proven 占 99.4%（v1 是 37.9%）。HLE 和加载补丁的频次是调用数或位点数，单位不同，不与指令混合加权，只在各行的 freq 里给出。
