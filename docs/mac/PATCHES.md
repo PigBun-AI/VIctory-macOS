@@ -792,6 +792,15 @@ first line when more than 20% are invalid. `frametime-annot.csv` has the marking
 10 s) is the load.log interval. Test: `tools/mac/test-frametime-summary.sh` (made-up logs, and `run.sh` with a fake Wine and a fake `uptime`).
 Pure Mac tooling.
 
+### M11 — the stage's capability file `CAPS`: `run.sh` exports `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1` only for a stage that says `mesh_compute`
+
+Only `run.sh` (after the stage is known), `test-run-until.sh` and `docs/mac/RUN.md` change. If `$stage/CAPS` has a whole line `mesh_compute` (lines
+starting with `#` are comments, one capability per line) the title gets `VICTORY_METAL_MESH_COMPUTE_SUPPORTED=1`; otherwise nothing is exported and
+a value set by hand is kept. Reason (S5): the VMCS part appended to a mesh container over 32 KB changes the container's hash, so 966 entries of an old
+back's AGX crash list would no longer match; an old stage with a new exe must not append it. `--print-env` shows the variable and its source
+(`# metal: caps:`). Metal-backend only; D3DMetal unaffected. Tests: `test-run-until.sh` (CAPS with `mesh_compute`, with other lines only, without a
+file, `--print-env`, and a run with a fake Wine). Pure Mac tooling; drop it when every stage carries the part's support (then S5 defaults on).
+
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
 *What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is
