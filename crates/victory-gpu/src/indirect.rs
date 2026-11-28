@@ -276,10 +276,19 @@ fn make_for(device: &ID3D12Device) -> windows::core::Result<Clamp> {
 /// is asked (its dispatch counts are 32 bits), and so does an AMD card, whose
 /// dispatch packets and group numbers are the same; D3D12 does not look at
 /// indirect counts. Other cards stay at 65,535.
+///
+/// The Metal chain (`VICTORY_METAL_OUT`, mac S-line) is wide too: the back passes the record to
+/// `dispatchThreadgroupsWithIndirectBuffer` as it is, and Metal runs 32-bit counts (tested to
+/// 3,000,000 groups, `metal/back/tests/exec_indirect_wide.rs`). The "card" there is the Metal front's
+/// Apple adapter, which `amd` never matches, so the tile lists of 67,440 and 47,760 groups were cut.
 fn widest(amd: bool) -> u32 {
-    let on = std::env::var_os("VICTORY_INDIRECT_WIDE").is_none_or(|v| v != "0");
-    if amd && on { 1 << 20 } else { 65_535 }
+    crate::mac::indirect_wide::widest(
+        amd,
+        crate::mac::on_metal_chain(),
+        std::env::var_os("VICTORY_INDIRECT_WIDE").is_none_or(|v| v != "0"),
+    )
 }
+
 
 /// Whether `device` is an AMD card's.
 pub(crate) fn amd(device: &ID3D12Device) -> bool {
