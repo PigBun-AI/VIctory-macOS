@@ -130,6 +130,26 @@ pub(crate) fn get() -> Option<&'static Collector> {
         .as_ref()
 }
 
+/// The back dropped or skipped something without an error (an early
+/// `continue` or `return` that still answers `Ok`): counted as the extra
+/// `silent.<site>.<reason>` of the frame's row in `back.csv`. Every hit counts.
+/// Does nothing (one atomic read) unless `VICTORY_METAL_DROPSTATS` is set; never
+/// changes what the back does.
+pub(crate) fn silent(site: &str, reason: &str) {
+    silent_n(site, reason, 1);
+}
+
+/// [`silent`] for `n` hits counted by the caller (a loop that would otherwise
+/// take the collector's lock for each one).
+pub(crate) fn silent_n(site: &str, reason: &str, n: u64) {
+    if n == 0 {
+        return;
+    }
+    if let Some(c) = get() {
+        c.extra(&format!("silent.{site}.{reason}"), n);
+    }
+}
+
 /// Ends the frame of the statistics (what `PRESENT` does; public for tests).
 pub fn end_frame() {
     if let Some(c) = get() {
@@ -229,6 +249,20 @@ mod tests {
         assert!(lines[2].ends_with(",vs,00000000000000ef,3,ok,0,"));
         let frames = std::fs::read_to_string(dir.join("back.csv")).unwrap();
         assert!(frames.lines().nth(1).unwrap().ends_with("pso refused ms=1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn silent_drops_are_extras_of_the_frame_row() {
+        let dir = temp("silent");
+        let c = Collector::open(&dir).unwrap();
+        c.extra("silent.emu.touched.key_unknown", 3);
+        c.extra("silent.emu.touched.key_unknown", 2);
+        c.extra("silent.emu.touched.heap_unknown", 1);
+        c.end_frame();
+        let frames = std::fs::read_to_string(dir.join("back.csv")).unwrap();
+        let row = frames.lines().nth(1).unwrap();
+        assert!(row.contains("silent.emu.touched.heap_unknown=1;silent.emu.touched.key_unknown=5"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

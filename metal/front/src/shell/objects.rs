@@ -30,20 +30,43 @@ impl QueueObj_Impl {
         numcommandlists: u32,
         ppcommandlists: *const Option<ID3D12CommandList>,
     ) {
+        // Every way out below drops the whole call, the valid lists of the batch
+        // with it: counted as `silent.queue.execute_lists.<reason>` (one per call)
+        // and `silent.queue.execute_lists_dropped.<reason>` (the lists of the
+        // call, the ones that were never looked at included); the ops of the
+        // lists already taken are dropped ops of the row.
+        let dropped = |reason: &str, taken: &[std::sync::Arc<[crate::device::Item]>]| {
+            crate::dropstats::silent("queue.execute_lists", reason);
+            crate::dropstats::silent_n(
+                "queue.execute_lists_dropped",
+                reason,
+                numcommandlists as u64,
+            );
+            if let Some(c) = crate::dropstats::get() {
+                let items: Vec<&[crate::device::Item]> = taken.iter().map(|l| &l[..]).collect();
+                c.lost(&items, &format!("ExecuteCommandLists dropped: {reason}"));
+            }
+        };
         if ppcommandlists.is_null() {
+            if numcommandlists != 0 {
+                dropped("null_array", &[]);
+            }
             return;
         }
         let mut lists = Vec::with_capacity(numcommandlists as usize);
         for i in 0..numcommandlists as usize {
             // SAFETY: the caller's array of `numcommandlists` interface pointers.
             let Some(l) = (unsafe { &*ppcommandlists.add(i) }) else {
+                dropped("null_entry", &lists);
                 return;
             };
             let Ok(l) = l.cast_object_ref::<ListObj>() else {
+                dropped("bad_cast", &lists);
                 return;
             };
             // A list that is not closed, or that failed while recording, is not executed.
             let Some(items) = l.closed_items() else {
+                dropped("not_closed", &lists);
                 return;
             };
             lists.push(items);

@@ -511,7 +511,9 @@ impl DeviceObj_Impl {
             Some(d) => (d.BufferLocation, d.SizeInBytes),
             None => (0, 0),
         };
-        let _ = self.dev.create_cbv(dest.ptr as u64, va, size);
+        if let Err(h) = self.dev.create_cbv(dest.ptr as u64, va, size) {
+            crate::dropstats::silent("cbv.create_failed", &crate::dropstats::err_reason(h));
+        }
     }
 
     pub(super) fn x_CreateShaderResourceView(
@@ -611,7 +613,10 @@ impl DeviceObj_Impl {
             });
             return view_result("CreateUnorderedAccessView", d.map_or(0, |d| d.Format.0), r);
         }
-        let Some(d) = d else { return };
+        let Some(d) = d else {
+            crate::dropstats::silent("uav", "buffer_no_desc");
+            return;
+        };
         // SAFETY: `ViewDimension` says which union member is live.
         let b = unsafe { d.Anonymous.Buffer };
         let r = self.dev.create_buffer_view(
@@ -689,8 +694,11 @@ impl DeviceObj_Impl {
         pdesc: *const D3D12_SAMPLER_DESC,
         dest: &D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {
-        let Ok(d) = require(pdesc) else { return };
-        let _ = self.dev.create_sampler(
+        let Ok(d) = require(pdesc) else {
+            crate::dropstats::silent("sampler", "null_desc");
+            return;
+        };
+        if let Err(h) = self.dev.create_sampler(
             dest.ptr as u64,
             &SamplerParams {
                 filter: d.Filter.0 as u32,
@@ -704,7 +712,9 @@ impl DeviceObj_Impl {
                 min_lod: d.MinLOD,
                 max_lod: d.MaxLOD,
             },
-        );
+        ) {
+            crate::dropstats::silent("sampler.create_failed", &crate::dropstats::err_reason(h));
+        }
     }
 
     pub(super) fn x_CopyDescriptorsSimple(
@@ -714,9 +724,12 @@ impl DeviceObj_Impl {
         src: &D3D12_CPU_DESCRIPTOR_HANDLE,
         _heaptype: D3D12_DESCRIPTOR_HEAP_TYPE,
     ) {
-        let _ = self
+        if let Err(h) = self
             .dev
-            .copy_descriptors(dst.ptr as u64, src.ptr as u64, numdescriptors);
+            .copy_descriptors(dst.ptr as u64, src.ptr as u64, numdescriptors)
+        {
+            crate::dropstats::silent("copy_descriptors.error", &crate::dropstats::err_reason(h));
+        }
     }
 
     pub(super) fn x_CopyDescriptors(
@@ -745,6 +758,11 @@ impl DeviceObj_Impl {
                 .collect()
         };
         if inc == 0 || dst_starts.is_null() || src_starts.is_null() {
+            // (A call with no ranges at all asks for nothing.)
+            if ndst != 0 && nsrc != 0 {
+                let reason = if inc == 0 { "zero_inc" } else { "null_start" };
+                crate::dropstats::silent("copy_descriptors", reason);
+            }
             return;
         }
         let (d, s) = (
@@ -755,11 +773,16 @@ impl DeviceObj_Impl {
         let (mut doff, mut soff) = (0u32, 0u32);
         while di < d.len() && si < s.len() {
             let n = (d[di].1 - doff).min(s[si].1 - soff);
-            if n > 0 {
-                let _ = self.dev.copy_descriptors(
+            if n > 0
+                && let Err(h) = self.dev.copy_descriptors(
                     d[di].0 + doff as u64 * inc,
                     s[si].0 + soff as u64 * inc,
                     n,
+                )
+            {
+                crate::dropstats::silent(
+                    "copy_descriptors.error",
+                    &crate::dropstats::err_reason(h),
                 );
             }
             doff += n;
@@ -1131,6 +1154,12 @@ impl DeviceObj_Impl {
 /// the not-implemented statistics) when the view was not made.
 fn view_result(what: &str, format: i32, r: crate::hresult::Result<()>) {
     if let Err(h) = r {
+        // Counted every time (`VICTORY_METAL_DROPSTATS`), whatever the log says:
+        // `silent.view.<what>.<result>`.
+        crate::dropstats::silent(
+            &format!("view.{}", what.trim_start_matches("Create")),
+            &crate::dropstats::err_reason(h),
+        );
         if h == Hr::E_NOTIMPL {
             super::note_notimpl(&format!(
                 "ID3D12Device::{what}(buffer view, format {format})"

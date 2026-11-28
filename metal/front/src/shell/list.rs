@@ -65,6 +65,7 @@ impl ListObj_Impl {
         // the front has no encoding for is skipped instead of invalidating the list, so
         // a program runs on and every missing call is counted (VICTORY_METAL_NOTIMPL_LOG).
         if super::lenient() {
+            crate::dropstats::silent("lenient", "skipped_call");
             return;
         }
         self.list.lock().unwrap().unsupported();

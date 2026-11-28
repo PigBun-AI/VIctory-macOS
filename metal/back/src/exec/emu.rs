@@ -107,12 +107,16 @@ fn touched(st: &State, side: &Side) -> Touch {
     let mut t = Touch::default();
     let Some(sig) = &side.sig else { return t };
     let desc: &RootSigDesc = &sig.desc;
+    // Entries the scan could not look at (counted as `silent.emu.touched.*`:
+    // the touch set it hands back is short by these).
+    let mut no_key = 0u64;
     if desc.flags & root_flags::CBV_SRV_UAV_HEAP_INDEXED != 0 {
         t.heap_srv = true;
         t.heap_uav = true;
     }
     for (i, p) in desc.params.iter().enumerate() {
         let Some(slot) = sig.layout.slot(i as u32) else {
+            crate::dropstats::silent("emu.touched", "slot_unknown");
             continue;
         };
         match (p.kind, slot.kind) {
@@ -135,6 +139,7 @@ fn touched(st: &State, side: &Side) -> Touch {
                         && va >= h.heap.gpu_va()
                         && va < h.heap.gpu_va() + u64::from(h.heap.capacity()) * ENTRY_SIZE
                 }) else {
+                    crate::dropstats::silent("emu.touched", "heap_unknown");
                     continue;
                 };
                 let start = ((va - h.heap.gpu_va()) / ENTRY_SIZE) as u32;
@@ -168,6 +173,7 @@ fn touched(st: &State, side: &Side) -> Touch {
                         // What the view looks at: recorded when it was written
                         // (a texture's entry holds a view id, not the texture).
                         let Some(&key) = h.keys.get(&idx) else {
+                            no_key += 1;
                             continue;
                         };
                         if r.kind == RangeKind::UAV {
@@ -181,6 +187,7 @@ fn touched(st: &State, side: &Side) -> Touch {
             _ => {}
         }
     }
+    crate::dropstats::silent_n("emu.touched", "key_unknown", no_key);
     t
 }
 

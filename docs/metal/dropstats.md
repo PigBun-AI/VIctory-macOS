@@ -28,6 +28,10 @@ back) write into the directory; the front turns the Unix path into a `Z:` path f
 * `back-pso.csv`, `front-pso.csv`: every pipeline creation with time, kind, hash, result, the text of the
   refusal, and in the back the time the Metal compiler call took (`compile_us`).
 
+## Silent paths (`extras`)
+
+`silent.<site>.<reason>=n` counts every hit, not just the first logged warning. Front descriptor creation and copy failures use the HRESULT as a reason. Lenient command skips and missing UAV descriptions count calls. A rejected `ExecuteCommandLists` batch counts once by reason; `queue.execute_lists_dropped` counts all its lists, while the dropped-op columns count only the already-inspected prefix. The back's `emu.touched` counts omissions from a resource scan (slots, heaps, entries), not failed draws. Do not add these extras to the dropped-op totals. Counters flush on the next row of the emitting process; without a subsequent row a pending count is not on disk.
+
 ## What counts as a drop
 
 Back: a command that fails (`refuse` leaves the reason in `State::note`); a refused copy, clear, draw or dispatch

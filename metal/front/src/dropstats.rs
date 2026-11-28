@@ -183,6 +183,13 @@ impl Collector {
         self.flush_row();
     }
 
+    /// A free counter of the frame (silent drops, see [`silent`]): in the
+    /// `extras` of the next row (a row goes out at the end of an
+    /// `ExecuteCommandLists` call).
+    pub fn extra(&self, name: &str, n: u64) {
+        lock(&self.stats).extra(name, n);
+    }
+
     /// A list that failed at `Close`: its ops were recorded, never executed.
     pub fn list_failed(&self, items: &[Item], why: &str) {
         lock(&self.stats).extra("lists failed at Close", 1);
@@ -231,6 +238,30 @@ pub fn get() -> Option<&'static Collector> {
             }
         })
         .as_ref()
+}
+
+/// A call or a piece of state the front dropped without telling the title
+/// (a `let _ =` on an error, an early `return` on a null pointer ...): counted
+/// as the extra `silent.<site>.<reason>` of the next row of `front.csv`. Every
+/// hit counts, not only the first. Does nothing (one atomic read) unless
+/// `VICTORY_METAL_DROPSTATS` is set; never changes what the front does.
+pub fn silent(site: &str, reason: &str) {
+    silent_n(site, reason, 1);
+}
+
+/// [`silent`] for `n` things dropped at once (the lists of a call).
+pub fn silent_n(site: &str, reason: &str, n: u64) {
+    if n == 0 {
+        return;
+    }
+    if let Some(c) = get() {
+        c.extra(&format!("silent.{site}.{reason}"), n);
+    }
+}
+
+/// The text of a failed call's result as the reason of a silent drop.
+pub fn err_reason(h: crate::hresult::Hr) -> String {
+    format!("{:#010x}", h.0 as u32)
 }
 
 /// Ends the frame of the statistics (`Present`).
@@ -360,6 +391,44 @@ mod tests {
         assert_eq!((at("submitted_draw"), at("dropped_draw")), ("2", "2"));
         assert!(at("extras").contains("lists failed at Close=1"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn silent_drops_are_extras_of_the_next_row_and_the_ops_of_a_dropped_call_are_dropped() {
+        let dir = temp("silent");
+        let c = Collector::open(&dir).unwrap();
+        // The shape of a dropped `ExecuteCommandLists`: the lists taken so far are lost,
+        // the call and its lists are counted by reason.
+        let taken: Vec<std::sync::Arc<[Item]>> = vec![list().into()];
+        c.extra("silent.queue.execute_lists.not_closed", 1);
+        c.extra("silent.queue.execute_lists_dropped.not_closed", 2);
+        let items: Vec<&[Item]> = taken.iter().map(|l| &l[..]).collect();
+        c.lost(&items, "ExecuteCommandLists dropped: not_closed");
+        c.extra("silent.cbv.create_failed.0x80004001", 1);
+        c.extra("silent.cbv.create_failed.0x80004001", 1);
+        c.executed();
+        let text = std::fs::read_to_string(dir.join("front.csv")).unwrap();
+        // `lost` puts a row out at once; the rest is in the next one.
+        let header: Vec<&str> = HEADER.split(',').collect();
+        let row: Vec<&str> = text.lines().nth(1).unwrap().split(',').collect();
+        let at = |r: &[&str], n: &str| r[header.iter().position(|h| *h == n).unwrap()].to_owned();
+        assert_eq!(
+            (at(&row, "submitted_draw"), at(&row, "dropped_draw")),
+            ("2".into(), "2".into())
+        );
+        assert!(at(&row, "extras").contains("silent.queue.execute_lists.not_closed=1"));
+        assert!(at(&row, "extras").contains("silent.queue.execute_lists_dropped.not_closed=2"));
+        let row: Vec<&str> = text.lines().nth(2).unwrap().split(',').collect();
+        assert!(at(&row, "extras").contains("silent.cbv.create_failed.0x80004001=2"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_call_is_named_by_its_result() {
+        assert_eq!(
+            err_reason(crate::hresult::Hr(0x80004001u32 as i32)),
+            "0x80004001"
+        );
     }
 
     #[test]
