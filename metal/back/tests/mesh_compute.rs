@@ -1913,3 +1913,210 @@ fn a_mesh_with_a_static_sampler_goes_through_the_emulation() {
     assert!(made.is_ok(), "the pair is made: {:?}", made.err());
     assert_eq!(mesh_emu::counters_here().pipelines, before.pipelines + 1);
 }
+
+/// Real pairs of the title (outside the repository), as the translator makes them and the host gives them their
+/// root signature: `victory-census mscs export` writes `N.ms` (the mesh container with its `VMCS` part), `N.ps`
+/// and `N.root` into a directory, `VICTORY_MC_REAL_DIR` names it. Each pair goes through the executor as the title
+/// does: the pipeline (the refusal, then the emulation: `Emulated::build`, with the check that the compute and the
+/// vertex stages agree on the argument buffer), then a one-group `DispatchMesh` with zeroed arguments (constants
+/// zero, root descriptors and the views of the tables on a zeroed buffer), which must run to the end.
+#[test]
+fn real_translator_products_run_through_the_executor() {
+    let Some(dir) = std::env::var_os("VICTORY_MC_REAL_DIR") else {
+        eprintln!(
+            "SKIPPED real translator products: set VICTORY_MC_REAL_DIR (victory-census mscs export)"
+        );
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let limit: usize = std::env::var("VICTORY_MC_REAL_LIMIT")
+        .ok()
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(usize::MAX);
+    let Some(g) = setup() else { return };
+    let index = std::fs::read_to_string(dir.join("index.txt")).expect("index.txt");
+    let start = mesh_emu::counters_here();
+    let (mut built, mut ran, mut emulated, mut failures) = (0, 0, 0, Vec::new());
+    for line in index.lines().take(limit) {
+        let n = line.split('\t').next().unwrap();
+        let key = line.split('\t').nth(1).unwrap_or("");
+        let ms = std::fs::read(dir.join(format!("{n}.ms"))).unwrap();
+        let ps = std::fs::read(dir.join(format!("{n}.ps"))).unwrap();
+        let root = std::fs::read_to_string(dir.join(format!("{n}.root"))).unwrap();
+        assert!(
+            matches!(mesh_emu::Bundle::find(&ms), Ok(Some(_))),
+            "{key}: the mesh container has its VMCS part"
+        );
+        // the root signature
+        let mut params = Vec::new();
+        let mut ranges = Vec::new();
+        let mut samplers = Vec::new();
+        // per parameter: (kind, table index) for binding
+        let mut binds: Vec<(RootParamKind, u32)> = Vec::new();
+        let mut tables = 0u32;
+        for l in root.lines() {
+            let f: Vec<&str> = l.split(' ').collect();
+            let num = |i: usize| f[i].parse::<u32>().unwrap();
+            match f[0] {
+                "flags" => {}
+                "const" => {
+                    params.push(RootParam {
+                        kind: RootParamKind::CONSTANTS,
+                        num_32bit_values: num(1),
+                        ..RootParam::default()
+                    });
+                    binds.push((RootParamKind::CONSTANTS, num(1)));
+                }
+                "cbv" | "srv" | "uav" => {
+                    let kind = match f[0] {
+                        "cbv" => RootParamKind::CBV,
+                        "srv" => RootParamKind::SRV,
+                        _ => RootParamKind::UAV,
+                    };
+                    params.push(root_param(kind, num(1), num(2)));
+                    binds.push((kind, 0));
+                }
+                "table" => {
+                    let kind = if f[1] == "uav" {
+                        RangeKind::UAV
+                    } else {
+                        RangeKind::SRV
+                    };
+                    let mut r = range(kind);
+                    r.num_descriptors = 1;
+                    r.base_register = num(2);
+                    r.register_space = num(3);
+                    params.push(table_param(ranges.len() as u32, 1));
+                    ranges.push(r);
+                    binds.push((RootParamKind::TABLE, tables));
+                    tables += 1;
+                }
+                "sampler" => samplers.push(StaticSampler {
+                    shader_register: num(1),
+                    register_space: num(2),
+                    // as the application's root signature gives it: to the stage that uses it
+                    visibility: match f[3] {
+                        "mesh" => ShaderVisibility::MESH,
+                        "pixel" => ShaderVisibility::FRAGMENT,
+                        v => panic!("{key}: sampler visibility {v}"),
+                    },
+                    ..StaticSampler::default()
+                }),
+                other => panic!("{key}: root line {other}"),
+            }
+        }
+        let sig = g.fx.root_sig(&RootSigDesc {
+            flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+            params,
+            ranges,
+            static_samplers: samplers,
+        });
+        let before = mesh_emu::counters_here();
+        let pso = match g.graphics_pso(sig, None, Some(&ms), &ps) {
+            Ok(p) => p,
+            Err(e) => {
+                failures.push(format!("{key}: pipeline: {e:?}"));
+                continue;
+            }
+        };
+        built += 1;
+        let em = mesh_emu::counters_here().pipelines - before.pipelines;
+        emulated += em;
+        // arguments
+        let zero = g.fx.buffer(BufferKind::UPLOAD, 4096);
+        cpu_write(zero.cpu_addr, &[0; 16]);
+        let data = g.fx.buffer(BufferKind::DEFAULT, 4096);
+        let staging = g.fx.heap(HeapKind::CBV_SRV_UAV, tables.max(1), false);
+        let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, tables.max(1), true);
+        let mut t = 0;
+        for (kind, _) in &binds {
+            if *kind == RootParamKind::TABLE {
+                let uav = root
+                    .lines()
+                    .filter(|l| l.starts_with("table"))
+                    .nth(t)
+                    .unwrap();
+                let view = if uav.starts_with("table uav") {
+                    ViewKind::BUFFER_UAV
+                } else {
+                    ViewKind::BUFFER_SRV
+                };
+                g.fx.write_view(staging.heap, t as u32, ViewDesc::raw(view, data.res, 0, 64));
+                t += 1;
+            }
+        }
+        if tables > 0 {
+            g.fx.copy_descriptors(heap.heap, 0, staging.heap, 0, tables);
+        }
+        let mut cmds = vec![
+            copy(data.res, zero.res, 4096),
+            Command::Barrier(Barrier::memory(
+                stage::BLIT,
+                stage::VERTEX | stage::FRAGMENT | stage::DISPATCH,
+            )),
+            Command::SetDescriptorHeaps(SetDescriptorHeaps {
+                cbv_srv_uav: heap.heap,
+                sampler: HeapId::NULL,
+            }),
+        ];
+        let mut state = vec![
+            Command::SetRootSignature(SetRootSignature {
+                bind_point: BindPoint::GRAPHICS,
+                root_sig: sig,
+            }),
+            Command::SetPipeline(SetPipeline { pso, _pad: 0 }),
+        ];
+        for (i, (kind, v)) in binds.iter().enumerate() {
+            let i = i as u32;
+            state.push(match *kind {
+                RootParamKind::CONSTANTS => {
+                    let bytes: &'static [u8] =
+                        Box::leak(vec![0u8; 4 * *v as usize].into_boxed_slice());
+                    Command::SetRootConstants(SetRootConstants {
+                        bind_point: BindPoint::GRAPHICS,
+                        root_index: i,
+                        dest_offset: 0,
+                        data: bytes,
+                    })
+                }
+                RootParamKind::TABLE => Command::SetRootTable(SetRootTable {
+                    bind_point: BindPoint::GRAPHICS,
+                    root_index: i,
+                    heap: heap.heap,
+                    index: *v,
+                }),
+                k => graphics_va(i, k, data.gpu_va),
+            });
+        }
+        cmds.append(&mut state);
+        let (tex, rb) = g.target();
+        let mut all = vec![begin(1, g.q)];
+        all.extend(cmds);
+        all.extend(g.pass_around(tex, vec![dispatch_mesh(1)]));
+        all.extend(g.read_back(tex, &rb));
+        all.push(end(1));
+        let s = g.fx.submit(&all);
+        if s != Status::OK {
+            failures.push(format!(
+                "{key}: submit {s:?}: {:?}",
+                g.fx.executor().last_error()
+            ));
+            continue;
+        }
+        g.settle();
+        ran += 1;
+    }
+    let after = mesh_emu::counters_here();
+    assert_eq!(after.dropped, start.dropped, "no draw was dropped");
+    assert_eq!(
+        after.hoisted + after.split + after.in_place - start.hoisted - start.split - start.in_place,
+        ran,
+        "every dispatch was emulated"
+    );
+    eprintln!(
+        "real products: {built} pipelines built ({emulated} through the emulation), {ran} ran; {} failures",
+        failures.len()
+    );
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert!(built > 0, "no pair in {}", dir.display());
+}
