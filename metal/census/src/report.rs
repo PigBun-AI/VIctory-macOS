@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::{arg, jsonl, out_dir, stats};
 
 /// The kinds of the conversion stage, in the order of the chain.
-const KINDS: [&str; 5] = ["cs", "vs", "ps", "ms", "gs"];
+const KINDS: [&str; 6] = ["cs", "vs", "ps", "ms", "gs", "tgs"];
 /// How many sample hashes a failure group shows in `census.json`.
 const SAMPLES: usize = 5;
 
@@ -242,7 +242,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "Vs": { "programs": programs.get("Vs"), "translated": translated.get("Vs"), "pipeline_ok_with_default_ps": chain_pass["vs"], "rect_list_gs_ok": chain_pass["gs"] },
         "Ps": { "programs": programs.get("Ps"), "translated": translated.get("Ps"), "pipeline_ok_with_fullscreen_vs": chain_pass["ps"] },
         "Ms": { "programs": programs.get("Ms"), "translated": translated.get("Ms"), "pipeline_ok_with_default_ps": chain_pass["ms"] },
-        "Gs": { "programs": programs.get("Gs"), "translated": translated.get("Gs").copied().unwrap_or(0), "note": "the title's own geometry programs: the translator makes no host shader for them" },
+        "Gs": { "programs": programs.get("Gs"), "translated": translated.get("Gs").copied().unwrap_or(0), "pipeline_ok_with_vs_and_default_ps": chain_pass["tgs"], "note": "the title's own geometry programs (mac S4): between a generated vertex shader and the default pixel shader" },
     });
 
     // The archive measurement: three serial runs over the same pipelines.

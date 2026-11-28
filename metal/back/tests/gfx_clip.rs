@@ -6,7 +6,8 @@
 //! (`meshFunction must not be nil`, SIGABRT). 29 of the title's 2192 vertex shaders write a
 //! clip distance and abort the census run behind the rectangle-list geometry shader. The
 //! back now makes the function first and refuses the pipeline with the reason. DXIL is
-//! synthetic (HLSL through the DXC front end; `SKIPPED` without one).
+//! synthetic (HLSL through the DXC front end; `SKIPPED` without one). The translator now draws these 29
+//! rectangle lists without the converter's clip distance (mac S4): `gfx_clip_rect.rs`.
 #![cfg(target_vendor = "apple")]
 
 mod common_msc;

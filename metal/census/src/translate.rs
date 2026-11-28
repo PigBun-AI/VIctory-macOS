@@ -182,6 +182,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .map(str::to_owned)
             .collect()
     });
+    // `--keep DIR`: the raw bytes of each container that `--hashes` lets through, as `<hash>.dxbc`
+    // (game-derived: outside the repository, for tests and for reading a program's stage data).
+    let keep: Option<PathBuf> = arg(args, "--keep").map(PathBuf::from);
+    if let Some(k) = &keep {
+        if k.starts_with(env!("CARGO_MANIFEST_DIR")) {
+            return Err(format!("--keep {} is inside the repository", k.display()));
+        }
+        std::fs::create_dir_all(k).map_err(|e| e.to_string())?;
+    }
     let rows_path = out.join("translate.jsonl");
     let done = jsonl::seen(&rows_path, "hash");
     let rows = jsonl::Appender::open(&rows_path)?;
@@ -240,12 +249,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
                             continue;
                         }
                         let n = taken.fetch_add(1, Ordering::Relaxed) + 1;
+                        if let Some(k) = &keep {
+                            let _ = std::fs::write(k.join(format!("{hash}.dxbc")), &bytes[..]);
+                        }
                         let (row, shader) = translate_one(&bytes, &hash, &job.label(file));
                         if let Some(shader) = shader {
                             let _ = std::fs::write(
                                 out.join("vsh").join(format!("{hash}.vsh")),
                                 wire::encode(&shader),
                             );
+                            // mac S4: a vertex shader that writes a clip distance is made once more for
+                            // the rectangle lists (`victory_shader::emit::clip_as_varying`): the form its
+                            // geometry stage (`rect_list_gs`) is converted with.
+                            if victory_shader::emit::writes_clip_distance(&shader.dxil)
+                                && let Ok(Ok(rect)) = catch_unwind(AssertUnwindSafe(|| {
+                                    victory_shader::emit::translate_variant(&bytes, &[], true)
+                                }))
+                            {
+                                let _ = std::fs::create_dir_all(out.join("vsh-rect"));
+                                let _ = std::fs::write(
+                                    out.join("vsh-rect").join(format!("{hash}.vsh")),
+                                    wire::encode(&rect),
+                                );
+                            }
                         }
                         rows.push(&row);
                         if n.is_multiple_of(2000) {

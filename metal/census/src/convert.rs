@@ -31,13 +31,15 @@ use crate::sig::{self, Element};
 use crate::{arg, flag, jobs, jsonl, out_dir};
 
 /// The kinds, in the order they run.
-const KINDS: [&str; 5] = ["cs", "vs", "ps", "ms", "gs"];
+const KINDS: [&str; 6] = ["cs", "vs", "ps", "ms", "gs", "tgs"];
 
 fn kind_stage(kind: &str) -> &'static str {
     match kind {
         "cs" => "Cs",
         "ps" => "Ps",
         "ms" => "Ms",
+        // mac S4: the title's own geometry programs.
+        "tgs" => "Gs",
         _ => "Vs",
     }
 }
@@ -216,7 +218,20 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
     let (inputs, outputs): (Vec<Element>, Vec<Element>) = sig::of_container(&s.dxil);
     row["dxil_bytes"] = json!(s.dxil.len());
     // The partner stage and the render targets.
-    let (partner, targets, depth): (Vec<u8>, Vec<Component>, bool) = if kind == "ps" {
+    let (partner, targets, depth): (Vec<u8>, Vec<Component>, bool) = if kind == "tgs" {
+        // A vertex shader that writes what the geometry shader reads (the ES's role), and the default pixel shader.
+        let hlsl = dxc::vertex_for(&inputs);
+        match ctx.dxc.compile("vs_6_6", &hlsl) {
+            Ok(v) => (v, vec![Component::Float], false),
+            Err(why) => {
+                row["ok"] = json!(false);
+                row["fail_stage"] = json!("census");
+                row["fail_class"] = json!("DefaultStage");
+                row["error"] = json!(one_line(&why));
+                return row;
+            }
+        }
+    } else if kind == "ps" {
         // A vertex shader has 32 signature rows in all. A pixel shader reading the three vertices
         // of an attribute has more than that once the translator lowers it (the added flat
         // elements, docs/metal/attribute-at-vertex.md); DXC refuses or aborts on such a vertex
@@ -302,6 +317,12 @@ fn graphics(ctx: &Ctx, kind: &str, hash: &str, s: &HostShader) -> Value {
             ps: Some(&partner),
             ..Stages::default()
         },
+        "tgs" => Stages {
+            vs: Some(&partner),
+            ps: Some(ctx.default_ps.as_slice()),
+            gs: Some(&s.dxil),
+            ..Stages::default()
+        },
         "gs" => Stages {
             vs: Some(&s.dxil),
             ps: Some(&partner),
@@ -373,7 +394,14 @@ fn items(
         .filter(|(i, _)| i % every == 0)
         .take(limit)
         .filter_map(|(_, h)| {
-            let bytes = std::fs::read(out.join("vsh").join(format!("{h}.vsh"))).ok()?;
+            // mac S4: the geometry kind converts the rectangle-list form of a vertex shader with clip distances.
+            let rect = (kind == "gs")
+                .then(|| std::fs::read(out.join("vsh-rect").join(format!("{h}.vsh"))).ok())
+                .flatten();
+            let bytes = match rect {
+                Some(b) => b,
+                None => std::fs::read(out.join("vsh").join(format!("{h}.vsh"))).ok()?,
+            };
             wire::decode(&bytes).map(|s| (h, s))
         })
         .collect()

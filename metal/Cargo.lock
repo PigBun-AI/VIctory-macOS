@@ -366,6 +366,7 @@ dependencies = [
  "objc2-metal",
  "objc2-quartz-core",
  "victory-metal-proto",
+ "victory-shader",
 ]
 
 [[package]]

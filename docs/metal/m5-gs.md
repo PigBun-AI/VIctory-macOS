@@ -184,3 +184,17 @@ old "onto itself" refusal assertion was removed from `copies_with_a_wrong_argume
 `BVH builder held back: not all its pipelines are made frame=1222 pipelines=53 made=50 refused=3`: the same
 50/53 before (`20261127-200844-metal`) and after these changes (`20261127-203731-metal`). The cause is in the
 shared layer (the three pipelines `victory-gpu` cannot make on the host); not touched.
+
+## 5. Title geometry shaders and clip distances of rectangle lists (mac S4, 2026-11-28)
+
+Both gaps this note left (matrix S-M-003 and S-G-006) are closed in the shared translator (`docs/mac/PATCHES.md` S4):
+
+* **29 rectangle lists with `SV_ClipDistance`.** Checked on MSC 4.0.3 (its headers and manual say nothing about clip or cull in the geometry
+  emulation): a geometry shader that writes the distance fails "Failed to materializeAll", and so does one that only reads it; a plain `TEXCOORD`
+  interpolant is fine, and so is a vertex clip distance behind a stage that ignores it. So the vertex shader writes the distance as a plain output
+  (`VICTORYCLIP`) and the rectangle stage cuts the rectangle by it (Sutherland-Hodgman in the rectangle's unit square, up to 4 planes, one strip out).
+  `back/tests/gfx_clip_rect.rs` (6 tests, pixels against a CPU rasterisation); census 29 failed -> 29 ok.
+* **195 `GS_VoxelizeGeneric_*` containers.** Programs of the console's on-chip geometry stage (one lane a primitive, the vertex outputs in the ESGS ring
+  in LDS): lowered to a host geometry shader (triangles in, strips out); `back/tests/gfx_gs_voxel.rs` draws all 195 with HLSL vertex and pixel shaders, six
+  triangles each, 1170 images against a CPU model of the program; census translate Gs 195 of 195, `convert --kind tgs --isolate` 195 of 195, 0 aborts.
+  The pipelines go through the same MSC emulation as the synthetic ones above (cost of title draws not measured: no run binds one yet).

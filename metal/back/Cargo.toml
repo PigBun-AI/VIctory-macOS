@@ -19,3 +19,7 @@ objc2 = "0.6.5"
 objc2-foundation = "0.3.2"
 objc2-metal = { version = "0.3.2", features = ["block2", "dispatch2"] }
 objc2-quartz-core = { version = "0.3.2", features = ["objc2-metal", "CAMetalLayer", "CALayer", "objc2-core-foundation"] }
+
+# The rectangle-list geometry stage the translator makes (mac S4) is drawn by the test `gfx_clip_rect`.
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+victory-shader = { path = "../../crates/victory-shader" }

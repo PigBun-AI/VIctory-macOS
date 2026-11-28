@@ -14,7 +14,7 @@ hash the game log prints.
 . tools/metal/env.sh; export RUSTUP_TOOLCHAIN=1.98.1
 cd metal && cargo build --release -p victory-metal-census
 victory-census translate                 # every container -> translate.jsonl, vsh/<hash>.vsh (VSH1)
-victory-census convert --kind all        # cs vs ps ms gs -> convert-<kind>.jsonl
+victory-census convert --kind all        # cs vs ps ms gs tgs -> convert-<kind>.jsonl
 victory-census convert --kind cs,vs,ps,ms --archive      # same, and an archive of every pipeline built
 victory-census report                    # census.json, mac-side.md/.tsv, shared-translator.md
 victory-census convert --kind cs --isolate  # one child process per run; an abort or a hang (--timeout S, default 300) is a row, not the end
@@ -22,6 +22,9 @@ victory-census denylist                  # msc-denylist.txt from the abort / tim
 victory-census opcodes                   # GFX10 instruction counts -> opcodes.jsonl, research/census/opcodes.{json,md}
 ```
 
+`translate --hashes FILE` translates only the listed containers and `--keep DIR` also writes each one's raw bytes as `<hash>.dxbc` (outside the
+repository: tests and tools read the title's programs from there); for the vertex programs that write a clip distance it also writes the form the rectangle stage
+needs (`vsh-rect/`, mac S4).
 `translate` is native arm64 (`victory translate` itself is a Windows-only stub on the Mac). Host settings it
 tells the translator: wave 32, view limit 2^21 - 1, raw views 2^21 (`victory-gpu` `descriptor/host.rs`).
 `convert` options: `--limit N`, `--every N` (sample), `--jobs N` (1 for timings that do not compete),
@@ -56,10 +59,11 @@ shader; `ps` a render pipeline with a full-screen-triangle vertex shader DXC mak
 input signature (DXC front end of `tools/macos`, x86_64 under Rosetta; DXC refuses and aborts on a vertex shader
 with more than 31 non-system outputs, so such a pixel shader gets a one-triangle mesh shader (`ms_6_6`, unvalidated)
 instead, the row says `"partner":"ms"`); `gs` the translator's rectangle-list
-geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load. A pipeline the back refuses
-(`Unsupported`, for example the 29 vertex shaders with `SV_ClipDistance`, which Metal cannot make a geometry-emulation
-mesh function for) is a failed row, not an abort. The title's own geometry
-programs have no host shader (the translator refuses them), so there is nothing to convert.
+geometry shader (`rect_list_gs`) of each vertex shader through MSC and library load; the 29 vertex shaders with `SV_ClipDistance`
+go through the form of mac S4 (`vsh-rect/`: the distances as the plain output `VICTORYCLIP`, cut by the rectangle stage), since MSC cannot make a
+geometry-emulation mesh function for a stage that writes or reads one (a refused pipeline is a failed row, not an abort); `tgs` the title's own geometry
+programs (mac S4, `Gs` rows of `translate.jsonl`, 195) as the geometry stage between a vertex shader DXC makes from the program's input signature
+and the default pixel shader.
 
 ## The pipeline archive
 
