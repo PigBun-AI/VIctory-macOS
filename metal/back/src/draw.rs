@@ -321,12 +321,21 @@ impl Pass {
             .filter(|f| **f != MTLPixelFormat::Invalid)
             .map(|f| f.0.to_string())
             .collect();
+        let loads: Vec<String> = self
+            .spec
+            .colors
+            .iter()
+            .flatten()
+            .map(|c| format!("{:?}", c.load))
+            .collect();
         format!(
-            "pass {}x{} colors=[{}] depth={} draws={draws}",
+            "pass {}x{} colors=[{}] depth={} s{} load=[{}] draws={draws}",
             self.size[0],
             self.size[1],
             colors.join(","),
             self.depth_format.0,
+            self.samples,
+            loads.join(","),
         )
     }
 
