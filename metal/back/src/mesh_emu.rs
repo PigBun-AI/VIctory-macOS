@@ -70,8 +70,24 @@ pub struct Counters {
     pub unproven: u64,
     /// Indirect dispatches emulated (one count per `ExecuteIndirect`).
     pub indirect: u64,
-    /// Draws dropped, for lack of scratch or a refused dispatch.
+    /// Draws dropped, for any reason (the sum of the two below).
     pub dropped: u64,
+    /// Draws dropped because their scratch could not be had (more than
+    /// [`MAX_BLOCK_BYTES`], or the ring cannot hold what one submission asks).
+    pub dropped_scratch: u64,
+    /// Draws dropped for another reason (a refused dispatch, a root
+    /// signature that does not fit, ...).
+    pub dropped_other: u64,
+    /// Direct dispatches whose scratch was over a ring segment and got a block
+    /// of its own.
+    pub big_blocks: u64,
+}
+
+impl Counters {
+    /// Emulated draws that were encoded (each `DispatchMesh` / `ExecuteIndirect`).
+    pub fn draws(&self) -> u64 {
+        self.hoisted + self.split + self.in_place
+    }
 }
 
 static PIPELINES: AtomicU64 = AtomicU64::new(0);
@@ -80,7 +96,31 @@ static SPLIT: AtomicU64 = AtomicU64::new(0);
 static IN_PLACE: AtomicU64 = AtomicU64::new(0);
 static UNPROVEN: AtomicU64 = AtomicU64::new(0);
 static INDIRECT: AtomicU64 = AtomicU64::new(0);
-static DROPPED: AtomicU64 = AtomicU64::new(0);
+static DROPPED_SCRATCH: AtomicU64 = AtomicU64::new(0);
+static DROPPED_OTHER: AtomicU64 = AtomicU64::new(0);
+static BIG_BLOCKS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// What this thread's emulation work counted (the executor runs a stream
+    /// on the calling thread): tests that run side by side read these.
+    static HERE: std::cell::Cell<Counters> = const { std::cell::Cell::new(Counters {
+        pipelines: 0, hoisted: 0, split: 0, in_place: 0, unproven: 0, indirect: 0,
+        dropped: 0, dropped_scratch: 0, dropped_other: 0, big_blocks: 0,
+    }) };
+}
+
+/// The counters of the work this thread did.
+pub fn counters_here() -> Counters {
+    HERE.with(|h| h.get())
+}
+
+fn bump_here(f: impl FnOnce(&mut Counters)) {
+    HERE.with(|h| {
+        let mut c = h.get();
+        f(&mut c);
+        h.set(c);
+    });
+}
 
 /// The counters now.
 pub fn counters() -> Counters {
@@ -91,25 +131,106 @@ pub fn counters() -> Counters {
         in_place: IN_PLACE.load(Ordering::Relaxed),
         unproven: UNPROVEN.load(Ordering::Relaxed),
         indirect: INDIRECT.load(Ordering::Relaxed),
-        dropped: DROPPED.load(Ordering::Relaxed),
+        dropped: DROPPED_SCRATCH.load(Ordering::Relaxed) + DROPPED_OTHER.load(Ordering::Relaxed),
+        dropped_scratch: DROPPED_SCRATCH.load(Ordering::Relaxed),
+        dropped_other: DROPPED_OTHER.load(Ordering::Relaxed),
+        big_blocks: BIG_BLOCKS.load(Ordering::Relaxed),
     }
 }
 
-pub(crate) fn count_hoisted() {
-    HOISTED.fetch_add(1, Ordering::Relaxed);
+/// What happened to an emulated draw, for the counters, the list's
+/// statistics and the drop statistics (`VICTORY_METAL_DROPSTATS`, one extra
+/// column per name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// The kernel ran before the render encoder.
+    Hoisted,
+    /// The kernel was encoded right before the draw: the pass was split.
+    Split,
+    /// The kernel was encoded in place (the heaps changed in the pass).
+    InPlace,
+    /// The rule could not decide this draw.
+    Unproven,
+    /// An indirect dispatch was emulated.
+    Indirect,
+    /// The draw was dropped: no scratch.
+    DroppedScratch,
+    /// The draw was dropped for another reason.
+    DroppedOther,
+    /// A direct dispatch took a block of its own.
+    BigBlock,
 }
-pub(crate) fn count_split() {
-    SPLIT.fetch_add(1, Ordering::Relaxed);
+
+impl Event {
+    fn name(self) -> &'static str {
+        match self {
+            Event::Hoisted => "mesh emu hoisted",
+            Event::Split => "mesh emu split",
+            Event::InPlace => "mesh emu in place",
+            Event::Unproven => "mesh emu unproven",
+            Event::Indirect => "mesh emu indirect",
+            Event::DroppedScratch => "mesh emu dropped scratch",
+            Event::DroppedOther => "mesh emu dropped other",
+            Event::BigBlock => "mesh emu big block",
+        }
+    }
 }
-pub(crate) fn count_in_place() {
-    IN_PLACE.fetch_add(1, Ordering::Relaxed);
+
+/// Counts `ev` (process counters, the list's stats, the frame's drop
+/// statistics).
+pub(crate) fn event(list: Option<&mut CommandList>, ev: Event) {
+    let counter = match ev {
+        Event::Hoisted => &HOISTED,
+        Event::Split => &SPLIT,
+        Event::InPlace => &IN_PLACE,
+        Event::Unproven => &UNPROVEN,
+        Event::Indirect => &INDIRECT,
+        Event::DroppedScratch => &DROPPED_SCRATCH,
+        Event::DroppedOther => &DROPPED_OTHER,
+        Event::BigBlock => &BIG_BLOCKS,
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+    bump_here(|c| match ev {
+        Event::Hoisted => c.hoisted += 1,
+        Event::Split => c.split += 1,
+        Event::InPlace => c.in_place += 1,
+        Event::Unproven => c.unproven += 1,
+        Event::Indirect => c.indirect += 1,
+        Event::DroppedScratch => {
+            c.dropped_scratch += 1;
+            c.dropped += 1;
+        }
+        Event::DroppedOther => {
+            c.dropped_other += 1;
+            c.dropped += 1;
+        }
+        Event::BigBlock => c.big_blocks += 1,
+    });
+    if let Some(l) = list {
+        let st = &mut l.stats;
+        match ev {
+            Event::Hoisted | Event::InPlace => st.emu_draws += 1,
+            Event::Split => {
+                st.emu_draws += 1;
+                st.emu_splits += 1;
+            }
+            Event::DroppedScratch | Event::DroppedOther => st.emu_dropped += 1,
+            _ => {}
+        }
+    }
+    if let Some(c) = crate::dropstats::get() {
+        c.extra(ev.name(), 1);
+    }
 }
-pub(crate) fn count_unproven() {
-    UNPROVEN.fetch_add(1, Ordering::Relaxed);
+
+/// Whether `e` says the scratch could not be had (and not something else).
+pub(crate) fn is_scratch_error(e: &Error) -> bool {
+    e.to_string().contains("mesh scratch")
 }
-pub(crate) fn count_dropped() {
-    DROPPED.fetch_add(1, Ordering::Relaxed);
-}
+
+/// The most scratch one direct dispatch gets: over a ring segment it takes a
+/// block of its own, up to this.
+pub const MAX_BLOCK_BYTES: u64 = 1 << 30;
 
 /// `VICTORY_METAL_MESH_COMPUTE_SPLIT=unproven`: the pass-split rule also splits
 /// on what it cannot decide (heap-indexed accesses), for A/B runs.
@@ -455,6 +576,7 @@ impl Emulated {
         let fetch = device.graphics_pipeline_from_dxil(&fetch_desc)?;
         let ext = ext_layout(app, &made.reflection.layout, fetch.layout())?;
         PIPELINES.fetch_add(1, Ordering::Relaxed);
+        bump_here(|c| c.pipelines += 1);
         Ok(Emulated {
             layout,
             compute: made.pipeline,
@@ -537,15 +659,30 @@ impl CommandList {
                     em.layout.group_stride
                 ))
             })?;
-        let scratch = self.alloc_scratch(bytes, 256)?;
+        // Over a ring segment: a block of its own, kept by the list until the
+        // submission completes.
+        let scratch_va = if bytes > self.queue().scratch_segment_bytes() {
+            if bytes > MAX_BLOCK_BYTES {
+                return Err(Error::Unsupported(format!(
+                    "{bytes} bytes of mesh scratch: over the {MAX_BLOCK_BYTES} one dispatch may take"
+                )));
+            }
+            let block = self
+                .queue()
+                .device()
+                .create_buffer(BufferKind::Shared, bytes)?;
+            let va = block.gpu_va();
+            self.keep_buffers.push(block);
+            event(Some(self), Event::BigBlock);
+            va
+        } else {
+            self.alloc_scratch(bytes, 256)?.gpu_va
+        };
         // The extended argument buffer, then the dimensions behind it.
         let size = u64::from(em.ext.size);
         let ring = self.alloc_constants(size + 16, 16)?;
         let dims = ring.gpu_va + size;
-        ring.write_bytes(
-            0,
-            &fill_ext(&em.ext, shadow, static_va, scratch.gpu_va, dims),
-        )?;
+        ring.write_bytes(0, &fill_ext(&em.ext, shadow, static_va, scratch_va, dims))?;
         ring.write_u32s(size, &[groups[0], groups[1], groups[2], 0])?;
         self.set_root_arguments(&ring)?;
         self.dispatch(&em.compute, groups, em.threads)?;
@@ -713,7 +850,7 @@ kernel void emu_chunk(constant P& p [[buffer(30)]], uint i [[thread_position_in_
   device uint* d = ((device uint*)p.disp_va) + (ulong)i * (ulong)p.disp_words;\n\
   uint x = live ? d[0] : 0u; uint y = live ? d[1] : 0u; uint z = live ? d[2] : 0u;\n\
   ulong n = (ulong)x * (ulong)y * (ulong)z;\n\
-  if (n > 0x7fffffffUL) { n = 0; }\n\
+  if (n > 0x7fffffffUL) { n = 0; atomic_fetch_add_explicit((device atomic_uint*)p.stats_va, 1u, memory_order_relaxed); }\n\
   grp[i] = (uint)n; offs[i] = 0;\n\
   threadgroup_barrier(mem_flags::mem_threadgroup);\n\
   if (i == 0) {\n\
@@ -748,6 +885,15 @@ kernel void emu_chunk(constant P& p [[buffer(30)]], uint i [[thread_position_in_
   for (uint w = 0; w < 16; w++) { dr[w] = 0; }\n\
   dr[0] = p.vertices; dr[1] = g;\n\
 }\n";
+
+/// What the emulation's kernels counted on the GPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuStats {
+    /// Indirect records whose groups did not fit the arena (not drawn).
+    pub dropped_records: u64,
+    /// Groups given scratch in indirect dispatches.
+    pub indirect_groups: u64,
+}
 
 /// The kernel of [`CommandList::emu_indirect`] and the buffer the GPU counts
 /// into (made on first use).
@@ -813,6 +959,14 @@ impl EmuKernels {
     /// Groups the GPU gave scratch to in indirect dispatches.
     pub fn indirect_groups(&self) -> u64 {
         self.word(1)
+    }
+
+    /// Both, for [`crate::Executor::mesh_emu_gpu_stats`].
+    pub fn gpu_stats(&self) -> GpuStats {
+        GpuStats {
+            dropped_records: self.dropped_records(),
+            indirect_groups: self.indirect_groups(),
+        }
     }
 }
 

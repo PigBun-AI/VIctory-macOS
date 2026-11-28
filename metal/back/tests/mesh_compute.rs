@@ -75,13 +75,20 @@ fn run_x86(tool: &Path, args: &[&Path], stdout: Option<&Path>) {
 /// The mesh shader's compute form and its scratch layout, or `None` (SKIPPED)
 /// without the tools. `Err` is the lowering's refusal.
 fn lower(name: &str, ms: &[u8]) -> Option<Result<(Vec<u8>, Layout), String>> {
-    lower_text(name, ms).map(|r| r.map(|(cs, l, _)| (cs, l)))
+    lower_with(name, ms, false).map(|r| r.map(|(cs, l, _)| (cs, l)))
 }
 
 /// [`lower`] with the layout text too (what the `VMCS` part carries).
 type Lowered = (Vec<u8>, Layout, String);
 
 fn lower_text(name: &str, ms: &[u8]) -> Option<Result<Lowered, String>> {
+    lower_with(name, ms, true)
+}
+
+/// `dims`: the compute form reads the dispatch dimensions from the interface's
+/// CBV (the product); without, the group index is `x` (the prototype's, for the
+/// tests that bind the scratch alone).
+fn lower_with(name: &str, ms: &[u8], dims: bool) -> Option<Result<Lowered, String>> {
     let Some(tools) = tools_dir() else {
         eprintln!("SKIPPED {name}: set VICTORY_DXC_TEXT_TOOLS (tools/metal/dxc-text-tools.sh)");
         return None;
@@ -100,8 +107,12 @@ fn lower_text(name: &str, ms: &[u8]) -> Option<Result<Lowered, String>> {
     std::fs::write(&src, ms).unwrap();
     run_x86(&tools.join("dxcdis"), &[&src], Some(&ll));
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/metal/ms2cs.py");
-    let conv = Process::new("python3")
-        .arg(&script)
+    let mut conv = Process::new("python3");
+    conv.arg(&script);
+    if !dims {
+        conv.arg("--x-only");
+    }
+    let conv = conv
         .args([&ll, &cs_ll, &lay])
         .output()
         .expect("run python3");
@@ -257,14 +268,21 @@ fn mesh_hlsl(big: bool) -> String {
 /// `mesh_hlsl`, the tint scaled by the first word of a root SRV `src`
 /// (`t0`, space 0) when `reads`: with the word 1 the picture is the same.
 fn mesh_hlsl_reading(big: bool, reads: bool) -> String {
-    mesh_hlsl_with(big, u8::from(reads), false)
+    mesh_hlsl_with(big, u8::from(reads), false, [0, 0])
 }
 
 /// `unfixable`: two `SV_ClipDistance` floats instead of two of the `float`
 /// members. D3D12 counts them once (the same 32000 bytes), Metal twice, which
 /// no order of the members repacks: the mesh Metal refuses for good, which
 /// only the compute form takes.
-fn mesh_hlsl_with(big: bool, reads: u8, unfixable: bool) -> String {
+fn mesh_hlsl_with(big: bool, reads: u8, unfixable: bool, grid: [u32; 2]) -> String {
+    // `grid` [DX, DY] (not 0): the group number is `x + DX * (y + DY * z)`, as the
+    // dispatch's dimensions say; [0, 0]: `x`.
+    let group = if grid[0] == 0 {
+        "gid.x".to_owned()
+    } else {
+        format!("(gid.x + {} * (gid.y + {} * gid.z))", grid[0], grid[1])
+    };
     let (decl, scale) = match reads {
         // a root SRV
         1 => (
@@ -314,9 +332,9 @@ void main(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID,\n\
   if (tid < {TRIS}) {{\n\
     uint t = tid;\n\
     float cw = 2.0 / 8.0, ch = 2.0 / 16.0;\n\
-    float x0 = -1.0 + (t % 8) * cw, y0 = -1.0 + ((t / 8) + 8 * gid.x) * ch;\n\
+    float x0 = -1.0 + (t % 8) * cw, y0 = -1.0 + ((t / 8) + 8 * {group}) * ch;\n\
     float2 p[3] = {{ float2(x0 + 0.1 * cw, y0 + 0.1 * ch), float2(x0 + 0.9 * cw, y0 + 0.2 * ch), float2(x0 + 0.3 * cw, y0 + 0.9 * ch) }};\n\
-    float tf = (t + 64.0 * gid.x) / 128.0;\n\
+    float tf = (t + 64.0 * {group}) / 128.0;\n\
     for (uint k = 0; k < 3; k++) {{\n\
       uint v = 3 * t + k;\n\
       verts[v].pos = float4(p[k], 0.5, 1);\n      verts[v].idv = v;\n{writes}    }}\n\
@@ -1154,9 +1172,17 @@ fn rig_with(fx: Fx, reads: bool) -> Option<Rig> {
 }
 
 fn rig_reading(fx: Fx, reads: u8) -> Option<Rig> {
+    rig_grid(fx, reads, [0, 0])
+}
+
+fn rig_grid(fx: Fx, reads: u8, grid: [u32; 2]) -> Option<Rig> {
     let g = setup_with(fx)?;
     let native = native_picture(&g)?;
-    let big = dxil_or_skip("mcb_ms_big", "ms_6_6", &mesh_hlsl_with(true, reads, true))?;
+    let big = dxil_or_skip(
+        "mcb_ms_big",
+        "ms_6_6",
+        &mesh_hlsl_with(true, reads, true, grid),
+    )?;
     let ps = dxil_or_skip("mcb_ps_all", "ps_6_6", &ps_all())?;
     let (ms, layout) = with_vmcs("mcb", &big)?;
     Some(Rig {
@@ -1198,14 +1224,14 @@ fn blank(got: &[u32], what: &str) {
 fn a_mesh_pipeline_metal_refuses_is_made_and_draws_what_the_native_path_draws() {
     let Some(r) = rig() else { return };
     let sig = graphics_root(&r.g.fx, vec![], 0);
-    let before = mesh_emu::counters();
+    let before = mesh_emu::counters_here();
     let pso =
         r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps)
             .unwrap_or_else(|e| panic!("the emulation is not made: {e:?}"));
-    assert_eq!(mesh_emu::counters().pipelines, before.pipelines + 1);
+    assert_eq!(mesh_emu::counters_here().pipelines, before.pipelines + 1);
     let got = r.g.picture(sig, pso, vec![], None, dispatch_mesh(GROUPS));
     same_picture(&got, &r.native, "DispatchMesh");
-    let after = mesh_emu::counters();
+    let after = mesh_emu::counters_here();
     assert_eq!(
         after.hoisted,
         before.hoisted + 1,
@@ -1229,7 +1255,7 @@ fn an_indirect_mesh_dispatch_draws_what_the_native_path_draws() {
     let count = r.g.fx.buffer(BufferKind::UPLOAD, 4096);
     // {x, y, z}: the groups the GPU holds
     cpu_write(args.cpu_addr, &[GROUPS, 1, 1]);
-    let before = mesh_emu::counters();
+    let before = mesh_emu::counters_here();
     for (n, max, drawn) in [(None, 1, true), (Some(1u32), 4, true), (Some(0), 4, false)] {
         if let Some(n) = n {
             cpu_write(count.cpu_addr, &[n]);
@@ -1247,7 +1273,7 @@ fn an_indirect_mesh_dispatch_draws_what_the_native_path_draws() {
             blank(&got, "indirect, count 0");
         }
     }
-    assert_eq!(mesh_emu::counters().indirect, before.indirect + 3);
+    assert_eq!(mesh_emu::counters_here().indirect, before.indirect + 3);
 }
 
 #[test]
@@ -1262,10 +1288,19 @@ fn an_indirect_record_the_arena_cannot_hold_draws_nothing_and_the_next_one_draws
         args.cpu_addr,
         &[1_000_000, 1, 1, GROUPS, 1, 1, 70_000, 70_000, 1],
     );
+    let lost = r.g.fx.executor().mesh_emu_gpu_stats();
     let got =
         r.g.picture(sig, pso, vec![], None, execute_mesh(args.res, 3, None));
     // The valid record is the picture the native path draws.
     same_picture(&got, &r.native, "the record after a refused one");
+    // The two the arena could not hold were counted on the GPU, and the one
+    // it held too.
+    let now = r.g.fx.executor().mesh_emu_gpu_stats();
+    assert_eq!(now.dropped_records, lost.dropped_records + 2);
+    assert_eq!(
+        now.indirect_groups,
+        lost.indirect_groups + u64::from(GROUPS)
+    );
 }
 
 #[test]
@@ -1305,6 +1340,15 @@ float4 main(float4 p : SV_Position) : SV_Target0 { bits.Store(0, 1); return floa
 fn write_then_read(
     r: &Rig,
     same_buffer: bool,
+) -> (Vec<u32>, mesh_emu::Counters, mesh_emu::Counters) {
+    write_then_read_with(r, same_buffer, false)
+}
+
+/// `switch`: the pass binds another descriptor heap between the two draws.
+fn write_then_read_with(
+    r: &Rig,
+    same_buffer: bool,
+    switch: bool,
 ) -> (Vec<u32>, mesh_emu::Counters, mesh_emu::Counters) {
     let g = &r.g;
     let wsig = graphics_root(&g.fx, vec![root_param(RootParamKind::UAV, 1, 0)], 0);
@@ -1348,6 +1392,16 @@ fn write_then_read(
             start_vertex: 0,
             start_instance: 0,
         }),
+    ];
+    let mut in_pass = in_pass;
+    if switch {
+        let other = g.fx.heap(HeapKind::CBV_SRV_UAV, 4, true);
+        in_pass.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+            cbv_srv_uav: other.heap,
+            sampler: HeapId::NULL,
+        }));
+    }
+    in_pass.extend([
         Command::SetRootSignature(SetRootSignature {
             bind_point: BindPoint::GRAPHICS,
             root_sig: msig,
@@ -1355,10 +1409,10 @@ fn write_then_read(
         Command::SetPipeline(SetPipeline { pso: mpso, _pad: 0 }),
         graphics_va(0, RootParamKind::SRV, b.gpu_va),
         dispatch_mesh(GROUPS),
-    ];
-    let c0 = mesh_emu::counters();
+    ]);
+    let c0 = mesh_emu::counters_here();
     let got = g.picture_in(before, vec![], in_pass);
-    (got, c0, mesh_emu::counters())
+    (got, c0, mesh_emu::counters_here())
 }
 
 #[test]
@@ -1689,9 +1743,9 @@ fn write_then_read_tables(
         table(4),
         dispatch_mesh(GROUPS),
     ];
-    let c0 = mesh_emu::counters();
+    let c0 = mesh_emu::counters_here();
     let got = g.picture_in(before, vec![], in_pass);
-    (got, c0, mesh_emu::counters())
+    (got, c0, mesh_emu::counters_here())
 }
 
 #[test]
@@ -1709,4 +1763,87 @@ fn the_rule_follows_descriptor_tables_too() {
     let (got, c0, c1) = write_then_read_tables(&r, false);
     same_picture(&got, &r.native, "tables, two buffers");
     assert_eq!((c1.split, c1.hoisted), (c0.split, c0.hoisted + 1));
+}
+
+#[test]
+fn a_three_dimensional_dispatch_numbers_its_groups_x_then_y_then_z() {
+    // The mesh numbers its groups x + 1 * (y + 2 * z): the dispatch (1, 2, 1) is
+    // the two groups of the native picture, (1, 2, 2) four of which the last two
+    // are above the picture. The scratch of every group has to be its own.
+    let Some(r) = rig_grid(Fx::new(), 0, [1, 2]) else {
+        return;
+    };
+    let sig = graphics_root(&r.g.fx, vec![], 0);
+    let pso = r.g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    for (x, y, z) in [(1, 2, 1), (1, 2, 2), (1, 2, 3)] {
+        let draw = Command::DispatchMesh(DispatchMesh { x, y, z, _pad: 0 });
+        let got = r.g.picture(sig, pso, vec![], None, draw);
+        same_picture(&got, &r.native, &format!("DispatchMesh({x}, {y}, {z})"));
+    }
+    // and the same through ExecuteIndirect
+    let args = r.g.fx.buffer(BufferKind::UPLOAD, 4096);
+    cpu_write(args.cpu_addr, &[1, 2, 2]);
+    let got =
+        r.g.picture(sig, pso, vec![], None, execute_mesh(args.res, 1, None));
+    same_picture(&got, &r.native, "ExecuteIndirect (1, 2, 2)");
+}
+
+#[test]
+fn a_dispatch_over_a_ring_segment_gets_a_block_of_its_own() {
+    let Some(r) = rig() else { return };
+    let g = &r.g;
+    // A segment of less than the dispatch needs.
+    let queue = g.fx.executor().queue(g.q).expect("the queue");
+    let need = r.layout.scratch_bytes(u64::from(GROUPS));
+    assert!(queue.configure_scratch((need / 2).next_multiple_of(256), 2));
+    let sig = graphics_root(&g.fx, vec![], 0);
+    let pso = g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    let c0 = mesh_emu::counters_here();
+    for round in 0..3 {
+        let got = g.picture(sig, pso, vec![], None, dispatch_mesh(GROUPS));
+        same_picture(&got, &r.native, &format!("round {round}"));
+    }
+    let c1 = mesh_emu::counters_here();
+    assert_eq!(c1.big_blocks, c0.big_blocks + 3);
+    assert_eq!(c1.dropped, c0.dropped, "nothing was dropped");
+}
+
+#[test]
+fn a_dispatch_over_what_one_block_may_take_is_dropped_and_counted_as_scratch() {
+    let Some(r) = rig() else { return };
+    let g = &r.g;
+    let sig = graphics_root(&g.fx, vec![], 0);
+    let pso = g.graphics_pso(sig, None, Some(&r.ms), &r.ps).unwrap();
+    let groups = (mesh_emu::MAX_BLOCK_BYTES / u64::from(r.layout.group_stride) + 1) as u32;
+    let c0 = mesh_emu::counters_here();
+    let got = g.picture(sig, pso, vec![], None, dispatch_mesh(groups));
+    blank(&got, "the dropped draw left the target as cleared");
+    let c1 = mesh_emu::counters_here();
+    assert_eq!(c1.dropped_scratch, c0.dropped_scratch + 1);
+    assert_eq!(c1.dropped_other, c0.dropped_other);
+    // and the next draw is fine
+    let got = g.picture(sig, pso, vec![], None, dispatch_mesh(GROUPS));
+    same_picture(&got, &r.native, "the draw after it");
+}
+
+#[test]
+fn a_heap_switch_in_the_pass_does_not_stop_the_pre_scan_for_a_kernel_that_does_not_index_the_heap()
+{
+    let Some(r) = rig_with(Fx::new(), true) else {
+        return;
+    };
+    if dxil_or_skip("mcb_probe", "vs_6_6", VS_FULL).is_none() {
+        return;
+    }
+    // no conflict: hoisted although the heaps changed in the pass
+    let (got, c0, c1) = write_then_read_with(&r, false, true);
+    same_picture(&got, &r.native, "heap switch, no conflict");
+    assert_eq!(c1.hoisted, c0.hoisted + 1);
+    assert_eq!(c1.in_place, c0.in_place);
+    assert_eq!(c1.split, c0.split);
+    // a conflict: the rule splits (not "in place")
+    let (got, c0, c1) = write_then_read_with(&r, true, true);
+    same_picture(&got, &r.native, "heap switch, conflict");
+    assert_eq!(c1.split, c0.split + 1);
+    assert_eq!(c1.in_place, c0.in_place);
 }

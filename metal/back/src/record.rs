@@ -60,6 +60,12 @@ pub struct ListStats {
     pub mesh_draws: u32,
     /// Clears of part of an attachment inside a pass.
     pub attachment_clears: u32,
+    /// Mesh draws emulated as compute plus a vertex-fetch draw (the mesh
+    /// emulation, [`crate::mesh_emu`]); `emu_splits` of them split their pass
+    /// (counted in both), `emu_dropped` were dropped.
+    pub emu_draws: u32,
+    pub emu_splits: u32,
+    pub emu_dropped: u32,
 }
 
 /// A command list being recorded. Made by [`Queue::begin_list`], finished

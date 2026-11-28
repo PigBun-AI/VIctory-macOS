@@ -292,6 +292,20 @@ impl State {
             a.sync_interval,
             a.flags & present_flags::ALLOW_TEARING != 0,
         );
+        // The emulation's indirect records the GPU dropped since the last
+        // frame (the GPU counts; the number lags the work in flight).
+        if self.emulations > 0
+            && let Some(c) = crate::dropstats::get()
+        {
+            let now = self.emu_kernels.gpu_stats().dropped_records;
+            if now > self.emu_dropped_seen {
+                c.extra(
+                    "mesh emu dropped indirect records",
+                    now - self.emu_dropped_seen,
+                );
+                self.emu_dropped_seen = now;
+            }
+        }
         // A frame of the drop statistics ends at every present.
         crate::dropstats::end_frame();
         crate::prof::end_frame();

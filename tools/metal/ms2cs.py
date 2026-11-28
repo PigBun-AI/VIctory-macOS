@@ -6,7 +6,7 @@ PROTOTYPE of docs/metal/mesh-compute.md (the lowering the translator would do as
 real mesh DXIL and on DXC-made synthetic shaders. Not a product tool: it needs
 DXC (`tools/metal/dxc-text-tools.sh` builds the disassembler and assembler).
 
-    ms2cs.py MESH.ll OUT.ll OUT.layout [--space N]
+    ms2cs.py MESH.ll OUT.ll OUT.layout [--space N] [--x-only]
 
 `MESH.ll` is `dxcdis` output of a `ms_6_x` DXIL container. The output is the
 same program as a `cs_6_x`: every output of the mesh stage becomes a store into
@@ -22,7 +22,10 @@ layout, and OUT.layout describes that layout for the back (see
 
 Only what the translator's and DXC's meshes use is handled; anything else is an
 error (nothing is guessed): 32-bit components, one row per element or a constant
-row, no amplification payload, groups along x only.
+row, no amplification payload. The group index is x + dim_x * (y + dim_y * z), the
+dims read from a CBV at b0 of the same space (the interface's second extra root
+parameter, docs/metal/mesh-compute.md 8.2); `--x-only` (the first prototype: no
+CBV, the index is x) is for tests that bind the scratch alone.
 """
 import re
 import sys
@@ -124,7 +127,7 @@ def align(n, a):
     return (n + a - 1) // a * a
 
 
-def convert(text, space):
+def convert(text, space, dims=True):
     mod = Module(text)
     # --- entry point ---------------------------------------------------------
     m = re.search(r"^!dx\.entryPoints = !\{!(\d+)\}", text, re.M)
@@ -245,10 +248,32 @@ def convert(text, space):
         if line.startswith("define void @main()"):
             in_main = True
             out.append(line)
-            gx = tmp()
             base = "%mc.base"
-            out.append(f"  {gx} = call i32 @dx.op.groupId.i32(i32 94, i32 0)")
-            out.append(f"  {base} = mul i32 {gx}, {gstride}")
+            if dims:
+                # g = x + dim_x * (y + dim_y * z), the dims from the extra CBV b0 of
+                # the same space (docs/metal/mesh-compute.md, 8.2 and 8.4)
+                gx, gy, gz = tmp(), tmp(), tmp()
+                out.append(f"  {gx} = call i32 @dx.op.groupId.i32(i32 94, i32 0)")
+                out.append(f"  {gy} = call i32 @dx.op.groupId.i32(i32 94, i32 1)")
+                out.append(f"  {gz} = call i32 @dx.op.groupId.i32(i32 94, i32 2)")
+                out.append(
+                    f"  %mc.c0 = call %dx.types.Handle @dx.op.createHandleFromBinding(i32 217, %dx.types.ResBind {{ i32 0, i32 0, i32 {space}, i8 2 }}, i32 0, i1 false)"
+                )
+                out.append(
+                    "  %mc.c = call %dx.types.Handle @dx.op.annotateHandle(i32 216, %dx.types.Handle %mc.c0, %dx.types.ResourceProperties { i32 13, i32 16 })"
+                )
+                out.append("  %mc.dims = call %dx.types.CBufRet.i32 @dx.op.cbufferLoadLegacy.i32(i32 59, %dx.types.Handle %mc.c, i32 0)")
+                out.append("  %mc.dx = extractvalue %dx.types.CBufRet.i32 %mc.dims, 0")
+                out.append("  %mc.dy = extractvalue %dx.types.CBufRet.i32 %mc.dims, 1")
+                out.append(f"  %mc.g1 = mul i32 %mc.dy, {gz}")
+                out.append(f"  %mc.g2 = add i32 %mc.g1, {gy}")
+                out.append("  %mc.g3 = mul i32 %mc.g2, %mc.dx")
+                out.append(f"  %mc.g = add i32 %mc.g3, {gx}")
+            else:
+                gx = tmp()
+                out.append(f"  {gx} = call i32 @dx.op.groupId.i32(i32 94, i32 0)")
+                out.append(f"  %mc.g = add i32 {gx}, 0")
+            out.append(f"  {base} = mul i32 %mc.g, {gstride}")
             out.append(f"  %mc.varea = add i32 {base}, {vhead}")
             out.append(f"  %mc.parea = add i32 {base}, {parea}")
             out.append(
@@ -301,6 +326,8 @@ def convert(text, space):
         "declare void @dx.op.rawBufferStore.i32(i32, %dx.types.Handle, i32, i32, i32, i32, i32, i32, i8, i32) #1\n"
         "declare void @dx.op.rawBufferStore.f32(i32, %dx.types.Handle, i32, i32, float, float, float, float, i8, i32) #1\n"
     )
+    if dims and "@dx.op.cbufferLoadLegacy.i32(i32, %dx.types.Handle, i32)" not in text2:
+        decl += "declare %dx.types.CBufRet.i32 @dx.op.cbufferLoadLegacy.i32(i32, %dx.types.Handle, i32) #2\n"
     if "declare i32 @dx.op.groupId.i32" not in text2:
         decl += "declare i32 @dx.op.groupId.i32(i32, i32) #0\n"
     if "@dx.op.createHandleFromBinding(i32, %dx.types.ResBind" not in text2:
@@ -308,10 +335,13 @@ def convert(text, space):
     if "declare %dx.types.Handle @dx.op.annotateHandle" not in text2:
         decl += "declare %dx.types.Handle @dx.op.annotateHandle(i32, %dx.types.Handle, %dx.types.ResourceProperties) #0\n"
     text2 = text2.replace("\nattributes #0 =", "\n" + decl + "\nattributes #0 =", 1)
+    if dims and "\nattributes #2 =" not in text2:
+        text2 = text2.rstrip("\n") + "\nattributes #2 = { nounwind readonly }\n"
     for ty in (
         "%dx.types.ResBind = type { i32, i32, i32, i8 }",
         "%dx.types.ResourceProperties = type { i32, i32 }",
         "%dx.types.Handle = type { i8* }",
+        *(("%dx.types.CBufRet.i32 = type { i32, i32, i32, i32 }", "%mc.dims.type = type { <3 x i32> }") if dims else ()),
     ):
         if ty not in text2:
             text2 = text2.replace("\ndefine void @main()", f"\n{ty}\n\ndefine void @main()", 1)
@@ -358,12 +388,27 @@ def convert(text, space):
         uav_id = len(lops)
         set_md(lid, ", ".join(list(lops) + [f"!{uav_node}"]))
         new_list = None
+    cbv_node, cbv_list_node = top + 4, top + 5
+    if not dims:
+        new_cbv_list = None
+    elif res[2] == "null":
+        cbv_id = 0
+        res[2] = f"!{cbv_list_node}"
+        new_cbv_list = f"!{cbv_node}"
+    else:
+        lid, lops = mod.node(res[2])
+        cbv_id = len(lops)
+        set_md(lid, ", ".join(list(lops) + [f"!{cbv_node}"]))
+        new_cbv_list = None
     set_md(res_id, ", ".join(res))
     extra = [
+        *([f"!{cbv_node} = !{{i32 {cbv_id}, %mc.dims.type* undef, !\"\", i32 {space}, i32 0, i32 1, i32 12, null}}"] if dims else []),
         f"!{uav_node} = !{{i32 {uav_id}, %struct.RWByteAddressBuffer* undef, !\"\", i32 {space}, i32 0, i32 1, i32 11, i1 false, i1 false, i1 false, null}}",
     ]
     if new_list is not None:
         extra.append(f"!{uav_list_node} = !{{{new_list}}}")
+    if new_cbv_list is not None:
+        extra.append(f"!{cbv_list_node} = !{{{new_cbv_list}}}")
     # shader model, view id state, entry point, properties
     for k, l in enumerate(lines):
         if l.startswith("!dx.viewIdState"):
@@ -414,6 +459,8 @@ def main():
         i = args.index("--space")
         space = int(args[i + 1])
         del args[i : i + 2]
+    dims = "--x-only" not in args
+    args = [a for a in args if a != "--x-only"]
     if len(args) != 3:
         print(__doc__)
         return 2
@@ -421,7 +468,7 @@ def main():
     with open(src, "rb") as f:
         text = f.read().decode("latin-1")
     try:
-        t, l = convert(text, space)
+        t, l = convert(text, space, dims)
     except Error as e:
         print(f"ms2cs: {e}", file=sys.stderr)
         return 1

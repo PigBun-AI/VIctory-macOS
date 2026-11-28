@@ -51,6 +51,7 @@ impl State {
             indirect_kernels: device.indirect_kernels(),
             emu_kernels: device.emu_kernels(),
             emulations: 0,
+            emu_dropped_seen: 0,
             device,
             options,
             resources: Default::default(),

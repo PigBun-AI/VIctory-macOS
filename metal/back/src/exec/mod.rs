@@ -181,6 +181,9 @@ pub(crate) struct State {
     /// Emulated mesh pipelines made so far (0: the stream code skips the
     /// pre-scan).
     pub(crate) emulations: u32,
+    /// Indirect records the GPU dropped, as far as the drop statistics have
+    /// said (`PRESENT` reports the change).
+    pub(crate) emu_dropped_seen: u64,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,
@@ -394,6 +397,14 @@ impl Executor {
         size: u32,
     ) -> Result<(), Status> {
         self.with_state(|st| st.set_tlab_layout(root_sig, offsets, size))?
+    }
+
+    /// What the mesh emulation's kernels counted on the GPU since the
+    /// executor was made (read when the work they belong to is finished; the
+    /// drop statistics add the change per frame).
+    pub fn mesh_emu_gpu_stats(&self) -> crate::mesh_emu::GpuStats {
+        self.with_state(|st| st.emu_kernels.gpu_stats())
+            .unwrap_or_default()
     }
 
     /// The argument buffer layout of a root signature (tests, tools).

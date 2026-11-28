@@ -232,6 +232,9 @@ pub(super) struct Bound {
     /// What the pre-scan of the open render pass prepared for the mesh
     /// draws that are emulated, in order (`exec/emu.rs`).
     pub(super) emu: std::collections::VecDeque<super::emu::Prepared>,
+    /// The descriptor heaps bound: `(cbv_srv_uav, sampler)` heap ids (null:
+    /// none yet).
+    pub(super) heaps: (u32, u32),
 }
 
 fn known_bind_point(b: BindPoint) -> bool {
@@ -929,7 +932,13 @@ impl Run<'_> {
         };
         let resources = find(self.st, c.cbv_srv_uav, false)?;
         let samplers = find(self.st, c.sampler, true)?;
-        let (list, _) = self.list()?;
+        let (list, bound) = self.list()?;
+        if resources.is_some() {
+            bound.heaps.0 = c.cbv_srv_uav.0;
+        }
+        if samplers.is_some() {
+            bound.heaps.1 = c.sampler.0;
+        }
         let result = match (&resources, &samplers) {
             (Some(r), s) => list.set_heaps(r, s.as_ref()),
             (None, Some(s)) => list.set_sampler_heap(s),

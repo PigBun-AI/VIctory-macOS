@@ -484,7 +484,9 @@ heap-indexed reads by the kernel) are counted as `unproven` and do not split by 
   pass's render encoder, ordered after everything earlier (barrier to the dispatch stage), draws
   consume the prepared records in order. Not hoisted (kernel encoded right before the draw, which
   ends the render encoder; the pass continues with `Load`): the rule of 8.8 (`split`), or a
-  `SetDescriptorHeaps` inside the pass (`in_place`).
+  `SetDescriptorHeaps` inside the pass that matters to the draw (`in_place`): tables are addresses,
+  so only a root signature that indexes the heap directly (`CBV_SRV_UAV_HEAP_INDEXED` /
+  `SAMPLER_HEAP_INDEXED`) and a heap that differs from the one the pre-scan encodes with count.
 * Identity for the rule: root descriptors by buffer base; table ranges by what each descriptor was
   written to look at (`Heap::keys`, kept by `WRITE_DESCRIPTOR` and `COPY_DESCRIPTORS`; buffers by base
   address, textures by resource). A range is looked at up to 512 entries. Heap-indexed root signatures
@@ -492,6 +494,16 @@ heap-indexed reads by the kernel) are counted as `unproven` and do not split by 
 * Scratch: a second `ConstantRing` on the queue (`Queue::alloc_scratch`, `Shared` memory), 6 x 16 MB
   by default (`VICTORY_METAL_MESH_COMPUTE_RING_MB`), segments recycled only after the submission that
   used them completed; one draw may take at most one segment, an indirect call one arena of
-  `INDIRECT_ARENA_GROUPS` (256) groups. A draw that cannot get scratch is dropped with a reason.
+  `INDIRECT_ARENA_GROUPS` (256) groups. A direct dispatch over a segment gets a block of its own
+  (a `Shared` buffer the list keeps until its submission completes, up to `MAX_BLOCK_BYTES` = 1 GiB);
+  over that it is dropped as `dropped_scratch`.
+* Group numbering: the dispatch is `(x, y, z)` groups and the kernel's group number is
+  `x + dim_x * (y + dim_y * z)` from the CBV (8.2); `ms2cs.py` emits this (`--x-only`: the
+  prototype's, for tests that bind the scratch alone). Tested with `DispatchMesh(1, 2, 1..3)`.
+* Numbers (`mesh_emu::counters()`, per list in `ListStats::{emu_draws, emu_splits, emu_dropped}`,
+  per frame in the drop statistics as extra columns): `mesh emu hoisted / split / in place /
+  unproven / indirect / dropped scratch / dropped other / big block`; the GPU's own count of
+  indirect records the arena could not hold: `Executor::mesh_emu_gpu_stats()` and the column
+  `mesh emu dropped indirect records` (the change since the last present).
 * Tests: `metal/back/tests/mesh_compute.rs` (the prototype's, plus the runtime's from
   `a_mesh_pipeline_metal_refuses_is_made...` on).

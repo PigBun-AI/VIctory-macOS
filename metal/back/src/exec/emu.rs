@@ -41,7 +41,7 @@ use super::stream::{R, Run, Side};
 use super::tlab::SlotKind;
 use super::{Pso, PsoBody, RootSig, State, status_of};
 use crate::descriptors::ENTRY_SIZE;
-use crate::mesh_emu::{self, Direct, Emulated, Fetch};
+use crate::mesh_emu::{self, Direct, Emulated, Event, Fetch};
 use crate::stages::{COMPUTE_ENCODER_STAGES, DISPATCH, RENDER_ENCODER_STAGES, VIS_DEVICE};
 
 /// What the pre-scan decided for one emulated draw (one per draw, in order).
@@ -78,6 +78,10 @@ struct Sim {
     gpso: Option<Arc<Pso>>,
     written: HashSet<u64>,
     heap_written: bool,
+    /// The heaps bound at this point of the pass, and when the pre-scan began
+    /// (the heaps the kernels are encoded with).
+    heaps: (u32, u32),
+    start_heaps: (u32, u32),
 }
 
 #[derive(PartialEq, Eq)]
@@ -181,6 +185,19 @@ fn touched(st: &State, side: &Side) -> Touch {
 }
 
 impl Sim {
+    /// Whether the heaps bound at this draw differ from the ones the kernels
+    /// of the pre-scan are encoded with in a way the draw's kernel can see:
+    /// tables are addresses, so only a root signature that indexes the heap
+    /// directly (the heap's address is bound, not passed) does.
+    fn heaps_matter(&self) -> bool {
+        let Some(sig) = &self.gfx.sig else {
+            return false;
+        };
+        let flags = sig.desc.flags;
+        (flags & root_flags::CBV_SRV_UAV_HEAP_INDEXED != 0 && self.heaps.0 != self.start_heaps.0)
+            || (flags & root_flags::SAMPLER_HEAP_INDEXED != 0 && self.heaps.1 != self.start_heaps.1)
+    }
+
     /// A draw of the pass: what it may write joins the pass's writes.
     fn note_draw(&mut self, st: &State) {
         let t = touched(st, &self.gfx);
@@ -230,23 +247,60 @@ impl Run<'_> {
         em: &Emulated,
         groups: [u32; 3],
     ) -> Result<Direct, Status> {
+        let r = self.encode_direct_inner(side, em, groups);
+        if let Err((_, scratch)) = &r {
+            self.ev(if *scratch {
+                Event::DroppedScratch
+            } else {
+                Event::DroppedOther
+            });
+        }
+        r.map_err(|(s, _)| s)
+    }
+
+    /// An event of the emulation: counters, the list's stats, drop statistics.
+    fn ev(&mut self, e: Event) {
+        let list = self.open.as_mut().map(|(l, _, _)| l);
+        mesh_emu::event(list, e);
+    }
+
+    fn encode_direct_inner(
+        &mut self,
+        side: &Side,
+        em: &Emulated,
+        groups: [u32; 3],
+    ) -> Result<Direct, (Status, bool)> {
         let static_va = side
             .sig
             .as_ref()
             .and_then(|s| s.static_table.as_ref())
             .map(|t| t.gpu_va());
         let Some((list, _, _)) = self.open.as_mut() else {
-            return Err(Status::BAD_STREAM);
+            return Err((Status::BAD_STREAM, false));
         };
         list.emu_direct(em, &side.shadow, static_va, groups)
             .map_err(|e| {
                 self.st.note = Some(format!("emulated DISPATCH_MESH: {e}"));
-                status_of(&e)
+                (status_of(&e), mesh_emu::is_scratch_error(&e))
             })
     }
 
     /// The compute work of an indirect mesh dispatch, encoded now.
     fn encode_indirect(
+        &mut self,
+        side: &Side,
+        em: &Emulated,
+        c: &ExecuteIndirect<'_>,
+    ) -> Result<Vec<Fetch>, Status> {
+        let r = self.encode_indirect_inner(side, em, c);
+        match &r {
+            Ok(_) => self.ev(Event::Indirect),
+            Err(_) => self.ev(Event::DroppedOther),
+        }
+        r
+    }
+
+    fn encode_indirect_inner(
         &mut self,
         side: &Side,
         em: &Emulated,
@@ -315,11 +369,10 @@ impl Run<'_> {
             gpso: bound.gpso.clone(),
             written: HashSet::new(),
             heap_written: false,
+            heaps: bound.heaps,
+            start_heaps: bound.heaps,
         };
         let mut queue: VecDeque<Prepared> = VecDeque::new();
-        // A descriptor heap change in the pass: the kernels would run with the
-        // heaps the pass started with.
-        let mut heaps_changed = false;
         let mut hoisted = false;
         let mut ordered = false;
         while let Some(Ok(cmd)) = dec.next() {
@@ -360,7 +413,14 @@ impl Run<'_> {
                 | Command::SetRootConstants(_)
                 | Command::SetRootDescriptor(_)
                 | Command::SetRootTable(_) => {}
-                Command::SetDescriptorHeaps(_) => heaps_changed = true,
+                Command::SetDescriptorHeaps(c) => {
+                    if !c.cbv_srv_uav.is_null() {
+                        sim.heaps.0 = c.cbv_srv_uav.0;
+                    }
+                    if !c.sampler.is_null() {
+                        sim.heaps.1 = c.sampler.0;
+                    }
+                }
                 Command::Draw(_) | Command::DrawIndexed(_) => sim.note_draw(self.st),
                 Command::DispatchMesh(c) => {
                     let emulated = sim.gpso.as_ref().and_then(|p| match &p.body {
@@ -371,6 +431,7 @@ impl Run<'_> {
                         sim.note_draw(self.st);
                         continue;
                     };
+                    let heaps_changed = sim.heaps_matter();
                     if !ordered && !heaps_changed {
                         ordered = self.order_before_kernel().is_ok();
                     }
@@ -389,6 +450,7 @@ impl Run<'_> {
                     });
                     match (mesh, emulated) {
                         (true, Some((pso, em))) => {
+                            let heaps_changed = sim.heaps_matter();
                             if !ordered && !heaps_changed {
                                 ordered = self.order_before_kernel().is_ok();
                             }
@@ -461,7 +523,7 @@ impl Run<'_> {
         match sim.conflict(self.st, em) {
             Conflict::Definite => return Prepared::Inline { split: true },
             Conflict::Unproven => {
-                mesh_emu::count_unproven();
+                self.ev(Event::Unproven);
                 if mesh_emu::split_on_unproven() {
                     return Prepared::Inline { split: true };
                 }
@@ -470,13 +532,10 @@ impl Run<'_> {
         }
         match self.encode_direct(&sim.gfx, em, [c.x, c.y, c.z]) {
             Ok(d) => {
-                mesh_emu::count_hoisted();
+                self.ev(Event::Hoisted);
                 Prepared::Direct(d)
             }
-            Err(s) => {
-                mesh_emu::count_dropped();
-                Prepared::Dropped(format!("emulated DISPATCH_MESH: {s:?}"))
-            }
+            Err(s) => Prepared::Dropped(format!("emulated DISPATCH_MESH: {s:?}")),
         }
     }
 
@@ -500,7 +559,7 @@ impl Run<'_> {
         match sim.conflict(self.st, em) {
             Conflict::Definite => return Prepared::Inline { split: true },
             Conflict::Unproven => {
-                mesh_emu::count_unproven();
+                self.ev(Event::Unproven);
                 if mesh_emu::split_on_unproven() {
                     return Prepared::Inline { split: true };
                 }
@@ -509,13 +568,10 @@ impl Run<'_> {
         }
         match self.encode_indirect(&sim.gfx, em, c) {
             Ok(f) => {
-                mesh_emu::count_hoisted();
+                self.ev(Event::Hoisted);
                 Prepared::Indirect(f)
             }
-            Err(s) => {
-                mesh_emu::count_dropped();
-                Prepared::Dropped(format!("emulated EXECUTE_INDIRECT: {s:?}"))
-            }
+            Err(s) => Prepared::Dropped(format!("emulated EXECUTE_INDIRECT: {s:?}")),
         }
     }
 
@@ -585,9 +641,9 @@ impl Run<'_> {
         split: bool,
     ) -> R {
         if split {
-            mesh_emu::count_split();
+            self.ev(Event::Split);
         } else {
-            mesh_emu::count_in_place();
+            self.ev(Event::InPlace);
         }
         self.order_before_kernel()?;
         let d = self.encode_direct(side, em, [c.x, c.y, c.z])?;
@@ -634,9 +690,9 @@ impl Run<'_> {
             Some(Prepared::Direct(_)) => Err(Status::INVALID_ARG),
             other => {
                 if matches!(other, Some(Prepared::Inline { split: true })) {
-                    mesh_emu::count_split();
+                    self.ev(Event::Split);
                 } else {
-                    mesh_emu::count_in_place();
+                    self.ev(Event::InPlace);
                 }
                 self.order_before_kernel()?;
                 let f = self.encode_indirect(&side, em, c)?;
