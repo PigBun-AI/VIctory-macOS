@@ -9029,6 +9029,13 @@ impl Meter {
                 placed = crate::descriptor::host::PLACED_TEXTURE_SLOTS.load(Ordering::Relaxed),
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
+            let builder_making = crate::pipeline::BUILDER_MAKING.swap(0, Ordering::Relaxed);
+            if builder_making > 0 {
+                tracing::info!(
+                    "ray-tracing structure builder: {:.1} dispatches/frame skipped while its pipelines are being made",
+                    builder_making as f64 / frames
+                );
+            }
             #[cfg(feature = "diagnostics")]
             {
                 let put = [0, 1, 2, 3].map(|i| crate::shadow::PUT[i].swap(0, Ordering::Relaxed) as f64 / frames);

@@ -961,6 +961,22 @@ the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 pr
 world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
 the replays log nothing about pipelines, so that the aav pipelines of those frames draw was not observed directly.
 
+## Fixes taken from other lines (`git cherry-pick -x`, one `mac:` commit each)
+
+Taken because they close a node of the translation map; the source SHA is in each commit message. Drop one when mac/livetr
+takes a merge of its line.
+
+### X1 — BVH builder pipelines queued at creation (`victory-gpu` `pipeline.rs`, `pipeline/make.rs`, `host.rs`; Windows ec648b34)
+
+*What it is.* `builder_runs()` used to make every ray-tracing structure-builder pipeline on the recording thread at the first builder
+dispatch (`make::now()`); on a cold cache that frame passed the title's 30 s GPU watchdog. Now they are queued at creation
+(`make::prepare`), a dispatch looks at them without waiting (`make::state`) and skips while one is being made (frame line
+"dispatches/frame skipped while its pipelines are being made"); only one that cannot be made turns the builder off.
+`VICTORY_BVH_BUILDER_SYNC=1` restores the old behaviour. `BUILDER_MAKING` is `cfg(windows)` like its only other user (`host.rs`
+is a `cfg(windows)` module), so no extra gate was needed for the native build. Matrix: `shared.rt.bvh_build`,
+`mac.title.hang_watchdog` (unproven, 待运行验证: unit tests `pipeline::builder_verdict_tests` only).
+*Retire when:* mac/livetr merges the Windows line that has it.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work

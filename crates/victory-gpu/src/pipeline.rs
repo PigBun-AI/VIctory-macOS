@@ -358,6 +358,63 @@ pub(crate) fn builder_rests(why: &'static str) {
     }
 }
 
+/// Builder dispatches skipped because a builder pipeline was still being
+/// made (see [`builder_runs`]); read and reset by the frame line.
+#[cfg(windows)]
+pub(crate) static BUILDER_MAKING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `VICTORY_BVH_BUILDER_SYNC=1`: make the builder's pipelines on the
+/// recording thread at its first dispatch, as before (can pass the title's
+/// 30 s watchdog on a cold cache).
+#[cfg(windows)]
+fn builder_sync() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER_SYNC").is_some_and(|v| v == "1"))
+}
+
+/// What the builder's pipelines allow, from each one's state (`None`: being
+/// made; `Some(made)`).
+#[derive(Debug, PartialEq, Eq)]
+enum BuilderVerdict {
+    /// One is still being made: skip this dispatch, look again at the next.
+    Making,
+    /// One cannot be made: the builder stays off.
+    Off,
+    /// All are made.
+    Whole,
+}
+
+fn builder_verdict(states: &[Option<bool>]) -> BuilderVerdict {
+    if states.iter().any(|s| *s == Some(false)) {
+        BuilderVerdict::Off
+    } else if states.iter().any(Option::is_none) {
+        BuilderVerdict::Making
+    } else {
+        BuilderVerdict::Whole
+    }
+}
+
+#[cfg(test)]
+mod builder_verdict_tests {
+    use super::{BuilderVerdict, builder_verdict};
+
+    #[test]
+    fn being_made_skips_without_turning_off() {
+        assert_eq!(builder_verdict(&[Some(true), None]), BuilderVerdict::Making);
+    }
+
+    #[test]
+    fn one_that_cannot_be_made_turns_it_off() {
+        assert_eq!(builder_verdict(&[None, Some(false), Some(true)]), BuilderVerdict::Off);
+    }
+
+    #[test]
+    fn all_made_is_whole() {
+        assert_eq!(builder_verdict(&[Some(true), Some(true)]), BuilderVerdict::Whole);
+        assert_eq!(builder_verdict(&[]), BuilderVerdict::Whole);
+    }
+}
+
 /// At a dispatch of a builder pipeline: whether the builder runs (see
 /// [`Builder`]).
 #[cfg(windows)]
@@ -372,6 +429,39 @@ pub(crate) fn builder_runs() -> bool {
     }
     if b.whole {
         return true;
+    }
+    if !builder_sync() {
+        // Not on this thread: made on the spot, a cold cache's builder
+        // programs took the frame past the title's 30 s GPU watchdog
+        // (cfbase3x, 2026-11-26: 0xc0000005 at victory-image+0x23cf683, 77 s
+        // after start, X with VICTORY_BVH_BUILDER=1). Queue them; the group
+        // skips its dispatches until all are made.
+        let states: Vec<Option<bool>> = b.pipelines.iter().map(make::state).collect();
+        match builder_verdict(&states) {
+            BuilderVerdict::Making => {
+                BUILDER_MAKING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return false;
+            }
+            BuilderVerdict::Off => {
+                // Without waiting for those still being made.
+                let missing: Vec<String> = b
+                    .pipelines
+                    .iter()
+                    .zip(&states)
+                    .filter(|(_, s)| **s == Some(false))
+                    .map(|(p, _)| make::hashes(p))
+                    .collect();
+                b.off = b.pipelines.len();
+                tracing::warn!(
+                    missing = missing.len(),
+                    of = b.pipelines.len(),
+                    which = ?missing,
+                    "the ray-tracing structure builder stays off: not all of its programs have a host pipeline, and its stages run all or none"
+                );
+                return false;
+            }
+            BuilderVerdict::Whole => {}
+        }
     }
     let missing: Vec<String> = b.pipelines.iter().filter(|p| !make::now(p)).map(|p| make::hashes(p)).collect();
     if !missing.is_empty() {
@@ -759,6 +849,10 @@ fn hand_out(
         let mut b = BUILDER.lock().unwrap_or_else(|e| e.into_inner());
         b.pipelines.push(host.clone());
         b.whole = false;
+        // Made while the title loads, not at the first dispatch.
+        if !builder_sync() {
+            make::prepare(&host);
+        }
     }
     let pipeline = Box::new(Pipeline {
         object: Object::new(&FUNCTIONS),
