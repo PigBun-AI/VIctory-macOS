@@ -91,8 +91,7 @@ avx_fparith:*vaddp avx_fparith:*vadds avx_fparith:*vsubp avx_fparith:*vsubs avx_
 x86_int_alu:add_* x86_int_alu:sub_* x86_int_alu:adc_* x86_int_alu:sbb_* x86_int_alu:and_* x86_int_alu:or_* x86_int_alu:xor_* x86_int_alu:cmp_* x86_int_alu:test_* x86_int_alu:inc_* x86_int_alu:dec_* x86_int_alu:neg_* x86_int_alu:not_*
 x86_int_move:mov_* x86_int_move:movabs* x86_int_move:movz* x86_int_move:movs* x86_int_move:xchg_* x86_int_move:cmov* x86_int_move:set* x86_int_move:j* x86_int_move:lea_*
 avx_logic:v*
-avx_int_arith:*
-avx_convert:*
+avx_shuffle:*
 "
     [ -n "${PROBE_LIST:-}" ] && LIST="$PROBE_LIST"   # e.g. PROBE_LIST="cvt_f2i:*_mem cvt_i2f:*_mem" to rerun a subset
     {

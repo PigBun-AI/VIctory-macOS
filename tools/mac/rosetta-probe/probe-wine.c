@@ -694,9 +694,7 @@ static int batch_atomic_split(void) {
 #include "isa-logic.h"
 #include "isa-int.h"
 #include "isa-intmove.h"
-#include "isa-iarith.h"
-#include "isa-convert.h"
-#include "isa-round.h"
+#include "isa-shuffle.h"
 
 // ---------- main ----------
 int main(int argc, char **argv) {
@@ -725,9 +723,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[2], "avx_logic")) f = batch_ops("avx_logic", reg_logic_ops, argc > 3 ? argv[3] : NULL, plan_default);
         else if (!strcmp(argv[2], "x86_int_alu")) f = batch_ops("x86_int_alu", reg_alu_ops, argc > 3 ? argv[3] : NULL, plan_int);
         else if (!strcmp(argv[2], "x86_int_move")) f = batch_ops("x86_int_move", reg_intmove_ops, argc > 3 ? argv[3] : NULL, plan_int);
-        else if (!strcmp(argv[2], "avx_int_arith")) f = batch_ops("avx_int_arith", reg_iarith_ops, argc > 3 ? argv[3] : NULL, plan_ia);
-        else if (!strcmp(argv[2], "avx_convert")) f = batch_ops("avx_convert", reg_convert_ops, argc > 3 ? argv[3] : NULL, plan_cv);
-        else if (!strcmp(argv[2], "avx_round")) f = batch_ops("avx_round", reg_round_ops, argc > 3 ? argv[3] : NULL, plan_rnd);
+        else if (!strcmp(argv[2], "avx_shuffle")) f = batch_ops("avx_shuffle", reg_shuffle_ops, argc > 3 ? argv[3] : NULL, plan_shuf);
         else if (!strcmp(argv[2], "avx_move")) f = batch_ops("avx_move", reg_move_ops, argc > 3 ? argv[3] : NULL, plan_default);
         else { say("unknown batch\n"); return 2; }
         return f ? 1 : 0;
