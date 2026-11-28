@@ -884,6 +884,8 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
         if facts.0.is_empty() {
             return false;
         }
+        // mac S3: whether any way out of the region (its join, the end) was met while following.
+        let left = std::cell::Cell::new(false);
         // The states after (block, from, facts): one if the block's exit is decided (none if
         // it leaves the region), else each way on.
         let step = |(x, from, mut facts): State| -> (bool, Vec<State>) {
@@ -938,20 +940,46 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
                         };
                     }
                     scc = narrows.then_some(false);
+                } else if matches!(name, "s_and_b64" | "s_and_b32")
+                    && inst.reads.iter().chain(&inst.writes).all(|r| matches!(r.0, Reg::S(_)))
+                    && inst.reads.len() == 2 * inst.writes.len()
+                {
+                    // mac S3: a mask and-ed with a mask known to hold no lane holds none
+                    // (reads: the first source's dwords, then the second's)
+                    let k = inst.writes.len();
+                    for (i, e) in empty.iter_mut().enumerate() {
+                        *e = facts.0.contains(&inst.reads[i].1) || facts.0.contains(&inst.reads[k + i].1);
+                    }
                 } else if none && name.starts_with("v_cmpx") {
+                    empty.fill(true);
+                } else if none && name.starts_with("v_cmp") && inst.writes.iter().all(|w| matches!(w.0, Reg::S(_))) {
+                    // mac S3: a compare into VCC or an SGPR pair under an empty EXEC gives no lane
+                    // (the loop of ptfx_CS_lightAtlas_*, ends on `v_cmp_eq_u32 vcc` + `s_cbranch_vccz`).
                     empty.fill(true);
                 }
                 for (e, w) in empty.into_iter().zip(&inst.writes) {
                     set(&mut facts, w.1, e, if w.0 == Reg::Scc { scc } else { None });
                 }
             }
-            let on = |t: usize, facts: Facts| (t != target && inside[t]).then_some((t, x, facts));
+            let on = |t: usize, facts: Facts| {
+                let stays = t != target && inside[t];
+                if !stays {
+                    left.set(true);
+                }
+                stays.then_some((t, x, facts))
+            };
             match block.exit {
                 Exit::Jump(t) => (true, on(t, facts).into_iter().collect()),
                 Exit::Branch { taken, not_taken } => {
                     let decided = block.insts.last().and_then(|last| match last.name() {
                         "s_cbranch_execz" => none_left(last, &facts).then_some(taken),
                         "s_cbranch_execnz" => none_left(last, &facts).then_some(not_taken),
+                        // mac S3: VCC known to hold no lane (see the compare above)
+                        "s_cbranch_vccz" | "s_cbranch_vccnz" => {
+                            let mut dwords = last.reads.iter().filter(|r| matches!(r.0, Reg::S(c) if c == VCC || c == VCC + 1)).peekable();
+                            let none = dwords.peek().is_some() && dwords.all(|r| facts.0.contains(&r.1));
+                            none.then_some(if last.name() == "s_cbranch_vccz" { taken } else { not_taken })
+                        }
                         name @ ("s_cbranch_scc0" | "s_cbranch_scc1") => last
                             .read(Reg::Scc)
                             .and_then(|v| facts.1.get(&v))
@@ -966,7 +994,10 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
                         ),
                     }
                 }
-                Exit::End | Exit::Indirect => (false, Vec::new()),
+                Exit::End | Exit::Indirect => {
+                    left.set(true);
+                    (false, Vec::new())
+                }
             }
         };
         let mut seen: HashSet<State> = HashSet::new();
@@ -1002,7 +1033,9 @@ pub(crate) fn without_skips(p: &Program, deep: bool) -> Option<Program> {
                 at = next;
             }
         }
-        false
+        // mac S3: every way on was followed (undecided branches both ways) and none left the
+        // region: with no lane left the region never ends, whichever way its branches go.
+        !left.get()
     };
     // The region a skip of `b` to `target` leaves out, if it is a pure skip.
     let skipped = |b: usize, target: usize, first: usize| -> Option<Vec<bool>> {

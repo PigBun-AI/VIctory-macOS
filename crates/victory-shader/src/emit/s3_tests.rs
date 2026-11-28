@@ -103,6 +103,34 @@ fn first_lane(threads: u32) -> NativeProgram {
     )
 }
 
+/// The shape of `ptfx_CS_lightAtlas_Sprite` (2561af9577c47289), cut down: a loop behind a lane skip
+/// (`s_and_saveexec`, `s_cbranch_execz`) that ends on `v_cmp_eq_u32 vcc` and `s_cbranch_vccz`, and
+/// reads a lane of the other half of the console wave inside the loop. Lane t is in the skip when
+/// `t < s0`; it counts three turns, adds the readlane (33) and stores the sum at dword t. With NO
+/// lane left in the skip the console never runs the loop, whose compare then finds no lane for ever.
+fn loop_behind_a_skip(threads: u32) -> NativeProgram {
+    native(
+        &[
+            0x7e02_0283, // v_mov_b32 v1, 3 (the turns)
+            0x7d88_0000, // v_cmp_gt_u32 vcc, s0, v0
+            0xbe8c_246a, // s_and_saveexec_b64 s[12:13], vcc
+            0xbf88_0000 | 11, // s_cbranch_execz (to the restore)
+            0xbe86_0380, // s_mov_b32 s6, 0
+            // loop:
+            0xd760_0007, 0x0001_4300, // v_readlane_b32 s7, v0, 33 (a lane of the upper half)
+            0x8006_8106, // s_add_u32 s6, s6, 1
+            0x7d84_0206, // v_cmp_eq_u32 vcc, s6, v1
+            0xbf86_0000 | 0xfffb, // s_cbranch_vccz loop
+            0x7e04_0206, // v_mov_b32 v2, s6
+            0x3408_0082, // v_lshlrev_b32 v4, 2, v0
+            0x4a04_0407, // v_add_nc_u32 v2, s7, v2
+            0xe070_1000, 0x8002_0204, // buffer_store_dword v2, v4, s[8:11], 0 offen
+            0xbefe_040c, // s_mov_b64 exec, s[12:13]
+        ],
+        threads,
+    )
+}
+
 fn names(p: &ir::Program) -> Vec<&'static str> {
     p.blocks.iter().flat_map(|b| b.insts.iter().map(|i| i.name())).collect()
 }
@@ -171,6 +199,38 @@ fn a_group_barrier_in_a_wave_wide_branch_of_several_console_waves_is_refused() {
     } else {
         assert!(matches!(&r, Err(ShaderError::Unsupported { what, .. }) if what.contains("several console waves")), "{:?}", r.err());
     }
+}
+
+/// mac S3 (root fix): the skip around that loop stays, taken by the whole group, in every form the
+/// ladder takes after the skips are left out: with it gone, a group none of whose lanes is in the
+/// skip runs the loop to the lowering's bound, a group barrier per turn (`ptfx_CS_lightAtlas_*`: ~100 s
+/// of GPU time in the prologue). Counted by `SKIPS_KEPT`. Adversarial: a skip around no loop goes.
+#[test]
+fn a_skip_around_a_loop_that_never_ends_with_no_lane_left_is_kept() {
+    let kept = || ir::SKIPS_KEPT.load(std::sync::atomic::Ordering::Relaxed);
+    let native = loop_behind_a_skip(64);
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    for deep in [false, true] {
+        let before = kept();
+        let _ = ir::without_skips(&p, deep);
+        assert!(kept() > before, "deep={deep}: the skip around the loop is kept");
+    }
+    let native = lds_in_a_lane_branch(64);
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    for deep in [false, true] {
+        let before = kept();
+        let skipped = ir::without_skips(&p, deep);
+        assert_eq!(kept(), before, "deep={deep}: a skip around no loop is not kept");
+        assert!(skipped.is_some(), "deep={deep}: and it goes");
+    }
+}
+
+/// The program translates for a host of 32-lane waves with the wide form (`VICTORY_WAVE_WIDE=1`).
+#[test]
+fn the_loop_behind_a_skip_translates_wide() {
+    let native = loop_behind_a_skip(64);
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    emitted_with_wide(&native, &p, "1").expect("translates on a host of 32-lane waves");
 }
 
 /// Hardware: the same programs run on the device (waves of 32) and compared with the console's
@@ -261,5 +321,35 @@ mod hardware {
         }
         eprintln!("ran on the hardware device: the console wave's first lane for both halves");
     }
-}
 
+    /// Two host waves with different conditions: lanes below `s0` are in the skip. For 40 both
+    /// halves are, for 32 only the lower half, for 0 neither (the console skips the loop; here
+    /// it must not run for the bound), for 5 a few lanes of the lower half. Before the fix the
+    /// case with no lane in the skip ran the loop to its bound with a group barrier in every
+    /// turn; the run has a time limit, and the results are the console's: 3 turns + lane 33.
+    #[test]
+    fn two_host_waves_with_different_conditions_take_the_loop_behind_the_skip_together() {
+        for below in [64u32, 40, 33, 32, 31, 5, 1, 0] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let native = loop_behind_a_skip(64);
+                let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+                let shader = emitted_with_wide(&native, &p, "1").expect("translates");
+                validated(&shader);
+                let t = std::time::Instant::now();
+                let got = group_of(&shader, below);
+                let _ = tx.send((got, t.elapsed()));
+            });
+            let (got, took) = rx
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("{below} threads in the skip: the group does not finish in 60 s"));
+            let Some(got) = got else { return };
+            for t in 0..64u32 {
+                let expected = if t < below { 3 + 33 } else { 0 };
+                assert_eq!(got[t as usize], expected, "{below} threads in the skip, thread {t}");
+            }
+            assert!(took.as_secs() < 20, "{below} threads in the skip: took {took:?}");
+        }
+        eprintln!("ran on the hardware device: the loop behind a skip, halves with different conditions");
+    }
+}
