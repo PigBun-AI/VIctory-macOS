@@ -208,6 +208,9 @@ pub(crate) fn mac_state(p: &Pending) -> super::MacState {
 /// not translate, else "refused" or "being made"; `None` if it has one.
 #[cfg(feature = "diagnostics")]
 pub(crate) fn missing(p: &Pending) -> Option<String> {
+    if let Some(why) = p.left_out {
+        return Some(why.into());
+    }
     match p.made.get() {
         Some(Some(_)) => None,
         None => Some("being made".into()),
@@ -297,6 +300,27 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         wait(p, crate::frame::current());
     }
     p.made.get()?.as_ref()
+}
+
+/// Whether `p` has a host pipeline, without waiting: `None` while it is
+/// being made (queued here if it was not), `Some(false)` if it cannot be
+/// made or is left out.
+pub(crate) fn state(p: &Arc<Pending>) -> Option<bool> {
+    if p.left_out.is_some() {
+        return Some(false);
+    }
+    if p.made.get().is_none() {
+        start(p, REQUESTED);
+    }
+    p.made.get().map(|made| made.is_some())
+}
+
+/// Queues `p` to be made ahead of its first use (the structure builder's
+/// stages, which run all or none).
+pub(crate) fn prepare(p: &Arc<Pending>) {
+    if p.left_out.is_none() && !p.shaders.is_empty() && p.made.get().is_none() {
+        start(p, EARLY);
+    }
 }
 
 /// Makes `p` on this thread if it is not made yet (waiting for a worker

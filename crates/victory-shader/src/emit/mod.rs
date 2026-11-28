@@ -79,6 +79,10 @@
 //!   geometry shader of ours between the translated vertex and pixel
 //!   shaders and draws triangle lists with the title's own vertex counts.
 //!   It binds nothing.
+//! * **Geometry shaders of the title** (mac S4, [`HwStage::Gs`], `gs_6_6`): the console's on-chip geometry stage
+//!   (one lane a triangle, the vertex shader's outputs in the ESGS ring in LDS) as a host geometry shader:
+//!   triangles in, `max_vertices` = the emits of the program, strips out; user data and descriptors as above (the
+//!   root constants visible to the geometry stage). See `gs.rs`.
 
 mod bitcode;
 pub mod live;
@@ -95,6 +99,8 @@ mod intersect_tests;
 pub mod host;
 mod lower;
 mod mesh_order; // mac S2
+#[cfg(all(test, not(windows)))]
+mod mac_dxil_check; // mac G12
 mod own_bits;
 #[cfg(all(test, windows))]
 mod permlane_tests;
@@ -104,6 +110,9 @@ mod shader;
 mod threading;
 #[cfg(windows)]
 pub mod validator;
+pub mod vertex_flat; // mac S1
+#[cfg(test)]
+mod vertex_flat_tests; // mac S1
 #[cfg(all(test, windows))]
 mod probe_tests;
 #[cfg(all(test, windows))]
@@ -124,9 +133,10 @@ use crate::{ShaderError, io, ir, resource, structure};
 
 pub use bitcode::census;
 pub use sampler::StaticSampler;
-pub use lower::{host_settings, set_host_max_wave, set_host_rdna};
+pub use lower::{host_attribute_at_vertex, host_settings, set_host_attribute_at_vertex, set_host_max_wave, set_host_rdna}; // mac S1
+pub use vertex_flat::{VertexRead, vertex_pipeline_gs}; // mac S1
 pub use lower::sunclamp::export_sat;
-pub use rect::rect_list_gs;
+pub use rect::{clip_as_varying, rect_list_gs, writes_clip_distance, CLIP_VARYING}; // mac S4
 pub use shader::{
     MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
     SLOT_STRIDES_COUNT, SLOT_TABLE_STRIDES, SLOT_TABLE_VIEW_ADDRESSES, SLOT_VIEW_ADDRESSES, USER_DATA_SPACE, VIEW_INTEGER, VIEW_SIGNED, VIEW_STRIDE_BITS, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
@@ -234,6 +244,12 @@ pub fn rt_pagecache() -> bool {
 pub fn viewaddr_table() -> bool {
     // mac S3: on unless `VICTORY_VIEWADDR_TABLE=0` (the shadow-mask ray programs are refused otherwise)
     switch(crate::emit::live::var_os("VICTORY_VIEWADDR_TABLE").as_deref(), true) // mac S3
+}
+/// mac S3: whether `emit` tries the wave-wide branches ([`widen`]) for a wave64 program: only with
+/// `VICTORY_WAVE_WIDE=1`, and by default for the two scene kernels (upstream's rule). S3 had them on unless
+/// `=0`; on Apple GPUs they put a group barrier in a divergent path and hang single-thread groups.
+pub(crate) fn wide_branches_on(option: Option<&std::ffi::OsStr>, scene_kernel: bool) -> bool {
+    option.map_or(scene_kernel, |v| v == "1") // mac S3
 }
 /// A switch's state from its variable: unset is `default`, `"1"` is on, `"0"` is off,
 /// anything else keeps the default for a default-on switch and is off for a default-off one.
@@ -430,6 +446,10 @@ pub struct HostShader {
     pub root_uavs: Vec<u8>,
     /// Heap descriptors that can be selected from root state at bind time.
     pub root_indexed_views: Vec<crate::resource::RootIndexedView>,
+    /// mac S1: for a pixel shader, the channels it reads from vertices 1 and 2 (flat inputs the mesh stage
+    /// must fill, [`vertex_flat`]); for a mesh shader, what it was translated to hand on. Empty on a host
+    /// that has `attributeAtVertex` ([`host_attribute_at_vertex`]).
+    pub vertex_reads: Vec<VertexRead>,
 }
 
 impl HostShader {
@@ -469,6 +489,26 @@ pub struct UserData {
 /// already translated came out changed (an extra evaluation in each), for
 /// the sake of 9 that did not translate.
 pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
+    translate_with(container, &[])
+}
+
+/// [`translate`] of a mesh program that hands the values of `reads` on to a pixel program (mac S1: what
+/// the pixel program's `HostShader::vertex_reads` lists).
+pub fn translate_with(container: &[u8], reads: &[VertexRead]) -> Result<HostShader, ShaderError> {
+    vertex_flat::with_reads(reads, || translate_first_half(container)) // mac S1
+}
+
+/// [`translate_with`], and for a vertex shader of a rectangle list: with its clip distances written as
+/// plain outputs ([`clip_as_varying`]; mac S4) when `rect_clip`.
+pub fn translate_variant(container: &[u8], reads: &[VertexRead], rect_clip: bool) -> Result<HostShader, ShaderError> {
+    if rect_clip {
+        clip_as_varying(|| translate_with(container, reads)) // mac S4
+    } else {
+        translate_with(container, reads)
+    }
+}
+
+fn translate_first_half(container: &[u8]) -> Result<HostShader, ShaderError> {
     match translate_plain(container) {
         Err(ShaderError::Unsupported { what, .. }) if what == lower::FIRST_HALF => {
             lower::with_first_half_pairs(|| translate_plain(container))
@@ -488,19 +528,27 @@ fn translate_plain(container: &[u8]) -> Result<HostShader, ShaderError> {
         .find(|p| {
             matches!(
                 p.stage,
-                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms
+                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms | HwStage::Gs // mac S4
             )
         })
         .ok_or(ShaderError::Unsupported {
             offset: 0,
-            what: "a container without a vertex, pixel, compute or mesh program",
+            what: "a container without a vertex, pixel, compute, mesh or geometry program",
         })?;
     let p = crate::spill::build(&native)?;
+    // mac S4: a geometry program's ring accesses are taken apart, and the arithmetic that only addressed them goes.
+    let (p, ring) = if native.stage == HwStage::Gs {
+        let (p, ring) = crate::gs::prepare(p)?;
+        (p, Some(ring))
+    } else {
+        (p, None)
+    };
     // Structurisation first: tracing per-lane descriptors needs it (its
     // failure is reported after the earlier stages').
     let st = structure::structure(&p);
     let res = resource::track(&p, &native.layout, native.stage, st.as_ref().ok())?;
-    let io = io::raise(&p, &native)?;
+    let mut io = io::raise(&p, &native)?;
+    io.gs = ring; // mac S4
     let st = st?;
     emit(&c, &native, &p, &st, &io, &res)
 }
@@ -625,9 +673,10 @@ pub fn emit(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        // mac S3: on unless `VICTORY_WAVE_WIDE=0` (it was on for the two scene kernels and `=1` only)
-        let _ = scene_kernel; // mac S3
-        let wide_on = wide_option.as_ref().is_none_or(|v| v != "0"); // mac S3
+        // mac S3: back to upstream's default (on for the two scene kernels, `=1` turns it on for the rest).
+        // S3 had it on unless `=0`; on Apple GPUs the wide branch puts a group barrier in a divergent
+        // path and `ptfx_CS_lightAtlas_Sprite` (single-thread group) hangs for ~100 s (prologue w54-70).
+        let wide_on = wide_branches_on(wide_option.as_deref(), scene_kernel); // mac S3
         // A single guest wave can iterate an active-lane loop until both host
         // halves have finished. The precise latch and convergence conditions
         // for the driver compute route are checked by widen().
@@ -892,6 +941,17 @@ fn emit_program(
     let pixel = native.stage == HwStage::Ps;
     let mut inputs = sig(FourCC::ISG1)?;
     let mut outputs = sig(FourCC::OSG1)?;
+    // mac S4: a geometry shader's inputs come interpolated as the vertex shader's outputs were declared.
+    if native.stage == HwStage::Gs {
+        for e in &mut inputs {
+            e.interp = match (e.kind, e.comp) {
+                (3, _) => 4,
+                (0 | 6 | 7, 9) => 2,
+                (0, _) => 1,
+                _ => 0,
+            };
+        }
+    }
     // Interpolation as DXC declares it by default; pixel inputs that are
     // read get the mode their barycentrics say.
     let interpolated = if pixel { &mut inputs } else { &mut outputs };
@@ -928,6 +988,13 @@ fn emit_program(
     prims.retain(|e| !matches!(e.kind, 10 | 30));
     for e in &mut prims {
         e.interp = 1;
+    }
+    // mac S1: a mesh shader's per-primitive outputs for the pixel shader's reads of vertices 1 and 2,
+    // added before S2 numbers them, so they are ordered with the others.
+    if matches!(native.io, crate::native::StageIo::Ms(_)) {
+        let reads = vertex_flat::current(); // mac S1
+        let row = vertex_flat::first_row(&prims); // mac S1
+        prims.extend(vertex_flat::elements(&reads, Some(row))); // mac S1
     }
     // mac S2: a mesh shader's outputs numbered for the least padding in Metal's struct.
     if matches!(native.io, crate::native::StageIo::Ms(_)) {
@@ -984,7 +1051,10 @@ fn emit_program(
         root_srvs: l.root_srvs,
         root_uavs: l.root_uavs,
         root_indexed_views: res.root_indexed_views.clone(),
+        vertex_reads: l.vertex_reads, // mac S1
     };
+    #[cfg(all(test, not(windows)))]
+    mac_dxil_check::check(&shader.dxil); // mac G12
     Ok((shader, wave_size))
 }
 
@@ -1766,6 +1836,7 @@ mod tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         let file = |var: &str, stage| {
             std::env::var(var).ok().map(|p| super::HostShader {
@@ -1778,6 +1849,7 @@ mod tests {
                 root_srvs: Vec::new(),
                 root_uavs: Vec::new(),
                 root_indexed_views: Vec::new(),
+                vertex_reads: Vec::new(), // mac S1
             })
         };
         let ps = file("VICTORY_REF_PS", crate::HwStage::Ps).unwrap_or(ps);
@@ -2387,6 +2459,7 @@ mod tests {
             root_srvs: l.root_srvs,
             root_uavs: l.root_uavs,
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         let (root, pso) = host.compute_pipeline(&cs).unwrap();
         // Twelve dwords: the loads below run across the view's end.
@@ -2540,6 +2613,7 @@ mod tests {
                 root_srvs: l.root_srvs,
                 root_uavs: l.root_uavs,
                 root_indexed_views: Vec::new(),
+                vertex_reads: Vec::new(), // mac S1
             };
             let (root, pso) = host.compute_pipeline(&cs).unwrap();
             let inputs: Vec<u32> = [
@@ -2959,6 +3033,7 @@ mod barycentric_tests {
             root_srvs: Vec::new(),
             root_uavs: Vec::new(),
             root_indexed_views: Vec::new(),
+            vertex_reads: Vec::new(), // mac S1
         };
         validate(&vs);
         // One triangle covers an 8x8 target, with attribute values 2, 6, 10.

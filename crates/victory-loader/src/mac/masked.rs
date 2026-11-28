@@ -686,6 +686,46 @@ pub fn choice(value: Option<String>, needed: bool) -> Option<String> {
     }
 }
 
+/// Plain 256-bit stores of build 1.0.2.1 (hash [`super::watchdog::BUILD_1_0_2_1`])
+/// that Rosetta also faults midway through (#144), as the RVAs added to `all`:
+/// 1233 masked sites found by the scan + these 8 = 1241.
+pub const BUILD_1_0_2_1_EXTRA: &str = "all,1e09b31,1e09b37,259509f,25950a5,1e759f0,1e759f7,1e759fe,1e75a05";
+
+/// What the loader does about masked stores, and why (the `why` is logged).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    /// What to give [`wanted_from`]; `None` patches nothing.
+    pub request: Option<String>,
+    /// One line for the log: the reason, with the variable if it decided.
+    pub why: String,
+}
+
+/// Decides the masked-store patch from `VICTORY_PATCH_MASKED` (`var`), whether
+/// this is Wine on Rosetta, whether fault tracking is on, and the exe's hash.
+///
+/// Under Rosetta the patch is on **by default, with tracking on or off**: a
+/// masked store whose lane >= 1 faults is fatal there (probe 2026-11-27), and
+/// anything of the title that touches a protected page (Wine's own guards, the
+/// title's VirtualProtect) can fault, tracking or not; the patch costs a jump
+/// per site and nothing when no fault happens. Off Rosetta it is never on
+/// unless `var` asks for it. `var` wins: `none` is off, any other value is
+/// taken as it is, except that for the build the 8 extra sites were found in,
+/// unset or a plain `all` takes them too ([`BUILD_1_0_2_1_EXTRA`]).
+pub fn decide(var: Option<String>, under_rosetta: bool, tracking: bool, hash: &str) -> Decision {
+    let tracking = if tracking { "tracking on" } else { "tracking off" };
+    let (request, why) = match (choice(var.clone(), under_rosetta), var.as_deref()) {
+        (None, Some(_)) => (None, "off (VICTORY_PATCH_MASKED=none)".to_owned()),
+        (None, None) => (None, "off (not under Rosetta, VICTORY_PATCH_MASKED unset)".to_owned()),
+        (Some(r), v) if under_rosetta && r == "all" && hash.eq_ignore_ascii_case(super::watchdog::BUILD_1_0_2_1) => {
+            let by = if v.is_some() { "VICTORY_PATCH_MASKED=all" } else { "default under Rosetta" };
+            (Some(BUILD_1_0_2_1_EXTRA.to_owned()), format!("on ({by}, {tracking}; all + the 8 extra sites of build 1.0.2.1)"))
+        }
+        (Some(r), Some(_)) => (Some(r.clone()), format!("on (VICTORY_PATCH_MASKED={r}, {tracking})")),
+        (Some(r), None) => (Some(r), format!("on (default under Rosetta, {tracking}; build not 1.0.2.1, no extra sites)")),
+    };
+    Decision { request, why }
+}
+
 /// The stores `VICTORY_PATCH_MASKED` asks to patch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Wanted {
@@ -826,6 +866,60 @@ mod patch_tests {
         assert_eq!(choice(s("none"), true), None);
         assert_eq!(choice(s("1e09b31"), true), s("1e09b31"));
         assert_eq!(choice(s("all"), false), s("all"));
+    }
+
+    const HASH: &str = "b99f876b74d4a77f03af5f878223b27bd647b5c35a79d5decd9f716504239e93";
+
+    #[test]
+    fn the_extra_sites_are_all_plus_eight_distinct_rvas() {
+        let w = wanted_from(Some(BUILD_1_0_2_1_EXTRA));
+        assert!(w.all);
+        assert_eq!(w.rvas.len(), 8);
+        let mut rvas = w.rvas.clone();
+        rvas.sort_unstable();
+        rvas.dedup();
+        assert_eq!(rvas.len(), 8);
+        assert!(w.picks(0x1e09b31) && w.picks(0x1e75a05) && w.picks(0x123));
+    }
+
+    /// The four combinations of Rosetta and fault tracking, nothing set:
+    /// patched (with the 8 extra sites) whenever Rosetta, tracking or not.
+    #[test]
+    fn plan_patches_by_default_under_rosetta_whatever_tracking_says() {
+        let d = decide(None, true, true, HASH);
+        assert_eq!(d.request.as_deref(), Some(BUILD_1_0_2_1_EXTRA));
+        assert!(d.why.starts_with("on (default under Rosetta, tracking on"), "{}", d.why);
+        let d = decide(None, true, false, HASH);
+        assert_eq!(d.request.as_deref(), Some(BUILD_1_0_2_1_EXTRA));
+        assert!(d.why.starts_with("on (default under Rosetta, tracking off"), "{}", d.why);
+        for tracking in [true, false] {
+            let d = decide(None, false, tracking, HASH);
+            assert_eq!(d.request, None);
+            assert!(d.why.starts_with("off (not under Rosetta"), "{}", d.why);
+        }
+    }
+
+    #[test]
+    fn plan_takes_the_variable_as_it_is_and_the_extra_sites_only_for_all() {
+        let s = |v: &str| Some(v.to_owned());
+        // none: off, even under Rosetta.
+        let d = decide(s("none"), true, true, HASH);
+        assert_eq!((d.request, d.why.as_str()), (None, "off (VICTORY_PATCH_MASKED=none)"));
+        // A plain all on the build under Rosetta: the 8 extra sites join it.
+        let d = decide(s("all"), true, false, HASH);
+        assert_eq!(d.request.as_deref(), Some(BUILD_1_0_2_1_EXTRA));
+        assert!(d.why.starts_with("on (VICTORY_PATCH_MASKED=all"), "{}", d.why);
+        // Off Rosetta an explicit all is just all (asked for, nothing to resume).
+        assert_eq!(decide(s("all"), false, true, HASH).request, s("all"));
+        // Explicit RVAs are taken as given.
+        let d = decide(s("1e09b31"), true, true, HASH);
+        assert_eq!(d.request, s("1e09b31"));
+        // Another build: all, without the extra sites (they are not its sites).
+        let other = "0".repeat(64);
+        let d = decide(None, true, true, &other);
+        assert_eq!(d.request, s("all"));
+        assert!(d.why.contains("build not 1.0.2.1"), "{}", d.why);
+        assert_eq!(decide(s("all"), true, true, &other).request, s("all"));
     }
 
     /// Real code with a masked store, run as written and then patched:

@@ -3,6 +3,8 @@
 # Output goes to $1 (default: research/census/rosetta-probe-<date>.txt outside the repo). Needs Apple clang + Rosetta.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
+# a heavy job (a clang build, then every case under Rosetta): only through heavy.sh (docs/mac/RUN.md "Heavy tasks")
+[ -n "${VICTORY_HEAVY_SLOT:-}" ] || exec bash "$here/heavy.sh" --jobs 1 --label rosetta-probe -- sh "$here/rosetta-probe.sh" "$@"
 out=${1:-$HOME/Documents/GTA6Project/research/census/rosetta-probe-$(date +%Y%m%d).txt}
 tmp=$(mktemp -d)
 clang -arch x86_64 -O0 -mavx2 -mfma -mbmi -mbmi2 -mf16c -mlzcnt -mpopcnt -mavx512f -mclwb -mclflushopt "$here/rosetta-probe/probe.c" -o "$tmp/probe" || exit 1

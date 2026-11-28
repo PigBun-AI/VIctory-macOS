@@ -172,7 +172,7 @@ pub extern "system" fn GetProcAddress(module: *mut c_void, name: *const u8) -> *
     // SAFETY: not an ordinal, so the title passes a NUL-terminated name.
     let name = unsafe { CStr::from_ptr(name.cast()) }.to_string_lossy();
     match m.exports.iter().find(|e| e.name == name) {
-        Some(e) => e.address as *mut c_void,
+        Some(e) => crate::registry::export_address(m, e) as *mut c_void, // mac H3
         None => {
             tracing::warn!(module = m.name, %name, "GetProcAddress: not implemented");
             std::ptr::null_mut()
@@ -238,12 +238,14 @@ pub extern "system" fn OutputDebugStringW(text: *const u16) {
 /// the code and the caller, then exits on the host.
 pub extern "C" fn exit(code: i32) -> ! {
     tracing::warn!(code, from = %host::callers(), "title exits");
+    crate::mac_counts::flush("exit"); // mac H3
     host::exit(code)
 }
 
 /// The CRT's `abort` (also reached from `terminate`): logged like [`exit`].
 pub extern "C" fn abort() -> ! {
     tracing::error!(from = %host::callers(), "title aborts");
+    crate::mac_counts::flush("abort"); // mac H3
     host::abort()
 }
 
@@ -286,6 +288,7 @@ extern "system" fn report_unhandled(info: *const c_void) -> i32 {
 pub extern "system" fn TerminateProcess(process: *mut c_void, code: u32) -> i32 {
     if process as isize == -1 {
         tracing::warn!(code, from = %host::callers(), "title terminates the process");
+        crate::mac_counts::flush("terminate"); // mac H3
     }
     host::terminate_process(process, code)
 }

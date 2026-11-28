@@ -23,7 +23,7 @@ compared with perf (output patched to 1280x720, internal 853x480, 4x fewer pixel
   setup, same time-limit, same keys and neutral input (the defaults), no `--present-max` unless the step says so.
 - Save everything open first: a GPU reset can take down WindowServer (reports in #131), and a kernel panic was seen once on an M3 Max.
 - Run order alternates (P F P F P F) so that thermal state and caches do not favour one side. The first run of each profile only
-  warms the caches (`victory-data-livetr-<profile>-<backend>/cache`, translated shaders; `--fresh-data` makes a run cold again); only runs 2 and 3 count for timing.
+  warms the caches (`data/livetr-<profile>-<backend>/cache`, translated shaders; `--fresh-data` makes a run cold again); only runs 2 and 3 count for timing.
 - Each run: `tools/mac/run.sh --profile <p> --out target/mac-runs/<name> --timeout 900 --sample 5 --frametime-log` (and the
   step's extra flags). 15 minutes is the limit; stop earlier by hand if swap passes 20 GB or `gpu_recovery_count` rises (see below).
 
@@ -45,7 +45,7 @@ Between runs `run.sh` stops only its own prefix's Wine; wait for `end.txt` befor
 | File | Line / column | For |
 |---|---|---|
 | `start.txt` | commit, changed files, exe hash, `settings.xml` size (fidelity) or `non-fidelity: output patched to 1280x720` | the run is what it says |
-| `stdout.log` | `resolution:` lines (`Done`, or `skip` of the pool check); `non-fidelity:` (perf only, **must not appear in fidelity**); `render size:` lines | no resolution patch in fidelity; internal size |
+| `stdout.log` | `resolution:` lines (a fidelity run: exactly `resolution: fidelity, no site patched` and no `... Done` line; a perf run: `resolution: perf, N sites ...`, then `Done` per site, or `skip` of the pool check); `non-fidelity:` (perf only, **must not appear in fidelity**); `render size:` lines | no resolution patch in fidelity; internal size |
 | `stdout.log`/`stderr.log` | `presenting to a window width= height=` (expect 2560x1440 fidelity, 1280x720 perf); `display mode reported to the title`; `video memory as the system counts it` (before/after the swap chain, after a resize) | output, window, video memory budget |
 | `stderr.log` | `world frame 1 (input scripts ...` | the world was entered (the replay is set, so the latch is logged) |
 | both | `ms/frame` lines (the host's meter: fps, ms/frame, preparing, GPU, draws) | frame time cross-check |

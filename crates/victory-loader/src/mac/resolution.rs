@@ -269,6 +269,23 @@ pub const OWN_SCALE: Site = Site {
     bytes: &[0xc7, 0x81, 0x90, 0x00, 0x00, 0x00, 0xab, 0xaa, 0x2a, 0x3f],
 };
 
+/// The upscaler's `divl 0x10c(%rdi)` (a round-robin distributor's divisor),
+/// +0x28f03e8. When the resolution patch shrinks the output the divisor can
+/// be zero, which traps (0xc0000094); the patch redirects it to a trampoline
+/// that clamps the divisor to 1.
+pub const DIV_ZERO: Site = Site {
+    at: 0x28f03e8,
+    what: "the upscaler's divide by the bucket count",
+    bytes: &[0xf7, 0xb7, 0x0c, 0x01, 0x00, 0x00],
+};
+
+/// Padding at the end of `.text` that holds the divide-clamp trampoline.
+pub const DIV_TRAMP: Site = Site {
+    at: 0x5f40966,
+    what: "padding for the divide-clamp trampoline",
+    bytes: &[0xcc; 16],
+};
+
 /// The upscaler picker, +0x7e93f0, to its first `ret`.
 pub const PICKER: Site = Site {
     at: 0x7e93f0,
@@ -315,6 +332,28 @@ pub fn output_code(width: u32, height: u32) -> Vec<u8> {
 pub fn own_scale_code(scale: f32) -> Vec<u8> {
     let mut c = OWN_SCALE.bytes[..6].to_vec();
     c.extend(scale.to_le_bytes());
+    c
+}
+
+/// The trampoline written at [`DIV_TRAMP`]: divides `edx:eax` by the
+/// divisor in `[rdi+0x10c]`, clamped to 1 when it is zero (the quotient in
+/// `eax` is discarded by the caller; only the remainder in `edx` matters).
+pub fn div_trampoline_code() -> Vec<u8> {
+    vec![
+        0x8b, 0x8f, 0x0c, 0x01, 0x00, 0x00, // mov ecx, [rdi+0x10c]
+        0x85, 0xc9, // test ecx, ecx
+        0x75, 0x02, // jnz +2
+        0xb1, 0x01, // mov cl, 1
+        0xf7, 0xf1, // div ecx
+        0xc3, // ret
+    ]
+}
+
+/// What goes at [`DIV_ZERO`]: a 5-byte `call` to the trampoline and a NOP.
+pub fn div_call_code() -> Vec<u8> {
+    let mut c = vec![0xe8];
+    c.extend(rel(DIV_TRAMP.at, DIV_ZERO.at + 5));
+    c.push(0x90);
     c
 }
 
@@ -410,8 +449,65 @@ pub unsafe fn write_together(base: usize, size: usize, parts: &[(&Site, &[u8])])
 }
 
 /// Sites written together, each with its replacement.
-#[cfg(windows)]
 type Group = Vec<(&'static Site, Vec<u8>)>;
+
+/// What the switches ask to be patched, as groups of sites (each written all or none) with the
+/// value the log shows: nothing for a fidelity run, which must leave the title's code alone.
+/// Pure, so both paths are tested without an image.
+pub fn plan_asked(
+    output: Asked,
+    pool_skip: bool,
+    scale: Option<f32>,
+    upscaler: Option<u32>,
+) -> Vec<(Group, String)> {
+    // Sites that only make sense together go in one group, written all or
+    // none: a smaller output with the pool check left in stops the title,
+    // and the check gone without a smaller output is pointless.
+    let mut asked: Vec<(Group, String)> = Vec::new();
+    if let Asked::Size((w, h)) = output {
+        let mut group = vec![(&OUTPUT, output_code(w, h))];
+        if (w, h) != (3840, 2160) {
+            group.push((&POOL_CHECK, pool_check_code()));
+        }
+        asked.push((group, format!("{w}x{h}")));
+    }
+    // Left to the title, the pool check alone (docs/mac/PATCHES.md, L3): not
+    // when the output is patched, which has the check in its group already.
+    let output_patched = matches!(output, Asked::Size((w, h)) if (w, h) != (3840, 2160));
+    if pool_skip && !output_patched {
+        asked.push((vec![(&POOL_CHECK, pool_check_code())], "skip".to_string()));
+    }
+    if let Some(s) = scale {
+        asked.push((vec![(&OWN_SCALE, own_scale_code(s))], format!("{s}")));
+    }
+    if let Some(kind) = upscaler {
+        asked.push((vec![(&PICKER, picker_code(kind))], format!("returns {kind}")));
+    }
+    // The divide-clamp: with any of the above, so a small output that zeroes
+    // the distributor's divisor does not trap with 0xc0000094. mac: not on a
+    // fidelity run (VICTORY_OUTPUT=0, nothing asked) that must leave the title's
+    // code alone and log no `resolution: ... Done` line.
+    if !asked.is_empty() {
+        asked.push((
+            vec![(&DIV_TRAMP, div_trampoline_code()), (&DIV_ZERO, div_call_code())],
+            "div-by-zero clamp".into(),
+        ));
+    }
+    asked
+}
+
+/// The line that says which path this run is on, once, before any site is written:
+/// `resolution: fidelity, no site patched` when nothing is asked (the title's own settings
+/// decide), else `resolution: perf, N sites patched: ...` over what is asked (the sites that
+/// then fail are said one by one).
+pub fn path_line(asked: &[(Group, String)]) -> String {
+    if asked.is_empty() {
+        return "resolution: fidelity, no site patched".to_owned();
+    }
+    let sites: usize = asked.iter().map(|(g, _)| g.len()).sum();
+    let what: Vec<&str> = asked.iter().map(|(_, v)| v.as_str()).collect();
+    format!("resolution: perf, {sites} sites asked to be patched ({})", what.join(", "))
+}
 
 /// Applies what the switches ask for; a line each in the log and on
 /// standard output.
@@ -421,32 +517,8 @@ type Group = Vec<(&'static Site, Vec<u8>)>;
 /// code yet.
 #[cfg(windows)]
 pub unsafe fn apply_asked(base: usize, size: usize) {
-    // Sites that only make sense together go in one group, written all or
-    // none: a smaller output with the pool check left in stops the title,
-    // and the check gone without a smaller output is pointless.
-    let mut asked: Vec<(Group, String)> = Vec::new();
-    if let Asked::Size((w, h)) = asked_output() {
-        let mut group = vec![(&OUTPUT, output_code(w, h))];
-        if (w, h) != (3840, 2160) {
-            group.push((&POOL_CHECK, pool_check_code()));
-        }
-        asked.push((group, format!("{w}x{h}")));
-    }
-    // Left to the title, the pool check alone (docs/mac/PATCHES.md, L3): not
-    // when the output is patched, which has the check in its group already.
-    let output_patched = matches!(asked_output(), Asked::Size((w, h)) if (w, h) != (3840, 2160));
-    if pool_check_skip_asked() && !output_patched {
-        asked.push((vec![(&POOL_CHECK, pool_check_code())], "skip".to_string()));
-    }
-    if let Some(s) = asked_render_scale() {
-        asked.push((vec![(&OWN_SCALE, own_scale_code(s))], format!("{s}")));
-    }
-    if let Some(kind) = asked_upscaler() {
-        asked.push((
-            vec![(&PICKER, picker_code(kind))],
-            format!("returns {kind}"),
-        ));
-    }
+    let asked = plan_asked(asked_output(), pool_check_skip_asked(), asked_render_scale(), asked_upscaler());
+    println!("{}", path_line(&asked));
     for (group, value) in asked {
         let parts: Vec<(&Site, &[u8])> = group.iter().map(|(s, c)| (*s, c.as_slice())).collect();
         // SAFETY: the caller's promise.
@@ -480,6 +552,48 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fidelity_run_patches_no_site_and_says_so() {
+        // VICTORY_OUTPUT=0 (the title's own size), nothing else asked: no group, so no site.
+        let asked = plan_asked(Asked::Title, false, None, None);
+        assert!(asked.is_empty(), "no divide clamp either: it only comes with a patch");
+        assert_eq!(path_line(&asked), "resolution: fidelity, no site patched");
+    }
+
+    #[test]
+    fn a_perf_run_patches_the_output_with_the_pool_check_and_the_clamp() {
+        let asked = plan_asked(Asked::Size((1280, 720)), false, None, None);
+        let sites: Vec<u32> = asked.iter().flat_map(|(g, _)| g.iter().map(|(s, _)| s.at as u32)).collect();
+        assert_eq!(
+            sites,
+            [OUTPUT.at, POOL_CHECK.at, DIV_TRAMP.at, DIV_ZERO.at].map(|a| a as u32),
+            "output + pool check in one group, then the clamp"
+        );
+        assert_eq!(asked[0].1, "1280x720");
+        assert_eq!(
+            path_line(&asked),
+            "resolution: perf, 4 sites asked to be patched (1280x720, div-by-zero clamp)"
+        );
+        // The title's own 3840x2160 needs no pool check.
+        let asked = plan_asked(Asked::Size((3840, 2160)), true, None, None);
+        assert_eq!(asked[0].0.len(), 1, "only the output site: 3840x2160 is what the pool is sized for");
+        assert_eq!(asked.len(), 3, "output, the pool check alone (this output has none in its group), clamp");
+    }
+
+    #[test]
+    fn the_pool_check_alone_the_scale_and_the_upscaler_are_each_a_perf_patch() {
+        // Pool check skipped with the title's own size: one site, plus the clamp.
+        let asked = plan_asked(Asked::Title, true, None, None);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[0].1, "skip");
+        assert!(path_line(&asked).starts_with("resolution: perf, 3 sites"), "{}", path_line(&asked));
+        let asked = plan_asked(Asked::Title, false, Some(0.75), Some(7));
+        assert_eq!(asked.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>(), ["0.75", "returns 7", "div-by-zero clamp"]);
+        // An output that keeps the pool check in its group does not get it a second time.
+        let asked = plan_asked(Asked::Size((1920, 1080)), true, None, None);
+        assert_eq!(asked.iter().filter(|(g, _)| g.iter().any(|(s, _)| s.at == POOL_CHECK.at)).count(), 1);
+    }
 
     #[test]
     fn the_pool_check_is_skipped_only_when_asked() {
@@ -606,6 +720,28 @@ mod tests {
         assert_eq!(c[48], 0xeb);
         assert_eq!(50 + c[49] as usize, 61, "jmp lands at the end");
         assert!(c[50..].iter().all(|&x| x == 0xcc));
+    }
+
+    /// The divide-clamp: the call lands on the trampoline, which keeps the
+    /// title's `div` on `[rdi+0x10c]` but never by zero.
+    #[test]
+    fn the_divide_clamp_calls_its_trampoline() {
+        assert_eq!(DIV_ZERO.bytes, [0xf7, 0xb7, 0x0c, 0x01, 0x00, 0x00]); // div dword [rdi+0x10c]
+        let call = div_call_code();
+        assert_eq!(call.len(), DIV_ZERO.bytes.len(), "the same length as the site");
+        assert_eq!(call[0], 0xe8);
+        let target = (DIV_ZERO.at + 5) as i64
+            + i64::from(i32::from_le_bytes(call[1..5].try_into().unwrap()));
+        assert_eq!(target, DIV_TRAMP.at as i64);
+        assert_eq!(call[5], 0x90);
+        let t = div_trampoline_code();
+        assert!(t.len() <= DIV_TRAMP.bytes.len(), "fits the padding");
+        assert_eq!(t[..6], [0x8b, 0x8f, 0x0c, 0x01, 0x00, 0x00]); // mov ecx, [rdi+0x10c]
+        assert_eq!(t[6..8], [0x85, 0xc9]); // test ecx, ecx
+        assert_eq!(t[8..10], [0x75, 0x02]); // jnz over the next
+        assert_eq!(t[10..12], [0xb1, 0x01]); // mov cl, 1
+        assert_eq!(t[12..14], [0xf7, 0xf1]); // div ecx
+        assert_eq!(t[14], 0xc3);
     }
 
     #[test]

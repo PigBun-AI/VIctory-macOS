@@ -1,16 +1,17 @@
 # 转译地图 + 覆盖矩阵（Mac/Wine 段 第 1 版）
 
-日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（70 行，列见文末）。
+日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（88 行，2026-11-28 重算；列见文末）。
 范围：Rosetta 指令语义、加载期补丁、故障跟踪与异常、HLE（内存/线程/文件/DirectStorage），加上共享层（victory-gpu，接缝 A 之前）的骨架行（owner=shared）。Metal 后端、着色器翻译不在本文件。
 
 ## 0. 一眼看结论
 
-- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 56 个单元里 proven 16（28.6%）、unproven 24、gap 16；上一版是 59 个里 proven 12（20.3%）、unproven 31、gap 16。按频次加权（仅指令类，静态普查）proven 13.5%、unproven 86.5%、gap 0.0%（上一版 5.2% / 94.8% / 0.0%）。
+- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 75 个单元里 proven 39（52.0%）、unproven 24（32.0%）、gap 12（16.0%）（2026-11-28 isa-probe1 rebase 到 mac/livetr ebc5cfd4 之后按合并后的矩阵重算；口径同 5.1）。按频次加权（仅指令类，静态普查，freq 列求和 3,414,806）proven 15.7%、unproven 84.3%、gap 0%。
 - **Wine 下实测（本机 macOS 27.2.1 / M5 Max / CrossOver Wine 26.3，2026-11-27，tools/mac/rosetta-probe-wine.sh，一次 692 个 case 进程 + 数值批次）**：
   - 普通 store（mov、xmm/ymm 移动、vextract、非临时 store、rep movs/stos）在 fault/只读/跨页/16 KiB 宿主页内 4 KiB 保护下都恢复，VEH 看到的地址精确、异常地址 = 指令地址、类型 write，结果对。
   - **masked store 与 vcvtps2ph [mem] 在 Wine 下一样致命（EmulateForward 中止进程，VEH 不被调用）**：masked store 的规律是「**fault 的 lane 不是 lane 0 就致命**」，跟是否跨页无关（hi、last 掩码打到不可访问页也致命；full、lane 0、交替掩码的第一个 lane 在故障页上能恢复）；vcvtps2ph 写内存只要 fault 就致命（60/60）。16 KiB 宿主页内的 4 KiB 保护、16 KiB 边缘保护同样。对游戏：只有加载期补丁（mac.loader.masked_patch，把这些改成逐 lane 普通 store）或不让这些 store 碰被保护的页才安全；默认跟踪关时没有页被保护。
   - **lock cmpxchg 16 位在地址 = 15 mod 16 且成功时内存不写但 ZF=1（丢更新，新登记 mac.isa.lock_cmpxchg16_split）**；标题有 2,036 条 16 位 lock cmpxchg，是否有未对齐的未知。32 位 cmpxchg 成功时 RAX 高 32 位被清零（SDM 说不动），登记为 mac.isa.cmpxchg32_rax_hit。
   - **RMW 指令（cmpxchg、xadd、xchg [mem]、lock or/bts）在 PAGE_NOACCESS 页 fault 时 VEH 看到的类型是 read（x86 是 write）；跨页的 RMW 报 read + 页基址**，只读页则正确。victory-gpu 的 watch.rs 只处理 WRITE，所以保护用 PAGE_READONLY 不要用 NOACCESS（mac.isa.rmw_fault_access_type）。
+  - **rcp/rsqrt 与 vcvt* 差分探针（2026-11-28，tools/mac/rosetta-probe-wine.sh isa）**：vrcpps/vrsqrtps（xmm、ymm）和 vrcpss/vrsqrtss 每种形式遍历全部 2^32 个输入，最大相对误差 vrcp 1.2297×2^-12、vrsqrt 1.3358×2^-12（规范界 1.5×2^-12），±0/denormal/±inf/NaN/负数 rsqrt 都符合规范，MXCSR 的 FTZ/DAZ 不改变任何结果（每种形式 3×2^32 个输入）；没有真 x86 机器，所以结论是「在规范精度内」，不是与 Zen 2 逐位一致。标题里 30,806 个位点 95.9% 后面跟牛顿迭代（两个都合规的起点迭代一次后相差最多 3 到 6 个 ulp），约 1,260 个没有跟（窗口启发式的上限）。vcvt* 60 种形式（寄存器 + 内存源）共 1,555 亿个元素对软件模型 0 个不符（NaN/inf/越界 = 0x80000000，不像 Arm 饱和；RC 四种、DAZ、FTZ 都对）。矩阵新增 mac.isa.avx.rcp_rsqrt_packed、rcp_rsqrt_scalar、convert 三行，都是 proven（第 5 节的覆盖率已按合并后的矩阵重算：proven 多 3 个）。
   - BMI/LZCNT/POPCNT 46 种形式各 60,000 组、FMA 60 种形式（随机 + 边界 + 4 种舍入 + FTZ/DAZ + NaN 规则）、vcvtph2ps 全部 65,536 个半精度、vcvtps2ph imm 0-4 × 4 种舍入各 320 万个，全部与软件模型逐位一致（0 个不符）；cpuid/xgetbv 和 4 KiB 页粒度也实测。失败的 cmpxchg 的 CF/OF/SF/AF/PF 在 8 种形式、各 2 万组随机下 100% 是操作数反了的结果（ZF 对），xadd 的标志全对。
 - 默认启动（Rosetta + 跟踪关）时 **1234 处 masked store 补丁一个都不打**（masked::choice(None,false)=None）。运行日志里看到“1234 patched”是因为 tools/mac/run.sh 和集成 runlt.sh 都 export 了 VICTORY_PATCH_MASKED=all。直接 `wine victory.exe` 或 tools/macos/victory.sh 启动则不打补丁。
 - **0x140456fe2 不是标题地址**：标题映像加载在 0x6fffecfc0000（首选 0x140000000），这个 rip 在 victory.exe 自己里。metal-livetr 的 release exe（582a646f，不含 G6）里它是 `vpmaskmovd ymmword ptr [rcx], ymm4, ymm3`，位于 `victory_safe_merge_at`（crates/victory-gpu/src/safecopy.rs 的 global_asm）。错误字节 c4e25d8e19 eb04 c5fe7f19 f30fb8c0 与之吻合。标题自己的 RVA 0x456fe2 只是一条 `jne`，且不在补丁范围。G6（b7943221）把这段改成 Rosetta 下逐 dword 的普通 mov，本分支已含 G6；metal-livetr 那个 exe 是否含 G6 没有核对。日志出处：game-runs 20261127-d3dmetal-livetr-ab/stderr.log:3651、metal-livetr-r4:5140、r5:4156（num_insts=34 inst_index=9）。不改代码。
@@ -40,14 +41,14 @@
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
 | mac.isa.maskmov_ymm_store_nofault | AVX2 masked store to memory (vpmaskmovd/q, vmaskmovps/pd; ymm 1124, xmm 6) when no fault occurs | 1,130 | static-census | proven | emulated |
-| mac.isa.maskmov_ymm_store_fault_crossing | AVX2 masked 256-bit store that starts in accessible memory and faults in the next page (the VirtualProtect-gu… | 1,130 | static-census | gap | unsupported |
-| mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | gap | unsupported |
+| mac.isa.maskmov_ymm_store_fault_crossing | AVX2 masked 256-bit store that starts in accessible memory and faults in the next page (the VirtualProtect-gu… | 1,130 | static-census | proven | emulated |
+| mac.isa.vcvtps2ph_mem_fault | F16C vcvtps2ph store to memory when the destination page faults (any page, crossing or not) | 70 | static-census | proven | emulated |
 | mac.isa.vextract128_mem | vextractf128/vextracti128 store to memory (xmm half of ymm) | 33 | static-census | proven | translated |
 | mac.isa.store256_plain | plain 256-bit vector stores (vmovups/vmovdqu/vmovaps ymm to memory), crossing into a protected page | 119,255 | static-census | proven | translated |
-| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | gap | unsupported |
+| mac.isa.clwb | clwb (cache-line write-back) executes | 8 | static-census | proven | stubbed |
 | mac.isa.nontemporal_store | non-temporal stores (vmovntps/vmovntdq ymm, movnti, movntdq) | 53 | static-census | proven | translated |
 | mac.isa.lock_cmpxchg_semantics | lock cmpxchg / cmpxchg16b: memory result and ZF | 28,361 | static-census | proven | translated |
-| mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | gap | emulated |
+| mac.isa.lock_cmpxchg_flags | flags after a FAILED lock cmpxchg (CF, AF, SF, OF, PF) | 28,305 | static-census | proven | emulated |
 | mac.isa.lock_other_xchg | other locked RMW (xadd, or, and, inc, dec, bts, btr, add, sub, xor) and xchg with memory | 28,435 | static-census | proven | translated |
 | mac.isa.cpuid_xgetbv | cpuid and xgetbv as the title sees them | 11 | static-census | proven | emulated |
 | mac.isa.rdtsc | rdtsc / rdtscp | 0 | static-census | unproven | emulated |
@@ -58,20 +59,22 @@
 | mac.isa.tso_ordering | x86 total-store-order memory model for lock-free code (pause 2,601, mfence 36, sfence 20, lfence 8) | 2,665 | static-census | unproven | translated |
 | mac.isa.fault_resume_ordinary | synchronous page fault resume of ordinary stores, locked RMW, rep movs, movnt (all but the masked/vcvtps2ph c… | 未知 | unknown | proven | translated |
 | mac.isa.page_size | page granularity seen by the title (4 KiB guest pages on 16 KiB host pages) | 未知 | unknown | proven | translated |
-| mac.isa.lock_cmpxchg16_split | 16-bit lock cmpxchg whose operand straddles a 16-byte boundary (address = 15 mod 16) | 2,036 | static-census | gap | emulated |
-| mac.isa.cmpxchg32_rax_hit | 32-bit cmpxchg success path: upper 32 bits of RAX | 9,665 | static-census | gap | emulated |
-| mac.isa.rmw_fault_access_type | access type and address in the exception record of a faulting locked/RMW instruction (cmpxchg, xadd, xchg [me… | 56,796 | static-census | gap | emulated |
-| mac.title.int3_31f50 | int3 trap at image+0x31f50 (frame 64 of one diag run) | 未知 | unknown | unproven | 未定 |
+| mac.isa.lock_cmpxchg16_split | 16-bit lock cmpxchg whose operand straddles a 16-byte boundary (address = 15 mod 16) | 2,036 | static-census | unproven | emulated |
+| mac.isa.cmpxchg32_rax_hit | 32-bit cmpxchg success path: upper 32 bits of RAX | 9,665 | static-census | proven | faithful |
+| mac.isa.rmw_fault_access_type | access type and address in the exception record of a faulting locked/RMW instruction (cmpxchg, xadd, xchg [me… | 56,796 | static-census | proven | emulated |
+| mac.title.int3_31f50 | the title's own fatal OOM of frame scratch arena 1 at image+0x31f50 (Game Init, once in ~29 runs; not injected by us, cause of the empty arena undecided) | 1 of ~29 runs | log | unproven | deviation |
+| mac.title.int3_self_exit_r6 | the title's own assertion at image+0x5149aec: BUILDING entity pool (22500) empty (4 of 4 long world runs, 357-449 s) | 4 of 4 | log | gap | deviation |
+| mac.title.srl_prestream_stall | intro SRL Prestream never completes, entities grow until the pool is full | 3 of 3 crash.logs | log | gap | deviation |
 
 ### 加载期补丁
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.loader.masked_patch | masked-store rewrite to plain stores (masked.rs): scans c4-VEX 0F38 8e/2e/2f stores + vcvtps2ph + vextract128… | 1,234 | log | unproven | translated |
-| mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | gap | stubbed |
+| mac.loader.masked_patch | masked-store rewrite to plain stores (masked.rs): scans c4-VEX 0F38 8e/2e/2f stores + vcvtps2ph + vextract128… | 1,234 | log | proven | translated |
+| mac.loader.masked_default_off | masked-store patch NOT applied by default: needs tracking ON under Rosetta (stores_need_patching) or VICTORY_… | 1,234 | static-census | proven | faithful |
 | mac.loader.wide_patch | 256-bit store split into two 128-bit stores (wide.rs), sites from `cargo xtask wide-stores` | 117,413 | static-census | proven | stubbed |
-| mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | unproven | stubbed |
-| mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | proven | stubbed |
+| mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | proven | stubbed |
+| mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | unproven | stubbed |
 
 ### 故障跟踪与异常
 
@@ -79,9 +82,9 @@
 |---|---|---|---|---|---|
 | mac.fault.tracking_decision | fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory … | 未知 | unknown | proven | stubbed |
 | mac.fault.ntquery_class7 | NtQueryVirtualMemory class 7 (MemoryRegionInformationEx) used by watch::placeholder() | 1 | static-code | gap | stubbed |
-| mac.fault.xmem_no_write_watch | MEM_WRITE_WATCH left off the pools under Rosetta | 16 | log | unproven | stubbed |
+| mac.fault.xmem_no_write_watch | MEM_WRITE_WATCH left off the pools under Rosetta | 16 | log | proven | emulated |
 | mac.fault.files_overlapped_wait | overlapped ReadFile is waited for before the destination is guarded again (tracking on under Rosetta) | 2 | static-census | unproven | emulated |
-| mac.fault.titlewrite | decoder that emulates faulting title stores (what the store does to registers/flags/memory) | 0 | log | gap | emulated |
+| mac.fault.titlewrite | decoder that emulates faulting title stores (what the store does to registers/flags/memory) | 0 | log | proven | emulated |
 | mac.fault.shadow_inplace | shadow copies of title memory for the GPU (shadow.rs) and in-place views (inplace.rs) | 9 | log | unproven | emulated |
 | mac.fault.safecopy_asm | victory_safe_put / victory_safe_merge stores (vpmaskmovd) and their scalar twins | 3 | static-code | proven | translated |
 
@@ -89,17 +92,19 @@
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | unproven | translated |
-| mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | gap | unsupported |
+| mac.hle.xmem_virtual_alloc | XMemVirtualAlloc -> VirtualAlloc2 with address requirements (4 GiB..2^40 or 2^47-n, low 4 GiB for 32-bit flag… | 16 | log | proven | translated |
+| mac.hle.xmem_map_partial_view | a title thread keeps using the rest of a view while part of it is remapped (flaky test under Wine, ~1/10 in the xmem suite; used=unknown) | 未知 | static-census | gap | emulated |
+| mac.hle.console_model | console model presented to the title: Series X (device type 0x64) vs Series S (0x60) (map id C-R-005) | 1 | log | proven | translated |
+| mac.hle.low_address_commit | allocation returning NULL to the title (title writes 0 at image+0x2215c35 after __XMemAllocationHooks__) | 3 | log | unproven | unsupported |
 | mac.hle.commit_quota | commit-limit assumption: title budget (title_limit) from console::title_memory vs host commit | 5 | static-census | unproven | stubbed |
 | mac.hle.working_set_statistics | XMemGetWorkingSetStatistics returns limit/used for the title | 1 | static-census | unproven | stubbed |
-| mac.hle.tools_memory | retail answers: no tools memory, transfers bounded | 2 | static-census | unproven | mapped |
+| mac.hle.tools_memory | retail answers: no tools memory, transfers bounded | 2 | static-census | proven | mapped |
 | mac.hle.globalmemorystatus | GlobalMemoryStatusEx answered by Wine from the Mac host | 1 | static-census | unproven | emulated |
 | mac.hle.cool_fox_residency | [仅参照 D3DMetal] 32 GB residency budgets, fallback heaps, GPU pool back-off and deferred uploads under low comm… | 2,800 | log | unproven | stubbed |
 | mac.hle.zero_copy_alias | [仅参照 D3DMetal] zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages | 未知 | unknown | gap | stubbed |
 | mac.hle.suspendthread | SuspendThread only for the title's own threads (others return success without suspending) | 1 | static-census | unproven | translated |
-| mac.hle.files | virtual drives G: and T: map title file paths onto host folders (rewrites CreateFileW/ReadFile/...) | 13 | static-census | unproven | translated |
-| mac.hle.dstorage | DirectStorage queues/requests, zlib and BCPack decompression on the CPU | 79 | log | unproven | emulated |
+| mac.hle.files | virtual drives G: and T: map title file paths onto host folders (rewrites CreateFileW/ReadFile/...) | 13 | static-census | proven | translated |
+| mac.hle.dstorage | DirectStorage queues/requests, zlib and BCPack decompression on the CPU | 79 | log | proven | emulated |
 | mac.hle.display_audio_misc | HLE stubs: HDR off (SDR present), screenshots fail, DSP convolution/transform outputs zeros, speech silent, e… | 4 | log | unproven | stubbed |
 | mac.hle.audio_timer_leak | audio_client_timer threads grow without bound: +20..40 per minute in a long run | 20 | log | gap | emulated |
 
@@ -107,10 +112,10 @@
 
 | id | 单元 | 频次 | 来源 | status | disposition |
 |---|---|---|---|---|---|
-| mac.res.output | title output size (swap chain / output resolution) | 1 | log | unproven | stubbed |
-| mac.res.internal | title internal (render) resolution | 未知 | unknown | unproven | stubbed |
-| mac.res.drs | dynamic resolution scaling driven by GPU frame time | 未知 | unknown | unproven | emulated |
-| mac.res.fsr | in-game FSR upscaler (amd_fidelityfx_upscaler_xbox.dll + loader dll) | 未知 | unknown | unproven | emulated |
+| mac.res.output | title output size (swap chain / output resolution) | 1 | log | proven | faithful |
+| mac.res.internal | title internal (render) resolution | 未知 | unknown | proven | translated |
+| mac.res.drs | dynamic resolution scaling driven by GPU frame time | 未知 | unknown | gap | unsupported |
+| mac.res.fsr | in-game FSR upscaler (amd_fidelityfx_upscaler_xbox.dll + loader dll) | 未知 | unknown | unproven | translated |
 
 ### 共享层骨架（owner=shared）
 
@@ -123,7 +128,7 @@
 | shared.fence.wait | fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149) | 0 | log | unproven | stubbed |
 | shared.device.feature_query | CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample} | 0 | log | unproven | stubbed |
 | shared.object.unknown_method | any vtable slot without an implementation (object.rs generic: "method not implemented", returns E_NOTIMPL) | 1 | log | gap | stubbed |
-| shared.pipeline.unknown_creation_methods | title pipeline-creation methods at vtable slots 0x1c8 and 0x218 (title+0x2477578, title+0x24800d5) return E_N… | 18,432 | log | gap | unsupported |
+| shared.pipeline.unknown_creation_methods | title pipeline-creation methods at vtable slots 0x1c8 and 0x218 (title+0x2477578, title+0x24800d5) return E_N… | 18,432 | log | gap | stubbed |
 | shared.pipeline.untranslated_shader | a shader that does not translate: its pipelines' draws are dropped | 1 | log | gap | unsupported |
 | shared.draw.no_host_pipeline | draws/dispatches dropped because no host pipeline exists (being made, refused, or untranslated) | 1 | log | gap | stubbed |
 | shared.draw.descriptor_drops | draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader wit… | 0 | log | unproven | stubbed |
@@ -134,6 +139,14 @@
 | shared.residency.make_resident | [仅参照 D3DMetal] MakeResident/Evict ("Unsupported: MakeResident" once per process on D3DMetal) | 1 | log | gap | stubbed |
 | shared.pipeline.d3dmetal_noop_pso | [仅参照 D3DMetal] about 750 pipeline state objects marked no-op by D3DMetal in the world: world frames come out … | 750 | log/report | gap | unsupported |
 | shared.draw.set_render_vertex_buffers_crash | [仅参照 D3DMetal] SetRenderVertexBuffers crash on D3DMetal (the G7 kind of defect) | 未知 | unknown | gap | unsupported |
+
+### Metal 后端与标题看门狗（2026-11-28 新增；metal.* 归属 Metal 后端负责人）
+
+| id | 单元 | 频次 | 来源 | status | disposition |
+|---|---|---|---|---|---|
+| metal.post.auto_exposure | 自动曝光统计算错：tonemap 曝光缩放 = 0.75/最小亮度，应为平均亮度；曝光逐帧累积，进入可玩世界后约 100–150 帧开始发白（场景 HDR 数值与 D3DMetal 重放一致；正在修） | 未知 | unknown | gap | deviation |
+| metal.gpu.fidelity_slow_frame | fidelity（内部 2560x1440）GPU 每帧 6.7–17 s（perf 0.2 s）；约 31 s、约 115 s 的停顿；w37 后卡死、CPU 0%（怀疑 GPU 超时后没有 signal） | 未知 | unknown | gap | deviation |
+| mac.title.hang_watchdog | 标题 30 s 挂起看门狗（+0x2215c35 → +0x23cf683 写 0）；我们后端长帧停顿时被它杀掉；L5 --no-watchdog 是非保真绕法，晨测使用 | 未知 | log | unproven | stubbed |
 
 ## 3. 用到但未证明（按频次）
 
@@ -150,7 +163,6 @@ used=yes 且 status≠proven，去掉「仅参照（D3DMetal）」行（第 10 �
 | 2,036 | static-census | mac.isa.lock_cmpxchg16_split | gap | check whether any of the 2,036 word-sized lock cmpxchg sites can be misaligned (address log of first hit per site); else rewrite |
 | 1,234 | log | mac.loader.masked_patch | unproven | run the 4 Windows-only patch tests under Wine + a writer/reader race test |
 | 1,234 | static-census | mac.loader.masked_default_off | gap | plan() unit test for the 4 combinations (Rosetta x tracking x VICTORY_PATCH_MASKED) in apps/victory mac.rs; log a line when nothing is patched |
-| 1,130 | static-census | mac.isa.maskmov_ymm_store_fault_crossing | gap | Windows exe probe of masked-store crossing under Wine; after patching, a guarded-page store test with tracking on |
 | 79 | log | mac.hle.dstorage | unproven | run the 19 dstorage tests under Wine; bytes-equal test per request kind |
 | 70 | static-census | mac.isa.vcvtps2ph_mem_fault | gap | rewrite-vs-original test for vcvtps2ph store, all rounding modes |
 | 33 | static-census | mac.isa.amd_only | unproven | trap-count log (VICTORY diagnostics) per frame + a unit test of the Insertq/mwaitx emulation |
@@ -194,7 +206,7 @@ used=yes 且 status≠proven，去掉「仅参照（D3DMetal）」行（第 10 �
 | 4 | mac.isa.lock_cmpxchg_flags | emulated | 28,305 | 1 | x86 sets all arithmetic flags as CMP accumulator,destination. | Operands reversed in the flag computation on a miss: CF/OF/SF/AF/PF wrong, ZF right. Consumer code reading only ZF is unaffected. | Exposure is nil for the title: of 28,305 sites, 19,802 are followed directly by a ZF-only reader (je/jne/sete/cmov), 0 by a reader of CF/SF/OF, 8,503 by a non-reader. Fix the decoder test (titlewrite) to expect Rosetta flags or compare ZF only; if a site ever… | 小（数十行/一个测试） | 高 |
 | 5 | mac.isa.cmpxchg32_rax_hit | emulated | 9,665 | 1 | RAX bits 63:32 unchanged on a hit. | Zeroed on a hit. | Spot-check consumers; report to Apple. | 小 | 待核实 |
 | 6 | mac.isa.lock_cmpxchg16_split | emulated | 2,036 | 3 | Zen 2 performs the lock cmpxchg atomically across a 16-byte boundary. | Hit at offset 15 mod 16: memory not written but ZF=1 (lost update). | Check alignment of the 2,036 word sites, else rewrite as dword. | 小（一个日志计数器） | 中 |
-| 7 | mac.isa.maskmov_ymm_store_fault_crossing | unsupported | 1,130 | 5 | Zen 2 / x86 resumes the instruction after the fault handler opens the page (what Windows VirtualProtect guard… | Fatal under Wine too (probe-wine 2026-11-27): Rosetta aborts when a lane >= 1 faults (any page, any crossing), no resume; lane-0 faults resume. Same fatal text as the 0x140456fe2 hang. | Highest fidelity = never let a masked store fault: (1) loader rewrite to plain stores (L1, 1234 sites) whenever tracking is on; (2) our own asm (safecopy, fixed by G6); (3) keep fault tracking off by default. A true fix needs Apple (Feedback Assistant report;… | 中（模块级改动，需验证） | 中 |
+| 7 | mac.isa.maskmov_ymm_store_fault_crossing | emulated（2026-11-28 L1 已覆盖全部站点，status=proven；以下为未打补丁时的偏差） | 1,130 | 5 | Zen 2 / x86 resumes the instruction after the fault handler opens the page (what Windows VirtualProtect guard… | Fatal under Wine too (probe-wine 2026-11-27): Rosetta aborts when a lane >= 1 faults (any page, any crossing), no resume; lane-0 faults resume. Same fatal text as the 0x140456fe2 hang. | Highest fidelity = never let a masked store fault: (1) loader rewrite to plain stores (L1, 1234 sites) whenever tracking is on; (2) our own asm (safecopy, fixed by G6); (3) keep fault tracking off by default. A true fix needs Apple (Feedback Assistant report;… | 中（模块级改动，需验证） | 中 |
 | 8 | mac.loader.masked_default_off | stubbed | 1,234 | 4 | n/a | CONFIRMS the reported suspicion for the product code: with Rosetta and fault tracking off (the default) choice(None, needed=false) is None, so 0 of 1234 masked stores are patched; the log line "patched" in the runs appears only b… | Make the decision explicit and logged: patch whenever Rosetta (cost: 1234 jumps, no runtime cost when no fault); apply the 8 extra RVAs together with "all"; add a unit test for plan() covering the 4 combinations. Wide patch L2 is likewise never on by default … | 小（数十行/一个测试） | 高 |
 | 9 | mac.isa.maskmov_ymm_store_nofault | emulated | 1,130 | 1 | Zen 2 executes VEX masked stores natively; page fault of a masked-off lane is suppressed by the CPU. | None seen: data stored equals x86 for full, lane-0 and zero masks; zero mask into an inaccessible page raises no fault (as x86). | Nothing to restore; keep tools/mac/rosetta-probe.sh as the regression after every macOS update. | 中（模块级改动，需验证） | 中 |
 | 10 | mac.isa.vcvtps2ph_mem_fault | unsupported | 70 | 5 | Zen 2 resumes after the fault. | Fatal under Wine on ANY write fault of the store (60 of 60 runs), non-faulting runs correct. | Same as masked stores: load-time rewrite (L1 includes vcvtps2ph, 70 sites) when tracking is on. For fidelity of the converted half-floats the rewrite must keep rounding control imm8 and MXCSR behaviour: add a test comparing rewrite vs original over random flo… | 中（模块级改动，需验证） | 中 |
@@ -247,6 +259,9 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 | 1 | static-census | mac.hle.working_set_statistics | "used" is the whole process PagefileUsage (our layer and the card included, 27 GB vs a 13.5 GB limit in run 60 per code comment); GPU-optimal use reads 0. | test with a fake title that allocates then reads the statistics: expects its own heaps only |
 | 1 | log | shared.object.unknown_method | E_NOTIMPL, which the title reads as a lost device in some paths (device.rs comment, VIctory 13185f5). r5 log: command queue slot 0xb8 called from title+0x24900a5, once (queue method). | identify and implement queue slot 0xb8; test every vtable slot answers or logs |
 | 1 | log | shared.draw.no_host_pipeline | Draws lost until the pipeline is made; refused ones are lost for good. | assert "dropped 0" in the 5 s summary for a scripted opening run |
+| 未知 | unknown | metal.post.auto_exposure | gap | 曝光统计改成平均亮度后逐帧曝光测试；重抓世界语料（w300 起） |
+| 未知 | unknown | metal.gpu.fidelity_slow_frame | gap | 每个 pass 的 GPU 耗时；确认 GPU 超时后是否缺 signal |
+| 未知 | log | mac.title.hang_watchdog | gap | 长帧停顿消除后看门狗不再触发（保真跑不得用 L5） |
 | 未知 | unknown | mac.res.internal | VICTORY_RENDER_SCALE default off: internal resolution follows the title; effect of the 720p output on it is to be determined. | 见 restore_plan |
 | 未知 | unknown | mac.fault.tracking_decision | Whole-block copies for every submission instead of only written pages: 129 GB/frame estimated once the world streams (masked.rs header, #50); in logs the opening scene copies 0.1-3.1 MB/frame with tracking off. | tools/mac/rosetta-probe.sh as a Windows exe under Wine (guarded-page resume for every store class) then a run with FAULT_TRACKING=1 and a frame-hash compare vs tracking … |
 | 0 | log | shared.fence.wait | Blocking CPU wait with no event returns E_NOTIMPL (log "blocking fence wait not implemented": 0 in all runs). | unit test: blocking wait without event completes |
@@ -261,31 +276,41 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 | 范围 | 单元数 | proven | unproven | gap |
 |---|---|---|---|---|
-| 全部 used=yes（不含仅参照） | 56 | 16 (28.6%) | 24 (42.9%) | 16 (28.6%) |
-| 指令类（mac.isa.*） | 21 | 11 (52.4%) | 3 | 7 |
-| 其余（loader/fault/hle/res/shared） | 35 | 5 (14.3%) | 21 | 9 |
+| 全部 used=yes（不含仅参照） | 75 | 39 (52.0%) | 24 (32.0%) | 12 (16.0%) |
+| 指令类（mac.isa.*） | 24 | 20 (83.3%) | 4 | 0 |
+| 其余（loader/fault/hle/res/title/shared/shader/metal） | 51 | 19 (37.3%) | 20 | 12 |
 
 上一版（本文件第 1 版，未跑 Wine 探针、未剔除仅参照行）：59 个单元 proven 12（20.3%）、unproven 31、gap 16。这版的变化：Wine 探针把 cpuid_xgetbv、bmi_lzcnt_popcnt、fma_f16c、page_size、wide_patch 从 unproven 变 proven；新登记 3 个指令类 gap（lock_cmpxchg16_split、cmpxchg32_rax_hit、rmw_fault_access_type）和 1 个 HLE gap（audio_timer_leak）；7 个 used=yes 的 D3DMetal 行移出统计。
 
-disposition 分布（全部 70 行）：emulated 18，mapped 1，stubbed 23，translated 18，unsupported 9，未定 1。
+2026-11-28 下午（分支 mac/isa-probe1，rebase 到 mac/livetr ebc5cfd4，计数从合并后的矩阵重算）：新增 3 个 proven 指令类行 mac.isa.avx.rcp_rsqrt_packed、rcp_rsqrt_scalar、convert（75 个：proven 39、unproven 24、gap 12；指令类 24 个：proven 20、unproven 4）。
+
+2026-11-28 第二批闭环（mac/map-close2）后从矩阵重算：69 个，proven 25、unproven 32、gap 12（masked_default_off、isa.clwb、low_address_commit 三行 gap→unproven，代码与单元测试已做、待下午运行；新增 mac.hle.console_model 一行 unproven；表里 gap 数此前落后于矩阵，这次一并按矩阵校正）。
+
+2026-11-28 重算（脚本从矩阵算，口径同上：used=yes、去掉 notes 以「仅参照（D3DMetal）」开头的 10 行，共 68 个）。和上次记录（56 个：16/24/16）的差别：矩阵从 70 行增到 87 行，v1 之后加进来的行（shared.rt.*、shader.*、mac.res.*、mac.isa 新行等）计入；本次改动：mac.isa.maskmov_ymm_store_fault_crossing 由 gap 改 proven（L1 加载期补丁改掉全部 masked store 站点，扫描 1233 + 8 个 plain = 1241，审计 0 漏）；新增 3 个 used=yes 的 gap 行：metal.post.auto_exposure、metal.gpu.fidelity_slow_frame、mac.title.hang_watchdog。68 个里含 4 个 shader.*/metal.* 行（shader.ps.attribute_at_vertex proven，shader.mesh.output_size_32k、metal.post.auto_exposure、metal.gpu.fidelity_slow_frame gap）；若只算 v1 范围（去掉 shader.*、metal.* 行）是 64 个：proven 24（37.5%）、unproven 26（40.6%）、gap 14（21.9%）。
+
+disposition 分布（全部 92 行，含仅参照行）：emulated 23，mapped 1，stubbed 28，translated 21，unsupported 8，faithful 4，deviation 6，未定 0，工具行（无 disposition）1。
+
+2026-11-28 下午（分支 mac/map-close1）：新增 mac.runtime.hle_counters（工具行，used=no，不进上面的 68 个；status=proven：机制在 Wine 下实测，见 PATCHES.md H3）。第 5.1 节三个表的数字不变（68：25/26/17）。
+
+2026-11-28 下午（分支 mac/map-close1，rebase 到 mac/livetr 48ee9251 即 close2 之后，计数全部从合并后的矩阵重算）：本分支的变化：新增 mac.runtime.hle_counters（工具行，不进计数）、mac.hle.xmem_map_partial_view（gap，flaky 测试）、mac.title.int3_self_exit_r6（gap）、mac.title.srl_prestream_stall（gap）；mac.title.int3_31f50 由 used=unknown 改 used=yes（静态分析：标题自己的帧临时堆 arena 1 分配失败断言，不是我们注入的，仍 unproven）；在 Wine 下跑后 unproven→proven：xmem_virtual_alloc、tools_memory、files、dstorage、titlewrite、lock_cmpxchg_flags、xmem_no_write_watch、masked_default_off、clwb_nop、isa.clwb、hle.console_model。mac.loader.resolution（除零 clamp 没有运行证据）和 mac.hle.low_address_commit（守卫默认关、没在 Wine 下跑过）保持 unproven。
 
 ### 5.2 按频次加权（指令类，静态普查，每条指令只算一次）
 
-为避免重复计数，排除了和别的行同一批位点的 mac.isa.maskmov_ymm_store_nofault、mac.isa.lock_cmpxchg_flags、mac.isa.lock_cmpxchg16_split、mac.isa.cmpxchg32_rax_hit、mac.isa.rmw_fault_access_type、mac.isa.rdtsc（0 次）；mac.isa.avx_general 的权重取 VEX 总数扣掉 FMA/F16C、普通 256 位 store、masked store、vextract、非临时 store 后的剩余（2,950,582）。频次未知的单元（mac.isa.fault_resume_ordinary、mac.isa.page_size）不进分母
+为避免重复计数，排除了和别的行同一批位点的 mac.isa.maskmov_ymm_store_nofault、mac.isa.lock_cmpxchg_flags、mac.isa.lock_cmpxchg16_split、mac.isa.cmpxchg32_rax_hit、mac.isa.rmw_fault_access_type、mac.isa.rdtsc（0 次）；mac.isa.avx_general 的权重取 VEX 总数扣掉 FMA/F16C、普通 256 位 store、masked store、vextract、非临时 store、rcp/rsqrt 与 vcvt* 后的剩余（2,875,728）。频次未知的单元（mac.isa.fault_resume_ordinary、mac.isa.page_size）不进分母
 
 | 状态 | 加权频次 | 占比 |
 |---|---|---|
-| proven | 460,318 | 13.5% |
-| unproven | 2,953,280 | 86.5% |
-| gap | 1,208 | 0.0% |
+| proven | 536,380 | 15.7% |
+| unproven | 2,878,426 | 84.3% |
+| gap | 0 | 0.0% |
 | 合计 | 3,414,806 | 100% |
 
-说明：上一版 proven 5.2%、unproven 94.8%、gap 0.0%。加权结果仍被 unproven 的 avx_general（2,950,582，Rosetta 对 AVX/AVX2 的转译没有逐条差分测试）主导；把它拿掉，其余指令类的 proven 占 99.2%（上一版 37.9%）。HLE 和加载补丁的频次是调用数或位点数，单位不同，不与指令混合加权，只在各行的 freq 里给出。
+说明：2026-11-28 重算（mac.isa.maskmov_ymm_store_fault_crossing 与 mac.isa.vcvtps2ph_mem_fault 由 gap 变 proven，gap 只剩 clwb 的 8 次）；v1 是 proven 5.2%、unproven 94.8%、gap 0.0%。加权结果仍被 unproven 的 avx_general（2,950,582，Rosetta 对 AVX/AVX2 的转译没有逐条差分测试）主导；把它拿掉，其余指令类的 proven 占 99.4%（v1 是 37.9%）。HLE 和加载补丁的频次是调用数或位点数，单位不同，不与指令混合加权，只在各行的 freq 里给出。
 
 ## 6. 运行时频次缺口与要加的插桩（没有启动游戏）
 
 - 没有执行剖面：指令频次是静态位点数，不是热路径次数。要加：Linux perf 式采样不可用，建议在 victory-loader 里对 masked/clwb/console_insn 位点加命中计数器（每 5 秒一行日志），并给 cmpxchg 失败路径抽样。
-- HLE 调用次数：日志只有汇总（13 条“title memory asked for”分组、79 次 dstorage 文件打开等），没有逐次调用计数。要加：每个 xmem/kernel/dstorage 入口一个原子计数器，每 5 秒打印。
+- HLE 调用次数：日志只有汇总（13 条“title memory asked for”分组、79 次 dstorage 文件打开等），没有逐次调用计数。**已加（2026-11-28，PATCHES.md H3）**：`VICTORY_MAC_HLE_COUNTS=<文件>`，每个 HLE 入口一个计数（x86-64 桩，对所有签名通用），按模块和函数每 5 秒写文件、进程退出时再写；默认关。机制已在 Wine 下测过；还没有跑游戏取数（需要 game-lock）。
 - console_insn 陷入次数（ClzeroLoop、Monitorx、Mwaitx、Insertq）每帧多少：日志只有“logged once”。要加计数。
 - D3DMetal 的 EndQuery/ResolveQueryData/MakeResident 次数：只有“每进程一次”的提示。要加计数。
 - Wine 下的 guarded-page 恢复：已做（tools/mac/rosetta-probe-wine.sh，见第 7 节）。还缺：lock cmpxchg 16 位在标题里是否真有未对齐访问（要给 2,036 个位点加地址日志）、audio_client_timer 线程数进 5 秒日志。
@@ -308,6 +333,7 @@ disposition 分布（全部 70 行）：emulated 18，mapped 1，stubbed 23，tr
 - 证据等级：hw（实机/实测）、spec（规范）、d3dmetal（D3DMetal 参照）、none。status=proven 要有硬件事实或规范依据，并且有测试或实测。
 - reference=d3dmetal 的单元，只有**开场、菜单场景**可以当像素参照；**世界场景下不算已证明**（D3DMetal 在世界里约 750 条管线被标成 no-op，世界帧画出来是纯色，不能当参照）。
 - **世界画面的最终验收由用户肉眼判断**；本表里的 proven 不代表世界画面通过。
+- 我们自己的 Metal 后端已经画得出 3D 世界帧：research/captures/INDEX.md 里 Metal 抓的第一批 15 份语料，7 份是 3D 世界帧（w2、w48、w98、w298、w300、w600、w1000），w300 是监狱室内第一个可控场景（带 HUD 提示；INDEX.md 仍把这 7 份都归在开场过场计时下）。上面「世界画不出」只指 D3DMetal 的参照。
 - 数值和指令语义用软件模型逐位比（模型本身先对 arm64 硬件校验）；Wine 路径下的故障恢复用 VEH 记录异常地址、访问类型、是否恢复。
 
 ## 10. 仅参照（D3DMetal）

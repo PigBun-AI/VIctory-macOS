@@ -30,6 +30,7 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::core::BOOL;
 
+use super::alloc_fail::{self, Site};
 use crate::{HleModule, hle_export};
 
 const MIB: usize = 1 << 20;
@@ -84,6 +85,22 @@ fn address_range(flags: u64) -> (usize, usize) {
     (1 << 32, (1 << bits) - 1)
 }
 
+/// The allocation type of a reservation the title asks for at an address of our choice
+/// (`constrained`): a reservation, and, with fault tracking on (`tracking`, on by default; Mac patch
+/// G2), `MEM_WRITE_WATCH`, so that the GPU side copies only the pages the title wrote since its last
+/// copy (`victory_gpu`, decision 0007). Placeholders cannot be watched (their physical-page views
+/// are copied whole), and a reservation at the title's own address is left as it asks.
+fn pool_kind(kind: u32, constrained: bool, tracking: bool) -> u32 {
+    let mut kind = kind;
+    if constrained {
+        kind |= MEM_RESERVE;
+        if kind & MEM_RESERVE_PLACEHOLDER == 0 && tracking {
+            kind |= MEM_WRITE_WATCH;
+        }
+    }
+    kind
+}
+
 pub extern "system" fn XMemVirtualAlloc(
     base: *mut c_void,
     size: usize,
@@ -128,19 +145,10 @@ pub extern "system" fn XMemVirtualAlloc(
     parameter.Anonymous2.Pointer = (&raw mut requirements).cast();
     // Address requirements apply to reservations at an address of our choice.
     let constrained = base.is_null();
-    if constrained {
-        kind |= MEM_RESERVE;
-        // The GPU side copies only the pages the title wrote since its last
-        // copy (`victory_gpu`, decision 0007); placeholders cannot be
-        // watched (their physical-page views are copied whole).
-        // (Not under Rosetta unless asked: Mac patch G2.)
-        if kind & MEM_RESERVE_PLACEHOLDER == 0 && victory_gpu::mac::rosetta::fault_tracking() {
-            kind |= MEM_WRITE_WATCH;
-        }
-    }
+    kind = pool_kind(kind, constrained, victory_gpu::mac::rosetta::fault_tracking());
     // SAFETY: the title's own arguments, cleaned of console bits; the
     // parameter points at `requirements`, which outlives the call.
-    let at = unsafe {
+    let allocate = |parameter: &mut MEM_EXTENDED_PARAMETER| unsafe {
         VirtualAlloc2(
             GetCurrentProcess(),
             base,
@@ -148,15 +156,29 @@ pub extern "system" fn XMemVirtualAlloc(
             kind,
             protect,
             if constrained {
-                &mut parameter
+                parameter
             } else {
                 std::ptr::null_mut()
             },
             constrained.into(),
         )
     };
+    let mut at = allocate(&mut parameter);
+    // A 32-bit request that found no room below 4 GiB: the guards there
+    // make way for it.
+    if at.is_null() && constrained && highest < FOUR_GIB {
+        at = low_guards::retry(size, || allocate(&mut parameter));
+    }
     if at.is_null() {
         let error = std::io::Error::last_os_error();
+        // The one line per refusal (mac H, `alloc_fail`), whatever the kind of request.
+        alloc_fail::note(
+            Site::VirtualAlloc,
+            size,
+            &format!(
+                "kind={kind:#x} flags={flags:#x} base={base:p} range={lowest:#x}..={highest:#x} error={error}"
+            ),
+        );
         if kind & MEM_COMMIT != 0 {
             commit_refused(size, "virtual memory", error);
         } else {
@@ -300,7 +322,16 @@ pub extern "system" fn XMemAlloc(size: usize, attributes: u64) -> *mut c_void {
         hook => {
             // SAFETY: the title's own routine of this type.
             let alloc: AllocRoutine = unsafe { std::mem::transmute(hook) };
-            alloc(size, attributes)
+            let block = alloc(size, attributes);
+            // The title's own allocator giving the title NULL back (mac H, `alloc_fail`).
+            if block.is_null() {
+                alloc_fail::note(
+                    Site::HookReturnedNull,
+                    size,
+                    &format!("{} hook={hook:#x}", alloc_fail::attributes(attributes)),
+                );
+            }
+            block
         }
     }
 }
@@ -320,15 +351,20 @@ pub extern "system" fn XMemFree(address: *mut c_void, attributes: u64) {
 /// The system allocator behind [`XMemAlloc`].
 pub extern "system" fn XMemAllocDefault(size: usize, attributes: u64) -> *mut c_void {
     if attributes & ALLOC_32BIT != 0 {
-        return XMemVirtualAlloc(
+        let block = XMemVirtualAlloc(
             std::ptr::null_mut(),
             size,
             MEM_RESERVE | MEM_COMMIT,
             GRAPHICS | ADDRESS_32BIT,
             PAGE_READWRITE,
         );
+        if block.is_null() {
+            alloc_fail::note(Site::Default32Bit, size, &alloc_fail::attributes(attributes));
+        }
+        return block;
     }
     let Some(layout) = layout(size, attributes) else {
+        alloc_fail::note(Site::DefaultBadLayout, size, &alloc_fail::attributes(attributes));
         return std::ptr::null_mut();
     };
     // shortcut: the host heap's addresses lie above 2^40, unlike the
@@ -339,6 +375,7 @@ pub extern "system" fn XMemAllocDefault(size: usize, attributes: u64) -> *mut c_
     let block = unsafe { alloc(layout) };
     if block.is_null() {
         tracing::warn!(size, "XMemAllocDefault: the host heap is out of memory");
+        alloc_fail::note(Site::DefaultHeapOom, size, &alloc_fail::attributes(attributes));
         return block.cast();
     }
     // SAFETY: the block holds the alignment (at least the header) and then
@@ -384,6 +421,80 @@ pub extern "system" fn XMemIsToolsMemAvailable() -> BOOL {
 // mapping is a view of consecutive slices in place of a host placeholder.
 
 const PAGE: usize = 64 << 10;
+/// Minimum starting address for our own whole-section and fallback views under
+/// Wine (`2 TiB`): above the title's 40-bit address space (`< 1 TiB`) and
+/// above Metal's `~1 TiB` host GPU heaps on macOS, so an unpatched Wine's
+/// `try_map_free_area` does not step 64 KiB at a time across `< 4 GiB` or
+/// gigabytes of host mappings while holding `virtual_mutex`.
+const OWN_VIEW_FLOOR: usize = 2 << 40;
+
+/// Whether our own views start above [`OWN_VIEW_FLOOR`] under Wine:
+/// `VICTORY_OWN_VIEW_HIGH=1` (`true`, `on`) asks for it, `0` (`false`, `off`)
+/// does not, and unset is on except under Wine on macOS (mac X3: not yet run
+/// there, switched on once a `VICTORY_OWN_VIEW_HIGH=1` run has shown it safe).
+/// Off means a plain [`MapViewOfFile`], as before the floor.
+fn own_view_high() -> bool {
+    static ON: LazyLock<bool> = LazyLock::new(|| {
+        own_view_high_from(
+            std::env::var("VICTORY_OWN_VIEW_HIGH").ok().as_deref(),
+            victory_gpu::mac::rosetta::rosetta(),
+        )
+    });
+    *ON
+}
+
+/// [`own_view_high`] for a given `VICTORY_OWN_VIEW_HIGH` value and platform;
+/// shares the switch parsing and the platform default with
+/// [`low_guards`].
+fn own_view_high_from(value: Option<&str>, wine_on_macos: bool) -> bool {
+    low_guards::enabled_from(value, low_guards::default_on(wine_on_macos))
+}
+
+/// Maps `[offset, offset + size)` of `section` writable for our own CPU writes
+/// (DirectStorage destinations), starting at or above [`OWN_VIEW_FLOOR`] under
+/// Wine ([`own_view_high`]) and falling back to [`MapViewOfFile`] if the host
+/// refuses the hint or the floor is off.
+unsafe fn map_own_view(section: HANDLE, offset: u64, size: usize) -> MEMORY_MAPPED_VIEW_ADDRESS {
+    use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
+    if on_wine() && own_view_high() {
+        let mut requirements = MEM_ADDRESS_REQUIREMENTS {
+            LowestStartingAddress: OWN_VIEW_FLOOR as *mut c_void,
+            HighestEndingAddress: std::ptr::null_mut(),
+            Alignment: 0,
+        };
+        let mut parameter = MEM_EXTENDED_PARAMETER::default();
+        parameter.Anonymous1._bitfield = MemExtendedParameterAddressRequirements as u64;
+        parameter.Anonymous2.Pointer = (&raw mut requirements).cast();
+        // SAFETY: caller owns `section`; `parameter` points at `requirements`,
+        // which outlives the call.
+        let view = unsafe {
+            MapViewOfFile3(
+                section,
+                GetCurrentProcess(),
+                std::ptr::null(),
+                offset,
+                size,
+                0,
+                PAGE_READWRITE,
+                &mut parameter,
+                1,
+            )
+        };
+        if !view.Value.is_null() {
+            return view;
+        }
+    }
+    // SAFETY: caller owns `section`.
+    unsafe {
+        MapViewOfFile(
+            section,
+            FILE_MAP_WRITE,
+            (offset >> 32) as u32,
+            offset as u32,
+            size,
+        )
+    }
+}
 
 struct Section {
     handle: HANDLE,
@@ -408,7 +519,6 @@ impl Section {
     /// `VICTORY_SECTION_WINDOW=0`: a view for each write, as before.
     fn window(&self, index: usize, n: usize) -> Option<usize> {
         use std::sync::atomic::Ordering;
-        use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
         static ON: LazyLock<bool> =
             LazyLock::new(|| std::env::var_os("VICTORY_SECTION_WINDOW").is_none_or(|v| v != "0"));
         if !*ON || index + n > self.pages {
@@ -416,7 +526,7 @@ impl Section {
         }
         let base = *self.window.get_or_init(|| {
             // SAFETY: the whole of a section we own.
-            unsafe { MapViewOfFile(self.handle, FILE_MAP_WRITE, 0, 0, self.pages * PAGE) }.Value as usize
+            unsafe { map_own_view(self.handle, 0, self.pages * PAGE) }.Value as usize
         });
         if base == 0 {
             return None;
@@ -639,11 +749,17 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     pages: *mut usize,
 ) -> BOOL {
     if count.is_null() || pages.is_null() {
+        alloc_fail::note(
+            Site::PhysicalPagesArgs,
+            0,
+            &format!("flags={flags:#x} count_null={} pages_null={}", count.is_null(), pages.is_null()),
+        );
         return 0;
     }
     // SAFETY: checked non-null.
     let n = unsafe { *count };
     let Some(size) = n.checked_mul(PAGE).filter(|&s| s > 0) else {
+        alloc_fail::note(Site::PhysicalPagesArgs, 0, &format!("flags={flags:#x} pages={n}: no size"));
         return 0;
     };
     // A pagefile-backed section of `size` bytes, its pages committed when
@@ -667,6 +783,7 @@ pub extern "system" fn XMemAllocatePhysicalPages(
     if handle.is_null() {
         let error = std::io::Error::last_os_error();
         tracing::warn!(n, %error, "XMemAllocatePhysicalPages failed");
+        alloc_fail::note(Site::PhysicalPagesSection, size, &format!("flags={flags:#x} pages={n} error={error}"));
         // SAFETY: checked non-null.
         unsafe { count.write(0) };
         return 0;
@@ -735,18 +852,9 @@ struct View {
 impl View {
     /// Maps `n` slices from `slice` on.
     fn map(slice: &Slice, n: usize) -> Option<View> {
-        use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
         let (offset, len) = ((slice.index * PAGE) as u64, n * PAGE);
         // SAFETY: slices of a section we own; the view is ours until dropped.
-        let at = unsafe {
-            MapViewOfFile(
-                slice.section.handle,
-                FILE_MAP_WRITE,
-                (offset >> 32) as u32,
-                offset as u32,
-                len,
-            )
-        };
+        let at = unsafe { map_own_view(slice.section.handle, offset, len) };
         if at.Value.is_null() {
             tracing::warn!(error = %std::io::Error::last_os_error(), n, "physical pages not mapped for a write");
             return None;
@@ -1113,6 +1221,11 @@ pub extern "system" fn XMemMapPhysicalPages(
     while i < n {
         let Some(first) = slices[i].clone() else {
             tracing::warn!(page = pages[i], "XMemMapPhysicalPages: unknown page");
+            alloc_fail::note(
+                Site::MapPagesUnknown,
+                n * PAGE,
+                &format!("address={address:p} page={:#x} index={i} of {n}", pages[i]),
+            );
             return std::ptr::null_mut();
         };
         // One view per run of consecutive slices of one section.
@@ -1126,6 +1239,11 @@ pub extern "system" fn XMemMapPhysicalPages(
             })
             .count();
         if !map(&mut physical, base + i * PAGE, run * PAGE, first) {
+            alloc_fail::note(
+                Site::MapPagesHost,
+                run * PAGE,
+                &format!("address={:#x} index={i} of {n}", base + i * PAGE),
+            );
             return std::ptr::null_mut();
         }
         i += run;
@@ -1141,6 +1259,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
     pages: *const usize,
 ) -> BOOL {
     if addresses.is_null() {
+        alloc_fail::note(Site::MapScatter, n * PAGE, "no address list");
         return 0;
     }
     lift_thread();
@@ -1151,7 +1270,11 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
             .map(|i| unsafe { (*addresses.add(i) as usize, if pages.is_null() { 0 } else { *pages.add(i) }) })
             .collect();
         if wanted.iter().all(|w| w.0 % PAGE == 0) {
-            return scatter(&wanted).into();
+            let done = scatter(&wanted);
+            if !done {
+                alloc_fail::note(Site::MapScatter, n * PAGE, &format!("{n} pages, side by side: the host refused"));
+            }
+            return done.into();
         }
     }
     for i in 0..n {
@@ -1167,6 +1290,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
             )
         };
         if XMemMapPhysicalPages(address, 1, page).is_null() {
+            alloc_fail::note(Site::MapScatter, PAGE, &format!("address={address:p} index={i} of {n}"));
             return 0;
         }
     }
@@ -1677,7 +1801,9 @@ fn commit(base: usize, len: usize) -> bool {
     if !unsafe { VirtualAlloc(base as *const c_void, len, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
         return true;
     }
-    commit_refused(len, "physical pages", std::io::Error::last_os_error());
+    let error = std::io::Error::last_os_error();
+    alloc_fail::note(Site::CommitPhysical, len, &format!("address={base:#x} error={error}"));
+    commit_refused(len, "physical pages", error);
     false
 }
 
@@ -1915,6 +2041,40 @@ mod tests {
         let process = unsafe { GetCurrentProcess() };
         assert_eq!(XMemVirtualQuery(process, address, &mut info), 1);
         info
+    }
+
+    #[test]
+    fn pools_are_watched_for_writes_when_tracking_runs() {
+        let plain = MEM_COMMIT;
+        // Tracking on (the default, also under Rosetta): a pool of our choosing is watched.
+        assert_eq!(pool_kind(plain, true, true), MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH);
+        // Tracking off (VICTORY_FAULT_TRACKING=0): reserved, not watched.
+        assert_eq!(pool_kind(plain, true, false), MEM_COMMIT | MEM_RESERVE);
+        // A placeholder is never watched; a reservation at the title's own address is left as it is.
+        let placeholder = MEM_RESERVE | MEM_RESERVE_PLACEHOLDER;
+        assert_eq!(pool_kind(placeholder, true, true), placeholder);
+        assert_eq!(pool_kind(plain, false, true), plain);
+        // And on this host (tracking is on unless VICTORY_FAULT_TRACKING=0 was set for the run) a pool the title
+        // gets answers GetWriteWatch, one reserved plainly does not.
+        use windows_sys::Win32::System::Memory::{GetWriteWatch, VirtualFree};
+        let watched = |at: *mut c_void| {
+            let (mut found, mut count, mut granularity) = ([std::ptr::null_mut::<c_void>(); 4], 4usize, 0u32);
+            // SAFETY: the pool just allocated, 64 KiB; the arrays are as long as `count` says.
+            unsafe { GetWriteWatch(0, at, 64 * 1024, found.as_mut_ptr(), &mut count, &mut granularity) == 0 }
+        };
+        let pool = XMemVirtualAlloc(std::ptr::null_mut(), 64 * 1024, MEM_RESERVE | MEM_COMMIT, 0, PAGE_READWRITE);
+        assert!(!pool.is_null());
+        assert_eq!(watched(pool), victory_gpu::mac::rosetta::fault_tracking(), "a pool and GetWriteWatch");
+        // SAFETY: the title's pool, ours to release.
+        unsafe { VirtualFree(pool, 0, 0x8000) };
+        // SAFETY: a plain allocation of our own, released below.
+        let plain_pool = unsafe {
+            windows_sys::Win32::System::Memory::VirtualAlloc(std::ptr::null(), 64 * 1024, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
+        };
+        assert!(!plain_pool.is_null());
+        assert!(!watched(plain_pool), "a reservation without MEM_WRITE_WATCH is not watched");
+        // SAFETY: as above.
+        unsafe { VirtualFree(plain_pool, 0, 0x8000) };
     }
 
     #[test]
@@ -2548,5 +2708,379 @@ mod tests {
         assert!(page_window(&[a[0], b[0]], 0, PAGE).is_some());
         assert_eq!(XMemFreePhysicalPages(3, a.as_ptr()), 1);
         assert_eq!(XMemFreePhysicalPages(1, b.as_ptr()), 1);
+    }
+
+    /// mac: the kept whole-section view (`Section::window`) and a per-write
+    /// view (`View::map`) both start above 2 TiB under Wine.
+    #[test]
+    fn own_views_are_high_by_default_except_under_wine_on_macos() {
+        assert!(!own_view_high_from(None, true));
+        assert!(!own_view_high_from(Some(""), true));
+        assert!(own_view_high_from(Some("1"), true));
+        assert!(own_view_high_from(Some(" true "), true));
+        assert!(own_view_high_from(Some("on"), true));
+        assert!(!own_view_high_from(Some("0"), true));
+        assert!(own_view_high_from(None, false));
+        assert!(own_view_high_from(Some("junk"), false));
+        assert!(!own_view_high_from(Some("0"), false));
+        assert!(!own_view_high_from(Some("off"), false));
+        assert!(own_view_high_from(Some("1"), false));
+    }
+
+    #[test]
+    fn own_section_views_start_above_two_tib_under_wine() {
+        use windows_sys::Win32::System::Memory::UnmapViewOfFile;
+        let pages = allocate(2);
+        let slice = page_table().pages.get(&pages[1]).cloned().expect("known page");
+        let whole = slice.section.window(slice.index, 1).expect("whole view");
+        // SAFETY: our section's page, mapped and unmapped here to cover the
+        // per-write `View::map` path as well.
+        let one = unsafe { map_own_view(slice.section.handle, (slice.index * PAGE) as u64, PAGE) };
+        assert!(!one.Value.is_null());
+        if on_wine() && own_view_high() {
+            assert!(
+                whole >= OWN_VIEW_FLOOR,
+                "whole view {whole:#x} below {OWN_VIEW_FLOOR:#x}"
+            );
+            assert!(
+                one.Value as usize >= OWN_VIEW_FLOOR,
+                "view {:p} below {OWN_VIEW_FLOOR:#x}",
+                one.Value
+            );
+        }
+        // SAFETY: mapped just above.
+        unsafe { UnmapViewOfFile(one) };
+        assert_eq!(XMemFreePhysicalPages(2, pages.as_ptr()), 1);
+    }
+}
+
+/// The space below 4 GiB, which the title's 32-bit memory (`XMemVirtualAlloc`
+/// with the 32-bit address flag) has to fit in.
+const FOUR_GIB: usize = 1 << 32;
+
+/// Guards over the space below 4 GiB. Windows places allocations bottom up,
+/// so the host's own memory (the driver's, heaps, the shader and pipeline
+/// caches read at startup) filled it first: with a large pipeline cache only
+/// 22 MB was left, in pieces, when Grand Theft Auto VI asked for a 185 MB
+/// 32-bit placeholder at startup, the request was refused
+/// (`ERROR_NOT_ENOUGH_MEMORY`) and the title stopped at an assertion. The
+/// debug layer's memory did the same. So the free space below 4 GiB is
+/// reserved at startup, past [`low_guards::SLACK`] (or
+/// [`low_guards::WINE_SLACK`] under Wine) left for the host, and a 32-bit
+/// request that finds no room releases guards and tries again.
+/// `VICTORY_LOW_GUARDS=0` (`false`, `off`) disables these guards; under Wine
+/// on macOS they are off unless `VICTORY_LOW_GUARDS=1` (`true`, `on`) asks
+/// for them (mac X3, until a run has shown them safe there).
+pub mod low_guards {
+    use std::sync::Mutex;
+
+    use windows_sys::Win32::System::Memory::{
+        MEM_FREE, MEM_RELEASE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, VirtualAlloc,
+        VirtualFree, VirtualQuery,
+    };
+
+    use super::FOUR_GIB;
+
+    /// Free space left to the host below 4 GiB on native Windows (the lowest
+    /// free space).
+    pub(crate) const SLACK: usize = 256 << 20;
+    /// Free space left to the host below 4 GiB under Wine (`2.75 GiB`). Host
+    /// GPU drivers such as D3DMetal/Metal allocate outside Wine above 4 GiB,
+    /// while Wine's own heap segments and thread stacks search bottom-up from
+    /// `0x10000`: leaving 2.75 GiB at the bottom keeps them out of gigabytes
+    /// of host mappings on unpatched Wine (`try_map_free_area` under
+    /// `virtual_mutex`), while reserving the top `~1 GiB` below 4 GiB for the
+    /// title's 32-bit `XMemVirtualAlloc` requests.
+    pub(crate) const WINE_SLACK: usize = 2816 << 20;
+    /// The allocation granularity of Windows.
+    const GRANULE: usize = 64 << 10;
+
+    /// The guards, `(base, bytes)`.
+    static GUARDS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+    fn guards() -> std::sync::MutexGuard<'static, Vec<(usize, usize)>> {
+        GUARDS.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether the guards are on when `VICTORY_LOW_GUARDS` is unset: on
+    /// everywhere except Wine on macOS (mac X3: not yet run there, switched
+    /// on once a `VICTORY_LOW_GUARDS=1` run has shown it safe).
+    pub(super) const fn default_on(wine_on_macos: bool) -> bool {
+        !wine_on_macos
+    }
+
+    /// Whether `VICTORY_LOW_GUARDS` leaves low-address guards enabled:
+    /// `1`/`true`/`on` enable, `0`/`false`/`off` disable, anything else
+    /// (unset, empty) is `default`.
+    pub(super) fn enabled_from(value: Option<&str>, default: bool) -> bool {
+        let Some(v) = value.map(str::trim) else {
+            return default;
+        };
+        if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on") {
+            true
+        } else if v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off") {
+            false
+        } else {
+            default
+        }
+    }
+
+    /// Low-address slack to leave unguarded at the bottom of `< 4 GiB`.
+    const fn slack_for(wine: bool) -> usize {
+        if wine { WINE_SLACK } else { SLACK }
+    }
+
+    /// Skips the lowest `slack` free bytes across ascending `runs` so the
+    /// free headroom stays at the bottom of `< 4 GiB` and the guarded region
+    /// sits at the top.
+    fn plan_guards(runs: &[(usize, usize)], mut slack: usize) -> Vec<(usize, usize)> {
+        let mut planned = Vec::new();
+        for &(mut base, mut bytes) in runs {
+            let left = slack.min(bytes);
+            (base, bytes, slack) = (base + left, bytes - left, slack - left);
+            if bytes > 0 {
+                planned.push((base, bytes));
+            }
+        }
+        planned
+    }
+
+    /// The free runs in `[from, to)`, granule-aligned.
+    fn free_runs(from: usize, to: usize) -> Vec<(usize, usize)> {
+        let mut runs = Vec::new();
+        let mut at = from.max(GRANULE);
+        while at < to {
+            // SAFETY: plain data filled in by the query.
+            let mut m: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: a valid out pointer of the right size.
+            if unsafe { VirtualQuery(at as *const _, &mut m, size_of_val(&m)) } == 0 {
+                break;
+            }
+            let base = m.BaseAddress as usize;
+            let end = (base + m.RegionSize).min(to);
+            if m.State == MEM_FREE {
+                let (start, end) = (
+                    base.max(from).next_multiple_of(GRANULE),
+                    end & !(GRANULE - 1),
+                );
+                if end > start {
+                    runs.push((start, end - start));
+                }
+            }
+            at = base + m.RegionSize;
+        }
+        runs
+    }
+
+    /// Reserves `[base, base + bytes)` as a guard; false if something took it.
+    fn guard(base: usize, bytes: usize) -> bool {
+        // SAFETY: a reservation of free address space; nothing refers to it.
+        let at = unsafe { VirtualAlloc(base as *const _, bytes, MEM_RESERVE, PAGE_NOACCESS) };
+        at as usize == base
+    }
+
+    /// Reserves the free space below 4 GiB past the lowest [`SLACK`] (or
+    /// [`WINE_SLACK`] under Wine). Call once, before the host allocates much
+    /// (the GPU device, the caches).
+    pub fn install() {
+        let default = default_on(victory_gpu::mac::rosetta::rosetta());
+        if !enabled_from(std::env::var("VICTORY_LOW_GUARDS").ok().as_deref(), default) {
+            tracing::info!(
+                default,
+                "space below 4 GiB left unguarded (VICTORY_LOW_GUARDS; off by default under Wine on macOS)"
+            );
+            return;
+        }
+        let mut guards = guards();
+        let slack = slack_for(super::on_wine());
+        for (base, bytes) in plan_guards(&free_runs(0, FOUR_GIB), slack) {
+            if guard(base, bytes) {
+                guards.push((base, bytes));
+            }
+        }
+        let total: usize = guards.iter().map(|g| g.1).sum();
+        tracing::info!(
+            guards = guards.len(),
+            mb = total >> 20,
+            slack_mb = slack >> 20,
+            "space below 4 GiB kept for the title"
+        );
+    }
+
+    /// Try the smallest fitting guards first, then try smaller guards in
+    /// descending size order. A replacement guard cannot be retried here.
+    pub(crate) fn retry(
+        bytes: usize,
+        mut allocate: impl FnMut() -> *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void {
+        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
+
+        // Preserve the allocation error across address queries and reservations.
+        // SAFETY: reads this thread's last-error value.
+        let mut error = unsafe { GetLastError() };
+        let mut guards = guards();
+        let mut candidates = guards.clone();
+        candidates.sort_unstable_by_key(|&(_, size)| {
+            let fits = size >= bytes;
+            (!fits, if fits { size } else { usize::MAX - size })
+        });
+        for (base, size) in candidates {
+            // SAFETY: our own reservation, with no allocations inside it.
+            if unsafe { VirtualFree(base as *mut _, 0, MEM_RELEASE) } == 0 {
+                continue;
+            }
+            guards.retain(|&(b, _)| b != base);
+            let at = allocate();
+            // SAFETY: reads this thread's last-error value.
+            error = unsafe { GetLastError() };
+            for (start, len) in free_runs(base, base + size) {
+                if guard(start, len) {
+                    guards.push((start, len));
+                }
+            }
+            if !at.is_null() {
+                return at;
+            }
+        }
+        // SAFETY: sets this thread's last-error value.
+        unsafe { SetLastError(error) };
+        std::ptr::null_mut()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Set in the child a test below relaunches itself in. These tests
+        /// reserve and release address space of the whole process, so in the
+        /// parallel suite another test can take it between their steps; the
+        /// child runs the one test alone (`--exact`), in a clean address
+        /// space.
+        const CHILD: &str = "VICTORY_TEST_LOW_GUARDS_CHILD";
+
+        /// Runs the test `name` in a child process, returning true in the
+        /// parent (the test then returns); in the child returns false, so
+        /// the test's body runs there.
+        fn alone(name: &str) -> bool {
+            if std::env::var_os(CHILD).is_some() {
+                return false;
+            }
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .expect("run low-guards test in a child");
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            assert!(
+                result.status.success() && stdout.contains("1 passed"),
+                "low-guards child {}: {stdout}{}",
+                result.status,
+                String::from_utf8_lossy(&result.stderr)
+            );
+            true
+        }
+
+        /// Wine on macOS: off unless asked for; elsewhere (Windows) upstream's
+        /// default, on.
+        #[test]
+        fn guards_are_off_by_default_under_wine_on_macos_only() {
+            assert!(!default_on(true));
+            assert!(default_on(false));
+            assert!(!enabled_from(None, default_on(true)));
+            assert!(enabled_from(Some("1"), default_on(true)));
+            assert!(enabled_from(None, default_on(false)));
+            assert!(!enabled_from(Some("0"), default_on(false)));
+        }
+
+        #[test]
+        fn switch_and_wine_slack_leave_bottom_free_and_guard_top_gib() {
+            // Unset (or unrecognised) takes the platform default; an explicit
+            // value wins either way.
+            for default in [true, false] {
+                assert_eq!(enabled_from(None, default), default);
+                assert_eq!(enabled_from(Some(""), default), default);
+                assert_eq!(enabled_from(Some("2"), default), default);
+                for on in ["1", "true", "TRUE", "on", "On", " 1 "] {
+                    assert!(enabled_from(Some(on), default), "{on:?}");
+                }
+                for off in ["0", "false", "FALSE", "off", "Off", " 0 "] {
+                    assert!(!enabled_from(Some(off), default), "{off:?}");
+                }
+            }
+            assert_eq!(slack_for(false), 256 << 20);
+            assert_eq!(slack_for(true), 2816 << 20);
+
+            // Across two free runs below 4 GiB (~4,073 MiB total, as at Wine
+            // startup), `plan_guards` leaves the lowest 2,816 MiB unguarded
+            // for bottom-up allocations and guards the top >1 GiB up to 4 GiB.
+            let runs = [
+                (GRANULE, (2047 << 20) - GRANULE),
+                (2048 << 20, (2048 << 20) - GRANULE),
+            ];
+            let planned = plan_guards(&runs, WINE_SLACK);
+            assert_eq!(planned.len(), 1);
+            let (guard_base, guard_len) = planned[0];
+            assert_eq!(guard_base + guard_len, FOUR_GIB - GRANULE);
+            assert!(guard_base > (2816 << 20));
+            assert!(guard_len >= (1024 << 20));
+        }
+
+        #[test]
+        fn a_refused_retry_leaves_the_guards_in_place() {
+            if alone("modules::xmem::low_guards::tests::a_refused_retry_leaves_the_guards_in_place")
+            {
+                return;
+            }
+            // A known hole of four granules, reserved and registered as a
+            // guard directly: releasing and re-reserving it would leave a
+            // window another allocation could take.
+            // SAFETY: a fresh reservation; nothing refers to it.
+            let hole =
+                unsafe { VirtualAlloc(std::ptr::null(), 4 * GRANULE, MEM_RESERVE, PAGE_NOACCESS) };
+            assert!(!hole.is_null());
+            let first = hole as usize;
+            guards().push((first, 4 * GRANULE));
+            let mut attempts = 0;
+            let result = retry(4 * GRANULE, || {
+                attempts += 1;
+                std::ptr::null_mut()
+            });
+            assert!(result.is_null());
+            assert_eq!(attempts, 1);
+            assert!(guards().contains(&(first, 4 * GRANULE)));
+            guards().retain(|&(base, _)| base != first);
+            // SAFETY: the guard the retry put back, ours.
+            assert_ne!(unsafe { VirtualFree(hole, 0, MEM_RELEASE) }, 0);
+        }
+
+        /// A released guard is guarded again around what took part of it.
+        #[test]
+        fn a_released_guard_is_guarded_again_around_what_took_it() {
+            if alone(
+                "modules::xmem::low_guards::tests::a_released_guard_is_guarded_again_around_what_took_it",
+            ) {
+                return;
+            }
+            // A known hole of four granules, reserved and registered as a
+            // guard directly.
+            // SAFETY: a fresh reservation; nothing refers to it.
+            let hole =
+                unsafe { VirtualAlloc(std::ptr::null(), 4 * GRANULE, MEM_RESERVE, PAGE_NOACCESS) }
+                    as usize;
+            assert_ne!(hole, 0);
+            guards().push((hole, 4 * GRANULE));
+            let taken = retry(GRANULE, || {
+                // SAFETY: a reservation of the first granule at a known address.
+                unsafe { VirtualAlloc(hole as *const _, GRANULE, MEM_RESERVE, PAGE_NOACCESS) }
+            }) as usize;
+            assert_eq!(taken, hole);
+            assert!(guards().contains(&(hole + GRANULE, 3 * GRANULE)));
+            guards().retain(|&(b, _)| b != hole + GRANULE);
+            // SAFETY: ours.
+            unsafe {
+                VirtualFree(taken as *mut _, 0, MEM_RELEASE);
+                VirtualFree((hole + GRANULE) as *mut _, 0, MEM_RELEASE);
+            }
+        }
     }
 }

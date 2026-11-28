@@ -48,7 +48,7 @@ const HEAP_IIDS: [Iid; 4] = [
     PAGEABLE_IIDS[1],
     PAGEABLE_IIDS[2],
 ];
-const RESOURCE_IIDS: [Iid; 4] = [
+pub(crate) const RESOURCE_IIDS: [Iid; 4] = [ // mac G12: pub(crate) for the tests of mac/prove
     guid(
         0x696442be,
         0xa72e,
@@ -2682,6 +2682,9 @@ fn hand_out_resource(
         desc.sample_count,
         desc.flags,
     ); // mac P2
+    if desc.dimension != BUFFER {
+        crate::mac::layout_stats::texture(desc.dimension, desc.layout, desc.flags, desc.format, desc.mip_levels, desc.depth_or_array_size, desc.sample_count); // mac G11
+    }
     let resource = Box::new(Resource {
         object: Object::new(&RESOURCE_FUNCTIONS),
         desc,
@@ -3305,6 +3308,13 @@ pub(crate) fn test_buffer(width: u64) -> This {
     assert_eq!(hr, S_OK);
     out
 }
+
+#[cfg(test)]
+#[path = "mac/prove/resource_footprints.rs"]
+mod prove_footprints; // mac G12
+#[cfg(test)]
+#[path = "mac/prove/resource_heaps.rs"]
+mod prove_heaps; // mac G12
 
 #[cfg(test)]
 mod tests {

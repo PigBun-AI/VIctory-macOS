@@ -21,7 +21,7 @@ use crate::resource::PAGEABLE_IIDS;
 #[cfg(windows)]
 pub(crate) mod thin;
 
-const ALLOCATOR_IIDS: [Iid; 4] = [
+pub(crate) const ALLOCATOR_IIDS: [Iid; 4] = [ // mac G12
     guid(
         0x6102dee4,
         0xaf59,

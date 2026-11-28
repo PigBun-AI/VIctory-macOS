@@ -1700,6 +1700,10 @@ fn add_regs(op: &Operand, lanes: u8, out: &mut Vec<Reg>) -> Result<(), ()> {
 }
 
 #[cfg(test)]
+#[path = "mac_prove_hints.rs"]
+mod prove_hints; // mac G12
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

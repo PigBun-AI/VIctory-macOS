@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::UserData;
 use super::bitcode::{Attr, Bin, Cast, Rmw, Tag, Term, V, pred};
 use super::container::SigElement;
-use super::shader::{Shader, flags};
+use super::shader::{Geometry, Shader, flags};
+use super::vertex_flat::{self, VertexRead}; // mac S1
 use crate::ShaderError;
 use crate::gfx10::{Dpp, Fields, NULL, Operand};
 use crate::io::{Barycentric, Export, Input, Interp, Io, Target};
@@ -61,6 +62,8 @@ pub(crate) struct Lowered {
     pub samplers: Vec<[u32; 4]>,
     /// The wave size the shader requires of the host, if any.
     pub wave_size: Option<u32>,
+    /// mac S1: the per-vertex reads a pixel stage needs, or a mesh stage hands on (`vertex_flat`).
+    pub vertex_reads: Vec<VertexRead>,
     /// Heap handles made with a non-uniform index.
     #[cfg(test)]
     pub nonuniform_handles: u32,
@@ -80,6 +83,25 @@ pub(crate) struct Parts<'a> {
     pub prims: Vec<SigElement>,
     /// Mesh: what the group id arrives multiplied by.
     pub mesh_stride: u32,
+}
+
+/// mac S1: a mesh stage's exchange of per-vertex values through group memory (`vertex_flat`). Lane m
+/// writes the values of its vertex's read channels at `base + m * stride`, and the packed corners of its
+/// primitive at `corners + m`; after the lanes meet, lane n writes primitive n's vertices 1 and 2.
+#[derive(Clone)]
+struct VtxExchange {
+    /// First dword of the vertex values in group memory.
+    base: u32,
+    /// Dwords per vertex: one per read channel.
+    stride: u32,
+    /// First dword of the packed corners (10 bits each).
+    corners: u32,
+    /// Lanes that write a primitive.
+    primitives: u32,
+    /// Vertices whose values are in group memory (an index past them reads vertex 0).
+    vertices: u32,
+    /// The index in `prims` of each added element (S2 numbers the primitive outputs, so not in a row).
+    ids: Vec<usize>,
 }
 
 enum Stop {
@@ -114,9 +136,13 @@ fn counted_in_threads(parts: &Parts) -> bool {
 /// bc3cd4b0, which does so for two of the programs by their digests).
 pub(super) fn lower_counted(parts: &Parts, counted: bool) -> Result<Lowered, ShaderError> {
     let mut bad = HashMap::new();
+    vertex_flat::clear_asked(); // mac S1
+    let mut again = 0; // mac S1
     loop {
         match Lower::new(parts, &bad).run(counted) {
             Ok(l) => return Ok(l),
+            // mac S1: reads the layout lacked were asked for: once more with them.
+            Err(Stop::Fail(ShaderError::Unsupported { what, .. })) if what == vertex_flat::MORE && again < 8 => again += 1,
             Err(Stop::Retry(v, why)) => {
                 if bad.insert(v, why).is_some() {
                     return Err(ShaderError::Unsupported {
@@ -326,6 +352,16 @@ struct Lower<'a> {
     console_lanes: bool,
     /// Mesh: the thread index in the group (made in the entry block).
     flat: Option<V>,
+    /// mac S1: the reads of vertices 1 and 2 as flat elements ([`vertex_flat`]); pixel: the first added
+    /// input is `self.s.inputs[vflat_id]`; mesh: `vtx` is the exchange that fills them.
+    vreads: Vec<VertexRead>,
+    vflat_id: usize,
+    vtx: Option<VtxExchange>,
+    vtx_fail: Option<Why>,
+    /// mac S1, mesh: the read channels whose exchanged value is a raw 16-bit half (converted after the meeting).
+    vtx_halves: HashSet<usize>,
+    /// mac S1, mesh: the block every lane leaves through (the exchange meets there).
+    epilogue: Option<usize>,
     /// Mesh: IR blocks whose `s_barrier` is left out.
     no_barrier: HashSet<usize>,
     /// IR blocks whose `s_barrier` not every lane is sure to reach (a lane
@@ -394,6 +430,8 @@ struct Lower<'a> {
     counters: HashMap<usize, (V, Vec<(V, usize)>)>,
     /// The block a loop stopped by [`LOOP_LIMIT`] leaves the program from.
     abort: Option<usize>,
+    /// Geometry (mac S4): the vertices the program has emitted so far.
+    gs_emitted: u32,
 }
 
 /// Iterations after which a loop is left (per entry into it), unless
@@ -1147,7 +1185,50 @@ fn own_bits_on() -> bool {
 /// wave, the view heap's limit, where the raw twins of its views start, and
 /// what it writes for the console's own hardware.
 pub fn host_settings() -> [u32; 4] {
-    [host_max_wave(), super::shader::view_heap_limit(), super::shader::raw_views(), host_rdna()]
+    // mac S1: bit 31 of the last word says the host has no `attributeAtVertex` (the live translator
+    // library takes the four words as they are; `set_host_rdna(host[3] != 0)` reads the other bits).
+    [
+        host_max_wave(),
+        super::shader::view_heap_limit(),
+        super::shader::raw_views(),
+        host_rdna() | u32::from(!host_attribute_at_vertex()) << 31,
+    ]
+}
+
+/// mac S1: whether the host's shader compiler takes `dx.op.attributeAtVertex` (`GetAttributeAtVertex`).
+/// The Windows line does (true, the default). The Metal chain does not: MSC and D3DMetal refuse it, so
+/// there a pixel program reads the three vertices of an attribute as flat inputs the mesh stage fills
+/// (`vertex_flat`). Remove with the patch: when MSC takes `GetAttributeAtVertex`, or emits MSL's
+/// `vertex_value` and the lowest supported GPU has it.
+static HOST_ATTRIBUTE_AT_VERTEX: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Tells the translator whether the host takes `attributeAtVertex` ([`host_attribute_at_vertex`]).
+pub fn set_host_attribute_at_vertex(on: bool) {
+    HOST_ATTRIBUTE_AT_VERTEX.store(if on { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`host_attribute_at_vertex`], for its thread only.
+    pub(super) static TEST_ATTRIBUTE_AT_VERTEX: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the host takes `attributeAtVertex`: what [`set_host_attribute_at_vertex`] said, else the
+/// environment (`VICTORY_ATTRIBUTE_AT_VERTEX=0`: no; a tool that translates for the Metal chain sets it),
+/// else yes.
+pub fn host_attribute_at_vertex() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_ATTRIBUTE_AT_VERTEX.get() {
+        return on;
+    }
+    match HOST_ATTRIBUTE_AT_VERTEX.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *ENV.get_or_init(|| std::env::var_os("VICTORY_ATTRIBUTE_AT_VERTEX").is_none_or(|v| v != "0"))
+        }
+    }
 }
 
 static HOST_RDNA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1421,6 +1502,26 @@ impl<'a> Lower<'a> {
         let mut s = Shader::new(x.native.stage == HwStage::Ps);
         s.inputs = x.inputs.clone();
         s.outputs = x.outputs.clone();
+        // mac S4: a geometry program emits as many vertices as it has `GS_OP_EMIT`s.
+        if let Some(ring) = &x.io.gs {
+            s.geometry = Some(Geometry { max_vertices: ring.vertices });
+        }
+        // mac S1: without `attributeAtVertex` the vertices 1 and 2 come as added flat elements.
+        let vflat_id = s.inputs.len();
+        let mut vreads: Vec<VertexRead> = Vec::new();
+        let mut vtx = None;
+        let mut vtx_fail = None;
+        match x.native.stage {
+            HwStage::Ps if !super::host_attribute_at_vertex() => {
+                vreads = vertex_flat::pixel_reads(x.io, &x.inputs);
+                vreads.extend(vertex_flat::asked());
+                vreads = vertex_flat::canonical(vreads);
+                let row = vertex_flat::first_row(&x.inputs);
+                s.inputs.extend(vertex_flat::elements(&vreads, Some(row)));
+            }
+            HwStage::Ms => vreads = vertex_flat::current(),
+            _ => {}
+        }
         let insts = || p.blocks.iter().flat_map(|b| &b.insts);
         let writes_uavs = insts().any(|i| {
             matches!(i.fields, Fields::Image { .. } | Fields::Buffer { .. })
@@ -1607,6 +1708,31 @@ impl<'a> Lower<'a> {
             s.prims = x.prims.clone();
             s.threads = Some([ms.threads, 1, 1]);
             s.lds_dwords = ms.lds_bytes.div_ceil(4);
+            // mac S1: the values the pixel stage reads of vertices 1 and 2 (the exchange's group memory,
+            // and the primitive outputs it fills; the sums are checked against the host's 32 KiB).
+            if !vreads.is_empty() {
+                let lanes = ms.threads.max(1);
+                let vertices = ms.max_vertices.min(lanes);
+                let primitives = ms.max_primitives.min(lanes);
+                let stride = vreads.len() as u32;
+                let base = s.lds_dwords;
+                let corners = base + vertices * stride;
+                s.lds_dwords = corners + primitives;
+                if s.lds_dwords * 4 > 32 * 1024 {
+                    vtx_fail = Some("a mesh shader whose per-vertex exchange passes group memory");
+                }
+                // The elements were added to the signature by `emit_program`.
+                let ids: Vec<usize> = (0..vertex_flat::elements(&vreads, None).len() as u32)
+                    .map(|n| {
+                        s.prims.iter().position(|e| e.name == vertex_flat::FLAT_NAME && e.index == vertex_flat::FLAT_BASE + n)
+                    })
+                    .collect::<Option<_>>()
+                    .unwrap_or_default();
+                if ids.len() != vertex_flat::elements(&vreads, None).len() {
+                    vtx_fail = Some("a mesh shader without the added per-vertex outputs");
+                }
+                vtx = Some(VtxExchange { base, stride, corners, primitives, vertices, ids });
+            }
             s.mesh = Some(super::shader::Mesh {
                 max_vertices: ms.max_vertices,
                 max_primitives: ms.max_primitives,
@@ -1736,6 +1862,12 @@ impl<'a> Lower<'a> {
             halves,
             wave_base: None,
             flat: None,
+            vreads,
+            vflat_id,
+            vtx,
+            vtx_fail,
+            vtx_halves: HashSet::new(),
+            epilogue: None,
             no_barrier,
             fence_only,
             half_outputs: half_outputs(&x.native.io, &x.outputs),
@@ -1765,6 +1897,7 @@ impl<'a> Lower<'a> {
             code_table: None,
             counters: HashMap::new(),
             abort: None,
+            gs_emitted: 0,
         }
     }
 
@@ -2406,6 +2539,7 @@ impl<'a> Lower<'a> {
         self.inputs()?;
         if let Some(mesh) = self.s.mesh {
             self.mesh_prologue(mesh).map_err(|w| unsupported(0, w))?;
+            self.vtx_prologue().map_err(|w| unsupported(0, w))?; // mac S1
             self.block[order[0]] = Some(self.cur);
         }
         for &b in &order {
@@ -2457,6 +2591,10 @@ impl<'a> Lower<'a> {
             self.tail[b] = Some(self.cur);
             self.exit(b)?;
         }
+        self.vtx_epilogue(); // mac S1
+        if !vertex_flat::covers(&self.vreads) {
+            return Err(unsupported(0, vertex_flat::MORE)); // mac S1
+        }
         self.fill_phis()?;
         let user_data = self.user_reads.values().copied().collect();
         self.s.samplers = self.samplers.len() as u32;
@@ -2466,6 +2604,7 @@ impl<'a> Lower<'a> {
         let cmp_samplers = self.s.cmp_samplers;
         let wave_size = self.s.wave_size;
         Ok(Lowered {
+            vertex_reads: self.vreads.clone(), // mac S1
             wave_size,
             cmp_samplers,
             root_cbvs,
@@ -2475,7 +2614,16 @@ impl<'a> Lower<'a> {
             nonuniform_handles: self.s.nonuniform_handles,
             #[cfg(test)]
             wave_ops: self.s.flags & flags::WAVE_OPS != 0,
-            dxil: self.s.finish(),
+            dxil: {
+                // mac S4: a vertex shader of a rectangle list writes its clip distances as plain outputs.
+                if super::rect::clip_as_varying_set() {
+                    for e in self.s.outputs.iter_mut().filter(|e| e.kind == 6) {
+                        e.kind = 0;
+                        e.name = super::rect::CLIP_VARYING.into();
+                    }
+                }
+                self.s.finish()
+            },
             user_data,
             samplers: self.samplers,
         })
@@ -2528,6 +2676,120 @@ impl<'a> Lower<'a> {
                 },
             };
             self.vals.insert(v, val);
+        }
+        Ok(())
+    }
+
+    /// mac S4: a geometry program's read of the ESGS ring: each dword is the host's `loadInput` of that
+    /// vertex's element; a write is kept for the `GS_OP_EMIT` that sends its vertex (`gs_message`).
+    fn gs_ring(&mut self, inst: &Inst, b: usize, i: usize) -> Result<(), Why> {
+        let io = self.x.io;
+        let ring = io.gs.as_ref().ok_or("a ring access outside a geometry program")?;
+        if self.x.st.guards[b][i].is_some() {
+            return Err("a ring access under a lane mask");
+        }
+        if let Some(reads) = ring.reads.get(&(b, i)) {
+            for r in reads {
+                let (row, channel) = (r.dword / 4, (r.dword % 4) as u8);
+                let val = match self.find_input(row as u8, channel) {
+                    Some((id, col)) => self.gs_load(id, col, u32::from(r.vertex)),
+                    // A register of the ring the signature does not declare: nothing writes it.
+                    None => Val::I32(self.s.m.i32(0)),
+                };
+                if let Some(v) = inst.write(Reg::V(r.dst)) {
+                    self.vals.insert(v, val);
+                }
+            }
+            return Ok(());
+        }
+        if ring.writes.contains_key(&(b, i)) {
+            return Ok(());
+        }
+        Err("a ring access the analysis did not see")
+    }
+
+    /// `loadInput` of column `col` of element `id` at vertex `vertex` of the primitive.
+    fn gs_load(&mut self, id: usize, col: u8, vertex: u32) -> Val {
+        let e = &mut self.s.inputs[id];
+        e.usage |= 1 << col;
+        let (int, bit) = (e.comp != 9, e.comp == 1);
+        let (ty, suffix) = if bit {
+            (self.s.t.i1, ".i1")
+        } else if int {
+            (self.s.t.i32, ".i32")
+        } else {
+            (self.s.t.f32, ".f32")
+        };
+        let entry = self.s.entry;
+        let args = [
+            self.s.m.i32(id as u32),
+            self.s.m.i32(0),
+            self.s.m.i8(col),
+            self.s.m.i32(vertex),
+        ];
+        let v = self.s.op(entry, &format!("loadInput{suffix}"), Attr::ReadNone, ty, 4, &args);
+        if bit {
+            Val::I32(self.s.m.cast(entry, Cast::ZExt, v, self.s.t.i32))
+        } else if int {
+            Val::I32(v)
+        } else {
+            Val::I32(self.s.m.cast(entry, Cast::Bitcast, v, self.s.t.i32))
+        }
+    }
+
+    /// mac S4: `s_sendmsg` of a geometry program: `GS_OP_EMIT` stores the vertex's dwords written to the
+    /// ring so far (the last write of each dword) as its outputs and emits it; `GS_OP_CUT` ends the strip.
+    fn gs_message(&mut self, b: usize, i: usize) -> Result<(), Why> {
+        use crate::gs::Message;
+        let io = self.x.io;
+        let ring = io.gs.as_ref().ok_or("a message outside a geometry program")?;
+        let message = *ring.messages.get(&(b, i)).ok_or("a message the analysis did not see")?;
+        let c = self.cur;
+        let void = self.s.t.void;
+        let stream = self.s.m.i8(0);
+        if matches!(message, Message::Emit | Message::EmitCut) {
+            let n = self.gs_emitted;
+            self.gs_emitted += 1;
+            // The last write to each dword of vertex n before this message, in program order.
+            let mut last: BTreeMap<u16, Value> = BTreeMap::new();
+            let mut sites: Vec<&Site> = ring.writes.keys().filter(|&&s| s < (b, i)).collect();
+            sites.sort();
+            for site in sites {
+                for w in &ring.writes[site] {
+                    if u32::from(w.vertex) == n {
+                        last.insert(w.dword, w.value);
+                    }
+                }
+            }
+            for (dword, value) in last {
+                let (row, channel) = (u32::from(dword / 4), (dword % 4) as u8);
+                let Some(id) = self.s.outputs.iter().position(|o| {
+                    o.row == Some(row) && channel >= o.col && channel < o.col + o.cols
+                }) else {
+                    // A dword of the ring no output declares.
+                    continue;
+                };
+                let col = channel - self.s.outputs[id].col;
+                let x = self.i32_of(value)?;
+                let el = &mut self.s.outputs[id];
+                el.usage |= 1 << col;
+                let comp = el.comp;
+                let (suffix, x) = if comp == 9 {
+                    let f = match self.floats.get(&value) {
+                        Some(&f) => f,
+                        None => self.as_float(x),
+                    };
+                    (".f32", f)
+                } else {
+                    (".i32", x)
+                };
+                let args = [self.s.m.i32(id as u32), self.s.m.i32(0), self.s.m.i8(col), x];
+                self.s.op(c, &format!("storeOutput{suffix}"), Attr::NoUnwind, void, 5, &args);
+            }
+            self.s.op(c, "emitStream", Attr::NoUnwind, void, 97, &[stream]);
+        }
+        if matches!(message, Message::Cut | Message::EmitCut) {
+            self.s.op(c, "cutStream", Attr::NoUnwind, void, 98, &[stream]);
         }
         Ok(())
     }
@@ -2588,6 +2850,11 @@ impl<'a> Lower<'a> {
                 let n = self.s.m.i32(self.x.mesh_stride);
                 return Val::I32(self.s.m.bin(self.s.entry, Bin::Mul, g, n));
             }
+            // mac S4: the ESGS ring offsets the evaluation of `gs.rs` assumed, and the wave's info.
+            Input::GsVertexPair(first) => {
+                return Val::I32(self.s.m.i32(crate::gs::vertex_pair(u32::from(first))));
+            }
+            Input::GsWaveInfo => return Val::I32(self.s.m.i32(crate::gs::WAVE_INFO)),
             Input::MergedWaveInfo => {
                 // shortcut: only the wave index (bits 24-27) is set; the
                 // console's other bits (lane counts) are read by no program.
@@ -5568,6 +5835,7 @@ impl<'a> Lower<'a> {
                     .op(self.cur, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
                 Ok(())
             }
+            Fields::Sopp { .. } if name == "s_sendmsg" && self.x.io.gs.is_some() => self.gs_message(b, i), // mac S4
             Fields::Sopp { .. } => Ok(()),
             Fields::Smem { .. } => self.smem(inst, (b, i)),
             Fields::Valu(_) if name.starts_with("v_interp_") => self.interp(inst, (b, i)),
@@ -5585,6 +5853,7 @@ impl<'a> Lower<'a> {
             Fields::Image { .. } => self.image(inst, b, i),
             Fields::Buffer { .. } => self.buffer(inst, b, i),
             Fields::Exp { .. } => self.export(b, i),
+            Fields::Ds { .. } if self.x.io.gs.is_some() => self.gs_ring(inst, b, i), // mac S4
             Fields::Ds { .. } => self.ds(inst, b, i),
             Fields::Flat { .. } if name.starts_with("global_") => self.flat(inst, b, i),
             Fields::Flat { .. } => Err("flat memory"),
@@ -10355,6 +10624,9 @@ impl<'a> Lower<'a> {
                 self.s
                     .op(c, "unaryBits.i32", Attr::ReadNone, self.s.t.i32, 32, &[a])
             }
+            // mac S4: a geometry program's lane is its primitive: the host thread is alone (lane 0). What the
+            // count feeds is the address of the lane's slice of LDS, which `gs.rs` took apart.
+            "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" if self.x.io.gs.is_some() => s(self, 1)?,
             "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" => {
                 // Bits of the mask's low (high) half below this lane, plus src1:
                 // with an all-ones mask, the lane index.
@@ -10866,12 +11138,12 @@ impl<'a> Lower<'a> {
                 _ => Err("an input"),
             };
         };
-        let v0 = self.vertex_input(id, col, 0);
+        let v0 = self.vertex_input(id, col, 0)?;
         let c = self.cur;
         let mut acc = p0.then_some(v0);
         for (k, w) in [(1, i), (2, j)] {
             let Some(w) = w else { continue };
-            let vk = self.vertex_input(id, col, k);
+            let vk = self.vertex_input(id, col, k)?;
             let d = self.s.m.bin(c, Bin::Sub, vk, v0);
             acc = Some(match acc {
                 Some(a) => self.fmad(w, d, a),
@@ -10884,7 +11156,27 @@ impl<'a> Lower<'a> {
 
     /// Vertex `k` (0 the provoking vertex, as `barycentric` orders them)
     /// of a constant input element's channel, as a float.
-    fn vertex_input(&mut self, id: usize, col: u8, k: u8) -> V {
+    fn vertex_input(&mut self, id: usize, col: u8, k: u8) -> Result<V, Why> {
+        // mac S1: a host without `attributeAtVertex`: vertex 0 is the element's own (constant) input,
+        // vertices 1 and 2 are added flat elements the mesh stage fills (`vertex_flat`).
+        if !super::host_attribute_at_vertex() {
+            let (id, col) = if k == 0 {
+                (id, col)
+            } else {
+                let e = &self.s.inputs[id];
+                let found = vertex_flat::find(&self.vreads, &e.name, e.index, e.col + col)
+                    .and_then(|read| vertex_flat::slot(&self.vreads, read, k));
+                let Some((n, comp)) = found else {
+                    vertex_flat::ask(VertexRead { name: e.name.clone(), index: e.index, channel: e.col + col, vertices: 1 << (k - 1) });
+                    return Err(vertex_flat::MORE);
+                };
+                (self.vflat_id + n, comp)
+            };
+            return match self.load_any_input(id, col) {
+                Val::I32(x) => Ok(self.as_float(x)),
+                _ => Err("an input"),
+            };
+        }
         let e = &mut self.s.inputs[id];
         e.usage |= 1 << col;
         let int = e.comp != 9;
@@ -10909,11 +11201,11 @@ impl<'a> Lower<'a> {
             137,
             &args,
         );
-        if int {
+        Ok(if int {
             self.s.m.cast(entry, Cast::Bitcast, v, self.s.t.f32)
         } else {
             v
-        }
+        })
     }
 
     /// `x` (an f16 in the low bits) as the low half of VGPR `reg`: 16-bit
@@ -12505,6 +12797,7 @@ impl<'a> Lower<'a> {
         let sat = sunclamp::export_sat() && matches!(e.target, Target::Color(_));
         for (id, col, value, half) in stores {
             let mut x = self.i32_of(value)?;
+            let mut raw_half = None;
             if let Some(high) = half {
                 // An f16 half, declared a 32-bit float on the host.
                 let c = self.cur;
@@ -12512,12 +12805,16 @@ impl<'a> Lower<'a> {
                     let k16 = self.s.m.i32(16);
                     x = self.s.m.bin(c, Bin::LShr, x, k16);
                 }
+                raw_half = Some(x);
                 let f32t = self.s.t.f32;
                 let f = self
                     .s
                     .op(c, "legacyF16ToF32", Attr::ReadNone, f32t, 131, &[x]);
                 x = self.as_int(f);
             }
+            // mac S1: the exchange holds a 16-bit output as its raw half (the converted value, shared with the
+            // output's store, crashes Apple's GPU compiler); the epilogue converts it.
+            let bits = raw_half.unwrap_or(x);
             let el = &mut elements(self, primitive)[id];
             el.usage |= 1 << col;
             let (suffix, x) = match el.comp {
@@ -12550,6 +12847,9 @@ impl<'a> Lower<'a> {
                 opcode,
                 &args,
             );
+            if mesh && !primitive {
+                self.vtx_store(id, col, bits, raw_half.is_some())?; // mac S1
+            }
         }
         self.end_guarded(at, &[]);
         Ok(())
@@ -12609,8 +12909,194 @@ impl<'a> Lower<'a> {
         let void = self.s.t.void;
         self.s
             .op(c, "emitIndices", Attr::NoUnwind, void, 169, &args);
+        self.vtx_corners(flat, [args[1], args[2], args[3]]); // mac S1
         self.end_guarded(at, &[]);
         Ok(())
+    }
+
+    /// mac S1, mesh: leaves the program (a `ret`, or to the exchange's meeting [`Self::vtx_epilogue`]).
+    fn leave(&mut self) -> Term {
+        if self.vtx.is_none() {
+            return Term::Ret;
+        }
+        let b = match self.epilogue {
+            Some(b) => b,
+            None => {
+                let b = self.s.m.new_block();
+                self.epilogue = Some(b);
+                b
+            }
+        };
+        Term::Br(b)
+    }
+
+    /// mac S1, mesh: every lane's packed corners start as zero (a primitive no `exp prim` writes is
+    /// culled with all indices 0).
+    fn vtx_prologue(&mut self) -> Result<(), Why> {
+        if let Some(w) = self.vtx_fail {
+            return Err(w);
+        }
+        let Some(x) = self.vtx.clone() else {
+            return Ok(());
+        };
+        let flat = self.mesh_thread();
+        let threads = self.s.threads.map_or(u32::MAX, |t| t[0]);
+        let guard = (threads > x.primitives).then(|| {
+            let n = self.s.m.i32(x.primitives);
+            self.s.m.cmp(self.cur, pred::IULT, flat, n)
+        });
+        let at = self.begin_guarded(guard);
+        let zero = self.s.m.i32(0);
+        self.vtx_corners(flat, [zero; 3]);
+        self.end_guarded(at, &[]);
+        Ok(())
+    }
+
+    /// mac S1, mesh: this lane's primitive corners, packed 10 bits each, into group memory.
+    fn vtx_corners(&mut self, flat: V, corners: [V; 3]) {
+        let Some(x) = self.vtx.clone() else {
+            return;
+        };
+        let c = self.cur;
+        let mut packed = corners[0];
+        for (k, &i) in corners.iter().enumerate().skip(1) {
+            let shift = self.s.m.i32(10 * k as u32);
+            let i = self.s.m.bin(c, Bin::Shl, i, shift);
+            packed = self.s.m.bin(c, Bin::Or, packed, i);
+        }
+        let at = self.s.m.i32(x.corners);
+        let at = self.s.m.bin(c, Bin::Add, flat, at);
+        let lds = self.s.lds();
+        let ptr = self.s.m.element(c, lds, at);
+        self.s.m.store(c, ptr, packed);
+    }
+
+    /// mac S1, mesh: the vertex output channel (`id`, `col`) the pixel stage reads of other vertices,
+    /// written to the exchange for this lane's vertex.
+    fn vtx_store(&mut self, id: usize, col: u8, bits: V, half: bool) -> Result<(), Why> {
+        let Some(x) = self.vtx.clone() else {
+            return Ok(());
+        };
+        let o = &self.s.outputs[id];
+        let Some(read) = vertex_flat::find(&self.vreads, &o.name, o.index, o.col + col) else {
+            return Ok(());
+        };
+        if half {
+            self.vtx_halves.insert(read);
+        }
+        let c = self.cur;
+        let flat = self.mesh_thread();
+        let stride = self.s.m.i32(x.stride);
+        let at = self.s.m.bin(c, Bin::Mul, flat, stride);
+        let k = self.s.m.i32(x.base + read as u32);
+        let at = self.s.m.bin(c, Bin::Add, at, k);
+        let lds = self.s.lds();
+        let ptr = self.s.m.element(c, lds, at);
+        self.s.m.store(c, ptr, bits);
+        Ok(())
+    }
+
+    /// mac S1, mesh: the bits of the f32 equal to the half in the low 16 bits of `h`, in integer
+    /// arithmetic (a `legacyF16ToF32` of a value read back from group memory crashes Apple's GPU
+    /// compiler in some shapes).
+    fn half_to_f32_bits(&mut self, h: V) -> V {
+        let c = self.cur;
+        let k = |l: &mut Self, v: u32| l.s.m.i32(v);
+        let (m16, m15, m10, m5) = (k(self, 0xFFFF), k(self, 0x8000), k(self, 0x3FF), k(self, 31));
+        let (s16, s10, s13, s23) = (k(self, 16), k(self, 10), k(self, 13), k(self, 23));
+        let (zero, bias) = (k(self, 0), k(self, 112));
+        let h = self.s.m.bin(c, Bin::And, h, m16);
+        let sign = self.s.m.bin(c, Bin::And, h, m15);
+        let sign = self.s.m.bin(c, Bin::Shl, sign, s16);
+        let e = self.s.m.bin(c, Bin::LShr, h, s10);
+        let e = self.s.m.bin(c, Bin::And, e, m5);
+        let m = self.s.m.bin(c, Bin::And, h, m10);
+        let eb = self.s.m.bin(c, Bin::Add, e, bias);
+        let eb = self.s.m.bin(c, Bin::Shl, eb, s23);
+        let mb = self.s.m.bin(c, Bin::Shl, m, s13);
+        let normal = self.s.m.bin(c, Bin::Or, eb, mb);
+        let inf = k(self, 0x7F80_0000);
+        let special = self.s.m.bin(c, Bin::Or, inf, mb);
+        let f32t = self.s.t.f32;
+        let mf = self.s.m.cast(c, Cast::UiToFp, m, f32t);
+        let scale = self.s.m.f32(0x3380_0000);
+        let sub = self.s.m.bin(c, Bin::Mul, mf, scale);
+        let sub = self.as_int(sub);
+        let is_zero = self.s.m.cmp(c, pred::EQ, e, zero);
+        let is_max = self.s.m.cmp(c, pred::EQ, e, m5);
+        let v = self.s.m.select(c, is_max, special, normal);
+        let v = self.s.m.select(c, is_zero, sub, v);
+        self.s.m.bin(c, Bin::Or, v, sign)
+    }
+
+    /// mac S1, mesh: the block every lane leaves through. The lanes meet (the group memory holds every
+    /// vertex's values), then lane n writes primitive n's vertices 1 and 2 as the added primitive
+    /// outputs.
+    fn vtx_epilogue(&mut self) {
+        let (Some(x), Some(b)) = (self.vtx.clone(), self.epilogue) else {
+            return;
+        };
+        self.cur = b;
+        self.group_sync(b);
+        let flat = self.mesh_thread();
+        let threads = self.s.threads.map_or(u32::MAX, |t| t[0]);
+        let guard = (threads > x.primitives).then(|| {
+            let n = self.s.m.i32(x.primitives);
+            self.s.m.cmp(self.cur, pred::IULT, flat, n)
+        });
+        let at = self.begin_guarded(guard);
+        let c = self.cur;
+        let lds = self.s.lds();
+        let first = self.s.m.i32(x.corners);
+        let first = self.s.m.bin(c, Bin::Add, flat, first);
+        let ptr = self.s.m.element(c, lds, first);
+        let packed = self.s.m.load(c, ptr);
+        let mask = self.s.m.i32(0x1FF);
+        let void = self.s.t.void;
+        // All the loads come before the stores: loads and stores alternating crash Apple's GPU compiler
+        // (AGX register allocation), so the values wait in registers until every one is read.
+        let mut pending: Vec<(usize, u8, V)> = Vec::new();
+        for k in 1..=2u8 {
+            let shift = self.s.m.i32(10 * u32::from(k));
+            let v = self.s.m.bin(c, Bin::LShr, packed, shift);
+            let v = self.s.m.bin(c, Bin::And, v, mask);
+            // Never an index past the vertices' values (the array's bounds are then provable).
+            let (n, zero) = (self.s.m.i32(x.vertices), self.s.m.i32(0));
+            let inside = self.s.m.cmp(c, pred::IULT, v, n);
+            let v = self.s.m.select(c, inside, v, zero);
+            let stride = self.s.m.i32(x.stride);
+            let row = self.s.m.bin(c, Bin::Mul, v, stride);
+            for read in 0..self.vreads.len() {
+                let Some((n, comp)) = vertex_flat::slot(&self.vreads, read, k) else {
+                    continue;
+                };
+                let at = self.s.m.i32(x.base + read as u32);
+                let at = self.s.m.bin(c, Bin::Add, row, at);
+                let ptr = self.s.m.element(c, lds, at);
+                let value = self.s.m.load(c, ptr);
+                let value = if self.vtx_halves.contains(&read) {
+                    self.half_to_f32_bits(value)
+                } else {
+                    value
+                };
+                pending.push((x.ids[n], comp, value));
+            }
+        }
+        // And in element and column order (scattered columns of a vector crash it too).
+        pending.sort_by_key(|&(id, comp, _)| (id, comp));
+        for (id, comp, value) in pending {
+            self.s.prims[id].usage |= 1 << comp;
+            let args = [
+                self.s.m.i32(id as u32),
+                self.s.m.i32(0),
+                self.s.m.i8(comp),
+                value,
+                flat,
+            ];
+            self.s.op(c, "storePrimitiveOutput.i32", Attr::NoUnwind, void, 172, &args);
+        }
+        self.end_guarded(at, &[]);
+        self.s.m.terminate(self.cur, Term::Ret);
     }
 
     /// The per-vertex arbitrary row no mesh output entry names but one
@@ -12714,7 +13200,7 @@ impl<'a> Lower<'a> {
                     self.s
                         .op(self.cur, "discard", Attr::NoUnwind, self.s.t.void, 82, &[t]);
                 }
-                Term::Ret
+                self.leave() // mac S1
             }
             LaneExit::Indirect => return Err(unsupported(offset, "an indirect jump")),
         };
@@ -12781,7 +13267,8 @@ impl<'a> Lower<'a> {
             self.s
                 .op(a, "discard", Attr::NoUnwind, self.s.t.void, 82, &[t]);
         }
-        self.s.m.terminate(a, Term::Ret);
+        let leave = self.leave(); // mac S1
+        self.s.m.terminate(a, leave);
         self.abort = Some(a);
         a
     }

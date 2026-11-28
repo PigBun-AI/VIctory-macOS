@@ -54,7 +54,8 @@ pub fn run(container: &[u8], settings_text: &str, host: [u32; 4]) -> (i32, Vec<u
     victory_shader::emit::set_host_max_wave(host[0]);
     victory_shader::emit::set_view_heap_limit(host[1]);
     victory_shader::emit::set_raw_views(host[2]);
-    victory_shader::emit::set_host_rdna(host[3] != 0);
+    victory_shader::emit::set_host_rdna(host[3] & 0x7FFF_FFFF != 0); // mac S1: bit 31 is the capability
+    victory_shader::emit::set_host_attribute_at_vertex(host[3] >> 31 == 0); // mac S1
     let done = catch_unwind(AssertUnwindSafe(|| live::scoped(&snapshot, || victory_shader::emit::translate(container))));
     match done {
         Ok(Ok(shader)) => (OK, wire::encode(&shader)),

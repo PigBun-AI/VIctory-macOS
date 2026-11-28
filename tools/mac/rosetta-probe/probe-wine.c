@@ -687,10 +687,14 @@ static int batch_atomic_split(void) {
     return fails;
 }
 
+#include "isa-numeric.h"
+
 // ---------- main ----------
 int main(int argc, char **argv) {
     if (argc < 2) { puts("usage: probe-wine list | cpuid | page4k | batch <fma|fma_all|fma_nan|f16c|bmi|atomic_flags> | <case> <mode> [back=N] [b=0x..] [gran=N] [mask=..]"); return 2; }
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (getenv("PROBE_FAST")) g_fast = atoi(getenv("PROBE_FAST"));
+    if (getenv("PROBE_NEG")) g_neg = 1;
     if (!strcmp(argv[1], "list")) { for (int i = 0; i < NCASES; i++) printf("store %s %d %d\n", cases[i].name, cases[i].mlanes, cases[i].back); for (int i = 0; i < NAC; i++) printf("atomic %s\n", acs[i].name); return 0; }
     g_base = VirtualAlloc(NULL, g_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!g_base) { say("RES setup VirtualAlloc failed\n"); return 3; }
@@ -701,6 +705,13 @@ int main(int argc, char **argv) {
         int f = 0;
         if (!strcmp(argv[2], "fma")) f = batch_fma(-1, 0) ; else if (!strcmp(argv[2], "fma_nan")) f = batch_fma_nan(); else if (!strcmp(argv[2], "fma_ftz")) f = batch_fma_ftz();
         else if (!strcmp(argv[2], "f16c")) f = batch_f16c(); else if (!strcmp(argv[2], "bmi")) f = batch_bmi(); else if (!strcmp(argv[2], "atomic_flags")) f = batch_atomic_flags(); else if (!strcmp(argv[2], "atomic_split")) f = batch_atomic_split();
+        else if (!strcmp(argv[2], "rcp_rsqrt")) {
+            const char *sel = argc > 3 ? argv[3] : NULL; struct { const char *n; int rs, sc, y; } v[] = {{"vrcpps_xmm", 0, 0, 0}, {"vrcpps_ymm", 0, 0, 1}, {"vrsqrtps_xmm", 1, 0, 0}, {"vrsqrtps_ymm", 1, 0, 1}, {"vrcpss", 0, 1, 0}, {"vrsqrtss", 1, 1, 0}};
+            for (unsigned i = 0; i < sizeof v / sizeof *v; i++) if (sel_ok(sel, v[i].n)) f += batch_rcp(v[i].rs, v[i].sc, v[i].y);
+        }
+        else if (!strcmp(argv[2], "cvt_f2i")) f = batch_cvt_f2i(argc > 3 ? argv[3] : NULL);
+        else if (!strcmp(argv[2], "cvt_i2f")) f = batch_cvt_i2f(argc > 3 ? argv[3] : NULL);
+        else if (!strcmp(argv[2], "cvt_f2f")) f = batch_cvt_f2f(argc > 3 ? argv[3] : NULL);
         else { say("unknown batch\n"); return 2; }
         return f ? 1 : 0;
     }
