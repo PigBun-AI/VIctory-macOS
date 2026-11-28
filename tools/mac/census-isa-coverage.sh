@@ -119,13 +119,19 @@ with open(f'{out}/coverage.tsv', 'w') as fh:
     for c, e in rows:
         fh.write('%s\t%d\t%d\t%d\t%.2f\t%d\t%d\t%d\t%d\t%d\t%d\t%s\n' % (c, len(e['mn']), e['forms'], e['n'], 100.0 * e['n'] / tot['n'],
             e['proven'], e['partial'], e['unproven'], e['fproven'], e['fpartial'], e['funproven'], PROBE.get(c, 'none')))
-nopad = tot['n'] - tot['pad']
+# Three exclusive tiers: proven + partial + unproven = 100% in every line below (same denominator for the three numbers).
+# int3/nop padding is its own tier-less group (never executed): it sits in 'unproven' above, so the no-padding lines subtract it.
+pad_forms = sum(1 for c in cats if c.startswith('padding')) and cats['padding (int3, nop)']['forms']
+nopad = tot['n'] - tot['pad']; up = tot['unproven'] - tot['pad']
+nf = tot['forms'] - pad_forms; fu = forms_n['unproven'] - pad_forms
+def pc(x, y): return '%.1f%%' % (100.0 * x / y)
 lines = [
  f"title instruction census: {tot['n']} instructions, {tot['forms']} forms, {len(mn_best)} mnemonics (static presence; execution unknown: used=unknown)",
- f"by instructions (all): proven {tot['proven']} ({100.0*tot['proven']/tot['n']:.1f}%), partial {tot['partial']} ({100.0*tot['partial']/tot['n']:.1f}%), unproven {tot['unproven']} ({100.0*tot['unproven']/tot['n']:.1f}%)",
- f"by instructions (without int3/nop padding, {nopad}): proven {100.0*tot['proven']/nopad:.1f}%, partial {100.0*tot['partial']/nopad:.1f}%, unproven {100.0*tot['unproven']/nopad:.1f}%",
- f"by forms: proven {forms_n['proven']} ({100.0*forms_n['proven']/tot['forms']:.1f}%), partial {forms_n['partial']}, unproven {forms_n['unproven']} ({100.0*forms_n['unproven']/tot['forms']:.1f}%)",
- f"by mnemonics: proven {mnt['proven']} (every form), partial {mnt['partial']} (some form probed), unproven {mnt['unproven']} ({100.0*mnt['unproven']/len(mn_best):.1f}%)",
+ f"BY INSTRUCTIONS, all {tot['n']}: proven {tot['proven']} ({pc(tot['proven'], tot['n'])}) + partial {tot['partial']} ({pc(tot['partial'], tot['n'])}) + unproven {tot['unproven']} ({pc(tot['unproven'], tot['n'])}) = 100%, of which int3/nop padding {tot['pad']} ({pc(tot['pad'], tot['n'])})",
+ f"BY INSTRUCTIONS, without padding {nopad}: proven {tot['proven']} ({pc(tot['proven'], nopad)}) + partial {tot['partial']} ({pc(tot['partial'], nopad)}) + unproven {up} ({pc(up, nopad)}) = 100%",
+ f"BY FORMS, all {tot['forms']}: proven {forms_n['proven']} ({pc(forms_n['proven'], tot['forms'])}) + partial {forms_n['partial']} ({pc(forms_n['partial'], tot['forms'])}) + unproven {forms_n['unproven']} ({pc(forms_n['unproven'], tot['forms'])}) = 100%, of which padding forms {pad_forms}",
+ f"BY FORMS, without padding {nf}: proven {forms_n['proven']} ({pc(forms_n['proven'], nf)}) + partial {forms_n['partial']} ({pc(forms_n['partial'], nf)}) + unproven {fu} ({pc(fu, nf)}) = 100%",
+ f"BY MNEMONICS, all {len(mn_best)}: proven {mnt['proven']} (every form probed) + partial {mnt['partial']} (some form probed) + unproven {mnt['unproven']} = {len(mn_best)}",
 ]
 open(f'{out}/coverage.txt', 'w').write('\n'.join(lines) + '\n')
 print('\n'.join(lines)); print()
