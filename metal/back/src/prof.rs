@@ -470,7 +470,9 @@ fn absorb(w: &mut Window, p: &Pending) {
     for (ns, label) in slow {
         let (head, snapped) = split_snap(label);
         let args = match (snapped, SNAP.get().and_then(|s| s.as_ref())) {
-            (Some(i), Some(sn)) => format!(" dispatch arguments (now in the ring) {:?}", sn.read(i)),
+            (Some(i), Some(sn)) => {
+                format!(" dispatch arguments (now in the ring) {:?}", sn.read(i))
+            }
             _ => String::new(),
         };
         eprintln!(

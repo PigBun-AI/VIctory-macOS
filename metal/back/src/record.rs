@@ -599,7 +599,15 @@ impl CommandList {
         {
             let (n, dst) = sn.take();
             let params = self.alloc_constants(16, 16)?;
-            params.write_u32s(0, &[args_va as u32, (args_va >> 32) as u32, dst as u32, (dst >> 32) as u32])?;
+            params.write_u32s(
+                0,
+                &[
+                    args_va as u32,
+                    (args_va >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                ],
+            )?;
             self.set_address(30, params.gpu_va)?;
             self.dispatch(&sn.pipeline, [1, 1, 1], [1, 1, 1])?;
             self.keep_buffers.push(sn.ring.clone());
