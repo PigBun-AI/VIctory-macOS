@@ -289,6 +289,12 @@ fn mesh_hlsl_with(big: bool, reads: u8, unfixable: bool, grid: [u32; 2]) -> Stri
             "ByteAddressBuffer src : register(t0);\n",
             "float(src.Load(0))",
         ),
+        // a texture sampled through a static sampler (the root signature
+        // gives the sampler to the mesh stage only)
+        3 => (
+            "Texture2D<float4> tx : register(t0);\nSamplerState sm : register(s0);\n",
+            "tx.SampleLevel(sm, float2(0.5, 0.5), 0).x",
+        ),
         // a root constant
         2 => (
             "cbuffer C : register(b0) { uint scale; };\n",
@@ -1876,4 +1882,34 @@ fn a_mesh_without_a_vmcs_part_is_refused_as_before_the_emulation_existed() {
     assert_ne!(s, Status::OK);
     assert!(why.contains("mesh size"), "Metal's reason: {why}");
     assert_eq!(mesh_emu::counters_here(), before, "nothing was emulated");
+}
+
+#[test]
+fn a_mesh_with_a_static_sampler_goes_through_the_emulation() {
+    // The compute form reads the texture through the application's static
+    // sampler, which the root signature shows to the mesh stage only: the
+    // extended root signature shows it to every stage (without, MSC refused
+    // the compute form: ResourceNotReferencedByRootSignature, 1229 of the
+    // 8765 meshes of the title).
+    let Some(r) = rig_reading(Fx::new(), 3) else {
+        return;
+    };
+    let g = &r.g;
+    let mut one = range(RangeKind::SRV);
+    one.num_descriptors = 1;
+    let sig = g.fx.root_sig(&RootSigDesc {
+        params: vec![table_param(0, 1)],
+        ranges: vec![one],
+        static_samplers: vec![StaticSampler {
+            register_space: 0,
+            shader_register: 0,
+            visibility: ShaderVisibility::MESH,
+            ..StaticSampler::default()
+        }],
+        ..RootSigDesc::default()
+    });
+    let before = mesh_emu::counters_here();
+    let made = g.graphics_pso(sig, None, Some(&r.ms), &r.ps);
+    assert!(made.is_ok(), "the pair is made: {:?}", made.err());
+    assert_eq!(mesh_emu::counters_here().pipelines, before.pipelines + 1);
 }

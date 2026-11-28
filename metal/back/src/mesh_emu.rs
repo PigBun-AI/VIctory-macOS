@@ -409,6 +409,13 @@ pub fn extend_root(
         for p in &mut r.params {
             p.visibility = Visibility::All;
         }
+        // A static sampler the mesh shader (now a compute shader) uses must
+        // be visible to it: Metal Shader Converter refuses a shader that
+        // names a resource its root signature hides from the stage
+        // (`ResourceNotReferencedByRootSignature`).
+        for s in &mut r.static_samplers {
+            s.visibility = Visibility::All;
+        }
     }
     r.params.push(Param {
         kind: if uav {
@@ -1076,9 +1083,23 @@ mod tests {
                 },
                 visibility: Visibility::Mesh,
             }],
-            static_samplers: vec![],
+            static_samplers: vec![crate::msc::StaticSampler {
+                filter: 0,
+                address: [1, 1, 1],
+                mip_lod_bias: 0.0,
+                max_anisotropy: 1,
+                comparison: 0,
+                border: 0,
+                min_lod: 0.0,
+                max_lod: 0.0,
+                register: 0,
+                space: 0,
+                visibility: Visibility::Mesh,
+            }],
         };
         let cs = extend_root(&root, &layout, true, true);
+        // the compute form sees the static sampler the mesh shader used
+        assert_eq!(cs.static_samplers[0].visibility, Visibility::All);
         assert_eq!(cs.params.len(), 3);
         assert_eq!(cs.params[0].visibility, Visibility::All);
         assert!(matches!(
@@ -1096,6 +1117,7 @@ mod tests {
             }
         ));
         let g = extend_root(&root, &layout, false, false);
+        assert_eq!(g.static_samplers[0].visibility, Visibility::Mesh);
         assert_eq!(g.params[0].visibility, Visibility::Mesh);
         assert!(matches!(g.params[1].kind, ParamKind::Srv { .. }));
         assert_eq!(g.flags, 1);
