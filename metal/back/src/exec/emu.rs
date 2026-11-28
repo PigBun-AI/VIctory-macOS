@@ -287,7 +287,11 @@ impl Run<'_> {
         };
         list.emu_direct(em, &side.shadow, static_va, groups)
             .map_err(|e| {
-                self.st.note = Some(format!("emulated DISPATCH_MESH: {e}"));
+                let why = format!("emulated DISPATCH_MESH: {e}");
+                if let Some(stats) = crate::dropstats::get() {
+                    stats.extra(&why, 1);
+                }
+                self.st.note = Some(why);
                 (status_of(&e), mesh_emu::is_scratch_error(&e))
             })
     }
@@ -360,7 +364,11 @@ impl Run<'_> {
         };
         list.emu_indirect(kernels, emu_kernels, em, &spec, static_va)
             .map_err(|e| {
-                self.st.note = Some(format!("emulated EXECUTE_INDIRECT: {e}"));
+                let why = format!("emulated EXECUTE_INDIRECT: {e}");
+                if let Some(stats) = crate::dropstats::get() {
+                    stats.extra(&why, 1);
+                }
+                self.st.note = Some(why);
                 status_of(&e)
             })
     }

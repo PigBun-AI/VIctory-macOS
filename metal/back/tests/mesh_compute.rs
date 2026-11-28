@@ -1488,10 +1488,15 @@ fn the_scratch_ring_does_not_hand_out_a_segment_a_submission_in_flight_may_use()
         !q.configure_scratch(8192, 4),
         "a ring in use keeps its size"
     );
+    // Both direct and indirect encoding use the list allocator: on exactly
+    // this third allocation it grows without reusing either live address.
+    let mut l = q.begin_list().unwrap();
+    let spill = l.mesh_scratch_va(4096).unwrap();
+    assert!(spill != a.gpu_va && spill != b.gpu_va);
+    assert_ne!(l.mesh_scratch_va(4096).unwrap(), spill);
     // The submission that holds them stays in flight until the CPU signals.
     let fence = d.create_fence().unwrap();
     q.wait_fence(&fence, 1);
-    let mut l = q.begin_list().unwrap();
     l.end().unwrap();
     q.submit(vec![l]).unwrap();
     let signalled = Arc::new(AtomicBool::new(false));

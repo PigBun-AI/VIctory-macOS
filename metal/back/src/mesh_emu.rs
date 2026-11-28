@@ -674,6 +674,28 @@ fn fill_ext(
 }
 
 impl CommandList {
+    /// Scratch kept until this submission completes. A full open ring must not wrap or wait for itself.
+    pub fn mesh_scratch_va(&mut self, bytes: u64) -> Result<u64> {
+        if bytes <= self.queue().scratch_segment_bytes() {
+            if let Some(slice) = self.queue().try_mesh_ring(bytes, 256)? {
+                return Ok(slice.gpu_va);
+            }
+        }
+        if bytes > MAX_BLOCK_BYTES {
+            return Err(Error::Unsupported(format!(
+                "{bytes} bytes of mesh scratch: over the {MAX_BLOCK_BYTES} one dispatch may take"
+            )));
+        }
+        let block = self
+            .queue()
+            .device()
+            .create_buffer(BufferKind::Shared, bytes)?;
+        let va = block.gpu_va();
+        self.keep_buffers.push(block);
+        event(Some(self), Event::BigBlock);
+        Ok(va)
+    }
+
     /// `groups` threadgroups of the compute form of `em`, with the
     /// application's root arguments `shadow` (the bytes of its argument
     /// buffer) and the scratch of the ring: encoded into the current compute
@@ -703,23 +725,7 @@ impl CommandList {
             })?;
         // Over a ring segment: a block of its own, kept by the list until the
         // submission completes.
-        let scratch_va = if bytes > self.queue().scratch_segment_bytes() {
-            if bytes > MAX_BLOCK_BYTES {
-                return Err(Error::Unsupported(format!(
-                    "{bytes} bytes of mesh scratch: over the {MAX_BLOCK_BYTES} one dispatch may take"
-                )));
-            }
-            let block = self
-                .queue()
-                .device()
-                .create_buffer(BufferKind::Shared, bytes)?;
-            let va = block.gpu_va();
-            self.keep_buffers.push(block);
-            event(Some(self), Event::BigBlock);
-            va
-        } else {
-            self.alloc_scratch(bytes, 256)?.gpu_va
-        };
+        let scratch_va = self.mesh_scratch_va(bytes)?;
         // The extended argument buffer, then the dimensions behind it.
         let size = u64::from(em.ext.size);
         let ring = self.alloc_constants(size + 16, 16)?;
@@ -788,7 +794,7 @@ impl CommandList {
                 "a mesh group of {gstride} bytes does not fit a scratch-ring segment"
             )));
         }
-        let arena = self.alloc_scratch(arena_bytes, 256)?;
+        let arena_va = self.mesh_scratch_va(arena_bytes)?;
         let cursor = self.alloc_constants(16, 16)?;
         cursor.write_u32s(0, &[0, 0, 0, 0])?;
         let chunk = ek.chunk()?;
@@ -828,7 +834,7 @@ impl CommandList {
                     va(head),
                     va(out_at),
                     va(draw_at),
-                    arena.gpu_va,
+                    arena_va,
                     cursor.gpu_va,
                     stats_va,
                     static_va.unwrap_or(0),

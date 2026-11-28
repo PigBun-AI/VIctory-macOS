@@ -808,6 +808,13 @@ impl Queue {
     /// full; fails when the request is over a segment or one submission
     /// alone needs more than the ring.
     pub fn alloc_scratch(&self, size: u64, align: u64) -> Result<RingAlloc> {
+        self.try_mesh_ring(size, align)?.ok_or_else(|| {
+            Error::Unsupported("one submission needs more mesh scratch than the whole ring".into())
+        })
+    }
+
+    /// None: this submission already owns the full ring; spill instead of waiting for itself.
+    pub(crate) fn try_mesh_ring(&self, size: u64, align: u64) -> Result<Option<RingAlloc>> {
         loop {
             let completed = self.inner.timeline.completed();
             let r = {
@@ -827,17 +834,13 @@ impl Queue {
                     .try_alloc(size, align, completed)
             };
             match r {
-                Ok(a) => return Ok(a),
+                Ok(a) => return Ok(Some(a)),
                 Err(RingFull::TooBig) => {
                     return Err(Error::Unsupported(format!(
                         "{size} bytes of mesh scratch do not fit a scratch-ring segment"
                     )));
                 }
-                Err(RingFull::Open) => {
-                    return Err(Error::Unsupported(
-                        "one submission needs more mesh scratch than the whole ring".into(),
-                    ));
-                }
+                Err(RingFull::Open) => return Ok(None),
                 Err(RingFull::Busy(value)) => {
                     if !self.inner.timeline.wait(value, 10_000) {
                         return Err(Error::Timeout);
