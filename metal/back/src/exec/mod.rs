@@ -159,6 +159,10 @@ pub(crate) struct Heap {
     pub(crate) heap: crate::descriptors::DescriptorHeap,
     pub(crate) sampler: bool,
     pub(crate) shader_visible: bool,
+    /// What each written view of the heap looks at, by identity (see
+    /// [`emu`]'s pass-split rule): a buffer's base address, a texture's
+    /// resource id with bit 62 set. Slots never written or cleared are absent.
+    pub(crate) keys: std::collections::HashMap<u32, u64>,
 }
 
 /// Everything `HELLO` made.

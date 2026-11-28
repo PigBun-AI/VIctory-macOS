@@ -466,3 +466,32 @@ so the kernel sees the writes. Resources are matched by identity (buffer range /
 accesses the back cannot resolve (heap-indexed UAV writes by the pixel shader against
 heap-indexed reads by the kernel) are counted as `unproven` and do not split by default
 (`VICTORY_METAL_MESH_COMPUTE_SPLIT=unproven` splits on them, for A/B).
+
+### 8.9 Back: what is implemented (branch `mc-back`)
+
+* `metal/back/src/mesh_emu.rs`: the `VMCS` part (`Bundle::find` / `attach`), the extended root
+  signature (`extend_root`), `Emulated::build` (compute PSO + vertex-fetch PSO; refuses when the
+  part is missing, the thread-group size or the two argument-buffer layouts disagree),
+  `CommandList::emu_direct` / `emu_indirect` / `emu_draw*`, the MSL kernel `emu_chunk` (indirect:
+  arena sizing, per-record argument buffers and draw blocks), the counters
+  (`mesh_emu::counters()`: pipelines, hoisted, split, in_place, unproven, indirect, dropped) and the
+  switch `VICTORY_METAL_MESH_COMPUTE` (0/false/off/no = off; default on).
+* `exec/gfx.rs`: after `mesh_fit::retry`, a refusal that is a size refusal or "crash(ed) Apple's GPU
+  compiler" (crash cache or pair denylist) builds the emulation instead; if that fails the old
+  refusal stands (with the reason appended to `last_error`).
+* `exec/emu.rs`: pre-scan at `BEGIN_RENDER_PASS` (decoder clone up to `END_RENDER_PASS`, root
+  arguments followed on a copy of the graphics side), kernels in the compute encoder before the
+  pass's render encoder, ordered after everything earlier (barrier to the dispatch stage), draws
+  consume the prepared records in order. Not hoisted (kernel encoded right before the draw, which
+  ends the render encoder; the pass continues with `Load`): the rule of 8.8 (`split`), or a
+  `SetDescriptorHeaps` inside the pass (`in_place`).
+* Identity for the rule: root descriptors by buffer base; table ranges by what each descriptor was
+  written to look at (`Heap::keys`, kept by `WRITE_DESCRIPTOR` and `COPY_DESCRIPTORS`; buffers by base
+  address, textures by resource). A range is looked at up to 512 entries. Heap-indexed root signatures
+  are `unproven`.
+* Scratch: a second `ConstantRing` on the queue (`Queue::alloc_scratch`, `Shared` memory), 6 x 16 MB
+  by default (`VICTORY_METAL_MESH_COMPUTE_RING_MB`), segments recycled only after the submission that
+  used them completed; one draw may take at most one segment, an indirect call one arena of
+  `INDIRECT_ARENA_GROUPS` (256) groups. A draw that cannot get scratch is dropped with a reason.
+* Tests: `metal/back/tests/mesh_compute.rs` (the prototype's, plus the runtime's from
+  `a_mesh_pipeline_metal_refuses_is_made...` on).

@@ -1595,3 +1595,118 @@ fn an_indirect_record_with_root_constants_reaches_its_own_dispatch() {
         same_picture(&got, want, &format!("records {records:?}"));
     }
 }
+
+/// [`write_then_read`] through descriptor tables: the draw stores through a UAV
+/// in the table at slot 0, the mesh reads the SRV in the table at slot 4 (both
+/// copied from a staging heap).
+fn write_then_read_tables(
+    r: &Rig,
+    same_buffer: bool,
+) -> (Vec<u32>, mesh_emu::Counters, mesh_emu::Counters) {
+    let g = &r.g;
+    let one_view = |kind: RangeKind, base: u32| {
+        let mut d = range(kind);
+        d.num_descriptors = 1;
+        d.base_register = base;
+        d
+    };
+    let wsig = g.fx.root_sig(&RootSigDesc {
+        params: vec![table_param(0, 1)],
+        ranges: vec![one_view(RangeKind::UAV, 1)],
+        ..RootSigDesc::default()
+    });
+    let msig = g.fx.root_sig(&RootSigDesc {
+        params: vec![table_param(0, 1)],
+        ranges: vec![one_view(RangeKind::SRV, 0)],
+        ..RootSigDesc::default()
+    });
+    let wvs = dxil_or_skip("mcb_vs_full", "vs_6_6", VS_FULL).unwrap();
+    let wps = dxil_or_skip("mcb_ps_store", "ps_6_6", PS_STORE).unwrap();
+    let wpso = g.graphics_pso(wsig, Some(&wvs), None, &wps).unwrap();
+    let mpso = g.graphics_pso(msig, None, Some(&r.ms), &r.ps).unwrap();
+    let a = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let b = if same_buffer {
+        a
+    } else {
+        g.fx.buffer(BufferKind::DEFAULT, 256)
+    };
+    let zero = g.fx.buffer(BufferKind::UPLOAD, 256);
+    cpu_write(zero.cpu_addr, &[0, 0, 0, 0]);
+    let one = g.fx.buffer(BufferKind::UPLOAD, 256);
+    cpu_write(one.cpu_addr, &[1, 0, 0, 0]);
+    let staging = g.fx.heap(HeapKind::CBV_SRV_UAV, 4, false);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    g.fx.write_view(
+        staging.heap,
+        0,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, a.res, 0, 64),
+    );
+    g.fx.write_view(
+        staging.heap,
+        1,
+        ViewDesc::raw(ViewKind::BUFFER_SRV, b.res, 0, 64),
+    );
+    g.fx.copy_descriptors(heap.heap, 0, staging.heap, 0, 1);
+    g.fx.copy_descriptors(heap.heap, 4, staging.heap, 1, 1);
+    let mut before = vec![copy(a.res, zero.res, 256)];
+    if !same_buffer {
+        before.push(copy(b.res, one.res, 256));
+    }
+    before.push(Command::Barrier(Barrier::memory(
+        stage::BLIT,
+        stage::BLIT | stage::VERTEX | stage::FRAGMENT | stage::DISPATCH,
+    )));
+    before.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+        cbv_srv_uav: heap.heap,
+        sampler: HeapId::NULL,
+    }));
+    let table = |index| {
+        Command::SetRootTable(SetRootTable {
+            bind_point: BindPoint::GRAPHICS,
+            root_index: 0,
+            heap: heap.heap,
+            index,
+        })
+    };
+    let in_pass = vec![
+        Command::SetRootSignature(SetRootSignature {
+            bind_point: BindPoint::GRAPHICS,
+            root_sig: wsig,
+        }),
+        Command::SetPipeline(SetPipeline { pso: wpso, _pad: 0 }),
+        table(0),
+        Command::Draw(Draw {
+            vertex_count: 3,
+            instance_count: 1,
+            start_vertex: 0,
+            start_instance: 0,
+        }),
+        Command::SetRootSignature(SetRootSignature {
+            bind_point: BindPoint::GRAPHICS,
+            root_sig: msig,
+        }),
+        Command::SetPipeline(SetPipeline { pso: mpso, _pad: 0 }),
+        table(4),
+        dispatch_mesh(GROUPS),
+    ];
+    let c0 = mesh_emu::counters();
+    let got = g.picture_in(before, vec![], in_pass);
+    (got, c0, mesh_emu::counters())
+}
+
+#[test]
+fn the_rule_follows_descriptor_tables_too() {
+    let Some(r) = rig_with(Fx::new(), true) else {
+        return;
+    };
+    let (got, c0, c1) = write_then_read_tables(&r, true);
+    same_picture(&got, &r.native, "tables, same buffer");
+    assert_eq!(
+        c1.split,
+        c0.split + 1,
+        "the table's UAV and SRV are one buffer"
+    );
+    let (got, c0, c1) = write_then_read_tables(&r, false);
+    same_picture(&got, &r.native, "tables, two buffers");
+    assert_eq!((c1.split, c1.hoisted), (c0.split, c0.hoisted + 1));
+}
