@@ -1086,6 +1086,71 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_has_the_same_hash_with_and_without_the_vmcs_part() {
+        // The denylists (`msc-denylist.txt`, `mesh-pair-denylist.txt`) name a
+        // shader by the hash of its container as the census saw it, before
+        // the translator appended the part.
+        let base = container(&[
+            (*b"SFI0", vec![1; 8]),
+            (*b"DXIL", vec![2; 13]),
+            (*b"PSV0", vec![3; 5]),
+        ]);
+        let with = Bundle {
+            layout: "vmcl 1\nthreads 1 1 1\n",
+            compute: b"cs bytes",
+            vertex: b"vs bytes!",
+        }
+        .attach(&base)
+        .unwrap();
+        assert_ne!(with, base);
+        assert_eq!(
+            crate::msc::guard::stage_hash(&with),
+            crate::msc::guard::stage_hash(&base)
+        );
+        assert_eq!(
+            victory_metal_proto::dropstats::without_vmcs(&with).as_ref(),
+            &base[..],
+            "the stripped container is the original, byte for byte"
+        );
+        // the pair and the label (front and back drop statistics) follow
+        let ps = container(&[(*b"DXIL", vec![9; 4])]);
+        assert_eq!(
+            victory_metal_proto::dropstats::hash_parts(&[&with, &ps]),
+            victory_metal_proto::dropstats::hash_parts(&[&base, &ps])
+        );
+        // another shader still hashes differently
+        let other = container(&[(*b"DXIL", vec![4; 13])]);
+        assert_ne!(
+            crate::msc::guard::stage_hash(&other),
+            crate::msc::guard::stage_hash(&base)
+        );
+    }
+
+    #[test]
+    fn a_denylisted_mesh_pair_is_still_denied_once_the_translator_attaches_the_part() {
+        let ms = container(&[(*b"DXIL", vec![2; 16])]);
+        let ps = container(&[(*b"DXIL", vec![5; 16])]);
+        let with = Bundle {
+            layout: "x",
+            compute: b"c",
+            vertex: b"v",
+        }
+        .attach(&ms)
+        .unwrap();
+        let key = (
+            crate::msc::guard::stage_hash(&ms),
+            crate::msc::guard::stage_hash(&ps),
+        );
+        assert_eq!(
+            (
+                crate::msc::guard::stage_hash(&with),
+                crate::msc::guard::stage_hash(&ps)
+            ),
+            key
+        );
+    }
+
+    #[test]
     fn a_damaged_part_is_an_error_not_a_guess() {
         let base = container(&[(*b"DXIL", vec![2; 8])]);
         let b = Bundle {

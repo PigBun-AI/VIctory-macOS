@@ -18,6 +18,7 @@
 use crate::cmd::Command;
 use crate::ids::PsoId;
 use crate::indirect::IndirectArgKind;
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -102,9 +103,60 @@ impl Label {
     };
 }
 
+/// The part the mesh-shader emulation adds to a mesh shader's container
+/// (`docs/metal/mesh-compute.md`, section 8.1).
+pub const VMCS_FOURCC: [u8; 4] = *b"VMCS";
+
+/// `container` as it was before the translator appended its `VMCS` part (the
+/// part is the last one, as the interface says): the parts before it kept as
+/// they are, the part table one entry shorter, the size field the new length.
+/// Anything else (no part, not a container, the part not last) comes back as
+/// it is. A stage is named by the hash of this form, so the denylists a
+/// census wrote for the shaders as they were keep working.
+pub fn without_vmcs(container: &[u8]) -> Cow<'_, [u8]> {
+    let word = |at: usize| -> Option<usize> {
+        let b = container.get(at..at + 4)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    };
+    if container.get(..4) != Some(b"DXBC") {
+        return Cow::Borrowed(container);
+    }
+    let Some(count) = word(28) else {
+        return Cow::Borrowed(container);
+    };
+    if count == 0 || count > 64 {
+        return Cow::Borrowed(container);
+    }
+    let Some(last) = word(32 + 4 * (count - 1)) else {
+        return Cow::Borrowed(container);
+    };
+    if container.get(last..last + 4) != Some(&VMCS_FOURCC[..]) {
+        return Cow::Borrowed(container);
+    }
+    let table_end = 32 + 4 * count;
+    if last < table_end || last > container.len() {
+        return Cow::Borrowed(container);
+    }
+    let mut out = Vec::with_capacity(last - 4);
+    out.extend_from_slice(&container[..28]);
+    out.extend_from_slice(&((count - 1) as u32).to_le_bytes());
+    for i in 0..count - 1 {
+        let Some(o) = word(32 + 4 * i) else {
+            return Cow::Borrowed(container);
+        };
+        out.extend_from_slice(&(o.wrapping_sub(4) as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&container[table_end..last]);
+    let total = out.len() as u32;
+    out[24..28].copy_from_slice(&total.to_le_bytes());
+    Cow::Owned(out)
+}
+
 /// FNV-1a (64 bit) over `parts`, a 0xff byte between them (so `["ab", "c"]`
 /// and `["a", "bc"]` differ). Front and back hash the same stage bytes with
-/// this, which is how their rows name the same pipeline.
+/// this, which is how their rows name the same pipeline. A part that is a
+/// container with a `VMCS` part is hashed without it ([`without_vmcs`]): the
+/// hash names the shader, and the part only adds how to emulate it.
 pub fn hash_parts(parts: &[&[u8]]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut put = |b: u8| {
@@ -112,7 +164,7 @@ pub fn hash_parts(parts: &[&[u8]]) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     };
     for p in parts {
-        for &b in *p {
+        for &b in without_vmcs(p).iter() {
             put(b);
         }
         put(0xff);
@@ -351,6 +403,45 @@ pub fn split_pairs(field: &str) -> Vec<(&str, u64)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_container_is_hashed_without_its_vmcs_part() {
+        use super::*;
+        // header, two parts; then the same with a VMCS part last
+        fn dxbc(parts: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+            let n = parts.len();
+            let mut out = b"DXBC".to_vec();
+            out.extend_from_slice(&[9u8; 16]);
+            out.extend_from_slice(&[1, 0, 0, 0]);
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&(n as u32).to_le_bytes());
+            let mut at = 32 + 4 * n;
+            for (_, d) in parts {
+                out.extend_from_slice(&(at as u32).to_le_bytes());
+                at += 8 + d.len();
+            }
+            for (f, d) in parts {
+                out.extend_from_slice(*f);
+                out.extend_from_slice(&(d.len() as u32).to_le_bytes());
+                out.extend_from_slice(d);
+            }
+            let total = out.len() as u32;
+            out[24..28].copy_from_slice(&total.to_le_bytes());
+            out
+        }
+        let plain = dxbc(&[(b"SFI0", &[1; 8]), (b"DXIL", &[2; 12])]);
+        let with = dxbc(&[(b"SFI0", &[1; 8]), (b"DXIL", &[2; 12]), (b"VMCS", &[7; 40])]);
+        assert_ne!(plain, with);
+        assert_eq!(without_vmcs(&with).as_ref(), &plain[..]);
+        assert_eq!(hash_parts(&[&with]), hash_parts(&[&plain]));
+        // nothing to strip: borrowed, untouched; a part that is not last stays
+        assert!(matches!(without_vmcs(&plain), Cow::Borrowed(_)));
+        let first = dxbc(&[(b"VMCS", &[7; 8]), (b"DXIL", &[2; 12])]);
+        assert_eq!(without_vmcs(&first).as_ref(), &first[..]);
+        // bytes that are no container, or a cut one, are hashed as they are
+        assert_eq!(without_vmcs(b"abc").as_ref(), b"abc");
+        assert_eq!(without_vmcs(&with[..30]).as_ref(), &with[..30]);
+    }
+
     use super::*;
 
     fn label(ty: PipeType) -> Label {
