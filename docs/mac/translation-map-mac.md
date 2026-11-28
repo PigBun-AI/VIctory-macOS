@@ -75,6 +75,15 @@
 | mac.loader.wide_patch | 256-bit store split into two 128-bit stores (wide.rs), sites from `cargo xtask wide-stores` | 117,413 | static-census | proven | stubbed |
 | mac.loader.clwb_nop | clwb write-back loops replaced by NOPs (only if exactly 8 loops are found) | 8 | log | proven | stubbed |
 | mac.loader.resolution | title output size site patches (2 sites) and VICTORY_OUTPUT / RENDER_SCALE / UPSCALER | 2 | log | unproven | stubbed |
+| mac.loader.output_chain | which output chain a run takes (X13): perf = native 1440p by default, fidelity forced off, L3 720p the alternative | 1 | static-code | unproven | stubbed |
+| mac.loader.display_mode_record | SDR display mode record +0x0615c100 (the title's 3840x2160), written 2560x1440 by native 1440p | 1 | static-code | unproven | stubbed |
+| mac.loader.scanout_reservation | scanout reservation +0x0247ad4a (back buffer pool size) | 1 | static-code | unproven | stubbed |
+| mac.loader.temporal_scale_min | scene scale minimum +0x028f1e7e (2/3 stock; overlaps L3's scale site) | 1 | static-code | unproven | stubbed |
+| mac.loader.temporal_scale_controller | scale controller vmaxss +0x028f1e87, pin and VICTORY_SCALE_WATCH | unknown | unknown | unproven | stubbed |
+| mac.loader.settings_preview_viewport | Settings preview viewport load +0x058048d4 | unknown | unknown | unproven | stubbed |
+| mac.loader.title_frame_rate_loads | title frame rate loads +0x1e0fc62, +0x224359a (VICTORY_FRAME_INTERVAL_MS, off) | unknown | static-code | unproven | stubbed |
+| mac.gpu.native_frontend_viewport | frontend legacy 4K projection viewport (draw.rs, native 1440p only) | unknown | unknown | unproven | stubbed |
+| mac.res.ui_scale | UI scale at the perf output: 1.5x expected at native 1440p (3.0x at L3 720p); gap until a run | unknown | unknown | gap | unsupported |
 
 ### 故障跟踪与异常
 
@@ -257,7 +266,7 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 | 8 | log | mac.loader.clwb_nop | Write-back dropped. Safe on this path because all title memory is read by our own CPU code (copies for the GPU: unified memory, CPU-coherent). Would break if the GPU read title memory without a CPU copy (zero-copy) and CPU caches… | counter "title pages the GPU reads without a CPU copy" must stay 0; run once with clflush replacing the NOPs and compare frames |
 | 5 | static-census | mac.hle.commit_quota | Our budget is a number we give the title; the host does not enforce it, so over-commit is not refused (and swap/compression may stall) instead of failing as on Xbox. | test: title-like allocation sequence past the 13.5 GB budget must be refused as on Xbox |
 | 4 | log | mac.hle.display_audio_misc | HDR never output; DSP effects silent (zeros); no TTS; package queries optimistic; no haptic triggers. | one test per stub: HDR query, screenshot, DSP command zeros, speech, package list |
-| 2 | log | mac.loader.resolution | Output forced to 1280x720 on a Mac (see mac.res.*). | 见 restore_plan |
+| 2 | log | mac.loader.resolution | Output forced to 1280x720 on a Mac (see mac.res.*); since X13 only with VICTORY_OUTPUT=720 / VICTORY_NATIVE_1440P=0, the perf default is native 1440p. | 见 restore_plan |
 | 1 | log | mac.res.output | Output is changed to 1280x720, inconsistent with the Xbox internal resolution + DRS + in-game FSR mechanism; effect to be determined. | frame-hash and timing compare with VICTORY_OUTPUT unset (title default) once the resolution investigation reports |
 | 1 | static-code | mac.fault.ntquery_class7 | Wine returns an invalid-info-class status: placeholder() is never true, so memory that is a placeholder is not recognised (only matters with VICTORY_FAULT_TRACKING=1). | Wine test: NtQueryVirtualMemory class 7 on a placeholder (then the 3 failing watch tests become the regression) |
 | 1 | static-census | mac.hle.working_set_statistics | "used" is the whole process PagefileUsage (our layer and the card included, 27 GB vs a 13.5 GB limit in run 60 per code comment); GPU-optimal use reads 0. | test with a fake title that allocates then reads the statistics: expects its own heaps only |

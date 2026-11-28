@@ -957,7 +957,7 @@ mode list (the fidelity profile only writes modes from the list). The first fide
 | | **perf** (the default for now) | **fidelity** |
 |---|---|---|
 | console | Series X (or `--console series-s`) | Series X only |
-| output | patched to 1280x720 (`VICTORY_OUTPUT=1280x720`, L3), log `non-fidelity: output patched to 1280x720` | the title's own, from `settings.xml` set to 2560x1440 in the profile's own data directory copy; `VICTORY_OUTPUT=0`, no resolution patch |
+| output | native 1440p by default since X13 (log `non-fidelity: output patched to 2560x1440 (native 1440p, in the image)`); the 1280x720 L3 patch (`VICTORY_OUTPUT=720`, log `non-fidelity: output patched to 1280x720`) is the alternative | the title's own, from `settings.xml` set to 2560x1440 in the profile's own data directory copy; `VICTORY_OUTPUT=0`, no resolution patch |
 | internal size / dynamic resolution / TAA upscale | the title's, at 2/3 of 1280x720 = 853x480 | the title's own logic; expected 2/3 of 1440p = 1707x960 (`VICTORY_LOG_RENDER_SIZE`) |
 | render scale, upscaler overrides | allowed (`VICTORY_RENDER_SCALE`, `VICTORY_UPSCALER`) | refused |
 | pool check (+0x247af25) | skipped with the output patch | kept. If F0 stops there, `--pool-check skip` becomes a fixed part of the profile (rule below) |
@@ -1033,6 +1033,8 @@ host shows the picture at most 2560x1440; the title's render targets and its UI 
 
 *Open.* Where the title takes 3840x2160 from is not found (not the display mode, probably not `settings.xml`); the perf profile's 1280x720 output has a UI that
 is 3x too big (a UI scale that L3 does not patch). Both are title facts to chase in the disassembly before any patch.
+*Update (X13, 2026-11-28 evening).* Where the title takes 3840x2160 from: the SDR display mode record at +0x0615c100 (5th entry of the mode table at +0x0615c0c0; the byte test of X13 reads it on the title image).
+The Windows line's native 1440p chain patches it; the perf profile now does by default, the fidelity profile does not (it stays the title's own 4K, no patch). Whether the UI follows the record: matrix `mac.res.ui_scale`, to be measured.
 *Remove when.* The title's own output size is found and can be set without a patch.
 
 ### S2 — mesh shader outputs numbered by alignment (`victory-shader/src/emit/mesh_order.rs`, 6 lines in `emit/mod.rs`)
@@ -1556,3 +1558,87 @@ Count case-sensitive error tokens once per line across both logs. Keep complete 
 ### M15 — `tools/mac/hle-functions.py` + `docs/mac/hle-functions.csv.txt`: per-function HLE state of the title's import table
 
 *What.* Static (no game, no Windows): reads `research/census/title-isa-<date>/import-callsites.tsv` (588 rows: 587 unique dll+function, 61 of them also address-taken), the HLE registry as written in `crates/victory-hle/src/modules/*.rs`, `HostPolicy::default()` and the export tables of Wine's builtin DLLs (`target/wine-cx`, API sets resolved to kernelbase/kernel32/ntdll/ucrtbase/user32), and writes one row per function: implemented / stub / passthrough-to-host / missing / title-dll (shipped by the title: Bink, libHttpClient, XboxBvhBuilder, the FidelityFX loader). Stub is a heuristic on the source (doc comment says stub/shortcut/not implemented, or a body that calls nothing); the `basis` column says why. `runtime_calls` stays empty until `mac.runtime.hle_counters` exists and one run has been made. Result 2026-11-28: 85 implemented, 8 stub, 422 passthrough (all exported by Wine), 72 title-dll, 0 missing. *Remove when.* the matrix itself carries per-function rows.
+### X13 — the Windows line's 1440p chain: native 1440p output, scene scale, scale watch, frame rate; the perf profile takes it by default (`victory-loader` `mac/output_chain.rs`, `render_scale.rs`, `frame_rate.rs`, `apps/victory/src/native_1440p.rs`, `run.rs`, `victory-gpu` `draw.rs`, `frame.rs`, `tools/mac/run.sh`)
+
+*Source.* `feat/live-translator` of the Windows line, six commits in this order: `30e991fc` (`VICTORY_FRAME_INTERVAL_MS`, `VICTORY_TITLE_FPS`),
+`0c1905bf` (`VICTORY_NATIVE_1440P`, `VICTORY_RENDER_1080P`; from DexNom 9a79132), `72eb7c6c` (`VICTORY_RENDER_SCALE` 0.25..1, pinned),
+`063cdc0a` (the scale is fixed for a run), `72f115b5` (`VICTORY_SCALE_WATCH`), `0a4e75db` (its result, no code change); plus a test-only commit that
+makes the watch test run under Wine (wrapping address arithmetic, a high test page). Applied with `git am` from the trial export (conflicts
+resolved by hand in `lib.rs`, `run.rs`, `draw.rs`: see the README of the trial); one `mac:` commit each, source SHA in the message. Author set to the placeholder identity.
+Three doc comments in the trial patches had their `→` turned into `??`; put back.
+
+*What the chain does to the title* (image offsets, build 1.0.2.1 only; every field compared against the stock bytes, another build is refused).
+`native_1440p::prepare` writes the **prepared image** before it is mapped (a folder of its own under `images/`, one per scale and pin):
+
+| field | at | length | stock | written |
+|---|---|---|---|---|
+| SDR display mode record (5th of the mode table at +0x0615c0c0) | +0x0615c100 | 16 | 3840, 2160, 60, 1 | 2560, 1440 (the one place the title's 3840x2160 comes from; checked on the title image by the byte test) |
+| scanout reservation (`mov ecx, imm32`) | +0x0247ad4a | 5 | `b9 00 00 00 04` (64 MB) | the size of two 64 KiB-aligned 1440p RGBA8 scanout buffers, rounded to 2 MiB (what the back buffer pool's left-over check at +0x247af25 wants used up) |
+| temporal scene scale minimum (imm32 of `mov dword [rcx+90h], 2/3`) | +0x028f1e7e | 4 | 2/3 | the scale (1.0 default; 0.75 for `VICTORY_RENDER_1080P`) |
+| scale controller `vmaxss xmm0, [rsi+0x90]` | +0x028f1e87 | 8 | `c5 fa 5f 86 90 00 00 00` | `vmovss` (pinned) only for `VICTORY_RENDER_SCALE` (`VICTORY_RENDER_SCALE_PIN=0` leaves it) |
+| Settings preview viewport load | +0x058048d4 | 8 | 3840x2160 constant | the SDR record |
+
+Runtime: `VICTORY_SCALE_WATCH` (default on with the 1440p image, `=0` off) puts a detour on the `vmaxss` and logs min/median/max of the scale the title computes every 10 s;
+`VICTORY_DISPLAY_MODE=2560x1440` is set for the HLE; `victory-gpu` `State::native_frontend_viewport` draws the frontend's last triangle with a 3840x2160 viewport when it still uses the legacy 4K
+projection (two shaders), scissor and target stay 1440p. `VICTORY_FRAME_INTERVAL_MS` (off) ticks our frame clock and rewrites the two loads of the title's 30 fps setting
+(+0x1e0fc62, +0x224359a; the commit message says 3, the code has 2).
+
+*The decision: perf takes native 1440p, fidelity does not; the switch follows the profile* (`victory-loader/src/mac/output_chain.rs`, decided once in `run.rs`, printed as `output chain: ...`):
+
+| profile (from `VICTORY_MAC_PROFILE`, exported by `run.sh`; else `VICTORY_OUTPUT` 0/none = fidelity, a size = perf; else a Mac is perf, a PC has none) | native 1440p |
+|---|---|
+| fidelity | **always off**, nothing about the output patched. `VICTORY_NATIVE_1440P=1` or `VICTORY_RENDER_1080P=1` are ignored with the line `output chain: native 1440p stays off: the fidelity profile keeps the title's own 4K output (... ignored)`. The victory-gpu variable is set to 0 so its frontend viewport cannot turn on by itself. |
+| perf, nothing set | **on** (`the perf profile's default`), scale 1.0 unpinned, L3's output not asked |
+| perf, `VICTORY_NATIVE_1440P=0` | off; L3's 1280x720 default (a Mac) applies |
+| perf, `VICTORY_OUTPUT=720` (also `720p`, `1280x720`, any of the title's modes, short forms by height) | off; the L3 chain with that size |
+| perf, `VICTORY_NATIVE_1440P=1` and `VICTORY_OUTPUT=<size>` | on; the L3 output is dropped, the line says so |
+| perf, `VICTORY_RENDER_1080P=1` or a readable `VICTORY_RENDER_SCALE` (0.25..1) and no output size | on, at that scale (pinned for `RENDER_SCALE`, as on the Windows line) |
+| perf, not a Series X (`--console series-s`) | off with a line (native 1440p is for the Series X image); asked outright (`=1`) `run.rs` refuses as before |
+| no profile, not a Mac (a PC) | off unless asked (`=1`, `RENDER_1080P`, `RENDER_SCALE`), as on the Windows line |
+
+Precedence for native 1440p: fidelity > explicit `VICTORY_NATIVE_1440P` > explicit `VICTORY_OUTPUT` size > a scale asked > the profile's default. Wrong values are said and ignored.
+`run.sh` exports `VICTORY_MAC_PROFILE`, no longer forces `VICTORY_OUTPUT=1280x720` in perf, and says `output chain ...` in `start.txt` (it only predicts; the title's line is the record).
+
+*Relation to L3 (720p): alternatives, not layers.* Reasons: (1) L3's output patch writes 1280x720 into the settings that the title hands to the screen-size setter, native 1440p
+makes the display mode record and the scanout buffers 1440p: both on would present a 720p screen size over a 1440p mode and scanout (never run; the order in which the title reads the two is not known).
+(2) L3's pool check jump exists because a smaller output leaves the 4K-sized pool unused; native 1440p resizes the pool itself (scanout reservation), so the jump is no longer
+needed. (3) **L3's scale site and the native minimum overlap**: L3's `OWN_SCALE` is `mov dword [rcx+90h], imm32` at +0x28f1e78 (10 bytes), its immediate (+0x28f1e7e, 4 bytes) is exactly the native `TEMPORAL_SCALE`.
+Written after the native patch, L3's byte comparison sees the native value and refuses the site (`Differs`), written before, it would be overwritten. (The trial's byte check
+called the L3 and native groups disjoint; it compared the output and pool check sites, not the scale site.) So with native 1440p on, L3 asks for **no output, no pool check with it and no scale**;
+what stays available is L3's upscaler picker (`VICTORY_UPSCALER`), an explicit `VICTORY_POOL_CHECK=skip` and the divide clamp, all disjoint from the native fields. L3's 720p stays as the
+optional chain (`VICTORY_OUTPUT=720`, or `VICTORY_NATIVE_1440P=0` on a Mac). Not changed: the fidelity profile (no site patched).
+
+*Cost of the default.* Native 1440p at scale 1.0 gives an internal size of **2560x1440**, the same as fidelity (4K output x 2/3); the old perf profile was 853x480 (720p x 2/3), 9x fewer pixels:
+GPU time of a world frame was 8.4 s at the title's own 4K output and 0.86 s at 720p (macos.md). Perf is therefore expected to be much slower than before unless a scale is given:
+`VICTORY_RENDER_SCALE=0.333` pins 853x480 (not run; the Windows runs were at 1.0, 0.667 and 0.5), `0.5` gives 1280x720, `0.667` gives 1707x960.
+
+*Tests.* Native (`cargo test`): `mac::output_chain` 11 tests (perf default, a Mac without `run.sh`, a PC, profile from `VICTORY_OUTPUT`, fidelity forced off with the log line, `=0`, output sizes and
+short forms, native over an output size, scales, Series S, switch words); `victory native_1440p`: `native_and_l3_sites_never_overlap_in_any_switch_combination` (3 profiles x 3 native x 2 x 3 scales x 6 outputs x
+pool check x 3 upscalers: the sites L3 writes, the native ones and the frame rate loads are pairwise disjoint, and native 1440p never comes with L3's output or scale site),
+`the_only_overlap_of_the_full_site_lists_is_the_scale_immediate` (every site L3 can write against every native range: exactly one pair, 4 bytes, the one above),
+`the_native_and_l3_bytes_on_the_title_image` (reads the title image, read only: path `VICTORY_DISPLAY_PROFILE_TEST_IMAGE`, else `$VICTORY_GAME_DIR/game_scarlett_master.exe`, else skipped with a line;
+stock bytes of every L3 site, native field and frame rate load; the five-entry mode table; four both-on combinations: every L3 group is written over the native image and leaves the native fields as they are; the
+scanout reservation holds two 1440p buffers and is under the 4K pool; fidelity plans no site; L3's scale site over the native image is refused), and the Windows line's `patches_the_retail_image_for_1440p`, which now
+runs for real with the same image. Wine (`tools/mac/wine-tests.sh -p victory-loader --lib`): the chain's `render_scale` and `frame_rate` tests (6, with `the_scale_watch_notes_what_the_instruction_made` that runs the detour on the CPU) and `output_chain`, `resolution`: 32 passed.
+Not run: the title (not here), so no node below is proven.
+
+*The UI, offline.* The title lays its UI out in fixed 4K pixel units (matrix `mac.res.ui_layout`): the hint bar is 604x54 px with 81 px / 60 px margins at the output's right and bottom edge in
+every measured output (3840x2160: 15.7% of the width, centre 0.900, 0.960; 1280x720: 47.2%, centre 0.701, 0.880 = 3840/1280 = 3.0x). Both centres are reproduced exactly by "constant pixel size,
+anchored to the output edges" (`(W - 81 - 302) / W`, `(H - 60 - 27) / H`), so the layout reads the output size for the anchors and not for the size. In those runs the SDR mode record was always 3840x2160 and only the output changed
+(L3), so they cannot say whether the size follows the record. With the record at 1440p the two readings give: **(H1) UI size constant in pixels, 1.5x** (3840/2560): 604x54 px = 23.6% of the width, centre (0.850, 0.940);
+**(H2) UI size follows the record's height (x 1440/2160)**: 403x36 px = 15.7%, centre (0.900, 0.960), 1.0x, the same picture as the fidelity run shown at 1440p (P1: 402x36 px). Nothing in the repository separates them; the
+Windows line's remark "no 4K pass and no 4K UI" is about the cost of the 4K surfaces, not about the layout. A third reading comes from the frontend's last triangle: where it still projects with the legacy 4K matrix,
+the viewport patch makes that draw 1.0x. **Expected: 1.5x for the hint bar** (H1, the only reading the measured law supports without an extra assumption); the chain then halves the problem (3.0x to 1.5x) but does not fix it, and a UI scale
+site would still be needed (not found: not settings `uiResolution`, not the HLE display mode). The run decides; the numbers to compare are in the matrix row `mac.res.ui_scale`.
+
+*Run plan* (not run here; the lead takes the game lock). Same method as the ui-scale runs 2026-11-28: Metal back, no keys, no input replay, present 320 (stable from 288), hint bar "choose account (Y) / PLAYER (A)":
+`tools/mac/run.sh --perf --backend metal --purpose "new-nodes: mac.res.output,mac.res.ui_scale,mac.loader.display_mode_record,mac.loader.scanout_reservation" --no-keys --input none --timeout 300` with
+`VICTORY_METAL_DUMP_PRESENT=288,320@<out>/dump` in the environment (needs a stage with the dump; `purpose: corpus` also fits). Read: (1) stdout `output chain: native 1440p on (the perf profile's default)`,
+`display 2560x1440 SDR, scene 2560x1440`, `non-fidelity: output patched to 2560x1440 (native 1440p, in the image)`, no `resolution: ... 0x224352b` line, no `int3` at +0x247af25; (2) frame size of `present-320-source.png` = 2560x1440
+(`mac.res.output`); (3) the hint bar's bounding box in that frame: 604x54 means H1 (1.5x), 403x36 means H2 or the frontend viewport (1.0x), anything else is new; compare with 604x54 at 3840x2160 / 1280x720 of the ui-scale runs.
+Second run, same command with `--fidelity` and `VICTORY_NATIVE_1440P=1` in the environment: stdout carries `native 1440p stays off ... ignored`, source frame 3840x2160, hint bar 604x54 at (3156,2047) as run C.
+Add `--log-render-size` once to see the internal size (expected 2560x1440 at scale 1.0; 1707x960 with `VICTORY_RENDER_SCALE=0.667`).
+
+Matrix: `mac.res.output`, `mac.res.internal`, `mac.res.drs`, `mac.res.display_mode`, `mac.res.ui_layout`, `mac.loader.resolution` (updated); new: `mac.loader.output_chain`, `mac.loader.display_mode_record`,
+`mac.loader.scanout_reservation`, `mac.loader.temporal_scale_min`, `mac.loader.temporal_scale_controller`, `mac.loader.settings_preview_viewport`, `mac.loader.title_frame_rate_loads`, `mac.gpu.native_frontend_viewport`, `mac.res.ui_scale` (gap).
+*Retire when:* the Windows line is merged into mac/livetr (the chain's commits then come with it; the profile rule, `output_chain.rs`, stays ours).

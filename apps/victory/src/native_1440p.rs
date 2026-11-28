@@ -192,6 +192,7 @@ mod tests {
     fn native_and_l3_sites_never_overlap_in_any_switch_combination() {
         let mut both = 0;
         let mut native_on = 0;
+        let mut total = 0;
         for profile in [None, Some("fidelity"), Some("perf")] {
             for native in [None, Some("0"), Some("1")] {
                 for r1080 in [None, Some("1")] {
@@ -208,6 +209,7 @@ mod tests {
                                         mac: true,
                                         series_x: true,
                                     };
+                                    total += 1;
                                     let chain = decide(&env);
                                     let mut ranges = l3_ranges(&chain, pool_skip, upscaler, scale.and_then(|s| s.parse().ok()));
                                     let l3_count = ranges.len();
@@ -233,6 +235,7 @@ mod tests {
                 }
             }
         }
+        assert_eq!(total, 3 * 3 * 2 * 3 * 6 * 2 * 3, "the whole table was walked");
         assert!(native_on > 0, "the table has native 1440p on");
         assert!(both > 0, "the table has native 1440p and an L3 site (the clamp, pool check, upscaler) written in one run");
     }
