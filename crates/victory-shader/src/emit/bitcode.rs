@@ -31,6 +31,8 @@ enum TypeDef {
     Int(u32),
     Float,
     Double,
+    /// 16-bit float (mac F1: `fptrunc`, native low precision).
+    Half,
     /// Pointee and address space.
     Ptr(Ty, u32),
     Struct(Option<String>, Vec<Ty>),
@@ -108,6 +110,8 @@ pub(crate) enum Cast {
     FpToSi = 4,
     UiToFp = 5,
     SiToFp = 6,
+    /// `fptrunc`: to the narrower float, to nearest even (mac F1).
+    FpTrunc = 7,
     Bitcast = 11,
 }
 
@@ -250,6 +254,9 @@ impl Module {
     }
     pub fn double(&mut self) -> Ty {
         self.ty(TypeDef::Double)
+    }
+    pub fn half(&mut self) -> Ty {
+        self.ty(TypeDef::Half) // mac F1
     }
     pub fn ptr(&mut self, to: Ty) -> Ty {
         self.ty(TypeDef::Ptr(to, 0))
@@ -583,6 +590,7 @@ impl Module {
                 TypeDef::Void => w.record(2, &[]),
                 TypeDef::Float => w.record(3, &[]),
                 TypeDef::Double => w.record(4, &[]),
+                TypeDef::Half => w.record(10, &[]), // mac F1
                 TypeDef::Int(b) => w.record(7, &[u64::from(*b)]),
                 TypeDef::Ptr(p, space) => w.record(8, &[u64::from(p.0), u64::from(*space)]),
                 TypeDef::Array(n, e) => w.record(11, &[u64::from(*n), u64::from(e.0)]),
@@ -607,11 +615,15 @@ impl Module {
         w.exit();
 
         w.record(2, &chars("dxil-ms-dx"));
+        // mac F1: a module with a `half` has the layout DXC writes for native 16-bit types
+        let native16 = self.types.contains(&TypeDef::Half);
         w.record(
             3,
-            &chars(
-                "e-m:e-p:32:32-i1:32-i8:32-i16:32-i32:32-i64:64-f16:32-f32:32-f64:64-n8:16:32:64",
-            ),
+            &chars(if native16 {
+                "e-m:e-p:32:32-i1:32-i8:8-i16:16-i32:32-i64:64-f16:16-f32:32-f64:64-n8:16:32:64"
+            } else {
+                "e-m:e-p:32:32-i1:32-i8:32-i16:32-i32:32-i64:64-f16:32-f32:32-f64:64-n8:16:32:64"
+            }),
         );
         let first_const = (self.globals.len() + self.funcs.len()) as u64;
         for g in &self.globals {

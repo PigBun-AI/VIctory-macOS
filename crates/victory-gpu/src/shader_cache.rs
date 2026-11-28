@@ -91,6 +91,9 @@ fn build() -> [u8; 32] {
         bytes.extend_from_slice(b"VICTORY_F16_NEAREST=");
         bytes.push(victory_shader::emit::f16_nearest() as u8);
         bytes.push(0);
+        bytes.extend_from_slice(b"VICTORY_F16_NATIVE=");
+        bytes.push(victory_shader::emit::f16_native() as u8);
+        bytes.push(0);
         // Colour exports clamped to +-65504, NaN -> 0 (emit::lower::sunclamp), default on:
         // keyed by the effective state, so unset and "1" share entries and "0" differs.
         bytes.extend_from_slice(b"VICTORY_EXPORT_F16_SAT=");

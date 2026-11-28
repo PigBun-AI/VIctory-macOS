@@ -1185,6 +1185,35 @@ fn f16_nearest_on() -> bool { // mac F1
     f16_nearest_for(crate::emit::live::var("VICTORY_F16_NEAREST").as_deref())
 }
 
+/// `VICTORY_F16_NATIVE` (mac F1): the nearest rounding of 16-bit results as one `fptrunc float to
+/// half` (native 16-bit types, SM 6.2) instead of [`Lower::f16_nearest`]'s dozen operations. Default:
+/// on for the Metal chain (the host takes no `attributeAtVertex`, [`host_attribute_at_vertex`]),
+/// whose Metal Shader Converter compiles the `fptrunc` to Metal's `half(x)`, round to nearest even;
+/// off elsewhere (a D3D12 host without `Native16BitShaderOpsSupported` would refuse the module).
+/// `1` and `0` force it.
+fn f16_native_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TEST_F16_NATIVE.get() {
+        return on;
+    }
+    match crate::emit::live::var("VICTORY_F16_NATIVE").as_deref().map(str::trim) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => !host_attribute_at_vertex(),
+    }
+}
+
+/// Whether [`f16_native_on`] holds now, for the shader cache's key.
+pub fn f16_native() -> bool { // mac F1
+    f16_nearest_on() && f16_native_on()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's choice for [`f16_native_on`], for its thread only.
+    pub(super) static TEST_F16_NATIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 /// On unless the value is exactly "0" (after trimming). Pure, for testing.
 pub(super) fn f16_nearest_for(value: Option<&str>) -> bool { // mac F1
     value.map(str::trim) != Some("0")
@@ -4236,13 +4265,29 @@ impl<'a> Lower<'a> {
 
     /// The f16 (low bits) of the f32 result `f` of a 16-bit float operation: to nearest, ties to
     /// even, as the console rounds it ([`f16_nearest_on`]), or as the host's conversion does.
+    /// On a host with native 16-bit types ([`f16_native_on`]) the nearest rounding is one
+    /// `fptrunc float to half` (LLVM's is to nearest even), else the dozen operations of
+    /// [`Self::f16_nearest`].
     fn f16_result(&mut self, f: V) -> V { // mac F1
         if f16_nearest_on() {
+            if f16_native_on() {
+                return self.f16_fptrunc(f);
+            }
             self.f16_nearest(f)
         } else {
             let i32t = self.s.t.i32;
             self.s.op(self.cur, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[f])
         }
+    }
+
+    /// `fptrunc` of `f` to a `half`, its bits zero-extended to a dword (marks the module native 16-bit).
+    fn f16_fptrunc(&mut self, f: V) -> V { // mac F1
+        self.s.flags |= flags::NATIVE_16;
+        let (half, i16t, i32t) = (self.s.m.half(), self.s.m.int(16), self.s.t.i32);
+        let c = self.cur;
+        let h = self.s.m.cast(c, Cast::FpTrunc, f, half);
+        let bits = self.s.m.cast(c, Cast::Bitcast, h, i16t);
+        self.s.m.cast(c, Cast::ZExt, bits, i32t)
     }
 
     /// `f` as an f16 in the low bits, rounded toward zero: the nearest-even
