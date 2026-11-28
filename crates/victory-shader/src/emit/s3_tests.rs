@@ -320,14 +320,14 @@ mod hardware {
         eprintln!("ran on the hardware device: the console wave's first lane for both halves");
     }
 
-    /// Two host waves with different conditions: lanes below `s0` are in the skip. For 40 both
+    /// Two host waves with different conditions: lanes below `s0` are in the skip (0 first: before the fix that is the case that runs to the bound). For 40 both
     /// halves are, for 32 only the lower half, for 0 neither (the console skips the loop; here
     /// it must not run for the bound), for 5 a few lanes of the lower half. Before the fix the
     /// case with no lane in the skip ran the loop to its bound with a group barrier in every
     /// turn; the run has a time limit, and the results are the console's: 3 turns + lane 33.
     #[test]
     fn two_host_waves_with_different_conditions_take_the_loop_behind_the_skip_together() {
-        for below in [64u32, 40, 33, 32, 31, 5, 1, 0] {
+        for below in [0u32, 5, 31, 32, 33, 40, 64, 1] {
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let native = loop_behind_a_skip(64);
