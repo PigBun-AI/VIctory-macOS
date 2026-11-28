@@ -71,7 +71,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - deviation: our front only stores names; Load* answers E_INVALIDARG (~2.5k calls in 370 s: LoadPipeline 915, LoadGraphicsPipeline 425, LoadComputePipeline 722), the title then creates the pipeline normally. Cost only: no precompiled blob reuse, a cold shader compile on every start.
 - restore_plan (how to break through): Keep the translated-DXIL + MSC metallib in an MTL4 archive / MTL4PipelineDataSetSerializer so reloads skip compile (MTL4Archive.h, MTL4PipelineDataSetSerializer.h, SDK 27.2, 2026-11-27). Feasibility 待验证; census: archive load 0.24 ms median vs cold compile 25.75 ms.
 - tests: gpu:pipeline/library.rs::names_change_with_what_goes_into_the_pipeline|a_rejected_blob_gives_an_empty_library|the_library_file_is_mapped_and_replaced(+2)
-- notes: code: front/src/library.rs, front/src/shell/library.rs. Census archive numbers: research/census/census.json archive.
+- notes: code: front/src/library.rs, front/src/shell/library.rs. Census archive numbers: research/census/census.json archive. | 2026-11-28 (shared-prove-2): the title-facing ID3D12PipelineLibrary is the Metal front's (front/src/library.rs, metal-livetr line); crates/victory-gpu on mac/livetr has no CreatePipelineLibrary of its own (its pipeline/library.rs is the host-side cache), so nothing here to test for this row.
 
 ## 8. mac.hle.cool_fox_residency — 32 GB residency budgets, fallback heaps, GPU pool back-off and deferred uploads under low commit
 
@@ -423,27 +423,17 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-shader/src/ir.rs:1410; emit/lower.rs float rules ~258, 3915-4036. Census (opcodes, 2026-11-27): s_denorm_mode 0 and s_round_mode 0 of 26177 programs. The package sets the float mode with s_setreg instead: s_setreg_imm32_b32 hwreg(MODE bits 3:2, the double/half round mode) in 7140 programs (=3 round toward zero: 4752 programs; =0 nearest-even: 2388), plus hwreg 20/21 writes in 12235 programs and 10 s_setreg_b32 of hwreg 25; whether the translator applies the MODE round bits to f16/f64 ops: 待核实 (emit/lower.rs:5691 accepts s_setreg as no-op). research/census/opcodes.md "s_setreg targets".
 
-## 43. shared.fence.wait — fence wait: blocking wait via event; blocking wait without event NOTIMPL (fence.rs 144-149)
-
-- owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
-- freq: 0 (log); used=yes; status=unproven
-- Xbox hardware / driver does: Fence wait is a GPU hardware semaphore wait.
-- deviation: Blocking CPU wait with no event returns E_NOTIMPL (log "blocking fence wait not implemented": 0 in all runs).
-- restore_plan (how to break through): Implement with an internal event (small): feasibility high.
-- tests: fence::tests (2) ; test asserts E_NOTIMPL for the unsupported form
-- notes: Count: 0 lines in ab and r5.
-
-## 44. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
+## 43. shared.device.feature_query — CheckFeatureSupport for feature ids not in {options, architecture, levels, format, multisample}
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
 - Xbox hardware / driver does: Driver answers every feature.
 - deviation: E_NOTIMPL for the rest; log "device feature query not implemented": 0 in ab/r5.
 - restore_plan (how to break through): Answer additional features from the host device (options1..21, shader model, GPU VA); feasibility high.
-- tests: none
-- notes: Hit would be silent for titles that ignore E_NOTIMPL.
+- tests: gpu:mac/prove/device_features.rs::options_are_values_the_headers_define|architecture_levels_and_samples|options_do_not_claim_more_than_the_host_device_has (Wine)
+- notes: FINDING (Wine/D3DMetal host options [0,1,2,2,3,1,1,1,0,64,0,0,0,1,2]): the console answer claims more than the host: double-precision shader ops (host 0), tiled resources tier 3 (host 2), conservative rasterization tier 3 (host 0). Matters only if the title takes those paths after the query; none seen in the title so far. Set VICTORY_PROVE_STRICT_OPTIONS=1 to make the test fail on it. | Decision 2026-11-28: values NOT changed to the host's (see rows shared.device.options_*); G12 logs once, at info, the first time the title queries each feature id, to learn whether it asks at all.
 
-## 45. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
+## 44. shared.draw.descriptor_drops — draws dropped for: no free descriptor slots, root UAV/SRV with no bound view heap, address-reading shader with no view heap (draw.rs 1654-2012, logged once each)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: 0 (log); used=yes; status=unproven
@@ -453,7 +443,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: draw::tests (6)
 - notes: Zero occurrences: dormant risk.
 
-## 46. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
+## 45. C-V-002 — Xbox ID3D12CommandList/Queue extensions the title may call (X-methods, e.g. DecompressResource, metadata init, FlushHiZ-style)
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -463,7 +453,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/list.rs (unwritten methods log once). No evidence of calls in runlog:20261127-221938-map.
 
-## 47. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
+## 46. C-V-006 — DCC (delta colour compression) metadata of render targets and the CreateCommittedResourceX DCC options
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -473,7 +463,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: code: crates/victory-gpu/src/device.rs f[76] create_committed. Whether the title reads DCC surfaces is untested.
 
-## 48. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
+## 47. C-V-007 — HTile / hi-Z / stencil metadata of depth buffers, read or written by title compute
 
 - owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu
 - freq: not measured (none); used=unknown; status=unproven
@@ -483,7 +473,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: —
 - notes: no code; absence verified by grep -i htile in crates/victory-gpu and crates/victory-shader (only hash constants match).
 
-## 49. C-F-014 — buffer UAV typed with misaligned first element
+## 48. C-F-014 — buffer UAV typed with misaligned first element
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=gap
@@ -493,7 +483,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: back/tests/typed_gpu.rs::refused_views_write_nothing
 - notes: code: back/src/typed.rs
 
-## 50. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
+## 49. C-F-063 — PIX markers / debug labels / SetName, GetPrivateData
 
 - owner / chain / hop: metal / command / 3 front core (d3d12.dll/dxgi.dll)
 - freq: not measured (none); used=unknown; status=unproven
@@ -503,7 +493,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: front/tests/device.rs::pix_markers_become_debug_labels
 - notes: code: front/src/timestamps.rs pix_text
 
-## 51. shared.rt.activate_rays — CS_ScreenProbes_ActivateRays compute pipelines: left out without BVH (make.rs:77-87; VICTORY_ACTIVATE_RAYS=1 makes them, =0 leaves them out even with the builder)
+## 50. shared.rt.activate_rays — CS_ScreenProbes_ActivateRays compute pipelines: left out without BVH (make.rs:77-87; VICTORY_ACTIVATE_RAYS=1 makes them, =0 leaves them out even with the builder)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (none (counted inside the same 'being made' reason as shared.rt.resolve; no separate count)); used=yes; status=unproven
@@ -513,7 +503,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: program name read from the container bytes (make.rs:57-61).
 
-## 52. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
+## 51. mac.fault.tracking_decision — fault tracking of title writes OFF by default under Rosetta (watch::writes returns None; callers copy memory whole)
 
 - owner / chain / hop: mac / command / victory-gpu mac/rosetta.rs fault_tracking()
 - freq: not measured (unknown); used=yes; status=proven
@@ -523,7 +513,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: mac::rosetta::tests::the_variable_decides_and_tests_track (native + Wine: pass)
 - notes: Decision proven by test; its cost is measured in logs. 0x140456fe2 hang (tracking on) was in victory.exe safecopy (G6).
 
-## 53. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
+## 52. mac.hle.zero_copy_alias — zero-copy title buffers via mach_vm_remap (copy=FALSE) onto D3DMetal buffer pages
 
 - owner / chain / hop: mac / command / Mac fork #204 alias.rs NOT ported (PATCHES.md "Not ported")
 - freq: not measured (unknown); used=unknown; status=gap
@@ -533,7 +523,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none in this tree (alias.rs absent)
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Fidelity: removes the copy latency/race window; correctness impact today unknown (copies hold). | used=unknown: alias.rs is not in this tree and no log line mentions mach_vm_remap, so a frequency cannot be estimated
 
-## 54. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
+## 53. shared.query.depth_bounds — depth bounds test reported supported (OPTIONS2 DepthBoundsTestSupported=true on D3DMetal)
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=unproven
@@ -543,7 +533,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。 Marked here because the shared layer relays the capability.
 
-## 55. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
+## 54. shared.resource.typed_buffer_r32g32b32 — R32G32B32 typed buffers (D3DMetal: "R32G32B32 typed buffers not supported, using R32G32")
 
 - owner / chain / hop: shared / command / shared D3D12.X -> host D3D12 (before seam A)
 - freq: not measured (unknown); used=yes; status=gap
@@ -553,7 +543,7 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - tests: none
 - notes: 仅参照（D3DMetal）。不计入覆盖率与偏差排序（用户 2026-11-28：只走自己的后端，D3DMetal 不再投入）。
 
-## 56. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
+## 55. mac.title.hang_watchdog — the title's 30 s hang watchdog: when the frame loop heartbeat is not seen for 30 s it kills the title by writing 0 (+0x2215c35 -> +0x23cf683 write 0)
 
 - owner / chain / hop: mac / command / title code: hang watchdog thread (+0x2215c35 -> +0x23cf683)
 - freq: not measured (log); used=yes; status=unproven
@@ -562,4 +552,34 @@ Fidelity first: costs are recorded, not a reason to choose. Sources and dates ar
 - restore_plan (how to break through): Keep L5 as the non-fidelity workaround; the fidelity fix is frames fast enough that the watchdog stays quiet (metal.gpu.fidelity_slow_frame), no fidelity result may cite a run with it off.
 - tests: victory-loader mac::watchdog on a synthetic image (L5); victory-gpu pipeline::builder_verdict_tests (3, the BVH builder making path, ec648b34); not run on the exe
 - notes: A hang that is real hangs for good with L5 on: always give such runs a wall-clock limit (RUN.md). Corpus captures (research/captures/INDEX.md) all ran with the watchdog off, so they are non-fidelity. | 2026-11-28: one cause of a >30 s frame is fixed in code: cold-cache BVH builder pipelines were made on the recording thread at the first builder dispatch (title died at +0x23cf683 about 77 s after start, 2026-11-26 run with VICTORY_BVH_BUILDER=1). ec648b34 (source: Windows fix/sun-clamp, gpu/cf-*) queues them at creation and skips the dispatch while one is being made; mac: cherry-pick, unit tests only, 待运行验证 (cold-cache run). Status gap -> unproven for that cause only; slow frames of the Metal fidelity path are still metal.gpu.fidelity_slow_frame and L5 stays the non-fidelity workaround.
+
+## 56. shared.device.options_double — CheckFeatureSupport OPTIONS: DoublePrecisionFloatShaderOps = 1 (console), host 0
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
+- freq: not measured (unknown); used=unknown; status=gap
+- Xbox hardware / driver does: fixed console GPU: the capability is there
+- deviation: The title is told double-precision shader ops exist; the Mac host has none (Apple GPUs have no f64; D3DMetal reports 0). Path the title may take after reading it: a shader variant with f64 ops (census: f64 VALU only in 5 CS_TransmissionVolumetrics programs, which do not translate today: S-I-010). If it never reads the flag, nothing changes.
+- restore_plan (how to break through): Not changed: no sign the title branches on it (console hardware is fixed, a title does not usually test it). Scheduled: the G12 log line says whether the title queries OPTIONS at all (next game run); if it does, set 0 here and watch whether the f64 programs stop being requested. S-I-010 holds the f64 translation plan.
+- tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
+- notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
+
+## 57. shared.device.options_tiled — CheckFeatureSupport OPTIONS: TiledResourcesTier = 3 (console), host 2
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
+- freq: not measured (unknown); used=unknown; status=gap
+- Xbox hardware / driver does: fixed console GPU: the capability is there
+- deviation: The title is told tiled resources tier 3 (3D tiled textures, volume tile mapping); the host has tier 2. Path after reading it: use reserved/tiled resources for 3D textures or streaming (UpdateTileMappings / reserved resources): the title would then call methods that the shared layer treats as placed/committed copies (resource.rs, tiles.rs).
+- restore_plan (how to break through): Not changed (as above). Scheduled: same G12 log; if the title queries it, make it 2 and run to see whether 3D tiled resources are still created (resource creation log, "reserved"/tile counters in tiles.rs).
+- tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
+- notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
+
+## 58. shared.device.options_conservative — CheckFeatureSupport OPTIONS: ConservativeRasterizationTier = 3 (console), host 0
+
+- owner / chain / hop: shared / command / 1 title(D3D12.X)->victory-gpu device
+- freq: not measured (unknown); used=unknown; status=gap
+- Xbox hardware / driver does: fixed console GPU: the capability is there
+- deviation: The title is told conservative rasterization tier 3; the host has none (Metal has no conservative rasterization). Path after reading it: a voxelisation / occlusion / culling pass drawn with the conservative flag (the rasterizer state ConservativeRaster): the host pipeline then ignores the flag and the pass covers fewer pixels (missing thin geometry).
+- restore_plan (how to break through): Not changed. Scheduled: G12 log; also read the rasterizer subobject in the graphics state (C-V-009 test reads it): count pipelines with ConservativeRaster set in the next run (a counter in GraphicsState::read, small). If any, the Metal back needs a fallback (expand triangles in a geometry/mesh stage).
+- tests: gpu:mac/prove/device_features.rs::options_do_not_claim_more_than_the_host_device_has (reports the claims; VICTORY_PROVE_STRICT_OPTIONS=1 makes it fail)
+- notes: Found by the feature_query proof. Reference only: the Mac host is D3DMetal here; the Metal line has its own limits (no f64, no conservative raster): the same values apply there. 待确认是否用到.
 
