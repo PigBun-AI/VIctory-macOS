@@ -94,8 +94,18 @@ makes frame times meaningless.
 - The lock is let go when the run ends, hits `--timeout`, or is interrupted (`INT`, `TERM`: the game is stopped first, so it never
   outlives the lock). Only `kill -9` of `run.sh` leaves a lock behind, and that one is stale at once.
 - `tools/mac/game-lock.sh status` prints the holder and the queue; `held` is exit 0 if a live process holds it.
+- **Lock first, then any side effect.** `run.sh` changes nothing that belongs to a run until it holds the lock: the clone of a data directory
+  from the seed (first use, `--fresh-data`, `--new-game`, `--worldsave`), `settings.xml` (fidelity), the cache and `dxc` folders, the out folder,
+  the prefix (making it, the dlls put into its `system32`, `wineserver -k` of it) all come after `gl_acquire`; a run that queues for the lock has
+  written nothing but its queue entry (so two `--new-game` started together on one data directory no longer replace it under each other's feet:
+  the second one replaces `data/` only after the first one has finished). `--print-env` takes no lock and writes nothing. A clone is made beside
+  its place (`*.part.<pid>`) and renamed into it, and an interrupted run removes it, so no half-made data directory is left to be used.
+  `tools/mac/test-run-lock.sh` tests this with a fake Wine (two `--new-game` at once, interrupts, `--allow-concurrent`).
 - `--allow-concurrent` (runs without the lock) is only accepted together with `--i-have-approval` (or
   `VICTORY_MAC_CONCURRENT_APPROVED=1`): it needs the approval of the Mac integration lead. Without it `run.sh` stops with an error.
+  **With it nothing protects the data directories: every concurrent run needs its own** (`--data`/`--cache` of its own, or a profile/backend
+  combination of its own, and its own `--prefix`); two concurrent runs on the same directory, above all with `--new-game` or `--fresh-data`,
+  replace it under each other's feet (that happened once: two `--new-game` replaced `data/livetr-perf-metal/data` at the same moment).
 - Heavy CPU jobs (builds, test runs, `cargo`) belong **between** runs, not during one: `tools/mac/check.sh` runs itself with
   `nice -n 15` and `CARGO_BUILD_JOBS=4` while the lock is held and says so; other heavy jobs should do the same or wait.
 - Every run records the load average (`uptime`) at the start in `start.txt` and every 10 s in `<out>/load.log` (beside `frametime.log`),

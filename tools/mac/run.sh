@@ -79,7 +79,11 @@
 # ONE GAME AT A TIME on this Mac: before it starts victory.exe (the title, or --exec; not --print-env) run.sh takes the
 # machine-wide game lock (tools/mac/game-lock.sh: a directory next to all checkouts, shared by every worktree), queues if
 # another run holds it (printing the holder every 30 s), takes over a lock whose holder is gone, and lets it go when the
-# run ends, times out or is interrupted. `tools/mac/game-lock.sh status` shows holder and queue. Keep heavy CPU work (builds,
+# run ends, times out or is interrupted. LOCK FIRST, THEN ANY SIDE EFFECT: everything that changes a data directory, a cache, a
+# prefix or a log folder (the clone from the seed, --fresh-data, --new-game, --worldsave, settings.xml, the dlls put into the prefix's
+# system32, `wineserver -k`, mkdir of the data, cache and out folders) is done only once the lock is held; a run that queues has
+# touched nothing yet. --print-env takes no lock and changes nothing. With --allow-concurrent (no lock) nothing protects the data
+# directories: give every concurrent run its own (docs/mac/RUN.md). `tools/mac/game-lock.sh status` shows holder and queue. Keep heavy CPU work (builds,
 # tests) away from a run: tools/mac/check.sh runs niced with fewer jobs while the lock is held. Every run logs the load
 # average every 10 s to <out>/load.log (and at the start in start.txt), to tell a clean frame-time run from a noisy one.
 #
@@ -407,9 +411,11 @@ if [ "$print_env" = 1 ]; then print_environment; exit 0; fi
 . "$ROOT/tools/mac/game-lock.sh"
 GL_WORKTREE="$ROOT"; GL_CMD="${*:-}"
 pid=""; wd=""; sm=""; ld=""; uw=""; _cleaned=0
+part=""   # a clone being made (data directory or a part of it): an interrupted run takes it away, so no half-made directory is left
 cleanup() {
     [ "$_cleaned" = 0 ] || return 0
     _cleaned=1
+    case "$part" in "$G"/data/livetr-*-*.part.*|"$G"/data/livetr-*-*/data.part.*) chmod -R u+w "$part" 2>/dev/null; rm -rf "$part" ;; esac
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         # interrupted: the game must not outlive the lock
         kill -TERM "$pid" 2>/dev/null; "$SERVER" -k 2>/dev/null
@@ -432,7 +438,8 @@ else
     gl_acquire "$backend" "$out" "$lock_tmo" || exit 4
 fi
 
-# ---- from here on: side effects --------------------------------------------
+# ---- from here on: side effects (the game lock is held, or --allow-concurrent was approved) -----------------------------------
+# Nothing above this line has written anything but the lock's own queue entry: not the data directory, not the cache, not the prefix.
 [ -x "$WINE" ] || { echo "no Wine at $WINE" >&2; exit 1; }
 [ -f "$exe" ] || { echo "no exe $exe" >&2; exit 1; }
 if [ "$concurrent" = 0 ]; then
@@ -442,7 +449,9 @@ if [ "$concurrent" = 0 ]; then
     [ -z "$others" ] || { echo "another victory.exe is running (pid $others): two at once can run the GPU out of memory; stop it or use --allow-concurrent" >&2; exit 3; }
 fi
 
-# the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data
+# the title's data: cloned from the seed (which is only read) on first use, or again with --fresh-data. A clone is made beside the
+# place it goes to ("*.part.<pid>") and renamed into it, so an interrupted run leaves no half-made directory that the next run takes as data.
+drop_part() { [ -z "$part" ] || { chmod -R u+w "$part" 2>/dev/null; rm -rf "$part"; }; part=""; }
 if [ "$derived" = 1 ]; then
     if [ "$fresh" = 1 ] && [ -d "$base" ]; then
         echo "--fresh-data: replacing $base"
@@ -450,13 +459,23 @@ if [ "$derived" = 1 ]; then
     fi
     if [ ! -d "$base" ]; then
         echo "making $base from the seed $seed (clone)"
-        mkdir -p "$base"
-        for d in data cache dxc; do [ -d "$seed/$d" ] && { cp -c -R "$seed/$d" "$base/$d" || cp -R "$seed/$d" "$base/$d"; }; done
-        chmod -R u+w "$base"   # the world-save seed is read-only; the run's clone must be writable
+        mkdir -p "$(dirname "$base")"
+        part="$base.part.$$"; rm -rf "$part"; mkdir -p "$part"
+        for d in data cache dxc; do
+            [ -d "$seed/$d" ] || continue
+            { cp -c -R "$seed/$d" "$part/$d" || { rm -rf "$part/$d"; cp -R "$seed/$d" "$part/$d"; }; } || { drop_part; die "could not clone $seed/$d"; }
+        done
+        chmod -R u+w "$part"   # the world-save seed is read-only; the run's clone must be writable
+        mv "$part" "$base" || { drop_part; die "could not move the clone to $base"; }
+        part=""
     elif [ "$newgame" = 1 ]; then
         echo "--new-game: replacing only $base/data with a clone of $seed/data (cache and dxc stay)"
-        case "$base" in "$G"/data/livetr-*-*) rm -rf "$base/data" ;; *) die "will not delete $base/data" ;; esac
-        { cp -c -R "$seed/data" "$base/data" || cp -R "$seed/data" "$base/data"; } && chmod -R u+w "$base/data" || die "could not clone $seed/data"
+        case "$base" in "$G"/data/livetr-*-*) ;; *) die "will not delete $base/data" ;; esac
+        part="$base/data.part.$$"; rm -rf "$part"
+        { cp -c -R "$seed/data" "$part" || { rm -rf "$part"; cp -R "$seed/data" "$part"; }; } && chmod -R u+w "$part" || { drop_part; die "could not clone $seed/data"; }
+        rm -rf "$base/data"
+        mv "$part" "$base/data" || { drop_part; die "could not move the clone to $base/data"; }
+        part=""
     fi
     if [ "$worldsave" = 0 ] && ls -d "$base"/data/*/saves/*/*/SARC* >/dev/null 2>&1; then
         echo "note: $base/data holds a world save (the title's own autosave from an earlier run): it starts in the saved world. --new-game starts over" >&2

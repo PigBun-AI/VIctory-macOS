@@ -8,6 +8,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="${1:-$(mktemp -d "${TMPDIR:-/tmp}/run-until-test.XXXXXX")}"
 mkdir -p "$T/wine/bin" "$T/game" "$T/root" "$T/cap"
+T="$(cd "$T" && pwd)"   # (no double slash from a TMPDIR that ends in one: run.sh prints the cleaned path)
 # the fake Wine: FAKE_MODE says what the "title" does; it ends when it is stopped (TERM), like the real one
 cat >"$T/wine/bin/wine" <<'EOF'
 #!/bin/bash
@@ -124,6 +125,8 @@ if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && 
     mkdir -p "$T/before/tools/mac"; cp "$T/run-before.sh" "$T/before/tools/mac/run.sh"
     ln -sfn "$ROOT/tools/macos" "$T/before/tools/macos"; ln -sfn "$ROOT/target" "$T/before/target"
     for f in game-lock.sh; do ln -sfn "$ROOT/tools/mac/$f" "$T/before/tools/mac/$f"; done
+    # (the machine's untracked settings are part of the environment both copies print: the before tree reads the same file)
+    [ ! -f "$ROOT/tools/mac/run.local.env" ] || cp -p "$ROOT/tools/mac/run.local.env" "$T/before/tools/mac/run.local.env"
     for who in before new; do
         script="$T/before/tools/mac/run.sh"; [ $who = new ] && script="$ROOT/tools/mac/run.sh"
         : >"$T/server.calls"
@@ -139,7 +142,7 @@ if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && 
     expect "default: the stop path is the time limit's" "grep -q '^== time limit 4s reached' $T/default-new/stderr.log"
     expect "default: same wineserver calls" "diff $T/default-before.calls $T/default-new.calls >/dev/null"
     expect "default: same console output apart from times" "diff <(strip $T/default-before.console) <(strip $T/default-new.console) >/dev/null"
-    pe() { bash "$1" --print-env --backend d3dmetal --exe /x --prefix /p --out /o 2>&1 | sed "s#$T/before#R#g; s#$ROOT#R#g"; }
+    pe() { bash "$1" --print-env --backend d3dmetal --exe /x --prefix /p --out /o 2>&1 | sed "s#$T/before#R#g; s#$ROOT#R#g; s#${ROOT/#$HOME/~}#R#g"; }   # (run.sh prints the home as ~)
     expect "default: print-env is unchanged" "diff <(pe $T/before/tools/mac/run.sh) <(pe $ROOT/tools/mac/run.sh) >/dev/null"
     expect "default: no time limit line when the title ended first" "! grep -q 'time limit' $T/nolinger/stderr.log"
 else
