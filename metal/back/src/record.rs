@@ -540,6 +540,7 @@ impl CommandList {
         samplers: Option<&DescriptorHeap>,
     ) -> Result<()> {
         self.live()?;
+        crate::prof::LAST_HEAP_VA.store(resources.gpu_va(), std::sync::atomic::Ordering::Relaxed);
         self.table
             .set_address(bind_point::DESCRIPTOR_HEAP as u32, resources.gpu_va())?;
         self.keep_buffers.push(resources.buffer().clone());

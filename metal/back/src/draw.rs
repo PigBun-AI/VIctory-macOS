@@ -1097,7 +1097,7 @@ impl crate::record::CommandList {
     /// the vertex buffer bind point.
     /// `VICTORY_METAL_GS_VISIBILITY`: copies the first words of the bound vertex and index
     /// buffers where the profiler prints them, and notes the state's viewports and scissors.
-    fn dump_gs_inputs(&mut self) -> Result<()> {
+    fn dump_gs_inputs(&mut self, tlab_va: Option<u64>) -> Result<()> {
         let dev = self.queue().device().clone();
         let (Some(k), Some(buf)) = (
             crate::prof::dump_kernel(&dev),
@@ -1170,6 +1170,26 @@ impl crate::record::CommandList {
             )?;
             self.set_address(30, params.gpu_va)?;
             self.dispatch(k, [1, 1, 1], [1, 1, 1])?;
+        }
+        if let (Some(t), Some(k2)) = (tlab_va, crate::prof::dump2_kernel(&dev)) {
+            let heap = crate::prof::LAST_HEAP_VA.load(std::sync::atomic::Ordering::Relaxed);
+            let params = self.alloc_constants(32, 16)?;
+            let dst = buf.gpu_va() + 5 * 64;
+            params.write_u32s(
+                0,
+                &[
+                    t as u32,
+                    (t >> 32) as u32,
+                    heap as u32,
+                    (heap >> 32) as u32,
+                    dst as u32,
+                    (dst >> 32) as u32,
+                    0,
+                    0,
+                ],
+            )?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(k2, [1, 1, 1], [1, 1, 1])?;
         }
         self.keep_buffers.push(buf.clone());
         Ok(())
@@ -1312,7 +1332,7 @@ impl crate::record::CommandList {
             l.cap_gs_groups(r.action_va)?;
             l.snap_gs_record(r.action_va)?;
             if crate::prof::GS_VIS.with(|c| c.get()) {
-                l.dump_gs_inputs()?;
+                l.dump_gs_inputs(r.tlab_va)?;
             }
             let enc = l.begin_draw(p, &[OBJECT, MESH, FRAGMENT])?;
             let vis = crate::prof::GS_VIS.with(|c| c.get());

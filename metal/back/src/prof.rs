@@ -814,6 +814,33 @@ pub(crate) fn dump_buffer(
     .as_ref()
 }
 
+pub(crate) static LAST_HEAP_VA: AtomicU64 = AtomicU64::new(0);
+
+const DUMP2_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void dump2k(constant ulong4& p [[buffer(30)]]) {\n\
+  device const uint* a = (device const uint*)p.x; device uint* d = (device uint*)p.z;\n\
+  for (uint i = 0; i < 12; i++) d[i] = a[i];\n\
+  uint base = a[9];\n\
+  for (uint k = 0; k < 2; k++) {\n\
+    uint idx = ((base + (k == 0 ? 224u : 32u)) >> 5) & 0x1fffffu;\n\
+    device const ulong* e = (device const ulong*)(p.y + (ulong)idx * 24);\n\
+    device const uint* s = (device const uint*)e[0];\n\
+    d[16 + k * 16] = (uint)(e[0]); d[17 + k * 16] = (uint)(e[0] >> 32); d[18 + k * 16] = (uint)e[2]; d[19 + k * 16] = idx;\n\
+    for (uint i = 0; i < 12; i++) d[20 + k * 16 + i] = s[i];\n\
+  }\n}\n";
+
+pub(crate) fn dump2_kernel(
+    device: &crate::device::Device,
+) -> Option<&'static crate::pipeline::ComputePipeline> {
+    static K: OnceLock<Option<crate::pipeline::ComputePipeline>> = OnceLock::new();
+    K.get_or_init(|| {
+        device
+            .compute_pipeline_from_msl(DUMP2_SOURCE, "dump2k")
+            .ok()
+    })
+    .as_ref()
+}
+
 pub(crate) static DUMP_META: Mutex<String> = Mutex::new(String::new());
 
 /// The dump as text: the state's facts, then each region's words (floats when they look like
@@ -824,7 +851,7 @@ pub(crate) fn dump_text() -> String {
     };
     let meta = lock(&DUMP_META).clone();
     let mut out = meta;
-    for k in 0..5u64 {
+    for k in 0..8u64 {
         let words = b.read_u32s(k * 64, 16).unwrap_or_default();
         let f: Vec<String> = words
             .iter()
