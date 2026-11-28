@@ -404,6 +404,8 @@ was taken for, our root signature object's bytes and blobs) and `blobs/<hash>.bi
 names, once per content; `_BYTES`=256, `_FOLLOW`=262144, `_MAX`=60000 tune it). The id hashes the non-pointer words and the
 memory behind the pointers, so the same pipeline in another run or place is the same file.
 
+*Verdict (2026-11-28, checked against the local GDKX reference, 10.1.26100.9661, and the disassembled call sites title+0x2477578 and title+0x24800d5).* Slots 0x1c8 and 0x218 are the Xbox extension's "deserialize a graphics / compute pipeline state": they load a pipeline that was serialized offline straight in. Returning `E_NOTIMPL` is a cache miss: the title falls back to slots 0x2b0 / 0x1f0 and builds the pipeline itself, so no draw is lost. That makes both slots **safe stubs** (matrix `C-V-001`: proven, disposition "安全桩"). 0x218 is implemented but stays off behind `VICTORY_MAC_PSO_X`; 0x1c8 is left out on purpose. The count 18,432 in the matrix is a lower bound (the log prints at powers of two), not the number of calls: the real count is between 20 and 30-odd thousand, which does not contradict the Windows line's 28,139. Still to do: log one total at the end of each run, and run the drop-ab B0/B1 A/B comparison to confirm.
+
 *Hooks in upstream files:* `device.rs` (`precompiled_compute` for slot 0x218, one dump line in `unknown_pipeline`),
 `pipeline.rs` (`compute_from_container`, `PIPELINE_IIDS` made `pub(crate)`). *Remove when* the Windows line implements the
 slots (the records' format is then theirs), or when a batch run shows the title's own fallback is as good and the patch is of no use.
