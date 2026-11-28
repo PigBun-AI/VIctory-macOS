@@ -430,8 +430,7 @@ const OWN_VIEW_FLOOR: usize = 2 << 40;
 
 /// Whether our own views start above [`OWN_VIEW_FLOOR`] under Wine:
 /// `VICTORY_OWN_VIEW_HIGH=1` (`true`, `on`) asks for it, `0` (`false`, `off`)
-/// does not, and unset is on except under Wine on macOS (mac X3: not yet run
-/// there, switched on once a `VICTORY_OWN_VIEW_HIGH=1` run has shown it safe).
+/// disables it. Unset is on everywhere (mac X3).
 /// Off means a plain [`MapViewOfFile`], as before the floor.
 fn own_view_high() -> bool {
     static ON: LazyLock<bool> = LazyLock::new(|| {
@@ -2746,9 +2745,9 @@ mod tests {
     /// mac: the kept whole-section view (`Section::window`) and a per-write
     /// view (`View::map`) both start above 2 TiB under Wine.
     #[test]
-    fn own_views_are_high_by_default_except_under_wine_on_macos() {
-        assert!(!own_view_high_from(None, true));
-        assert!(!own_view_high_from(Some(""), true));
+    fn own_views_are_high_by_default_on_all_hosts() {
+        assert!(own_view_high_from(None, true));
+        assert!(own_view_high_from(Some(""), true));
         assert!(own_view_high_from(Some("1"), true));
         assert!(own_view_high_from(Some(" true "), true));
         assert!(own_view_high_from(Some("on"), true));
@@ -2801,9 +2800,7 @@ const FOUR_GIB: usize = 1 << 32;
 /// reserved at startup, past [`low_guards::SLACK`] (or
 /// [`low_guards::WINE_SLACK`] under Wine) left for the host, and a 32-bit
 /// request that finds no room releases guards and tries again.
-/// `VICTORY_LOW_GUARDS=0` (`false`, `off`) disables these guards; under Wine
-/// on macOS they are off unless `VICTORY_LOW_GUARDS=1` (`true`, `on`) asks
-/// for them (mac X3, until a run has shown them safe there).
+/// Enabled everywhere by default; `VICTORY_LOW_GUARDS=0` (`false`, `off`) disables the guards.
 pub mod low_guards {
     use std::sync::Mutex;
 
@@ -2835,11 +2832,9 @@ pub mod low_guards {
         GUARDS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether the guards are on when `VICTORY_LOW_GUARDS` is unset: on
-    /// everywhere except Wine on macOS (mac X3: not yet run there, switched
-    /// on once a `VICTORY_LOW_GUARDS=1` run has shown it safe).
-    pub(super) const fn default_on(wine_on_macos: bool) -> bool {
-        !wine_on_macos
+    /// mac X3: the four paired runs support the same default on all hosts.
+    pub(super) const fn default_on(_wine_on_macos: bool) -> bool {
+        true
     }
 
     /// Whether `VICTORY_LOW_GUARDS` leaves low-address guards enabled:
@@ -2920,7 +2915,7 @@ pub mod low_guards {
         if !enabled_from(std::env::var("VICTORY_LOW_GUARDS").ok().as_deref(), default) {
             tracing::info!(
                 default,
-                "space below 4 GiB left unguarded (VICTORY_LOW_GUARDS; off by default under Wine on macOS)"
+                "space below 4 GiB left unguarded (VICTORY_LOW_GUARDS disabled)"
             );
             return;
         }
@@ -3013,13 +3008,12 @@ pub mod low_guards {
             true
         }
 
-        /// Wine on macOS: off unless asked for; elsewhere (Windows) upstream's
-        /// default, on.
+        /// Defaults on for both platforms; an explicit opt-out still wins.
         #[test]
-        fn guards_are_off_by_default_under_wine_on_macos_only() {
-            assert!(!default_on(true));
+        fn guards_are_on_by_default_on_all_hosts() {
+            assert!(default_on(true));
             assert!(default_on(false));
-            assert!(!enabled_from(None, default_on(true)));
+            assert!(enabled_from(None, default_on(true)));
             assert!(enabled_from(Some("1"), default_on(true)));
             assert!(enabled_from(None, default_on(false)));
             assert!(!enabled_from(Some("0"), default_on(false)));
