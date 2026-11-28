@@ -27,6 +27,11 @@ Frequencies come from: `callstats:20261127-221938-map` (calls at seam A in one g
 `census:2026-11-27` (programs of the package, `research/census/census.json`), run logs (r6, the map run). Frequencies of
 different sources are not comparable with each other.
 
+## Private SDK (GDKX)
+
+GDKX may be used freely while developing (semantics, structure layouts, oracle numbers, the constants and structures we
+need). Do not commit whole headers, documentation or the `private/` directory. See `metal/README.md`.
+
 ## Chain 1 — shader
 
 `GFX10 ISA (RDNA2 binary in the title) → victory-shader decode/IR/lower → DXIL → Metal Shader Converter 4.0.3 → AIR/metallib → MTL4Compiler pipeline`

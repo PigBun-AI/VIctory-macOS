@@ -32,3 +32,9 @@ Setup: the root `rust-toolchain.toml` applies; add the targets once with
                                           # metal/conformance/expected-fail.txt
     tools/metal/notimpl-stats.sh          # which unimplemented D3D12 methods the tests call, by count
     tools/metal/gen-front-stubs.sh        # regenerate front/src/shell/stubs.rs (--check in check.sh)
+
+## Private SDK (GDKX)
+
+GDKX (the Xbox GDK, under NDA) may be used freely while developing: look up API semantics, take structure layouts as a
+reference, generate oracle numbers, use the constants and structures we need. One limit: do not commit whole headers,
+documentation or the `private/` directory (`~/Documents/GTA6Project/private/gdkx/`) into the repository.
