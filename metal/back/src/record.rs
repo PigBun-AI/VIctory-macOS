@@ -92,6 +92,8 @@ pub struct CommandList {
     pub(crate) prof: Option<crate::prof::ListProf>,
     /// What the executor put into the list, for the log of a failed submission ([`crate::fault`]).
     pub(crate) journal: Option<crate::fault::Journal>,
+    /// The ring entry the last indirect dispatch's arguments were copied to ([`crate::prof::Snap`]).
+    pub(crate) last_snap: Option<u32>,
 }
 
 // A command buffer and its encoder may move between threads as long as one
@@ -130,6 +132,7 @@ impl Queue {
             stats: ListStats::default(),
             prof: crate::prof::ListProf::new(self.device().raw()),
             journal: crate::fault::Journal::new(),
+            last_snap: None,
         };
         list.refresh_mirrors()?;
         Ok(list)
@@ -589,6 +592,18 @@ impl CommandList {
             return Err(Error::BadArgument(format!(
                 "indirect dispatch arguments at {args_va:#x} are not 4-byte aligned"
             )));
+        }
+        if self.prof.is_some()
+            && std::env::var_os("VICTORY_METAL_GPUPROF_ARGS").is_some_and(|v| v != "0")
+            && let Some(sn) = crate::prof::snap(&self.queue.device().clone())
+        {
+            let (n, dst) = sn.take();
+            let params = self.alloc_constants(16, 16)?;
+            params.write_u32s(0, &[args_va as u32, (args_va >> 32) as u32, dst as u32, (dst >> 32) as u32])?;
+            self.set_address(30, params.gpu_va)?;
+            self.dispatch(&sn.pipeline, [1, 1, 1], [1, 1, 1])?;
+            self.keep_buffers.push(sn.ring.clone());
+            self.last_snap = Some(n);
         }
         let per_group: u64 = threads.iter().map(|&t| u64::from(t)).product();
         if per_group == 0 || per_group > u64::from(pipeline.max_threads_per_threadgroup()) {

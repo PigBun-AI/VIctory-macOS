@@ -433,7 +433,10 @@ fn absorb(w: &mut Window, p: &Pending) {
         let share = (i - from) as u64;
         for k in from + 1..=i {
             let part = ns / share;
-            let row = w.rows.entry(p.prof.labels[k].clone()).or_default();
+            let row = w
+                .rows
+                .entry(split_snap(&p.prof.labels[k]).0.to_string())
+                .or_default();
             row.ns += part;
             row.count += 1;
             row.max_ns = row.max_ns.max(part);
@@ -465,8 +468,13 @@ fn absorb(w: &mut Window, p: &Pending) {
         }
     }
     for (ns, label) in slow {
+        let (head, snapped) = split_snap(label);
+        let args = match (snapped, SNAP.get().and_then(|s| s.as_ref())) {
+            (Some(i), Some(sn)) => format!(" dispatch arguments (now in the ring) {:?}", sn.read(i)),
+            _ => String::new(),
+        };
         eprintln!(
-            "victory-metal gpuprof: a scope took {:.1} ms on the card: {label} (list of {} scopes, queued {:.1} s ago)",
+            "victory-metal gpuprof: a scope took {:.1} ms on the card: {head}{args} (list of {} scopes, queued {:.1} s ago)",
             ns as f64 / 1e6,
             n,
             p.queued.elapsed().as_secs_f64()
@@ -594,5 +602,60 @@ pub(crate) fn compiled(
             total.as_secs_f64() * 1e3,
             metal.as_secs_f64() * 1e3,
         );
+    }
+}
+
+/// What an indirect dispatch's arguments held when it ran (`snap#<n>` on the scope's label): a
+/// tiny kernel copies the three words, in the encoder just ahead of the dispatch, to a ring the
+/// CPU reads when the scope turns out to be slow.
+const SNAP_ENTRIES: u64 = 4096;
+const SNAP_SOURCE: &str = "#include <metal_stdlib>\nusing namespace metal;\n\
+kernel void snap(constant ulong2& p [[buffer(30)]]) {\n\
+  device const uint* s = (device const uint*)p.x; device uint* d = (device uint*)p.y;\n\
+  d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 0x5a5a5a5au;\n}\n";
+
+pub(crate) struct Snap {
+    pub(crate) ring: crate::memory::Buffer,
+    pub(crate) pipeline: crate::pipeline::ComputePipeline,
+    next: AtomicU64,
+}
+
+static SNAP: OnceLock<Option<Snap>> = OnceLock::new();
+
+pub(crate) fn snap(device: &crate::device::Device) -> Option<&'static Snap> {
+    SNAP.get_or_init(|| {
+        let ring = device
+            .create_buffer(crate::memory::BufferKind::Shared, SNAP_ENTRIES * 16)
+            .ok()?;
+        let pipeline = device.compute_pipeline_from_msl(SNAP_SOURCE, "snap").ok()?;
+        Some(Snap {
+            ring,
+            pipeline,
+            next: AtomicU64::new(0),
+        })
+    })
+    .as_ref()
+}
+
+impl Snap {
+    /// The next entry: its number and the address the kernel writes to.
+    pub(crate) fn take(&self) -> (u32, u64) {
+        let n = self.next.fetch_add(1, Ordering::Relaxed) % SNAP_ENTRIES;
+        (n as u32, self.ring.gpu_va() + n * 16)
+    }
+
+    /// The words entry `n` holds now.
+    pub(crate) fn read(&self, n: u32) -> Vec<u32> {
+        self.ring
+            .read_u32s(u64::from(n) * 16, 4)
+            .unwrap_or_default()
+    }
+}
+
+/// `label` without its ` snap#<n>` tail, and the entry number.
+fn split_snap(label: &str) -> (&str, Option<u32>) {
+    match label.rsplit_once(" snap#") {
+        Some((head, n)) => (head, n.parse().ok()),
+        None => (label, None),
     }
 }

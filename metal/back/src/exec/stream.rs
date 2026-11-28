@@ -547,9 +547,23 @@ impl Run<'_> {
         };
         let label = match c {
             Command::Dispatch(_) => Some(crate::prof::pipeline_label(pso.0)),
-            Command::ExecuteIndirect(_) => Some(format!(
-                "execute-indirect {}",
-                crate::prof::pipeline_label(pso.0)
+            Command::ExecuteIndirect(e) => Some(format!(
+                "execute-indirect {} args [{}]+{} stride {} max {} count [{}]+{}{}",
+                crate::prof::pipeline_label(pso.0),
+                self.prof_res(e.args),
+                e.args_offset,
+                e.stride,
+                e.max_count,
+                if e.count.is_null() {
+                    "none".to_string()
+                } else {
+                    self.prof_res(e.count)
+                },
+                e.count_offset,
+                match self.open.as_mut().and_then(|(l, _, _)| l.last_snap.take()) {
+                    Some(n) => format!(" snap#{n}"),
+                    None => String::new(),
+                }
             )),
             Command::CopyBufferRegion(c) => Some(format!("copy buf->buf {} bytes", c.size)),
             Command::FillBuffer(c) => Some(format!("fill buf {} bytes", c.size)),
@@ -988,6 +1002,17 @@ impl Run<'_> {
             return Err(Status::INVALID_ARG);
         }
         let plan = super::indirect::plan(c, Some(&sig))?;
+        // `VICTORY_METAL_INDIRECT_BARRIER=1` (a test of whether a missing barrier ahead of the
+        // arguments' read is what makes one run take minutes): everything before it is done and
+        // visible first.
+        if indirect_barrier() {
+            list.barrier(
+                crate::stages::DISPATCH | crate::stages::BLIT,
+                crate::stages::DISPATCH | crate::stages::BLIT,
+                crate::stages::VIS_DEVICE,
+            )
+            .map_err(|e| status_of(&e))?;
+        }
         let (side_graphics, action) = (graphics, plan.action);
         if side_graphics != (action != super::indirect::Action::Dispatch) {
             return Err(Status::INVALID_ARG);
@@ -1338,4 +1363,10 @@ fn footprint_offset(
         + u64::from(at[2]) * image
         + u64::from(at[1] / bh) * u64::from(loc.row_pitch)
         + u64::from(at[0] / bw) * u64::from(f.bytes))
+}
+
+/// `VICTORY_METAL_INDIRECT_BARRIER` (see `execute_indirect`).
+fn indirect_barrier() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_METAL_INDIRECT_BARRIER").is_some_and(|v| v != "0"))
 }
