@@ -988,6 +988,24 @@ when a resolution patch is asked (`VICTORY_OUTPUT` size, render scale, upscaler,
 (unproven, 待运行验证: unit test of the bytes only).
 *Retire when:* the title no longer reaches the divide with the output patch (never expected), or mac/livetr merges #615.
 
+### X3 — low-address guards with 2.75 GiB Wine slack, own views above 2 TiB (`victory-hle` `modules/xmem.rs`, `apps/victory/src/run.rs`; origin e68a2191, #398)
+
+*What it is.* Under Wine the host's own memory (D3DMetal/Metal heaps, caches) and Wine's bottom-up heap/stack searches compete with
+the title's 32-bit `XMemVirtualAlloc` requests for the space below 4 GiB. `xmem::low_guards::install()` (called at the start
+of `run` when executing) reserves the free space below 4 GiB as `PAGE_NOACCESS` guards, leaving the lowest 2.75 GiB
+(`WINE_SLACK`; 256 MB on native Windows) to the host, so about 1 GiB at the top stays for the title; a 32-bit request that
+finds no room releases guards (smallest that fits first) and retries (`low_guards::retry`). `VICTORY_LOW_GUARDS=0` turns it off.
+Our own views of a section (`Section::window`, the per-write `View::map`) start at or above 2 TiB under Wine (`map_own_view`,
+`MapViewOfFile3` with `LowestStartingAddress`, `OWN_VIEW_FLOOR`), so Wine's `try_map_free_area` does not step through the gigabytes
+of host mappings under `virtual_mutex`. Reason it was taken (it was "not ported, wait for a run that needs it"): `mac.hle.low_address_commit`,
+the title got a NULL from an allocator and wrote 0 at image+0x2215c35, in **3 of 8** runs (run report 2026-11-27 crash 2).
+*Mac port.* mac/livetr's xmem.rs never had the #1009 guards the commit widens (only the docs paragraph in `macos.md`), so the module
+(`low_guards`, `FOUR_GIB`), its call in `run.rs` and the retry in `XMemVirtualAlloc` came along with it, in the form at e68a2191.
+Our `Section` keeps its own design (`window` + commit bitmap, `VICTORY_SECTION_WINDOW=0`), not upstream's `whole()`: `map_own_view`
+is used in `Section::window` and `View::map`; upstream's test of the shared whole view is not ported, its floor test is.
+Matrix: `mac.hle.low_address_commit` (unproven, 待运行验证: unit tests only, none run under Wine).
+*Retire when:* mac/livetr merges the line that has it.
+
 ## Not ported this round (decided with the Windows line as the reference)
 
 Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific GPU work
@@ -995,10 +1013,12 @@ Listed in `inventory.md` with source commits. In short: D3DMetal/Metal-specific 
 R32G32B32 views, 64-bit atomics, mesh limits, queue recovery, shader MD5 hash, wide indirect
 dispatch) because `host.rs`/`draw.rs` diverge by tens of thousands of lines; **G3**: the DXC
 helper (`VICTORY_HELPER_DXC`) is skipped in `victory.sh` until `victory-gpu/build.rs` has it;
-low-address guards (#398) and 2 TiB views, DirectStorage per-worker handles (#400), publish rename
+DirectStorage per-worker handles (#400), publish rename
 tolerance (this line's `publish.rs` already stages per writer), pipeline cache calls under Wine;
 the generic upstream PRs in the Mac history (not Mac specific). Each is a candidate for a later
 `mac:` commit once a run on the Mac shows the need.
+
+Taken later (no longer "not ported"): the low-address guards and 2 TiB views (#398, with the #1009 guards it builds on), see X3.
 
 ### M7 — `tools/mac/play.sh`: hand play wrapper
 
