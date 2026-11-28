@@ -5,7 +5,7 @@
 
 ## 0. 一眼看结论
 
-- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 68 个单元里 proven 25（36.8%）、unproven 26（38.2%）、gap 17（25.0%）（2026-11-28 从矩阵重算；上次记录是 56 个里 proven 16、unproven 24、gap 16）。按频次加权（仅指令类，静态普查）proven 13.5%、unproven 86.5%、gap 0.0%。
+- 覆盖率（第 5 节；不含「仅参照（D3DMetal）」行）：按单元数，已用的 72 个单元里 proven 36（50.0%）、unproven 24（33.3%）、gap 12（16.7%）（2026-11-28 下午 mac/map-close1 两个 int3 节点后重算，已在 mac/livetr 48ee9251 之上；口径同 5.1）。按频次加权（仅指令类，静态普查，freq 列求和 3,840,791）proven 14.5%、unproven 85.5%、gap 0%。
 - **Wine 下实测（本机 macOS 27.2.1 / M5 Max / CrossOver Wine 26.3，2026-11-27，tools/mac/rosetta-probe-wine.sh，一次 692 个 case 进程 + 数值批次）**：
   - 普通 store（mov、xmm/ymm 移动、vextract、非临时 store、rep movs/stos）在 fault/只读/跨页/16 KiB 宿主页内 4 KiB 保护下都恢复，VEH 看到的地址精确、异常地址 = 指令地址、类型 write，结果对。
   - **masked store 与 vcvtps2ph [mem] 在 Wine 下一样致命（EmulateForward 中止进程，VEH 不被调用）**：masked store 的规律是「**fault 的 lane 不是 lane 0 就致命**」，跟是否跨页无关（hi、last 掩码打到不可访问页也致命；full、lane 0、交替掩码的第一个 lane 在故障页上能恢复）；vcvtps2ph 写内存只要 fault 就致命（60/60）。16 KiB 宿主页内的 4 KiB 保护、16 KiB 边缘保护同样。对游戏：只有加载期补丁（mac.loader.masked_patch，把这些改成逐 lane 普通 store）或不让这些 store 碰被保护的页才安全；默认跟踪关时没有页被保护。
@@ -61,7 +61,9 @@
 | mac.isa.lock_cmpxchg16_split | 16-bit lock cmpxchg whose operand straddles a 16-byte boundary (address = 15 mod 16) | 2,036 | static-census | unproven | emulated |
 | mac.isa.cmpxchg32_rax_hit | 32-bit cmpxchg success path: upper 32 bits of RAX | 9,665 | static-census | proven | faithful |
 | mac.isa.rmw_fault_access_type | access type and address in the exception record of a faulting locked/RMW instruction (cmpxchg, xadd, xchg [me… | 56,796 | static-census | proven | emulated |
-| mac.title.int3_31f50 | int3 trap at image+0x31f50 (frame 64 of one diag run) | 未知 | unknown | unproven | 未定 |
+| mac.title.int3_31f50 | the title's own fatal OOM of frame scratch arena 1 at image+0x31f50 (Game Init, once in ~29 runs; not injected by us, cause of the empty arena undecided) | 1 of ~29 runs | log | unproven | deviation |
+| mac.title.int3_self_exit_r6 | the title's own assertion at image+0x5149aec: BUILDING entity pool (22500) empty (4 of 4 long world runs, 357-449 s) | 4 of 4 | log | gap | deviation |
+| mac.title.srl_prestream_stall | intro SRL Prestream never completes, entities grow until the pool is full | 3 of 3 crash.logs | log | gap | deviation |
 
 ### 加载期补丁
 
@@ -272,9 +274,9 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 | 范围 | 单元数 | proven | unproven | gap |
 |---|---|---|---|---|
-| 全部 used=yes（不含仅参照） | 69 | 25 (36.2%) | 32 (46.4%) | 12 (17.4%) |
-| 指令类（mac.isa.*） | 21 | 15 (71.4%) | 5 | 1 |
-| 其余（loader/fault/hle/res/title/shared/shader/metal） | 48 | 10 (20.8%) | 27 | 11 |
+| 全部 used=yes（不含仅参照） | 72 | 36 (50.0%) | 24 (33.3%) | 12 (16.7%) |
+| 指令类（mac.isa.*） | 21 | 17 (81.0%) | 4 | 0 |
+| 其余（loader/fault/hle/res/title/shared/shader/metal） | 51 | 19 (37.3%) | 20 | 12 |
 
 上一版（本文件第 1 版，未跑 Wine 探针、未剔除仅参照行）：59 个单元 proven 12（20.3%）、unproven 31、gap 16。这版的变化：Wine 探针把 cpuid_xgetbv、bmi_lzcnt_popcnt、fma_f16c、page_size、wide_patch 从 unproven 变 proven；新登记 3 个指令类 gap（lock_cmpxchg16_split、cmpxchg32_rax_hit、rmw_fault_access_type）和 1 个 HLE gap（audio_timer_leak）；7 个 used=yes 的 D3DMetal 行移出统计。
 
@@ -282,9 +284,11 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 2026-11-28 重算（脚本从矩阵算，口径同上：used=yes、去掉 notes 以「仅参照（D3DMetal）」开头的 10 行，共 68 个）。和上次记录（56 个：16/24/16）的差别：矩阵从 70 行增到 87 行，v1 之后加进来的行（shared.rt.*、shader.*、mac.res.*、mac.isa 新行等）计入；本次改动：mac.isa.maskmov_ymm_store_fault_crossing 由 gap 改 proven（L1 加载期补丁改掉全部 masked store 站点，扫描 1233 + 8 个 plain = 1241，审计 0 漏）；新增 3 个 used=yes 的 gap 行：metal.post.auto_exposure、metal.gpu.fidelity_slow_frame、mac.title.hang_watchdog。68 个里含 4 个 shader.*/metal.* 行（shader.ps.attribute_at_vertex proven，shader.mesh.output_size_32k、metal.post.auto_exposure、metal.gpu.fidelity_slow_frame gap）；若只算 v1 范围（去掉 shader.*、metal.* 行）是 64 个：proven 24（37.5%）、unproven 26（40.6%）、gap 14（21.9%）。
 
-disposition 分布（全部 88 行，含仅参照行）：emulated 21，mapped 1，stubbed 29，translated 20，unsupported 9，faithful 3，deviation 3，未定 1，工具行（无 disposition）1。
+disposition 分布（全部 92 行，含仅参照行）：emulated 23，mapped 1，stubbed 28，translated 21，unsupported 8，faithful 4，deviation 6，未定 0，工具行（无 disposition）1。
 
 2026-11-28 下午（分支 mac/map-close1）：新增 mac.runtime.hle_counters（工具行，used=no，不进上面的 68 个；status=proven：机制在 Wine 下实测，见 PATCHES.md H3）。第 5.1 节三个表的数字不变（68：25/26/17）。
+
+2026-11-28 下午（分支 mac/map-close1，rebase 到 mac/livetr 48ee9251 即 close2 之后，计数全部从合并后的矩阵重算）：本分支的变化：新增 mac.runtime.hle_counters（工具行，不进计数）、mac.hle.xmem_map_partial_view（gap，flaky 测试）、mac.title.int3_self_exit_r6（gap）、mac.title.srl_prestream_stall（gap）；mac.title.int3_31f50 由 used=unknown 改 used=yes（静态分析：标题自己的帧临时堆 arena 1 分配失败断言，不是我们注入的，仍 unproven）；在 Wine 下跑后 unproven→proven：xmem_virtual_alloc、tools_memory、files、dstorage、titlewrite、lock_cmpxchg_flags、xmem_no_write_watch、masked_default_off、clwb_nop、isa.clwb、hle.console_model。mac.loader.resolution（除零 clamp 没有运行证据）和 mac.hle.low_address_commit（守卫默认关、没在 Wine 下跑过）保持 unproven。
 
 ### 5.2 按频次加权（指令类，静态普查，每条指令只算一次）
 
