@@ -95,6 +95,8 @@ mod intersect_tests;
 pub mod host;
 mod lower;
 mod mesh_order; // mac S2
+#[cfg(all(test, not(windows)))]
+mod mac_dxil_check; // mac G12
 mod own_bits;
 #[cfg(all(test, windows))]
 mod permlane_tests;
@@ -1018,6 +1020,8 @@ fn emit_program(
         root_indexed_views: res.root_indexed_views.clone(),
         vertex_reads: l.vertex_reads, // mac S1
     };
+    #[cfg(all(test, not(windows)))]
+    mac_dxil_check::check(&shader.dxil); // mac G12
     Ok((shader, wave_size))
 }
 

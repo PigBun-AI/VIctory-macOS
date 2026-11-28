@@ -626,6 +626,7 @@ the census has been read and the answer is in the map row.
 `queue_fence` (fences, events, queue Signal/Wait), `resource_footprints` and `resource_heaps` (GetCopyableFootprints / GetResourceAllocationInfo against a model of the spec and the host device; placed/committed/Map rules). They are child
 modules (`#[path = "mac/prove/..."]`) so they reach private items; the visibility widening above is for the tests only. The one run-time part is the 3D unordered-access census (`VICTORY_MAC_LAYOUT_STATS=1`): counts the
 title's 3D UAVs with a first depth slice other than 0 or a size other than the rest (D3DMetal cannot make partial 3D views, finding F1 of C-V-012).
+Shader side: `victory-shader/tests/sampler_spec.rs` (S-G-009) and `emit/mac_dxil_check.rs` (S-D-001: a hook in `emit_program`, `cfg(all(test, not(windows)))`, that checks every DXIL container the translator's tests build with an independent container reader and `llvm-bcanalyzer`; Mac has no `dxil.dll`).
 
 *Why.* Map nodes C-V-012/014/017 and api.CreateConstantBufferView/Resource::Map were "used, not proven".
 
