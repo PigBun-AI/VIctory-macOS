@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use super::UserData;
 use super::bitcode::{Attr, Bin, Cast, Rmw, Tag, Term, V, pred};
 use super::container::SigElement;
-use super::shader::{Shader, flags};
+use super::shader::{Geometry, Shader, flags};
 use super::vertex_flat::{self, VertexRead}; // mac S1
 use crate::ShaderError;
 use crate::gfx10::{Dpp, Fields, NULL, Operand};
@@ -430,6 +430,8 @@ struct Lower<'a> {
     counters: HashMap<usize, (V, Vec<(V, usize)>)>,
     /// The block a loop stopped by [`LOOP_LIMIT`] leaves the program from.
     abort: Option<usize>,
+    /// Geometry (mac S4): the vertices the program has emitted so far.
+    gs_emitted: u32,
 }
 
 /// Iterations after which a loop is left (per entry into it), unless
@@ -1500,6 +1502,10 @@ impl<'a> Lower<'a> {
         let mut s = Shader::new(x.native.stage == HwStage::Ps);
         s.inputs = x.inputs.clone();
         s.outputs = x.outputs.clone();
+        // mac S4: a geometry program emits as many vertices as it has `GS_OP_EMIT`s.
+        if let Some(ring) = &x.io.gs {
+            s.geometry = Some(Geometry { max_vertices: ring.vertices });
+        }
         // mac S1: without `attributeAtVertex` the vertices 1 and 2 come as added flat elements.
         let vflat_id = s.inputs.len();
         let mut vreads: Vec<VertexRead> = Vec::new();
@@ -1891,6 +1897,7 @@ impl<'a> Lower<'a> {
             code_table: None,
             counters: HashMap::new(),
             abort: None,
+            gs_emitted: 0,
         }
     }
 
@@ -2673,6 +2680,120 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// mac S4: a geometry program's read of the ESGS ring: each dword is the host's `loadInput` of that
+    /// vertex's element; a write is kept for the `GS_OP_EMIT` that sends its vertex (`gs_message`).
+    fn gs_ring(&mut self, inst: &Inst, b: usize, i: usize) -> Result<(), Why> {
+        let io = self.x.io;
+        let ring = io.gs.as_ref().ok_or("a ring access outside a geometry program")?;
+        if self.x.st.guards[b][i].is_some() {
+            return Err("a ring access under a lane mask");
+        }
+        if let Some(reads) = ring.reads.get(&(b, i)) {
+            for r in reads {
+                let (row, channel) = (r.dword / 4, (r.dword % 4) as u8);
+                let val = match self.find_input(row as u8, channel) {
+                    Some((id, col)) => self.gs_load(id, col, u32::from(r.vertex)),
+                    // A register of the ring the signature does not declare: nothing writes it.
+                    None => Val::I32(self.s.m.i32(0)),
+                };
+                if let Some(v) = inst.write(Reg::V(r.dst)) {
+                    self.vals.insert(v, val);
+                }
+            }
+            return Ok(());
+        }
+        if ring.writes.contains_key(&(b, i)) {
+            return Ok(());
+        }
+        Err("a ring access the analysis did not see")
+    }
+
+    /// `loadInput` of column `col` of element `id` at vertex `vertex` of the primitive.
+    fn gs_load(&mut self, id: usize, col: u8, vertex: u32) -> Val {
+        let e = &mut self.s.inputs[id];
+        e.usage |= 1 << col;
+        let (int, bit) = (e.comp != 9, e.comp == 1);
+        let (ty, suffix) = if bit {
+            (self.s.t.i1, ".i1")
+        } else if int {
+            (self.s.t.i32, ".i32")
+        } else {
+            (self.s.t.f32, ".f32")
+        };
+        let entry = self.s.entry;
+        let args = [
+            self.s.m.i32(id as u32),
+            self.s.m.i32(0),
+            self.s.m.i8(col),
+            self.s.m.i32(vertex),
+        ];
+        let v = self.s.op(entry, &format!("loadInput{suffix}"), Attr::ReadNone, ty, 4, &args);
+        if bit {
+            Val::I32(self.s.m.cast(entry, Cast::ZExt, v, self.s.t.i32))
+        } else if int {
+            Val::I32(v)
+        } else {
+            Val::I32(self.s.m.cast(entry, Cast::Bitcast, v, self.s.t.i32))
+        }
+    }
+
+    /// mac S4: `s_sendmsg` of a geometry program: `GS_OP_EMIT` stores the vertex's dwords written to the
+    /// ring so far (the last write of each dword) as its outputs and emits it; `GS_OP_CUT` ends the strip.
+    fn gs_message(&mut self, b: usize, i: usize) -> Result<(), Why> {
+        use crate::gs::Message;
+        let io = self.x.io;
+        let ring = io.gs.as_ref().ok_or("a message outside a geometry program")?;
+        let message = *ring.messages.get(&(b, i)).ok_or("a message the analysis did not see")?;
+        let c = self.cur;
+        let void = self.s.t.void;
+        let stream = self.s.m.i8(0);
+        if matches!(message, Message::Emit | Message::EmitCut) {
+            let n = self.gs_emitted;
+            self.gs_emitted += 1;
+            // The last write to each dword of vertex n before this message, in program order.
+            let mut last: BTreeMap<u16, Value> = BTreeMap::new();
+            let mut sites: Vec<&Site> = ring.writes.keys().filter(|&&s| s < (b, i)).collect();
+            sites.sort();
+            for site in sites {
+                for w in &ring.writes[site] {
+                    if u32::from(w.vertex) == n {
+                        last.insert(w.dword, w.value);
+                    }
+                }
+            }
+            for (dword, value) in last {
+                let (row, channel) = (u32::from(dword / 4), (dword % 4) as u8);
+                let Some(id) = self.s.outputs.iter().position(|o| {
+                    o.row == Some(row) && channel >= o.col && channel < o.col + o.cols
+                }) else {
+                    // A dword of the ring no output declares.
+                    continue;
+                };
+                let col = channel - self.s.outputs[id].col;
+                let x = self.i32_of(value)?;
+                let el = &mut self.s.outputs[id];
+                el.usage |= 1 << col;
+                let comp = el.comp;
+                let (suffix, x) = if comp == 9 {
+                    let f = match self.floats.get(&value) {
+                        Some(&f) => f,
+                        None => self.as_float(x),
+                    };
+                    (".f32", f)
+                } else {
+                    (".i32", x)
+                };
+                let args = [self.s.m.i32(id as u32), self.s.m.i32(0), self.s.m.i8(col), x];
+                self.s.op(c, &format!("storeOutput{suffix}"), Attr::NoUnwind, void, 5, &args);
+            }
+            self.s.op(c, "emitStream", Attr::NoUnwind, void, 97, &[stream]);
+        }
+        if matches!(message, Message::Cut | Message::EmitCut) {
+            self.s.op(c, "cutStream", Attr::NoUnwind, void, 98, &[stream]);
+        }
+        Ok(())
+    }
+
     /// Whether the input SGPR `v` is the POPS collision wave id: a program
     /// with an ordered section only takes its fields apart (bit 31 says
     /// that the wave overlaps another, the others which packer and waves).
@@ -2729,6 +2850,11 @@ impl<'a> Lower<'a> {
                 let n = self.s.m.i32(self.x.mesh_stride);
                 return Val::I32(self.s.m.bin(self.s.entry, Bin::Mul, g, n));
             }
+            // mac S4: the ESGS ring offsets the evaluation of `gs.rs` assumed, and the wave's info.
+            Input::GsVertexPair(first) => {
+                return Val::I32(self.s.m.i32(crate::gs::vertex_pair(u32::from(first))));
+            }
+            Input::GsWaveInfo => return Val::I32(self.s.m.i32(crate::gs::WAVE_INFO)),
             Input::MergedWaveInfo => {
                 // shortcut: only the wave index (bits 24-27) is set; the
                 // console's other bits (lane counts) are read by no program.
@@ -5709,6 +5835,7 @@ impl<'a> Lower<'a> {
                     .op(self.cur, "barrier", Attr::NoDuplicate, void, 80, &[mode]);
                 Ok(())
             }
+            Fields::Sopp { .. } if name == "s_sendmsg" && self.x.io.gs.is_some() => self.gs_message(b, i), // mac S4
             Fields::Sopp { .. } => Ok(()),
             Fields::Smem { .. } => self.smem(inst, (b, i)),
             Fields::Valu(_) if name.starts_with("v_interp_") => self.interp(inst, (b, i)),
@@ -5726,6 +5853,7 @@ impl<'a> Lower<'a> {
             Fields::Image { .. } => self.image(inst, b, i),
             Fields::Buffer { .. } => self.buffer(inst, b, i),
             Fields::Exp { .. } => self.export(b, i),
+            Fields::Ds { .. } if self.x.io.gs.is_some() => self.gs_ring(inst, b, i), // mac S4
             Fields::Ds { .. } => self.ds(inst, b, i),
             Fields::Flat { .. } if name.starts_with("global_") => self.flat(inst, b, i),
             Fields::Flat { .. } => Err("flat memory"),
@@ -10496,6 +10624,9 @@ impl<'a> Lower<'a> {
                 self.s
                     .op(c, "unaryBits.i32", Attr::ReadNone, self.s.t.i32, 32, &[a])
             }
+            // mac S4: a geometry program's lane is its primitive: the host thread is alone (lane 0). What the
+            // count feeds is the address of the lane's slice of LDS, which `gs.rs` took apart.
+            "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" if self.x.io.gs.is_some() => s(self, 1)?,
             "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" => {
                 // Bits of the mask's low (high) half below this lane, plus src1:
                 // with an all-ones mask, the lane index.

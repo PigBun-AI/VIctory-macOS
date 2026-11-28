@@ -435,14 +435,19 @@ impl HostPipeline {
         if compute.is_none()
             && shaders
                 .iter()
-                .any(|s| !matches!(s.stage, "vertex" | "pixel" | "mesh"))
+                .any(|s| !matches!(s.stage, "vertex" | "pixel" | "mesh" | "geometry"))
         {
             return refuse(
-                "only vertex, mesh, pixel and compute stages are translated",
+                "only vertex, mesh, pixel, geometry and compute stages are translated",
                 shaders,
             );
         }
         let mesh = find("mesh");
+        // mac S4: the title's own geometry stage (the voxelisation passes) between its vertex and pixel shaders.
+        let title_gs = find("geometry");
+        if title_gs.is_some() && (mesh.is_some() || find("vertex").is_none() || find("pixel").is_none()) {
+            return refuse("a geometry stage without a vertex and a pixel shader, or with a mesh shader", shaders);
+        }
         let stages = if let Some(cs) = compute {
             vec![(cs, D3D12_SHADER_VISIBILITY_ALL)]
         } else {
@@ -453,6 +458,8 @@ impl HostPipeline {
             };
             let mut stages = vec![first];
             stages.extend(find("pixel").map(|ps| (ps, D3D12_SHADER_VISIBILITY_PIXEL)));
+            // (Last, so the vertex and pixel shaders keep their places.)
+            stages.extend(title_gs.map(|gs| (gs, D3D12_SHADER_VISIBILITY_GEOMETRY)));
             stages
         };
         if mesh.is_some() && !host()?.mesh_shaders() {
@@ -465,6 +472,11 @@ impl HostPipeline {
             .and_then(|ps| ps.translated())
             .map(|t| t.host.vertex_reads.clone())
             .unwrap_or_default();
+        // mac S4: the stage a title geometry shader takes is the pipeline's one: no rectangle stage, no per-vertex
+        // stage beside it.
+        if title_gs.is_some() && (!reads.is_empty() || g.is_some_and(|g| g.topology.0 == RECTANGLES)) {
+            return refuse("a title geometry stage in a rectangle list or with per-vertex pixel reads", shaders);
+        }
         if !reads.is_empty() && mesh.is_none() && g.is_some_and(|g| g.topology.0 == RECTANGLES) {
             tracing::warn!(?shaders, "a pixel shader reads per-vertex values of a rectangle list");
             return None;
@@ -474,6 +486,7 @@ impl HostPipeline {
         // writes one; `host_attribute_at_vertex` false is how the host says it is that chain): the vertex
         // shader writes it as a plain output and the rectangle stage cuts by it.
         let rect_clip = g.is_some_and(|g| g.topology.0 == RECTANGLES)
+            && title_gs.is_none()
             && mesh.is_none()
             && reads.is_empty()
             && !victory_shader::emit::host_attribute_at_vertex()
@@ -777,12 +790,17 @@ impl HostPipeline {
             pRootSignature: unsafe { std::mem::transmute_copy(&root) },
             VS: code(0),
             PS: code(1),
-            GS: rect_gs.as_ref().map_or(D3D12_SHADER_BYTECODE::default(), |gs| {
-                D3D12_SHADER_BYTECODE {
-                    pShaderBytecode: gs.as_ptr().cast(),
-                    BytecodeLength: gs.len(),
-                }
-            }),
+            GS: if title_gs.is_some() {
+                // mac S4: the title's (the last of the stages).
+                code(stages.len() - 1)
+            } else {
+                rect_gs.as_ref().map_or(D3D12_SHADER_BYTECODE::default(), |gs| {
+                    D3D12_SHADER_BYTECODE {
+                        pShaderBytecode: gs.as_ptr().cast(),
+                        BytecodeLength: gs.len(),
+                    }
+                })
+            },
             BlendState: host_blend(&g.blend, &g.targets),
             SampleMask: g.sample_mask,
             RasterizerState: g.rasterizer,
@@ -807,6 +825,13 @@ impl HostPipeline {
         // A pipeline with the geometry stage has a name of its own in the
         // library; the others keep theirs.
         let name = |gs: Option<&Vec<u8>>| match gs {
+            // mac S4: a title geometry stage: named by its code.
+            None if title_gs.is_some() => super::library::name(
+                "graphics geometry",
+                &root_blob,
+                &[&code_bytes(&code(0)), &code_bytes(&code(1)), &code_bytes(&code(stages.len() - 1))],
+                &state,
+            ),
             Some(gs) => super::library::name(
                 "graphics rectangles",
                 &root_blob,
@@ -851,7 +876,10 @@ impl HostPipeline {
             Ok(pso) => pso,
             Err(e) => {
                 tracing::warn!(error = %e, ?shaders, "host pipeline refused");
-                crate::mac::drop_stats::refusal(format!("host pipeline refused: {e}"));
+                crate::mac::drop_stats::refusal(format!(
+                    "host pipeline refused{}: {e}",
+                    if title_gs.is_some() { " (with the title's geometry stage)" } else { "" }
+                ));
                 host.log_messages();
                 return None;
             }

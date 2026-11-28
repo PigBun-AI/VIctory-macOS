@@ -79,6 +79,10 @@
 //!   geometry shader of ours between the translated vertex and pixel
 //!   shaders and draws triangle lists with the title's own vertex counts.
 //!   It binds nothing.
+//! * **Geometry shaders of the title** (mac S4, [`HwStage::Gs`], `gs_6_6`): the console's on-chip geometry stage
+//!   (one lane a triangle, the vertex shader's outputs in the ESGS ring in LDS) as a host geometry shader:
+//!   triangles in, `max_vertices` = the emits of the program, strips out; user data and descriptors as above (the
+//!   root constants visible to the geometry stage). See `gs.rs`.
 
 mod bitcode;
 pub mod live;
@@ -524,19 +528,27 @@ fn translate_plain(container: &[u8]) -> Result<HostShader, ShaderError> {
         .find(|p| {
             matches!(
                 p.stage,
-                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms
+                HwStage::Vs | HwStage::Ps | HwStage::Cs | HwStage::Ms | HwStage::Gs // mac S4
             )
         })
         .ok_or(ShaderError::Unsupported {
             offset: 0,
-            what: "a container without a vertex, pixel, compute or mesh program",
+            what: "a container without a vertex, pixel, compute, mesh or geometry program",
         })?;
     let p = crate::spill::build(&native)?;
+    // mac S4: a geometry program's ring accesses are taken apart, and the arithmetic that only addressed them goes.
+    let (p, ring) = if native.stage == HwStage::Gs {
+        let (p, ring) = crate::gs::prepare(p)?;
+        (p, Some(ring))
+    } else {
+        (p, None)
+    };
     // Structurisation first: tracing per-lane descriptors needs it (its
     // failure is reported after the earlier stages').
     let st = structure::structure(&p);
     let res = resource::track(&p, &native.layout, native.stage, st.as_ref().ok())?;
-    let io = io::raise(&p, &native)?;
+    let mut io = io::raise(&p, &native)?;
+    io.gs = ring; // mac S4
     let st = st?;
     emit(&c, &native, &p, &st, &io, &res)
 }
@@ -929,6 +941,17 @@ fn emit_program(
     let pixel = native.stage == HwStage::Ps;
     let mut inputs = sig(FourCC::ISG1)?;
     let mut outputs = sig(FourCC::OSG1)?;
+    // mac S4: a geometry shader's inputs come interpolated as the vertex shader's outputs were declared.
+    if native.stage == HwStage::Gs {
+        for e in &mut inputs {
+            e.interp = match (e.kind, e.comp) {
+                (3, _) => 4,
+                (0 | 6 | 7, 9) => 2,
+                (0, _) => 1,
+                _ => 0,
+            };
+        }
+    }
     // Interpolation as DXC declares it by default; pixel inputs that are
     // read get the mode their barycentrics say.
     let interpolated = if pixel { &mut inputs } else { &mut outputs };

@@ -1058,7 +1058,7 @@ the added outputs (no pixel-mesh pairing exists: assuming D scalars read, 128 pr
 world w1 and w100 identical to the recording, w300 differs from the previous build by as much as two runs of the same build differ (about 11-15 thousand pixels over 8/255 of 921600);
 the replays log nothing about pipelines, so that the aav pipelines of those frames draw was not observed directly.
 
-### S4 — geometry shaders on the Metal chain: clip distances of rectangle lists (`victory-shader` `emit/{rect,lower,mod}.rs`, `victory-gpu` `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`)
+### S4 — geometry shaders on the Metal chain: clip distances of rectangle lists, and the title's own geometry shaders (`victory-shader` `gs.rs`, `io.rs`, `emit/{rect,lower,mod}.rs`, `victory-gpu` `pipeline.rs`, `pipeline/host.rs`, `shader_cache.rs`)
 
 *What.* The translator's rectangle-list geometry stage (`emit::rect_list_gs`) used to be refused for the 29 vertex programs of the title
 that write `SV_ClipDistance` (of 2192; matrix S-M-003): Metal Shader Converter 4.0.3 cannot make the geometry emulation's mesh function
@@ -1079,6 +1079,32 @@ Tests: `emit/rect.rs` `clip_distances_are_cut_by_the_stage_and_not_passed_on`; p
 *Why not needed on Windows.* D3D12's geometry stages write clip distances; the default capability leaves everything as it was.
 
 *Remove when.* MSC makes a geometry emulation that writes `SV_ClipDistance` (rerun `gfx_clip.rs`'s refusal test: it then fails).
+
+*What, part two: the title's own geometry shaders (2026-11-28; plan S4, the 195 `GS_VoxelizeGeneric_*` containers).* The container of a
+geometry shader holds one program of the console's on-chip geometry stage (hardware stage `Gs`, wave64): one lane per input triangle, the
+vertex shader's outputs in the ESGS ring (LDS) and its own vertices written to an LDS slice per lane, sent out by `s_sendmsg`. `translate`
+refused it ("a container without a vertex, pixel, compute or mesh program") and `HostPipeline::new` refused every pipeline with a geometry
+stage. Now:
+* `victory-shader/src/gs.rs` takes the ring accesses apart. An evaluation of the integer arithmetic with offsets of its own for the
+  vertices (`vertex_offset`, `vertex_pair`: what `v0`/`v1` hold) says which vertex and which dword every `ds_read*` reads (dword `4 row +
+  channel` of the vertex shader's outputs); the lane's slice (`0xf0 * lane + base`, the slice size in bytes) says which vertex and dword
+  of the output every `ds_write*` writes (`slice / emitted vertices` dwords a vertex, four per output register). `prepare` removes what only
+  addressed them (including the loads of a ring-size table that trace to no root parameter, and the `s_bfm_b64 exec` setup: each host thread is one
+  primitive that runs).
+* `io.rs`: `Input::GsVertexPair`, `GsWaveInfo` for `v0`/`v1`/`s3`; `Io::gs` holds the analysis. `emit/lower.rs`: `gs_ring` turns a read into
+  `loadInput(element, row, column, vertex)`, `gs_message` turns `GS_OP_EMIT` into `storeOutput` of the vertex's dwords and `emitStream`,
+  `GS_OP_CUT` into `cutStream` (the shader declares triangles in, strips out, `max_vertices` = the emits); `v_mbcnt` is 0 in a geometry program (its lane is
+  its primitive). Straight-line programs, 32-bit ring accesses, stream 0 only; anything else is refused with its offset.
+* `HostPipeline::new` accepts vertex + geometry + pixel: the title's geometry shader is the last stage (visibility geometry, its own user data and descriptor
+  tables bound like any stage's by `draw`); a pipeline with one and a rectangle topology, or whose pixel shader reads other vertices (S1), is
+  refused; the host refusing it is a refusal of the pipeline (there is nothing to fall back to), logged as such in the drop statistics.
+Tests: `gs::tests` (4, hand-assembled program), `metal/back/tests/gfx_gs_voxel.rs` (the 195 programs lowered, HLSL vertex and pixel shaders, six
+triangles each facing one of the six directions, 1170 images against a CPU rasterisation of the triangle the program computes; the title's containers are
+read from `VICTORY_GS_CONTAINERS`, `SKIPPED` without). Census (`victory-census translate`, then `convert --kind tgs --isolate`): translate Gs 0 of 195 -> 195 of 195;
+Metal Shader Converter and Metal pipelines 195 of 195, 0 aborts.
+*Not observed in a run:* no frame the replays and runs so far (prologue to w300, world drops) reaches a pipeline with a title geometry stage, so the drop statistics
+see no difference (graphics-gs refusals 0 before and after); the host-side change is checked by the cross build and the GPU test only.
+*Remove when.* never needed on Windows (D3D12 takes the geometry stage as it is); the host side stays with the S4 patch.
 
 ## Fixes taken from other lines (`git cherry-pick -x`, one `mac:` commit each)
 
