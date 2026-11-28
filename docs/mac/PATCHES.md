@@ -616,6 +616,38 @@ minidump is of no use to us anywhere and the title still writes its own `crash.l
 
 *Remove when* Wine's dbghelp parses Rust DWARF without crashing (retest after a Wine bump).
 
+### H3 — how often the title calls each HLE function: `VICTORY_MAC_HLE_COUNTS=<file>` (`victory-hle/src/mac_counts.rs`, 3 hooks)
+
+*What.* Off by default. `VICTORY_MAC_HLE_COUNTS=<file>` (empty, `0`, `off`, `false`: off) puts a 32-byte x86-64 stub in front of
+every function of ours the title is given (`mov r11,<counter>; lock inc [r11]; mov r11,<function>; jmp r11`: `r11` is volatile and
+carries no argument, the stub ends in a jump, so it fits every signature and leaves no frame) and writes the counts per
+`module` (the `HleModule` name) and function as a text table to the file: every 5 s while they change
+(`VICTORY_MAC_HLE_COUNTS_SECS=<n>`, at least 1), and when the process ends (the title's `exit`, `abort` and `TerminateProcess` on itself call
+`mac_counts::flush`, and an `atexit` function writes it for any other CRT exit). The file is replaced atomically (written beside it,
+renamed). First line `# victory-hle-counts v1`, then `# pid=.. uptime_s=.. reason=periodic|exit|abort|terminate bound=N called=N total=N`,
+then `module<TAB>function<TAB>calls` by calls, most first; bound functions never called are there with 0. Off: nothing is
+wrapped, the registry returns the function's own address, the cost is one `OnceLock` read per bound import.
+
+*Hooks in upstream files.* `lib.rs` (`pub mod mac_counts;`), `registry.rs` (`lookup` goes through `export_address`, which calls
+`mac_counts::address_for`), `modules/kernel.rs` (the `GetProcAddress` result for our pseudo modules goes through the same
+function; `flush` in `exit`, `abort`, `TerminateProcess` on itself). Upstream semantics are unchanged.
+
+*Scope.* Only functions of ours (`Provenance::Hle`, and `GetProcAddress` on one of our modules); an import the host answers goes
+straight to Wine. x86-64 Windows only: on any other host `address_for` hands out the function itself and the table shows 0s (a
+warning says so). A function's address seen by the title is the stub's, so code that compares an imported address with `&function`
+would see them differ (nothing of ours does).
+
+*Tests* (`mac_counts::tests`, 11 under Wine, 9 natively): the stub's bytes; one counter and one stub per function bound twice;
+exact counts from 8 threads (also through a real stub: 160,000 calls, no loss); arguments (4 in registers, 3 on the stack, a float)
+and the result pass through a stub; the file is replaced whole and leaves no temporary file; the table is written when a child
+process leaves through the CRT `exit` and lists what the registry bound in it; a locked table is skipped on the exit path instead of
+hanging it. `tools/mac/wine-tests.sh -p victory-hle --lib mac_counts`.
+
+*Use.* A run through `tools/mac/run.sh` with `VICTORY_MAC_HLE_COUNTS=<path>` in the environment: the table is what the matrix rows
+`mac.hle.*` need for `freq` (rows with no entry yet: `net`, `media_bink`, `apu_acphal`, `xgameruntime_family`, `xasync`,
+`lifecycle`, `rpcrt4`, `audio_xaudio2`, `kernel_overrides`, `fidelityfx_xcrd` in the plan of 2026-11-28). *No game run has been made
+with it yet.* *Remove when* the frame-time work no longer needs call counts; nothing else depends on it.
+
 ### T1 — `victory-shader-dylib/tests/translate.rs`: corpus folders from the environment
 
 The test had two build-machine paths of the Windows team written in (`...\build\livetr-corpus`,

@@ -57,9 +57,13 @@ pub(crate) fn lookup(dll: &str, name: &str) -> Option<usize> {
     registry()
         .iter()
         .filter(|m| m.serves(dll))
-        .flat_map(|m| m.exports.iter())
-        .find(|e| e.name == name)
-        .map(|e| e.address)
+        .find_map(|m| m.exports.iter().find(|e| e.name == name).map(|e| export_address(m, e)))
+}
+
+/// What the title is given for an export: its address, or (with
+/// `VICTORY_MAC_HLE_COUNTS` on, mac patch H3) a counting stub in front of it.
+pub(crate) fn export_address(module: &'static HleModule, export: &HleExport) -> usize {
+    crate::mac_counts::address_for(module.name, export.name, export.address)
 }
 
 #[cfg(test)]

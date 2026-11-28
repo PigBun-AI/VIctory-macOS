@@ -1,6 +1,6 @@
 # 转译地图 + 覆盖矩阵（Mac/Wine 段 第 1 版）
 
-日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（87 行，2026-11-28 重算；列见文末）。
+日期 2026-11-27。分支 mac/translation-map（基于 mac/fix-wine-tests）。矩阵：`docs/mac/translation-matrix-mac.csv.txt`（88 行，2026-11-28 重算；列见文末）。
 范围：Rosetta 指令语义、加载期补丁、故障跟踪与异常、HLE（内存/线程/文件/DirectStorage），加上共享层（victory-gpu，接缝 A 之前）的骨架行（owner=shared）。Metal 后端、着色器翻译不在本文件。
 
 ## 0. 一眼看结论
@@ -282,7 +282,9 @@ Metal 侧 matrix.sh 合并时也按 freq 排序这些行。
 
 2026-11-28 重算（脚本从矩阵算，口径同上：used=yes、去掉 notes 以「仅参照（D3DMetal）」开头的 10 行，共 68 个）。和上次记录（56 个：16/24/16）的差别：矩阵从 70 行增到 87 行，v1 之后加进来的行（shared.rt.*、shader.*、mac.res.*、mac.isa 新行等）计入；本次改动：mac.isa.maskmov_ymm_store_fault_crossing 由 gap 改 proven（L1 加载期补丁改掉全部 masked store 站点，扫描 1233 + 8 个 plain = 1241，审计 0 漏）；新增 3 个 used=yes 的 gap 行：metal.post.auto_exposure、metal.gpu.fidelity_slow_frame、mac.title.hang_watchdog。68 个里含 4 个 shader.*/metal.* 行（shader.ps.attribute_at_vertex proven，shader.mesh.output_size_32k、metal.post.auto_exposure、metal.gpu.fidelity_slow_frame gap）；若只算 v1 范围（去掉 shader.*、metal.* 行）是 64 个：proven 24（37.5%）、unproven 26（40.6%）、gap 14（21.9%）。
 
-disposition 分布（全部 87 行，含仅参照行）：emulated 21，mapped 1，stubbed 29，translated 20，unsupported 9，faithful 3，deviation 3，未定 1。
+disposition 分布（全部 88 行，含仅参照行）：emulated 21，mapped 1，stubbed 29，translated 20，unsupported 9，faithful 3，deviation 3，未定 1，工具行（无 disposition）1。
+
+2026-11-28 下午（分支 mac/map-close1）：新增 mac.runtime.hle_counters（工具行，used=no，不进上面的 68 个；status=proven：机制在 Wine 下实测，见 PATCHES.md H3）。第 5.1 节三个表的数字不变（68：25/26/17）。
 
 ### 5.2 按频次加权（指令类，静态普查，每条指令只算一次）
 
@@ -300,7 +302,7 @@ disposition 分布（全部 87 行，含仅参照行）：emulated 21，mapped 1
 ## 6. 运行时频次缺口与要加的插桩（没有启动游戏）
 
 - 没有执行剖面：指令频次是静态位点数，不是热路径次数。要加：Linux perf 式采样不可用，建议在 victory-loader 里对 masked/clwb/console_insn 位点加命中计数器（每 5 秒一行日志），并给 cmpxchg 失败路径抽样。
-- HLE 调用次数：日志只有汇总（13 条“title memory asked for”分组、79 次 dstorage 文件打开等），没有逐次调用计数。要加：每个 xmem/kernel/dstorage 入口一个原子计数器，每 5 秒打印。
+- HLE 调用次数：日志只有汇总（13 条“title memory asked for”分组、79 次 dstorage 文件打开等），没有逐次调用计数。**已加（2026-11-28，PATCHES.md H3）**：`VICTORY_MAC_HLE_COUNTS=<文件>`，每个 HLE 入口一个计数（x86-64 桩，对所有签名通用），按模块和函数每 5 秒写文件、进程退出时再写；默认关。机制已在 Wine 下测过；还没有跑游戏取数（需要 game-lock）。
 - console_insn 陷入次数（ClzeroLoop、Monitorx、Mwaitx、Insertq）每帧多少：日志只有“logged once”。要加计数。
 - D3DMetal 的 EndQuery/ResolveQueryData/MakeResident 次数：只有“每进程一次”的提示。要加计数。
 - Wine 下的 guarded-page 恢复：已做（tools/mac/rosetta-probe-wine.sh，见第 7 节）。还缺：lock cmpxchg 16 位在标题里是否真有未对齐访问（要给 2,036 个位点加地址日志）、audio_client_timer 线程数进 5 秒日志。
