@@ -54,6 +54,11 @@ fn a_failing_op_and_what_it_takes_with_it_are_counted_as_dropped() {
         end(1),
     ]);
     assert_ne!(status, Status::OK);
+    let mut barriers = victory_metal_back::barrier::Tracker::new(false);
+    barriers.barrier(0, 1, 1);
+    barriers.barrier(0, 1, 1);
+    barriers.barrier(1, 0, 1);
+    assert_eq!(barriers.pending(), 0);
     // Block 2: nothing to run, so nothing counted.
     assert_eq!(fx.submit(&[begin(2, q), end(2)]), Status::OK);
     victory_metal_back::dropstats::end_frame();
@@ -65,6 +70,9 @@ fn a_failing_op_and_what_it_takes_with_it_are_counted_as_dropped() {
     assert_eq!(rows.len(), 2);
     let r = &rows[0];
     assert_eq!(r["frame"], "1");
+    let extras = split_pairs(&r["extras"]);
+    assert!(extras.contains(&("silent.barrier.empty_mask.after", 2)));
+    assert!(extras.contains(&("silent.barrier.empty_mask.before", 1)));
     assert_eq!(
         (
             r["dispatch"].as_str(),

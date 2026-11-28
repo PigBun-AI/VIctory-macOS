@@ -296,7 +296,10 @@ impl CommandList {
         rects: &[[i32; 4]],
     ) {
         // A null or unknown descriptor: nothing to clear.
-        let Some(tv) = view else { return };
+        let Some(tv) = view else {
+            crate::dropstats::silent("clear", "no_view");
+            return;
+        };
         if tv.depth_stencil {
             return self.fail(Hr::E_INVALIDARG);
         }
@@ -324,7 +327,10 @@ impl CommandList {
         stencil: u32,
         rects: &[[i32; 4]],
     ) {
-        let Some(tv) = view else { return };
+        let Some(tv) = view else {
+            crate::dropstats::silent("clear", "no_view");
+            return;
+        };
         if !tv.depth_stencil || flags & 3 == 0 || flags & !3 != 0 {
             return self.fail(Hr::E_INVALIDARG);
         }

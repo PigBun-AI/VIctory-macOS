@@ -565,6 +565,12 @@ impl crate::record::CommandList {
         let desc = MTL4RenderPassDescriptor::new();
         for (i, v) in pass.colors.iter().enumerate() {
             let (Some(v), Some(Some(c))) = (v, pass.spec.colors.get(i)) else {
+                // Both absent is an intentionally unused MRT slot, not a dropped attachment.
+                if v.is_some() {
+                    crate::dropstats::silent("pass.colour_attachment", "no_spec");
+                } else if matches!(pass.spec.colors.get(i), Some(Some(_))) {
+                    crate::dropstats::silent("pass.colour_attachment", "no_view");
+                }
                 continue;
             };
             // SAFETY: at most 8 attachments (checked at `begin_pass`).

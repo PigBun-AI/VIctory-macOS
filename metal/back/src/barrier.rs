@@ -166,6 +166,12 @@ impl Tracker {
     /// A barrier arrives. Nothing is encoded yet.
     pub fn barrier(&mut self, after: u16, before: u16, vis: u8) {
         if after == 0 || before == 0 {
+            let reason = match (after == 0, before == 0) {
+                (true, true) => "both",
+                (true, false) => "after",
+                _ => "before",
+            };
+            crate::dropstats::silent("barrier.empty_mask", reason);
             return;
         }
         let (declared_in, in_encoder) = match &self.open {

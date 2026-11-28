@@ -358,6 +358,7 @@ impl Swapchain {
         }
         self.layer.setDisplaySyncEnabled(sync_interval != 0);
         let Some(drawable) = self.layer.nextDrawable() else {
+            crate::dropstats::silent("present", "no_drawable");
             self.dropped += 1;
             return Ok(());
         };

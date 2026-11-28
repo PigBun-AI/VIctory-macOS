@@ -694,10 +694,23 @@ impl Device {
 
     /// The render-target or depth-stencil view a CPU handle names.
     pub fn target_view(&self, cpu_handle: u64) -> Option<TargetView> {
-        let (slot, index) = self.slot_of(cpu_handle).ok()?;
+        let Ok((slot, index)) = self.slot_of(cpu_handle) else {
+            crate::dropstats::silent(
+                "target_view",
+                if cpu_handle == 0 {
+                    "null"
+                } else {
+                    "unknown_handle"
+                },
+            );
+            return None;
+        };
         match self.desc.lock().unwrap().records.get(&(slot, index)) {
             Some(Record::Target(t)) => Some(*t),
-            _ => None,
+            _ => {
+                crate::dropstats::silent("target_view", "no_target_record");
+                None
+            }
         }
     }
 

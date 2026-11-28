@@ -285,6 +285,9 @@ impl ListObj_Impl {
     ) {
         let mut l = self.list.lock().unwrap();
         if pbarriers.is_null() {
+            if numbarriers != 0 {
+                crate::dropstats::silent("resource_barrier", "null");
+            }
             return;
         }
         let id = |r: &Option<ID3D12Resource>| -> Option<ResId> {
@@ -397,6 +400,10 @@ impl ListObj_Impl {
     ) {
         let mut l = self.list.lock().unwrap();
         if psrcdata.is_null() || n == 0 {
+            // A zero-length update requests no state change.
+            if n != 0 {
+                crate::dropstats::silent("root_constants", "null");
+            }
             return;
         }
         // SAFETY: `n` 32-bit values at `psrcdata` (not necessarily aligned).
@@ -671,6 +678,10 @@ impl ListObj_Impl {
     ) {
         let mut l = self.list.lock().unwrap();
         if psrcdata.is_null() || n == 0 {
+            // A zero-length update requests no state change.
+            if n != 0 {
+                crate::dropstats::silent("root_constants", "null");
+            }
             return;
         }
         // SAFETY: `n` 32-bit values at `psrcdata` (not necessarily aligned).
