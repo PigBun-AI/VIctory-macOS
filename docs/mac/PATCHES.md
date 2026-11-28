@@ -995,6 +995,14 @@ the title's 32-bit `XMemVirtualAlloc` requests for the space below 4 GiB. `xmem:
 of `run` when executing) reserves the free space below 4 GiB as `PAGE_NOACCESS` guards, leaving the lowest 2.75 GiB
 (`WINE_SLACK`; 256 MB on native Windows) to the host, so about 1 GiB at the top stays for the title; a 32-bit request that
 finds no room releases guards (smallest that fits first) and retries (`low_guards::retry`). `VICTORY_LOW_GUARDS=0` turns it off.
+*Default (2026-11-28): off under Wine on macOS, on elsewhere.* On Windows the upstream default is unchanged (on). Under Wine on Darwin
+(`victory_gpu::mac::rosetta::rosetta()`) `install()` does nothing unless `VICTORY_LOW_GUARDS=1` (`true`, `on`); the log then says
+"space below 4 GiB left unguarded". Two reasons: (1) it changes the memory layout of every run (2.75 GiB left at the bottom, the top
+~1 GiB reserved) and has not run once under Wine; (2) its reason for being, `mac.hle.low_address_commit` "3 of 8 runs", does not hold: G7 found
+that the write of 0 at image+0x2215c35 is the title's own hang watchdog, not an allocation failure. Tests: `low_guards::tests::guards_are_off_by_default_under_wine_on_macos_only`
+(and the switch test). *To turn it on by default:* run once with `VICTORY_LOW_GUARDS=1` to w300; the log shows no allocation failure
+and no new crash; then flip `default_on` (xmem.rs) and update this entry and the matrix row. Our own views above 2 TiB (below) are not
+affected by this switch.
 Our own views of a section (`Section::window`, the per-write `View::map`) start at or above 2 TiB under Wine (`map_own_view`,
 `MapViewOfFile3` with `LowestStartingAddress`, `OWN_VIEW_FLOOR`), so Wine's `try_map_free_area` does not step through the gigabytes
 of host mappings under `virtual_mutex`. Reason it was taken (it was "not ported, wait for a run that needs it"): `mac.hle.low_address_commit`,

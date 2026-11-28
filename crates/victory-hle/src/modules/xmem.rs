@@ -2640,7 +2640,9 @@ const FOUR_GIB: usize = 1 << 32;
 /// reserved at startup, past [`low_guards::SLACK`] (or
 /// [`low_guards::WINE_SLACK`] under Wine) left for the host, and a 32-bit
 /// request that finds no room releases guards and tries again.
-/// `VICTORY_LOW_GUARDS=0` (`false`, `off`) disables these guards.
+/// `VICTORY_LOW_GUARDS=0` (`false`, `off`) disables these guards; under Wine
+/// on macOS they are off unless `VICTORY_LOW_GUARDS=1` (`true`, `on`) asks
+/// for them (mac X3, until a run has shown them safe there).
 pub mod low_guards {
     use std::sync::Mutex;
 
@@ -2672,12 +2674,27 @@ pub mod low_guards {
         GUARDS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether `VICTORY_LOW_GUARDS` leaves low-address guards enabled.
-    fn enabled_from(value: Option<&str>) -> bool {
-        !value.is_some_and(|v| {
-            let v = v.trim();
-            v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")
-        })
+    /// Whether the guards are on when `VICTORY_LOW_GUARDS` is unset: on
+    /// everywhere except Wine on macOS (mac X3: not yet run there, switched
+    /// on once a `VICTORY_LOW_GUARDS=1` run has shown it safe).
+    const fn default_on(wine_on_macos: bool) -> bool {
+        !wine_on_macos
+    }
+
+    /// Whether `VICTORY_LOW_GUARDS` leaves low-address guards enabled:
+    /// `1`/`true`/`on` enable, `0`/`false`/`off` disable, anything else
+    /// (unset, empty) is `default`.
+    fn enabled_from(value: Option<&str>, default: bool) -> bool {
+        let Some(v) = value.map(str::trim) else {
+            return default;
+        };
+        if v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on") {
+            true
+        } else if v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off") {
+            false
+        } else {
+            default
+        }
     }
 
     /// Low-address slack to leave unguarded at the bottom of `< 4 GiB`.
@@ -2738,8 +2755,12 @@ pub mod low_guards {
     /// [`WINE_SLACK`] under Wine). Call once, before the host allocates much
     /// (the GPU device, the caches).
     pub fn install() {
-        if !enabled_from(std::env::var("VICTORY_LOW_GUARDS").ok().as_deref()) {
-            tracing::info!("space below 4 GiB left unguarded (VICTORY_LOW_GUARDS)");
+        let default = default_on(victory_gpu::mac::rosetta::rosetta());
+        if !enabled_from(std::env::var("VICTORY_LOW_GUARDS").ok().as_deref(), default) {
+            tracing::info!(
+                default,
+                "space below 4 GiB left unguarded (VICTORY_LOW_GUARDS; off by default under Wine on macOS)"
+            );
             return;
         }
         let mut guards = guards();
@@ -2831,15 +2852,32 @@ pub mod low_guards {
             true
         }
 
+        /// Wine on macOS: off unless asked for; elsewhere (Windows) upstream's
+        /// default, on.
+        #[test]
+        fn guards_are_off_by_default_under_wine_on_macos_only() {
+            assert!(!default_on(true));
+            assert!(default_on(false));
+            assert!(!enabled_from(None, default_on(true)));
+            assert!(enabled_from(Some("1"), default_on(true)));
+            assert!(enabled_from(None, default_on(false)));
+            assert!(!enabled_from(Some("0"), default_on(false)));
+        }
+
         #[test]
         fn switch_and_wine_slack_leave_bottom_free_and_guard_top_gib() {
-            assert!(enabled_from(None));
-            assert!(enabled_from(Some("")));
-            assert!(enabled_from(Some("1")));
-            assert!(enabled_from(Some("true")));
-            assert!(enabled_from(Some("on")));
-            for off in ["0", "false", "FALSE", "off", "Off", " 0 "] {
-                assert!(!enabled_from(Some(off)), "{off:?}");
+            // Unset (or unrecognised) takes the platform default; an explicit
+            // value wins either way.
+            for default in [true, false] {
+                assert_eq!(enabled_from(None, default), default);
+                assert_eq!(enabled_from(Some(""), default), default);
+                assert_eq!(enabled_from(Some("2"), default), default);
+                for on in ["1", "true", "TRUE", "on", "On", " 1 "] {
+                    assert!(enabled_from(Some(on), default), "{on:?}");
+                }
+                for off in ["0", "false", "FALSE", "off", "Off", " 0 "] {
+                    assert!(!enabled_from(Some(off), default), "{off:?}");
+                }
             }
             assert_eq!(slack_for(false), 256 << 20);
             assert_eq!(slack_for(true), 2816 << 20);
