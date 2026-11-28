@@ -83,8 +83,8 @@
 # prefix or a log folder (the clone from the seed, --fresh-data, --new-game, --worldsave, settings.xml, the dlls put into the prefix's
 # system32, `wineserver -k`, mkdir of the data, cache and out folders) is done only once the lock is held; a run that queues has
 # touched nothing yet. --print-env takes no lock and changes nothing. With --allow-concurrent (no lock) nothing protects the data
-# directories: give every concurrent run its own (docs/mac/RUN.md). `tools/mac/game-lock.sh status` shows holder and queue. Keep heavy CPU work (builds,
-# tests) away from a run: tools/mac/check.sh runs niced with fewer jobs while the lock is held. Every run logs the load
+# directories: give every concurrent run its own (docs/mac/RUN.md). `tools/mac/game-lock.sh status` shows holder and queue. Heavy CPU work (builds,
+# tests) goes through tools/mac/heavy.sh, which drops its budget to 1 job while the lock is held (docs/mac/RUN.md "Heavy tasks"). Every run logs the load
 # average every 10 s to <out>/load.log (and at the start in start.txt), to tell a clean frame-time run from a noisy one.
 #
 # Other VICTORY_* / WINE* variables in the environment pass through unchanged.

@@ -4,8 +4,8 @@
 #
 #   tools/mac/rosetta-probe-wine.sh [full|quick] [output file]
 #   tools/mac/rosetta-probe-wine.sh case <probe-wine.exe arguments...>      e.g.  case vpmaskmovd_ymm cross mask=hi
-#   tools/mac/rosetta-probe-wine.sh isa [output file]    numeric differential batches only (rcp/rsqrt, vcvt*), PROBE_JOBS parallel processes (default 6),
-#                                                        niced; PROBE_FAST=n divides every pass by 2^n (smoke test); PROBE_NEG=1 is the negative control
+#   tools/mac/rosetta-probe-wine.sh isa [output file]    numeric differential batches only (rcp/rsqrt, vcvt*), PROBE_JOBS parallel processes (default 4, never more than
+#                                                        the job units heavy.sh gave: VICTORY_HEAVY_JOBS); PROBE_FAST=n divides every pass by 2^n (smoke test); PROBE_NEG=1 is the negative control
 #
 # Output (default research/census/rosetta-probe-wine-<date>.txt outside the repo, plus a .md summary next to it):
 # one "RES ..." line per case and mode. A case that kills the process (Rosetta "EmulateForward", a hang) leaves no RES line
@@ -14,6 +14,12 @@
 # wineserver is ever stopped (`wineserver -k` with that WINEPREFIX), so a game on another prefix is not touched.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# A heavy job: only through tools/mac/heavy.sh (budget, nice 19, 1 job while a game runs; docs/mac/RUN.md "Heavy tasks"). The isa mode asks
+# for PROBE_JOBS units (default 4) because it starts that many probe-wine.exe at once; every other mode runs one at a time.
+if [ -z "${VICTORY_HEAVY_SLOT:-}" ]; then
+    case "${1:-}" in isa) _hj="${PROBE_JOBS:-4}" ;; *) _hj=1 ;; esac
+    exec bash "$ROOT/tools/mac/heavy.sh" --jobs "$_hj" --label rosetta-probe-wine -- sh "$ROOT/tools/mac/rosetta-probe-wine.sh" "$@"
+fi
 cd "$ROOT"
 HERE="$ROOT/tools/mac/rosetta-probe"
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
@@ -68,7 +74,9 @@ if [ "$MODE" = case ]; then run_one "$@"; exit 0; fi
 
 if [ "$MODE" = isa ]; then
     OUT="${1:-$HOME/Documents/GTA6Project/research/census/rosetta-probe-isa-$(date +%Y%m%d).txt}"
-    JOBS="${PROBE_JOBS:-6}"
+    JOBS="${PROBE_JOBS:-4}"
+    # the slot's units are the limit (the game running: 1), whatever PROBE_JOBS says
+    [ "$JOBS" -le "${VICTORY_HEAVY_JOBS:-$JOBS}" ] || JOBS="$VICTORY_HEAVY_JOBS"
     # one batch per instruction form (the selector is a substring of the form name); long exhaustive ones first
     LIST="cvt_f2i:vcvtps2dq_ymm cvt_f2i:vcvttps2dq_ymm cvt_f2i:vcvttss2si_r32 cvt_f2i:vcvttss2si_r64 cvt_f2i:vcvtss2si_r32 cvt_f2i:vcvtss2si_r64
 rcp_rsqrt:vrcpps_xmm rcp_rsqrt:vrcpps_ymm rcp_rsqrt:vrsqrtps_xmm rcp_rsqrt:vrsqrtps_ymm rcp_rsqrt:vrcpss rcp_rsqrt:vrsqrtss
@@ -85,7 +93,7 @@ cvt_f2i:*_mem cvt_i2f:*_mem cvt_f2f:*_mem"
     for j in $LIST; do
         while [ "$(jobs -r | wc -l)" -ge "$JOBS" ]; do sleep 1; done
         n=$((n+1)); b="${j%%:*}"; sel="${j#*:}"
-        ( nice -n 10 "$WINE" "$EXE" batch "$b" "$sel" >"$tmp/i.$n" 2>"$tmp/ie.$n" </dev/null; rc=$?
+        ( "$WINE" "$EXE" batch "$b" "$sel" >"$tmp/i.$n" 2>"$tmp/ie.$n" </dev/null; rc=$?
           tr -d '\r' <"$tmp/i.$n" | grep '^RES'
           grep -q '^RES' "$tmp/i.$n" || echo "RES fam=$b batch=$sel mode=run status=CRASH rc=$rc stderr=\"$(tail -c 200 "$tmp/ie.$n" | tr '\n"' '  ')\"" ) >"$tmp/io.$n" &
     done

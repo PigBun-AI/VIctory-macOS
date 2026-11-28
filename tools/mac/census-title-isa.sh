@@ -7,6 +7,8 @@
 # Needs llvm-objdump (llvm-mingw's from VIctory-macOS/target/toolchain, or on PATH) and python3. The game directory is only read.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
+# a heavy job (objdump of the whole title image, python over it): only through heavy.sh (docs/mac/RUN.md "Heavy tasks")
+[ -n "${VICTORY_HEAVY_SLOT:-}" ] || exec bash "$here/heavy.sh" --jobs 1 --label census-title-isa -- sh "$here/census-title-isa.sh" "$@"
 root=$HOME/Documents/GTA6Project
 img=${1:-${VICTORY_CACHE_DIR:-$root/data/shared/cache}/images/victory-image-b99f876b74d4a77f.dll}
 out=${2:-$root/research/census/title-isa-$(date +%Y%m%d)}

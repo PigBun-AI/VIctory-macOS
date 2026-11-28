@@ -66,7 +66,7 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-if [ ${#report_only[@]} -gt 0 ]; then exec "$REPORT" "${report_only[@]}" --frames "$frames"; fi
+if [ ${#report_only[@]} -gt 0 ]; then exec bash "$ROOT/tools/mac/heavy.sh" --jobs 1 --label drop-stats-report -- "$REPORT" "${report_only[@]}" --frames "$frames"; fi
 
 [ -n "$base" ] || base="$G/data/livetr/data"
 [ -d "$base" ] || { echo "no data folder $base (--base)" >&2; exit 1; }
@@ -153,6 +153,6 @@ fi
 {
     echo; echo "== report (first $frames world frames)"
     runs=(); [ -e "$out/warm/run" ] && runs+=("$out/warm/run"); [ -e "$out/cold/run" ] && runs+=("$out/cold/run")
-    "$REPORT" "${runs[@]}" --frames "$frames"
+    bash "$ROOT/tools/mac/heavy.sh" --jobs 1 --label drop-stats-report -- "$REPORT" "${runs[@]}" --frames "$frames"
 } 2>&1 | tee "$out/report.txt"
 echo "all in $out"

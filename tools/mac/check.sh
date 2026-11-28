@@ -11,13 +11,14 @@
 # sync-windows.sh runs this with `sh`.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# Every heavy job of this Mac goes through tools/mac/heavy.sh (docs/mac/RUN.md "Heavy tasks"): a machine-wide budget of job units
+# (the number of cores, 1 while a game holds the game lock, tools/mac/game-lock.sh), nice 19, CARGO_BUILD_JOBS / RAYON_NUM_THREADS /
+# MAKEFLAGS from the slot. Already inside a slot (VICTORY_HEAVY_SLOT set) this just goes on.
+if [ -z "${VICTORY_HEAVY_SLOT:-}" ]; then
+    exec bash "$(dirname "$SELF")/heavy.sh" --jobs 2 --label check -- sh "$SELF" "$@"
+fi
 cd "$(dirname "$0")/../.."
 . tools/mac/env.sh || { echo "check FAILED: environment (tools/mac/env.sh)" >&2; exit 1; }
-# A game is running (it holds the game lock, tools/mac/game-lock.sh): do not disturb its frame times, run niced with fewer jobs
-if [ -z "${VICTORY_CHECK_NICED:-}" ] && bash tools/mac/game-lock.sh held 2>/dev/null; then
-    echo "check.sh: a game holds the game lock: running niced (nice -n 15) with CARGO_BUILD_JOBS=4" >&2
-    exec env VICTORY_CHECK_NICED=1 CARGO_BUILD_JOBS=4 nice -n 15 sh "$SELF" "$@"
-fi
 LOGS="${LOGS:-target/mac-logs}"
 mkdir -p "$LOGS"
 FAILED=""

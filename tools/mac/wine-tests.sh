@@ -22,6 +22,10 @@ cd "$ROOT"
 # --rosetta-probe: not a cargo test. Cross-builds tools/mac/rosetta-probe/probe-wine.c and runs it with a vectored
 # exception handler in its own prefix target/wineprefix-probe (CPU only, no game); see tools/mac/rosetta-probe-wine.sh.
 if [ "${1:-}" = "--rosetta-probe" ]; then shift; exec sh tools/mac/rosetta-probe-wine.sh "$@"; fi
+# cargo test under Wine is a heavy job: only through tools/mac/heavy.sh (docs/mac/RUN.md "Heavy tasks")
+if [ -z "${VICTORY_HEAVY_SLOT:-}" ]; then
+    exec bash "$ROOT/tools/mac/heavy.sh" --jobs 2 --label wine-tests -- sh "$ROOT/tools/mac/wine-tests.sh" "$@"
+fi
 [ -f tools/mac/env.sh ] && . tools/mac/env.sh
 case "$ROOT" in */worktrees/mac/*) _g="$ROOT/../../.." ;; *) _g="$ROOT/.." ;; esac   # worktrees/mac/<name> or next to the main checkouts
 WDIR="${VICTORY_MAC_WINE_DIR:-$_g/VIctory-macOS/target/wine-cx}"

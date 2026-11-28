@@ -712,6 +712,15 @@ commits, a private word list kept outside the repository), binaries and game fil
 `.gitignore` entries for `tools/mac/privacy.local.txt`. Usage in `docs/mac/PUSH.md`. Pure Mac
 tooling, nothing to recycle; delete it if pushes to the fork stop.
 
+### M8 — heavy tasks: `tools/mac/heavy.sh`, `heavy-guard.sh` (launchd), `check.sh` and the other heavy scripts through it
+
+A machine-wide budget of job units (the number of cores; 1 while a game holds the game lock), nice 19, `SIGSTOP`/`SIGCONT` of the
+later jobs when a game starts, slots in `research/.heavy/`, nested calls free (`VICTORY_HEAVY_SLOT`). `heavy-guard.sh` renices (and, at
+load > 30, stops) heavy processes outside a slot, only while the game lock is held. `check.sh`, `wine-tests.sh`, `rosetta-probe*.sh`,
+`census-*.sh` start with an `exec heavy.sh`; `rosetta-probe-wine.sh isa` keeps to `VICTORY_HEAVY_JOBS` probes; `push-check.sh` and the
+no-`check.sh` fallback of `sync-windows.sh` wrap their `cargo`. The old "nice 15 while the lock is held" block of `check.sh` is gone.
+Tests `test-heavy.sh`, `test-heavy-guard.sh`; rules in `docs/mac/RUN.md` "Heavy tasks". Pure Mac tooling, nothing to recycle.
+
 ### I1 — input record and replay by world frame, `VICTORY_KEYS` repeats
 
 *What.* Ported from VIctory-macOS (`gameinput_script.rs`, #423, and the repeat form of #392); all of it is

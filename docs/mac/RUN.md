@@ -106,10 +106,49 @@ makes frame times meaningless.
   **With it nothing protects the data directories: every concurrent run needs its own** (`--data`/`--cache` of its own, or a profile/backend
   combination of its own, and its own `--prefix`); two concurrent runs on the same directory, above all with `--new-game` or `--fresh-data`,
   replace it under each other's feet (that happened once: two `--new-game` replaced `data/livetr-perf-metal/data` at the same moment).
-- Heavy CPU jobs (builds, test runs, `cargo`) belong **between** runs, not during one: `tools/mac/check.sh` runs itself with
-  `nice -n 15` and `CARGO_BUILD_JOBS=4` while the lock is held and says so; other heavy jobs should do the same or wait.
+- Heavy CPU jobs (builds, test runs, `cargo`, censuses, probes) go through `tools/mac/heavy.sh` and are limited to one job unit while a
+  game holds this lock: see "Heavy tasks" below.
 - Every run records the load average (`uptime`) at the start in `start.txt` and every 10 s in `<out>/load.log` (beside `frametime.log`),
   so a frame-time run on a busy machine can be told from a clean one.
+
+## Heavy tasks (`tools/mac/heavy.sh`, `heavy-guard.sh`)
+
+Why: a frame-time run is only worth something on a quiet machine (load reached 337 on 2026-11-28 11:00 and 600 the night before; the
+spoken rule "at most 4 jobs, nice 19" did not hold across hands). The rules are about the **game running**; with no game running the machine is
+not squeezed.
+
+1. **Every heavy task runs through `tools/mac/heavy.sh`** (a build, `cargo test`, `check.sh`, a census, a Rosetta probe, a batch of anything
+   that starts more than a light process): `tools/mac/heavy.sh [--jobs K] [--label TEXT] [--timeout SEC] [--run-timeout SEC] -- COMMAND ...`.
+   `heavy.sh status` shows slots, queue, paused jobs, the budget in force and the load. Both sides (every hand, every worktree) share one state
+   directory, `$VICTORY_HEAVY_DIR`, default `~/Documents/GTA6Project/research/.heavy/` (one slot file per job: pid, pgid, jobs, label, start,
+   cwd, state).
+2. **Budget: with no game running, the number of cores** (`sysctl -n hw.ncpu`; `VICTORY_HEAVY_BUDGET=N` overrides) in job units for all jobs
+   together. A job takes `--jobs K` units (default 1); it starts when the units in use plus K fit, otherwise it queues (first come, first
+   served, the queue is printed every 30 s; `--timeout SEC` gives up with exit 4). K above what is possible runs with the budget in force
+   (when nothing else runs), so it always starts. The command gets `nice -n 19`, `CARGO_BUILD_JOBS=K`, `RAYON_NUM_THREADS=K`,
+   `MAKEFLAGS=-jK`, `RUST_TEST_THREADS=max(K,2)`, `VICTORY_HEAVY_JOBS=K`, `VICTORY_HEAVY_SLOT=<id>`. nice 19 stays whatever the load.
+3. **A game running (the game lock held): the budget drops to 1.** The job that started first goes on; every other running job gets `SIGSTOP`
+   (its process group; `paused` in its slot file) from its own `heavy.sh` within 5 s, and `SIGCONT` when the lock is released. A paused job
+   still counts in the budget, so nothing new starts until the running one is done. A job ending, interrupted (`INT`, `TERM`, `HUP`) or
+   timed out (`--run-timeout`, exit 124) removes its slot and continues its group first: nothing stays stopped. A slot of a dead process is
+   reclaimed by the next job (also by `kill -9`: the kernel hangs up a stopped orphaned group).
+4. **Nested use is free**: inside a slot (`VICTORY_HEAVY_SLOT` set) `heavy.sh` just runs the command, so `check.sh` -> `cargo` -> a build
+   script that calls `heavy.sh` again cannot deadlock. A script that is a heavy task begins with
+   `[ -n "${VICTORY_HEAVY_SLOT:-}" ] || exec bash "$here/heavy.sh" --jobs N --label NAME -- sh "$0" "$@"`; `check.sh`, `wine-tests.sh`,
+   `rosetta-probe*.sh`, `census-title-*.sh`, `census-cmpxchg-flags.sh` do (`rosetta-probe-wine.sh isa` starts at most `VICTORY_HEAVY_JOBS`
+   `probe-wine.exe` at once), and `push-check.sh` (policy build), `sync-windows.sh` (the check fallback) wrap their `cargo`.
+5. **`run.sh` (the game) does not go through `heavy.sh`**: it takes the game lock (and must not be niced). So do the scripts that only drive
+   `run.sh` (`play.sh`, `drop-ab.sh` runs, `rt-builder-accept.sh run`, `accept-batch.sh`): their game runs are under the lock, their log
+   reading is light (`drop-ab.sh`'s report goes through `heavy.sh`).
+6. **The guard, `tools/mac/heavy-guard.sh`** (launchd agent `com.gta6project.heavy-guard`, a scan every 10 s, one `ps`) catches what ignores the
+   rule. **Only while the game lock is held** it acts; with the lock free it does nothing. It `renice`s to 19 every heavy process that is
+   not in a `heavy.sh` slot (command name `cargo rustc rustdoc victory-census victory-shader-exec probe-wine.exe clang clang++ cc1 cc1plus ld
+   ld64 ld64.lld lld rust-lld`, a cargo test binary; configurable: `VICTORY_GUARD_NAMES`, `VICTORY_GUARD_ARGS`, `<state dir>/guard.conf`), and
+   when the 1-minute load average is above 30 it sends them `SIGSTOP`, and `SIGCONT` when the lock is released or the load is under 20. It never
+   touches the game (`victory.exe run --execute`), `wineserver`, `winedevice`, any `run.sh` and what runs below one or below the lock holder,
+   never kills, and only continues what it stopped itself. Each action is a line of `<state dir>/guard.log` (time, pid, command, action, load,
+   lock). `heavy-guard.sh install|uninstall|status`; install refuses if an agent of that label is already loaded.
+Tests: `tools/mac/test-heavy.sh`, `tools/mac/test-heavy-guard.sh` (temp state directory and fake lock, only their own fake processes).
 
 ## Data directories
 

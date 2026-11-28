@@ -61,7 +61,9 @@ else
             echo "   note: no tools/mac/env.sh in this checkout; using the cargo on PATH"
         fi
         command -v cargo >/dev/null 2>&1 || { echo "   cargo not found (tools/mac/env.sh did not help)"; exit 2; }
-        cargo xtask policy 2>&1 | sed 's/^/   /'
+        # building xtask is a heavy job: through heavy.sh (docs/mac/RUN.md "Heavy tasks") where this checkout has it
+        _hv=""; [ -f "$ROOT/tools/mac/heavy.sh" ] && _hv="bash $ROOT/tools/mac/heavy.sh --jobs 1 --label push-check-policy --"
+        $_hv cargo xtask policy 2>&1 | sed 's/^/   /'
         exit "${PIPESTATUS[0]}"
     ); then echo "   policy: ok"; else echo "   BLOCK (a) cargo xtask policy failed"; RC=1; fi
 fi

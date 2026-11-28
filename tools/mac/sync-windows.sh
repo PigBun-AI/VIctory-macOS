@@ -527,10 +527,12 @@ else
         ( cd "$WT" && LOGS="$LOGS" $TO sh tools/mac/check.sh ) > "$LOGS/check.out" 2>&1; CHECK_RC=$?
     else
         # equivalent of check.sh for trees that do not have it
+        # (heavy jobs: through tools/mac/heavy.sh, docs/mac/RUN.md "Heavy tasks")
+        HV="bash $SCRIPT_DIR/heavy.sh --jobs 2 --label sync-check --"
         ( cd "$WT" && . tools/mac/env.sh && \
-          { cargo build --workspace --locked > "$LOGS/native-build.log" 2>&1; \
-            cargo test --workspace --locked --no-fail-fast > "$LOGS/native-test.log" 2>&1; \
-            cargo build --release -p victory --target x86_64-pc-windows-gnullvm --locked > "$LOGS/cross-build.log" 2>&1; \
+          { $HV cargo build --workspace --locked > "$LOGS/native-build.log" 2>&1; \
+            $HV cargo test --workspace --locked --no-fail-fast > "$LOGS/native-test.log" 2>&1; \
+            $HV cargo build --release -p victory --target x86_64-pc-windows-gnullvm --locked > "$LOGS/cross-build.log" 2>&1; \
             ls -l target/x86_64-pc-windows-gnullvm/release/victory.exe; } ) > "$LOGS/check.out" 2>&1; CHECK_RC=$?
     fi
     ELAPSED=$(( $(date +%s) - T0 ))
