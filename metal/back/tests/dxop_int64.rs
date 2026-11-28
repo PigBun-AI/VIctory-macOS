@@ -66,33 +66,59 @@ const LOAD: &str = "uint i = t.x; uint64_t a = ((uint64_t)I.Load(i*16+4) << 32) 
   int64_t sa = (int64_t)a, sb = (int64_t)b;\n";
 
 fn put(slot: usize, expr: &str) -> String {
-    format!("{{ uint64_t r = {expr}; O.Store2((i*16+{slot})*8, uint2((uint)r, (uint)(r >> 32))); }}\n")
+    format!(
+        "{{ uint64_t r = {expr}; O.Store2((i*16+{slot})*8, uint2((uint)r, (uint)(r >> 32))); }}\n"
+    )
 }
 
+type Ran = (Vec<(u64, u64)>, Vec<u32>);
+
 /// Runs one program over every pair and returns the words per pair.
-fn run(rig: &Rig, name: &str, body: &str, n_out: usize, ops: &[&str]) -> Option<(Vec<(u64, u64)>, Vec<u32>)> {
+fn run(rig: &Rig, name: &str, body: &str, n_out: usize, ops: &[&str]) -> Option<Ran> {
     let pairs = operands();
     let src = format!(
         "[numthreads(64,1,1)] void main(uint3 t : SV_DispatchThreadID) {{\n{LOAD}{body}}}\n"
     );
     let p = rig.program(name, &src, ops)?;
-    let got = rig.run(&p, [(pairs.len() / 64) as u32, 1, 1], [64, 1, 1], &[], &words(&pairs), pairs.len() * n_out * 2);
+    let got = rig.run(
+        &p,
+        [(pairs.len() / 64) as u32, 1, 1],
+        [64, 1, 1],
+        &[],
+        &words(&pairs),
+        pairs.len() * n_out * 2,
+    );
     Some((pairs, got))
 }
 
-fn check(name: &str, pairs: &[(u64, u64)], got: &[u32], n_out: usize, want: impl Fn(u64, u64) -> Vec<Option<u64>>) {
+fn check(
+    name: &str,
+    pairs: &[(u64, u64)],
+    got: &[u32],
+    n_out: usize,
+    want: impl Fn(u64, u64) -> Vec<Option<u64>>,
+) {
     let mut bad = Vec::new();
     for (i, &(a, b)) in pairs.iter().enumerate() {
         let w = want(a, b);
         for (k, w) in w.iter().enumerate() {
             let Some(w) = w else { continue };
-            let g = u64::from(got[(i * n_out + k) * 2]) | (u64::from(got[(i * n_out + k) * 2 + 1]) << 32);
+            let g = u64::from(got[(i * n_out + k) * 2])
+                | (u64::from(got[(i * n_out + k) * 2 + 1]) << 32);
             if g != *w {
-                bad.push(format!("result {k} of ({a:#x}, {b:#x}): got {g:#x} want {w:#x}"));
+                bad.push(format!(
+                    "result {k} of ({a:#x}, {b:#x}): got {g:#x} want {w:#x}"
+                ));
             }
         }
     }
-    assert!(bad.is_empty(), "{name}: {} of {} results differ; first: {:?}", bad.len(), pairs.len() * n_out, &bad[..bad.len().min(4)]);
+    assert!(
+        bad.is_empty(),
+        "{name}: {} of {} results differ; first: {:?}",
+        bad.len(),
+        pairs.len() * n_out,
+        &bad[..bad.len().min(4)]
+    );
 }
 
 /// add, sub, mul, and, or, xor, not, neg: wrapping.
@@ -111,7 +137,9 @@ fn i64_add_sub_mul_and_bitwise() {
     ]
     .concat();
     // `put` writes slot k at word offset (i*16 + k) * 8 bytes: n_out is 16 records of 64 bits per pair
-    let Some((pairs, got)) = run(&rig, "i64_arith", &body, 16, &[]) else { return };
+    let Some((pairs, got)) = run(&rig, "i64_arith", &body, 16, &[]) else {
+        return;
+    };
     check("arith", &pairs, &got, 16, |a, b| {
         vec![
             Some(a.wrapping_add(b)),
@@ -141,7 +169,9 @@ fn i64_shifts_use_the_low_six_bits_of_the_count() {
         put(5, "(uint64_t)(sa >> (uint)b)"),
     ]
     .concat();
-    let Some((pairs, got)) = run(&rig, "i64_shift", &body, 16, &[]) else { return };
+    let Some((pairs, got)) = run(&rig, "i64_shift", &body, 16, &[]) else {
+        return;
+    };
     check("shift", &pairs, &got, 16, |a, b| {
         let c = (b & 63) as u32;
         let c32 = (b as u32) & 63;
@@ -173,7 +203,9 @@ fn i64_compare_select_and_conversions() {
         put(7, "(uint64_t)(uint)(a >> 17)"),
     ]
     .concat();
-    let Some((pairs, got)) = run(&rig, "i64_cmp", &body, 16, &[]) else { return };
+    let Some((pairs, got)) = run(&rig, "i64_cmp", &body, 16, &[]) else {
+        return;
+    };
     check("compare", &pairs, &got, 16, |a, b| {
         vec![
             Some(u64::from(a < b)),
@@ -203,7 +235,9 @@ fn i64_division_and_remainder() {
         "}\n".to_string(),
     ]
     .concat();
-    let Some((pairs, got)) = run(&rig, "i64_div", &body, 16, &[]) else { return };
+    let Some((pairs, got)) = run(&rig, "i64_div", &body, 16, &[]) else {
+        return;
+    };
     check("division", &pairs, &got, 16, |a, b| {
         let (sa, sb) = (a as i64, b as i64);
         let u = b != 0;
@@ -228,12 +262,39 @@ fn i64_division_and_remainder() {
 fn i64_bit_counting_and_the_find_first_bit_defect() {
     let rig = rig();
     let body = [put(0, "countbits(a)"), put(1, "reversebits(a)")].concat();
-    let Some((pairs, got)) = run(&rig, "i64_bits", &body, 16, &["dx.op.unaryBits.i64", "dx.op.unary.i64"]) else { return };
-    check("bits", &pairs, &got, 16, |a, _| vec![Some(u64::from(a.count_ones())), Some(a.reverse_bits())]);
-    for (n, e) in [("firstbitlow", "firstbitlow(a)"), ("firstbithigh", "firstbithigh(a)"), ("sfirstbithigh", "firstbithigh(sa)")] {
-        let src = format!("[numthreads(64,1,1)] void main(uint3 t : SV_DispatchThreadID) {{\n{LOAD}{}}}\n", put(0, e));
-        let Some(dxil) = dxil_checked(&format!("i64b_{n}"), "cs_6_6", &format!("{PRELUDE}{src}"), &["dx.op.unaryBits.i64"]) else { return };
+    let Some((pairs, got)) = run(
+        &rig,
+        "i64_bits",
+        &body,
+        16,
+        &["dx.op.unaryBits.i64", "dx.op.unary.i64"],
+    ) else {
+        return;
+    };
+    check("bits", &pairs, &got, 16, |a, _| {
+        vec![Some(u64::from(a.count_ones())), Some(a.reverse_bits())]
+    });
+    for (n, e) in [
+        ("firstbitlow", "firstbitlow(a)"),
+        ("firstbithigh", "firstbithigh(a)"),
+        ("sfirstbithigh", "firstbithigh(sa)"),
+    ] {
+        let src = format!(
+            "[numthreads(64,1,1)] void main(uint3 t : SV_DispatchThreadID) {{\n{LOAD}{}}}\n",
+            put(0, e)
+        );
+        let Some(dxil) = dxil_checked(
+            &format!("i64b_{n}"),
+            "cs_6_6",
+            &format!("{PRELUDE}{src}"),
+            &["dx.op.unaryBits.i64"],
+        ) else {
+            return;
+        };
         let r = rig.try_build(&dxil, 0);
-        assert!(r.as_ref().is_err_and(|e| e.contains("materializeAll")), "{n}: {r:?}");
+        assert!(
+            r.as_ref().is_err_and(|e| e.contains("materializeAll")),
+            "{n}: {r:?}"
+        );
     }
 }

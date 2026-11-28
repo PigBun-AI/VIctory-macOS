@@ -75,7 +75,10 @@ fn atomic_binops_on_a_uav_commute_to_the_cpu_total() {
     let want: Vec<u32> = (0..n as u32).map(|i| init.wrapping_add(i)).collect();
     let mut want_sorted = want.clone();
     want_sorted.sort_unstable();
-    assert_eq!(seen, want_sorted, "the originals returned by InterlockedAdd(1) are distinct, consecutive");
+    assert_eq!(
+        seen, want_sorted,
+        "the originals returned by InterlockedAdd(1) are distinct, consecutive"
+    );
 }
 
 /// `InterlockedExchange` and `InterlockedCompareExchange`, one thread:
@@ -101,7 +104,10 @@ fn compare_exchange_returns_the_original_and_only_writes_on_a_match() {
     };
     let got = rig.run(&p, [1, 1, 1], [1, 1, 1], &[], &[], 16);
     // original / memory after: match 5->9; mismatch (9 != 5); exchange 77 returns 9; CAS on all-ones; no match
-    assert_eq!(&got[4..14], &[5, 9, 9, 9, 9, 77, 0xFFFF_FFFF, 3, 0x8000_0000, 0x8000_0000]);
+    assert_eq!(
+        &got[4..14],
+        &[5, 9, 9, 9, 9, 77, 0xFFFF_FFFF, 3, 0x8000_0000, 0x8000_0000]
+    );
 }
 
 /// A compare-exchange loop makes an increment; 512 threads do it on one word.
@@ -160,7 +166,11 @@ fn group_shared_atomics_total_up() {
     };
     let got = rig.run(&p, [6, 1, 1], [128, 1, 1], &[], &[], 18);
     for g in 0..6 {
-        assert_eq!(&got[g * 3..g * 3 + 3], &[128 * 129 / 2, 127 * 3, 0xFFFF_FFFF], "group {g}");
+        assert_eq!(
+            &got[g * 3..g * 3 + 3],
+            &[128 * 129 / 2, 127 * 3, 0xFFFF_FFFF],
+            "group {g}"
+        );
     }
 }
 
@@ -185,7 +195,11 @@ fn pixel_shader_atomics_skip_helper_lanes() {
     };
     let start = 0xDEAD_BEEFu32;
     let got = rig.run_pixels(&p, [8, 8], &[], &[], 16 + 64, None);
-    assert_eq!(got[0], start.wrapping_add(36), "one atomic per covered pixel");
+    assert_eq!(
+        got[0],
+        start.wrapping_add(36),
+        "one atomic per covered pixel"
+    );
     let mut tickets = Vec::new();
     for j in 0..8usize {
         for i in 0..8usize {
@@ -198,5 +212,10 @@ fn pixel_shader_atomics_skip_helper_lanes() {
         }
     }
     tickets.sort_unstable();
-    assert_eq!(tickets, (0..36u32).map(|k| start.wrapping_add(k)).collect::<Vec<_>>());
+    assert_eq!(
+        tickets,
+        (0..36u32)
+            .map(|k| start.wrapping_add(k))
+            .collect::<Vec<_>>()
+    );
 }

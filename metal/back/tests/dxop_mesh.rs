@@ -83,7 +83,12 @@ fn a_mesh_shader_emits_vertices_indices_and_attributes() {
                 }
             }
         }
-        assert!(bad.is_empty(), "tris={tris} k1={k1:#x}: {} pixels differ, first: {:?}", bad.len(), &bad[..bad.len().min(4)]);
+        assert!(
+            bad.is_empty(),
+            "tris={tris} k1={k1:#x}: {} pixels differ, first: {:?}",
+            bad.len(),
+            &bad[..bad.len().min(4)]
+        );
     }
 }
 
@@ -122,12 +127,23 @@ fn mesh_groups_have_their_own_ids_and_counts() {
             }
             wrote += 1;
             let g = w / 100;
-            assert_eq!(w % 100, 0, "pixel ({i},{j}): flat value is the provoking vertex's (tid 0): {w}");
-            assert_eq!(i / 2, g as usize, "pixel ({i},{j}) belongs to the band of group {g}");
+            assert_eq!(
+                w % 100,
+                0,
+                "pixel ({i},{j}): flat value is the provoking vertex's (tid 0): {w}"
+            );
+            assert_eq!(
+                i / 2,
+                g as usize,
+                "pixel ({i},{j}) belongs to the band of group {g}"
+            );
         }
     }
     assert!(wrote >= 4, "every group drew pixels: {wrote}");
     for g in 0..4 {
-        assert!((0..N).any(|j| got[j * N + 2 * g] == g as u32 * 100), "group {g} drew");
+        assert!(
+            (0..N).any(|j| got[j * N + 2 * g] == g as u32 * 100),
+            "group {g} drew"
+        );
     }
 }

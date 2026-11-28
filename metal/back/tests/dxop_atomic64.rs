@@ -8,8 +8,8 @@ mod common_dxop;
 mod common_msc;
 
 use common_dxop::*;
-use victory_metal_back::msc::flags;
 use victory_metal_back::format::dxgi;
+use victory_metal_back::msc::flags;
 use victory_metal_back::texture::{TextureDesc, ViewDim, ViewSpec};
 
 const W: usize = 4;
@@ -27,11 +27,21 @@ fn run_op(rig: &Rig, op: &str, init: u64, ulong_texture: bool) -> Option<Vec<u64
            {op}(t[uint2(id.x & 3, id.y & 3)], v); }}\n"
     );
     let _ = ulong_texture;
-    let dxil = dxil_checked(&format!("a64_{op}"), "cs_6_6", &format!("{PRELUDE}{body}"), &["dx.op.atomicBinOp.i64"])?;
+    let dxil = dxil_checked(
+        &format!("a64_{op}"),
+        "cs_6_6",
+        &format!("{PRELUDE}{body}"),
+        &["dx.op.atomicBinOp.i64"],
+    )?;
     let p = rig.prog_with(&dxil, flags::HEAP_INDEXED | flags::SAMPLER_HEAP_INDEXED);
     let t = rig
         .d
-        .create_texture(&TextureDesc::tex2d(dxgi::R32G32_UINT, W as u32, W as u32, SRV | UAV))
+        .create_texture(&TextureDesc::tex2d(
+            dxgi::R32G32_UINT,
+            W as u32,
+            W as u32,
+            SRV | UAV,
+        ))
         .unwrap();
     let bytes: Vec<u8> = (0..W * W).flat_map(|_| init.to_le_bytes()).collect();
     upload(&rig.d, &rig.q, &t, 0, &bytes, (W * 8) as u32);
@@ -39,7 +49,11 @@ fn run_op(rig: &Rig, op: &str, init: u64, ulong_texture: bool) -> Option<Vec<u64
     let hs = heaps(&rig.d, &[view], &[]);
     rig.run_heaps(&p, [1, 1, 1], [8, 8, 1], &[], &[], 1, Some((&hs.0, &hs.1)));
     let out = download(&rig.d, &rig.q, &t, (W * 8) as u32);
-    Some(out.chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect())
+    Some(
+        out.chunks(8)
+            .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+            .collect(),
+    )
 }
 
 /// What a 64-bit `InterlockedMax` / `InterlockedMin` leaves in each of the
@@ -47,14 +61,24 @@ fn run_op(rig: &Rig, op: &str, init: u64, ulong_texture: bool) -> Option<Vec<u64
 #[test]
 fn texture_atomic_max_and_min_on_64_bits() {
     let rig = rig();
-    for (op, init) in [("InterlockedMax", 0u64), ("InterlockedMin", u64::MAX), ("InterlockedMax", 0x0000_0005_ffff_ffff)] {
-        let Some(got) = run_op(&rig, op, init, true) else { return };
+    for (op, init) in [
+        ("InterlockedMax", 0u64),
+        ("InterlockedMin", u64::MAX),
+        ("InterlockedMax", 0x0000_0005_ffff_ffff),
+    ] {
+        let Some(got) = run_op(&rig, op, init, true) else {
+            return;
+        };
         let mut want = vec![init; W * W];
         for y in 0..8u32 {
             for x in 0..8u32 {
                 let i = ((y & 3) as usize) * W + (x & 3) as usize;
                 let v = operand(x, y);
-                want[i] = if op == "InterlockedMax" { want[i].max(v) } else { want[i].min(v) };
+                want[i] = if op == "InterlockedMax" {
+                    want[i].max(v)
+                } else {
+                    want[i].min(v)
+                };
             }
         }
         assert_eq!(got, want, "{op} from {init:#x}");
@@ -86,33 +110,79 @@ fn msc_takes_64_bit_atomic_min_max_without_the_original_and_nothing_else() {
     };
     let tex2d = "RWTexture2D<uint64_t> t = ResourceDescriptorHeap[0];";
     for (name, decl, stmt) in [
-        ("tex1d_max", "RWTexture1D<uint64_t> t = ResourceDescriptorHeap[0];", "InterlockedMax(t[id.x], v);"),
+        (
+            "tex1d_max",
+            "RWTexture1D<uint64_t> t = ResourceDescriptorHeap[0];",
+            "InterlockedMax(t[id.x], v);",
+        ),
         ("tex2d_max", tex2d, "InterlockedMax(t[id.xy], v);"),
         ("tex2d_min", tex2d, "InterlockedMin(t[id.xy], v);"),
-        ("tex2darr_max", "RWTexture2DArray<uint64_t> t = ResourceDescriptorHeap[0];", "InterlockedMax(t[id.xyz], v);"),
-        ("tex3d_max", "RWTexture3D<uint64_t> t = ResourceDescriptorHeap[0];", "InterlockedMax(t[id.xyz], v);"),
-        ("typedbuf_max", "RWBuffer<uint64_t> t = ResourceDescriptorHeap[0];", "InterlockedMax(t[id.x], v);"),
-        ("structbuf_max", "RWStructuredBuffer<uint64_t> t = ResourceDescriptorHeap[0];", "InterlockedMax(t[id.x], v);"),
-        ("rawbuf_max", "RWByteAddressBuffer t = ResourceDescriptorHeap[0];", "uint64_t r; t.InterlockedMax64(id.x * 8, v, r);"),
+        (
+            "tex2darr_max",
+            "RWTexture2DArray<uint64_t> t = ResourceDescriptorHeap[0];",
+            "InterlockedMax(t[id.xyz], v);",
+        ),
+        (
+            "tex3d_max",
+            "RWTexture3D<uint64_t> t = ResourceDescriptorHeap[0];",
+            "InterlockedMax(t[id.xyz], v);",
+        ),
+        (
+            "typedbuf_max",
+            "RWBuffer<uint64_t> t = ResourceDescriptorHeap[0];",
+            "InterlockedMax(t[id.x], v);",
+        ),
+        (
+            "structbuf_max",
+            "RWStructuredBuffer<uint64_t> t = ResourceDescriptorHeap[0];",
+            "InterlockedMax(t[id.x], v);",
+        ),
+        (
+            "rawbuf_max",
+            "RWByteAddressBuffer t = ResourceDescriptorHeap[0];",
+            "uint64_t r; t.InterlockedMax64(id.x * 8, v, r);",
+        ),
     ] {
-        let Some(r) = takes(name, decl, stmt) else { return };
+        let Some(r) = takes(name, decl, stmt) else {
+            return;
+        };
         assert_eq!(r, Ok(()), "{name} is converted and built");
     }
     for (name, stmt) in [
-        ("tex2d_max_original", "uint64_t r; InterlockedMax(t[id.xy], v, r); O.Store2(0, uint2((uint)r, (uint)(r >> 32)));"),
+        (
+            "tex2d_max_original",
+            "uint64_t r; InterlockedMax(t[id.xy], v, r); O.Store2(0, uint2((uint)r, (uint)(r >> 32)));",
+        ),
         ("tex2d_and", "InterlockedAnd(t[id.xy], v);"),
         ("tex2d_or", "InterlockedOr(t[id.xy], v);"),
         ("tex2d_xor", "InterlockedXor(t[id.xy], v);"),
         ("tex2d_add", "InterlockedAdd(t[id.xy], v);"),
-        ("tex2d_exchange", "uint64_t r; InterlockedExchange(t[id.xy], v, r);"),
+        (
+            "tex2d_exchange",
+            "uint64_t r; InterlockedExchange(t[id.xy], v, r);",
+        ),
     ] {
-        let Some(r) = takes(name, tex2d, stmt) else { return };
+        let Some(r) = takes(name, tex2d, stmt) else {
+            return;
+        };
         let e = r.expect_err(name);
-        assert!(e.contains("unsupported instruction") && e.contains("atomicBinOp.i64"), "{name}: {e}");
+        assert!(
+            e.contains("unsupported instruction") && e.contains("atomicBinOp.i64"),
+            "{name}: {e}"
+        );
     }
-    let Some(r) = takes("tex2d_cas", tex2d, "uint64_t r; InterlockedCompareExchange(t[id.xy], 1ull, v, r);") else { return };
+    let Some(r) = takes(
+        "tex2d_cas",
+        tex2d,
+        "uint64_t r; InterlockedCompareExchange(t[id.xy], 1ull, v, r);",
+    ) else {
+        return;
+    };
     let e = r.expect_err("compare-exchange");
-    assert!(e.contains("atomic_compare_exchange_weak_explicit_texture_2d"), "{e}");
+    assert!(
+        e.contains("atomic_compare_exchange_weak_explicit_texture_2d"),
+        "{e}"
+    );
 }
 
 /// In a pixel shader (677 of the 679 programs): a 64-bit `InterlockedMax`
@@ -147,7 +217,10 @@ fn pixel_shader_64_bit_atomic_max_skips_helper_lanes() {
     let hs = heaps(&rig.d, &[view], &[]);
     rig.run_pixels(&p, [8, 8], &[], &[], 1, Some((&hs.0, &hs.1)));
     let out = download(&rig.d, &rig.q, &t, 64);
-    let got: Vec<u64> = out.chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+    let got: Vec<u64> = out
+        .chunks(8)
+        .map(|c| u64::from_le_bytes(c.try_into().unwrap()))
+        .collect();
     for y in 0..8usize {
         for x in 0..8usize {
             let g = got[y * 8 + x];

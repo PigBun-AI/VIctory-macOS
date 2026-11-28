@@ -17,10 +17,10 @@ mod common_dxop;
 mod common_msc;
 
 use common_dxop::*;
-use victory_metal_back::sampler::{Address, Compare, Filter, SamplerSpec};
-use victory_metal_back::texture::{ViewDim, ViewSpec};
 use victory_metal_back::format::dxgi;
+use victory_metal_back::sampler::{Address, Compare, Filter, SamplerSpec};
 use victory_metal_back::texture::TextureDesc;
+use victory_metal_back::texture::{ViewDim, ViewSpec};
 
 const N: usize = 8;
 
@@ -53,8 +53,16 @@ fn discard_stops_the_pixel_writes_that_follow() {
         for i in 0..N * N {
             let (x, y) = px(i);
             let disc = ((x + y * 3) % 4) as u32 == k0;
-            let want = [1, if disc { 0xDEAD_BEEF } else { 2 }, if disc { 0xDEAD_BEEF } else { 3 }];
-            assert_eq!(&got[i * 3..i * 3 + 3], &want, "k0={k0} pixel ({x},{y}) discard={disc}");
+            let want = [
+                1,
+                if disc { 0xDEAD_BEEF } else { 2 },
+                if disc { 0xDEAD_BEEF } else { 3 },
+            ];
+            assert_eq!(
+                &got[i * 3..i * 3 + 3],
+                &want,
+                "k0={k0} pixel ({x},{y}) discard={disc}"
+            );
         }
     }
 }
@@ -111,7 +119,12 @@ fn uncovered_pixels_are_helper_lanes_the_quad_can_read() {
             bad.push(format!("({x},{y}) got {r:x?} want {want:x?}"));
         }
     }
-    assert!(bad.is_empty(), "{} pixels differ, first: {:?}", bad.len(), &bad[..bad.len().min(4)]);
+    assert!(
+        bad.is_empty(),
+        "{} pixels differ, first: {:?}",
+        bad.len(),
+        &bad[..bad.len().min(4)]
+    );
 }
 
 /// What `discard` does to the quad (SM 6.x: a discarded lane becomes a
@@ -149,22 +162,34 @@ fn a_discarded_lane_keeps_the_values_it_made_before_the_discard() {
             if !dis {
                 // The helper flags the neighbours see (bit 0 across X, 1 across Y, 2 diagonal):
                 // only the discarded lane is a helper.
-                let d = |xx: usize, yy: usize| u32::from((xx & 1) as u32 == k0 && (yy & 1) as u32 == k1);
+                let d = |xx: usize, yy: usize| {
+                    u32::from((xx & 1) as u32 == k0 && (yy & 1) as u32 == k1)
+                };
                 let want = d(x ^ 1, y) | (d(x, y ^ 1) << 1) | (d(x ^ 1, y ^ 1) << 2);
                 odd += usize::from(got[256 + i] != want);
             }
             let r = &got[i * 4..i * 4 + 4];
             if dis {
-                assert!(r.iter().all(|&w| w == 0xDEAD_BEEF), "({x},{y}) discarded lane stored {r:x?}");
+                assert!(
+                    r.iter().all(|&w| w == 0xDEAD_BEEF),
+                    "({x},{y}) discarded lane stored {r:x?}"
+                );
                 continue;
             }
             let v = |xx: usize, yy: usize| 100 + (yy * 8 + xx) as u32;
-            assert_eq!(r, &[0, v(x ^ 1, y), v(x, y ^ 1), v(x ^ 1, y ^ 1)], "discard lane ({k0},{k1}) pixel ({x},{y})");
+            assert_eq!(
+                r,
+                &[0, v(x ^ 1, y), v(x, y ^ 1), v(x ^ 1, y ^ 1)],
+                "discard lane ({k0},{k1}) pixel ({x},{y})"
+            );
         }
         // Measured, not asserted: a quad read of `IsHelperLane()` made after the discard
         // does not always show the discarded lane alone (on the M5 Max some quads show
         // one more helper); see the S-D-0xx note.
-        eprintln!("discard lane ({k0},{k1}): {odd} of {} live pixels read a different helper set than the discarded lane alone", N * N * 3 / 4);
+        eprintln!(
+            "discard lane ({k0},{k1}): {odd} of {} live pixels read a different helper set than the discarded lane alone",
+            N * N * 3 / 4
+        );
     }
 }
 
@@ -230,7 +255,11 @@ fn sample_sample_bias_and_calculate_lod_in_a_pixel_shader() {
     let Some(p) = rig.pixel_program(
         "px_lod",
         LOD_PS,
-        &["dx.op.sample.f32", "dx.op.sampleBias.f32", "dx.op.calculateLOD.f32"],
+        &[
+            "dx.op.sample.f32",
+            "dx.op.sampleBias.f32",
+            "dx.op.calculateLOD.f32",
+        ],
         true,
     ) else {
         return;
@@ -251,7 +280,14 @@ fn sample_sample_bias_and_calculate_lod_in_a_pixel_shader() {
         (0.5, 0.5, 1.0),
         (8.0, 1.0, 0.0),
     ] {
-        let got = rig.run_pixels(&p, [8, 8], &[sx.to_bits(), sy.to_bits(), bias.to_bits()], &[], 64 * 4, Some((&hs.0, &hs.1)));
+        let got = rig.run_pixels(
+            &p,
+            [8, 8],
+            &[sx.to_bits(), sy.to_bits(), bias.to_bits()],
+            &[],
+            64 * 4,
+            Some((&hs.0, &hs.1)),
+        );
         let lod = sx.max(sy).log2();
         let clamped = lod.clamp(0.0, 3.0);
         let biased = (lod + bias).clamp(0.0, 3.0);
@@ -263,10 +299,28 @@ fn sample_sample_bias_and_calculate_lod_in_a_pixel_shader() {
         for i in 0..64 {
             let (x, y) = px(i);
             let what = format!("step ({sx},{sy}) bias {bias} pixel ({x},{y})");
-            assert!(close(g(i, 0), 1.0 + clamped, 0.0625), "{what}: Sample {} want {}", g(i, 0), 1.0 + clamped);
-            assert!(close(g(i, 1), 1.0 + biased, 0.0625), "{what}: SampleBias {} want {}", g(i, 1), 1.0 + biased);
-            assert!(close(g(i, 2), clamped, 0.0625), "{what}: CalculateLOD {} want {clamped}", g(i, 2));
-            assert!(close(g(i, 3), lod, 0.0625), "{what}: unclamped LOD {} want {lod}", g(i, 3));
+            assert!(
+                close(g(i, 0), 1.0 + clamped, 0.0625),
+                "{what}: Sample {} want {}",
+                g(i, 0),
+                1.0 + clamped
+            );
+            assert!(
+                close(g(i, 1), 1.0 + biased, 0.0625),
+                "{what}: SampleBias {} want {}",
+                g(i, 1),
+                1.0 + biased
+            );
+            assert!(
+                close(g(i, 2), clamped, 0.0625),
+                "{what}: CalculateLOD {} want {clamped}",
+                g(i, 2)
+            );
+            assert!(
+                close(g(i, 3), lod, 0.0625),
+                "{what}: unclamped LOD {} want {lod}",
+                g(i, 3)
+            );
         }
     }
     eprintln!("{}", report.join("\n"));
@@ -304,7 +358,12 @@ fn sample_grad_in_a_pixel_shader() {
         let got = rig.run_pixels(
             &p,
             [8, 8],
-            &[dx[0].to_bits(), dx[1].to_bits(), dy[0].to_bits(), dy[1].to_bits()],
+            &[
+                dx[0].to_bits(),
+                dx[1].to_bits(),
+                dy[0].to_bits(),
+                dy[1].to_bits(),
+            ],
             &[],
             64,
             Some((&hs.0, &hs.1)),
@@ -317,7 +376,10 @@ fn sample_grad_in_a_pixel_shader() {
         let want = 1.0 + texels.log2().clamp(0.0, 3.0);
         for (i, w) in got.iter().enumerate() {
             let r = f32::from_bits(*w);
-            assert!(close(r, want, 0.0625), "grad {dx:?} {dy:?} pixel {i}: {r} want {want}");
+            assert!(
+                close(r, want, 0.0625),
+                "grad {dx:?} {dy:?} pixel {i}: {r} want {want}"
+            );
         }
     }
 }
@@ -347,7 +409,10 @@ fn gather_and_comparison_sampling_in_a_pixel_shader() {
     };
     let t = gather_texture(&rig.d, &rig.q);
     let tv = t.view(&ViewSpec::whole(ViewDim::D2)).unwrap();
-    let dt = rig.d.create_texture(&TextureDesc::tex2d(40, 4, 4, DS | SRV)).unwrap();
+    let dt = rig
+        .d
+        .create_texture(&TextureDesc::tex2d(40, 4, 4, DS | SRV))
+        .unwrap();
     let depth = |x: i32, y: i32| 0.05f32 + 0.05 * (x.clamp(0, 3) + 4 * y.clamp(0, 3)) as f32;
     let mut dv = Vec::new();
     for y in 0..4 {
@@ -359,11 +424,36 @@ fn gather_and_comparison_sampling_in_a_pixel_shader() {
     let mut vs = ViewSpec::whole(ViewDim::D2);
     vs.format = dxgi::R32_FLOAT;
     let dview = dt.view(&vs).unwrap();
-    let point = SamplerSpec { min: Filter::Nearest, mag: Filter::Nearest, mip: None, address: [Address::ClampToEdge; 3], ..Default::default() };
-    let cmp = SamplerSpec { min: Filter::Linear, mag: Filter::Linear, mip: None, address: [Address::ClampToEdge; 3], compare: Some(Compare::LessEqual), ..Default::default() };
+    let point = SamplerSpec {
+        min: Filter::Nearest,
+        mag: Filter::Nearest,
+        mip: None,
+        address: [Address::ClampToEdge; 3],
+        ..Default::default()
+    };
+    let cmp = SamplerSpec {
+        min: Filter::Linear,
+        mag: Filter::Linear,
+        mip: None,
+        address: [Address::ClampToEdge; 3],
+        compare: Some(Compare::LessEqual),
+        ..Default::default()
+    };
     let hs = heaps(&rig.d, &[tv, dview], &[point, cmp]);
-    for (uv, r) in [([0.30f32, 0.40f32], 0.40f32), ([0.60, 0.80], 0.5), ([0.05, 0.05], 0.1), ([0.97, 0.97], 0.9)] {
-        let got = rig.run_pixels(&p, [8, 8], &[uv[0].to_bits(), uv[1].to_bits(), r.to_bits()], &[], 64 * 8, Some((&hs.0, &hs.1)));
+    for (uv, r) in [
+        ([0.30f32, 0.40f32], 0.40f32),
+        ([0.60, 0.80], 0.5),
+        ([0.05, 0.05], 0.1),
+        ([0.97, 0.97], 0.9),
+    ] {
+        let got = rig.run_pixels(
+            &p,
+            [8, 8],
+            &[uv[0].to_bits(), uv[1].to_bits(), r.to_bits()],
+            &[],
+            64 * 8,
+            Some((&hs.0, &hs.1)),
+        );
         let (fx, fy) = (uv[0] * 4.0 - 0.5, uv[1] * 4.0 - 0.5);
         let (i0, j0) = (fx.floor() as i32, fy.floor() as i32);
         let g4 = |c: usize, dx: i32, dy: i32| {
@@ -376,14 +466,27 @@ fn gather_and_comparison_sampling_in_a_pixel_shader() {
         };
         let (wx, wy) = (fx - i0 as f32, fy - j0 as f32);
         let c = |x, y| f32::from(u8::from(r <= depth(x, y)));
-        let pcf = (1.0 - wx) * (1.0 - wy) * c(i0, j0) + wx * (1.0 - wy) * c(i0 + 1, j0) + (1.0 - wx) * wy * c(i0, j0 + 1) + wx * wy * c(i0 + 1, j0 + 1);
+        let pcf = (1.0 - wx) * (1.0 - wy) * c(i0, j0)
+            + wx * (1.0 - wy) * c(i0 + 1, j0)
+            + (1.0 - wx) * wy * c(i0, j0 + 1)
+            + wx * wy * c(i0 + 1, j0 + 1);
         for i in 0..64 {
-            let w: Vec<f32> = got[i * 8..i * 8 + 8].iter().map(|&w| f32::from_bits(w)).collect();
+            let w: Vec<f32> = got[i * 8..i * 8 + 8]
+                .iter()
+                .map(|&w| f32::from_bits(w))
+                .collect();
             assert_eq!(&w[0..4], &g4(0, 0, 0), "uv {uv:?} pixel {i}: GatherRed");
             // the comparison result overlaps the last gather word (offset 28): the gather alpha is first four words at +16
-            assert_eq!(&w[4..7], &g4(3, 1, -1)[0..3], "uv {uv:?} pixel {i}: GatherAlpha with offset");
-            assert!(close(w[7], pcf, 0.02), "uv {uv:?} ref {r} pixel {i}: SampleCmp {} want {pcf}", w[7]);
+            assert_eq!(
+                &w[4..7],
+                &g4(3, 1, -1)[0..3],
+                "uv {uv:?} pixel {i}: GatherAlpha with offset"
+            );
+            assert!(
+                close(w[7], pcf, 0.02),
+                "uv {uv:?} ref {r} pixel {i}: SampleCmp {} want {pcf}",
+                w[7]
+            );
         }
     }
 }
-

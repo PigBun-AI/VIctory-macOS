@@ -142,42 +142,44 @@ fn f32_inputs() -> Vec<u32> {
         0x8000_0000, // -0
         0x0000_0001, // smallest f32 denormal
         0x8000_0001,
-        0x007f_ffff,         // largest f32 denormal
-        0x0080_0000,         // smallest f32 normal
-        0x3380_0000,         // 2^-24 = smallest half denormal
-        0x3300_0000,         // 2^-25: half of it, a tie to zero
-        0x3300_0001,         // just above the tie
-        0x3380_0001,         // just above the smallest half denormal
-        0x33c0_0000,         // 1.5 * 2^-24: a tie between two half denormals
-        0x3800_0000,         // 2^-15 half denormal
-        0x387f_c000,         // largest half denormal (1023 * 2^-24)
-        0x387f_e000,         // tie between the largest denormal and 2^-14
-        0x387f_f000,         // above that tie
-        0x3880_0000,         // 2^-14 smallest half normal
-        0x3f80_0000,         // 1
-        0x3f80_1000,         // 1 + 2^-11: a tie (even below)
-        0x3f80_3000,         // 1 + 3*2^-11: a tie (odd below)
-        0x3f80_1001,         // above a tie
-        0x3f80_0fff,         // below a tie
-        0x477f_e000,         // 65504, largest half
-        0x477f_efff,         // just below the tie to 65520
-        0x477f_f000,         // 65520: a tie that rounds to Inf when nearest
-        0x477f_ffff,         // just below 65536
-        0x4780_0000,         // 65536
-        0x7f7f_ffff,         // largest f32
-        0x7f80_0000,         // +Inf
-        0xff80_0000,         // -Inf
-        0x7fc0_0000,         // quiet NaN
+        0x007f_ffff, // largest f32 denormal
+        0x0080_0000, // smallest f32 normal
+        0x3380_0000, // 2^-24 = smallest half denormal
+        0x3300_0000, // 2^-25: half of it, a tie to zero
+        0x3300_0001, // just above the tie
+        0x3380_0001, // just above the smallest half denormal
+        0x33c0_0000, // 1.5 * 2^-24: a tie between two half denormals
+        0x3800_0000, // 2^-15 half denormal
+        0x387f_c000, // largest half denormal (1023 * 2^-24)
+        0x387f_e000, // tie between the largest denormal and 2^-14
+        0x387f_f000, // above that tie
+        0x3880_0000, // 2^-14 smallest half normal
+        0x3f80_0000, // 1
+        0x3f80_1000, // 1 + 2^-11: a tie (even below)
+        0x3f80_3000, // 1 + 3*2^-11: a tie (odd below)
+        0x3f80_1001, // above a tie
+        0x3f80_0fff, // below a tie
+        0x477f_e000, // 65504, largest half
+        0x477f_efff, // just below the tie to 65520
+        0x477f_f000, // 65520: a tie that rounds to Inf when nearest
+        0x477f_ffff, // just below 65536
+        0x4780_0000, // 65536
+        0x7f7f_ffff, // largest f32
+        0x7f80_0000, // +Inf
+        0xff80_0000, // -Inf
+        0x7fc0_0000, // quiet NaN
         0xffc0_0000,
-        0x7f80_0001,         // signalling NaN, payload 1
+        0x7f80_0001, // signalling NaN, payload 1
         0x7fa0_0000,
         0x7fff_ffff,
-        0xdead_beef,         // a negative NaN? (0xdeadbeef is a large negative normal)
-        0xc47f_c000,         // -1023
+        0xdead_beef, // a negative NaN? (0xdeadbeef is a large negative normal)
+        0xc47f_c000, // -1023
     ];
     // a sweep: every exponent, a few mantissas, both signs
     for e in (0u32..=254).step_by(3) {
-        for m in [0u32, 1, 0x1000, 0x1fff, 0x2000, 0x3000, 0x7f_e000, 0x7f_ffff] {
+        for m in [
+            0u32, 1, 0x1000, 0x1fff, 0x2000, 0x3000, 0x7f_e000, 0x7f_ffff,
+        ] {
             v.push((e << 23) | m);
             v.push(0x8000_0000 | (e << 23) | m);
         }
@@ -188,7 +190,7 @@ fn f32_inputs() -> Vec<u32> {
         s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         v.push(s);
     }
-    while v.len() % 64 != 0 {
+    while !v.len().is_multiple_of(64) {
         v.push(0x3f80_0000);
     }
     v
@@ -221,7 +223,11 @@ fn legacy_f32_to_f16_edge_values_and_rounding() {
             );
             continue;
         }
-        assert_eq!(g >> 16, 0, "the upper 16 bits are zero (22.13.2): {x:#010x} -> {g:#x}");
+        assert_eq!(
+            g >> 16,
+            0,
+            "the upper 16 bits are zero (22.13.2): {x:#010x} -> {g:#x}"
+        );
         let rtz = u32::from(f32_to_f16_rtz(x));
         let model = u32::from(f32_to_f16_msc(x));
         if g != model {
@@ -247,13 +253,20 @@ fn legacy_f32_to_f16_edge_values_and_rounding() {
         at(0x477f_f000),
         at(0x33c0_0000)
     );
-    assert!(bad.is_empty(), "(input, got, model, rtz): {:x?}", &bad[..bad.len().min(8)]);
+    assert!(
+        bad.is_empty(),
+        "(input, got, model, rtz): {:x?}",
+        &bad[..bad.len().min(8)]
+    );
     // Everything that gives a half normal is exactly the spec's.
     assert!(
         deviates.iter().all(|x| (x & 0x7fff_ffff) < 0x3880_0000),
         "a half-normal result that is not round-to-zero"
     );
-    assert!(!deviates.is_empty(), "the denormal-range deviation is gone: update docs and this test");
+    assert!(
+        !deviates.is_empty(),
+        "the denormal-range deviation is gone: update docs and this test"
+    );
 }
 
 /// MSC's `f32tof16` as measured (docs/metal/translation-matrix.csv.txt,
@@ -286,13 +299,20 @@ kernel void cvt(device const uint* i [[buffer(0)]], device uint* o [[buffer(1)]]
     let pso = rig.d.compute_pipeline_from_msl(msl, "cvt").unwrap();
     let input = f32_inputs();
     let n = input.len();
-    let ib = rig.d.create_buffer(BufferKind::Shared, 4 * n as u64).unwrap();
-    let ob = rig.d.create_buffer(BufferKind::Shared, 4 * n as u64).unwrap();
+    let ib = rig
+        .d
+        .create_buffer(BufferKind::Shared, 4 * n as u64)
+        .unwrap();
+    let ob = rig
+        .d
+        .create_buffer(BufferKind::Shared, 4 * n as u64)
+        .unwrap();
     ib.write_u32s(0, &input).unwrap();
     let mut l = rig.q.begin_list().unwrap();
     l.set_address(0, ib.gpu_va()).unwrap();
     l.set_address(1, ob.gpu_va()).unwrap();
-    l.dispatch(&pso, [(n / 64) as u32, 1, 1], [64, 1, 1]).unwrap();
+    l.dispatch(&pso, [(n / 64) as u32, 1, 1], [64, 1, 1])
+        .unwrap();
     l.end().unwrap();
     let v = rig.q.submit(vec![l]).unwrap();
     rig.q.wait_for(v, 20_000).unwrap();
@@ -307,11 +327,19 @@ kernel void cvt(device const uint* i [[buffer(0)]], device uint* o [[buffer(1)]]
             bad.push((x, got[i], rne));
         }
     }
-    assert!(bad.is_empty(), "(input, got, rne): {:x?}", &bad[..bad.len().min(8)]);
+    assert!(
+        bad.is_empty(),
+        "(input, got, rne): {:x?}",
+        &bad[..bad.len().min(8)]
+    );
 }
 
 fn firstbit_hi_u(x: u32) -> u32 {
-    if x == 0 { u32::MAX } else { 31 - x.leading_zeros() }
+    if x == 0 {
+        u32::MAX
+    } else {
+        31 - x.leading_zeros()
+    }
 }
 fn firstbit_hi_s(x: i32) -> u32 {
     if x == 0 || x == -1 {
@@ -343,8 +371,23 @@ fn unary_bits_count_reverse_and_find() {
         return;
     };
     let mut input: Vec<u32> = vec![
-        0, 1, 2, 3, 0x8000_0000, 0xffff_ffff, 0xffff_fffe, 0x7fff_ffff, 0x8000_0001, 0x4000_0000,
-        0xc000_0000, 0x0000_ffff, 0xffff_0000, 0x5555_5555, 0xaaaa_aaaa, 0xdead_beef, 0x0f0f_0f0f,
+        0,
+        1,
+        2,
+        3,
+        0x8000_0000,
+        0xffff_ffff,
+        0xffff_fffe,
+        0x7fff_ffff,
+        0x8000_0001,
+        0x4000_0000,
+        0xc000_0000,
+        0x0000_ffff,
+        0xffff_0000,
+        0x5555_5555,
+        0xaaaa_aaaa,
+        0xdead_beef,
+        0x0f0f_0f0f,
     ];
     for b in 0..32 {
         input.push(1 << b);
@@ -359,7 +402,7 @@ fn unary_bits_count_reverse_and_find() {
         input.push(s & s.rotate_left(7) & s.rotate_left(19));
         input.push(s | s.rotate_left(11) | s.rotate_left(23));
     }
-    while input.len() % 64 != 0 {
+    while !input.len().is_multiple_of(64) {
         input.push(0);
     }
     let n = input.len();

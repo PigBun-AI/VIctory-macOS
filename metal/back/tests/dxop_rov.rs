@@ -38,17 +38,26 @@ fn ps(resource: &str) -> String {
 fn run(rig: &Rig, name: &str, resource: &str) -> Option<Vec<u32>> {
     let p = rig.pixel_program_vs(name, VS_MANY, &ps(resource), &[], true)?;
     p.vertices.set(3 * N);
-    let t = rig.d.create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 8, 8, SRV | UAV)).unwrap();
+    let t = rig
+        .d
+        .create_texture(&TextureDesc::tex2d(dxgi::R32_UINT, 8, 8, SRV | UAV))
+        .unwrap();
     upload(&rig.d, &rig.q, &t, 0, &vec![0u8; 8 * 8 * 4], 32);
     let view = t.view(&ViewSpec::whole(ViewDim::D2)).unwrap();
     let hs = heaps(&rig.d, &[view], &[]);
     rig.run_pixels(&p, [8, 8], &[], &[], 1, Some((&hs.0, &hs.1)));
     let out = download(&rig.d, &rig.q, &t, 32);
-    Some(out.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+    Some(
+        out.chunks(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect(),
+    )
 }
 
 fn expected() -> u32 {
-    (0..N).fold(0u32, |r, prim| r.wrapping_mul(1_664_525).wrapping_add(prim + 1))
+    (0..N).fold(0u32, |r, prim| {
+        r.wrapping_mul(1_664_525).wrapping_add(prim + 1)
+    })
 }
 
 #[test]
@@ -58,12 +67,27 @@ fn a_rasterizer_ordered_view_sees_the_primitives_in_order() {
     let mut bad: Vec<(usize, u32)> = Vec::new();
     // ten runs: an ordering that holds by luck of the scheduler would break at some
     for rep in 0..10 {
-        let Some(got) = run(&rig, "rov_ordered", "RasterizerOrderedTexture2D") else { return };
-        bad.extend(got.iter().enumerate().filter(|&(_, &g)| g != want).map(|(i, &g)| (i + 64 * rep, g)));
+        let Some(got) = run(&rig, "rov_ordered", "RasterizerOrderedTexture2D") else {
+            return;
+        };
+        bad.extend(
+            got.iter()
+                .enumerate()
+                .filter(|&(_, &g)| g != want)
+                .map(|(i, &g)| (i + 64 * rep, g)),
+        );
     }
     // The plain UAV version of the same shader shows what ordering does.
     let plain = run(&rig, "rov_plain", "RWTexture2D").unwrap();
     let plain_bad = plain.iter().filter(|&&g| g != want).count();
-    eprintln!("ROV: {} of 640 pixel results differ from the in-order result {want:#x}; plain UAV: {plain_bad} of 64", bad.len());
-    assert!(bad.is_empty(), "ROV pixels out of order: {} of 640, first {:?}", bad.len(), &bad[..bad.len().min(4)]);
+    eprintln!(
+        "ROV: {} of 640 pixel results differ from the in-order result {want:#x}; plain UAV: {plain_bad} of 64",
+        bad.len()
+    );
+    assert!(
+        bad.is_empty(),
+        "ROV pixels out of order: {} of 640, first {:?}",
+        bad.len(),
+        &bad[..bad.len().min(4)]
+    );
 }

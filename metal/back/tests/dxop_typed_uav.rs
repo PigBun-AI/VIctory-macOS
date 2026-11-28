@@ -38,7 +38,13 @@ struct F {
 }
 
 const fn f(name: &'static str, dxgi: u32, kind: Kind, chans: usize, bits: u32) -> F {
-    F { name, dxgi, kind, chans, bits }
+    F {
+        name,
+        dxgi,
+        kind,
+        chans,
+        bits,
+    }
 }
 
 use Kind::*;
@@ -89,7 +95,11 @@ fn f16_value(h: u16) -> f32 {
     let s = if h >> 15 == 1 { -1.0 } else { 1.0 };
     let e = i32::from((h >> 10) & 31);
     let m = f32::from(h & 1023);
-    if e == 0 { s * m * 2f32.powi(-24) } else { s * (1.0 + m / 1024.0) * 2f32.powi(e - 15) }
+    if e == 0 {
+        s * m * 2f32.powi(-24)
+    } else {
+        s * (1.0 + m / 1024.0) * 2f32.powi(e - 15)
+    }
 }
 
 /// Raw channel value `c` of pixel `i`: kept in range of the format.
@@ -116,7 +126,7 @@ fn texel(fm: &F, i: usize) -> (Vec<u8>, [u32; 4]) {
     } else {
         want[3] = 1;
     }
-    for c in 0..fm.chans {
+    for (c, slot) in want.iter_mut().enumerate().take(fm.chans) {
         let (b, w): (Vec<u8>, u32) = match (fm.kind, fm.bits) {
             (Float, 32) => {
                 let v = float_value(i, c);
@@ -124,18 +134,29 @@ fn texel(fm: &F, i: usize) -> (Vec<u8>, [u32; 4]) {
             }
             (Float, 16) => {
                 let v = float_value(i, c);
-                (f16_bits(v).to_le_bytes().to_vec(), f16_value(f16_bits(v)).to_bits())
+                (
+                    f16_bits(v).to_le_bytes().to_vec(),
+                    f16_value(f16_bits(v)).to_bits(),
+                )
             }
             (Unorm, bits) => {
                 let r = raw(fm, i, c);
                 let max = ((1u64 << bits) - 1) as f32;
-                let b = if bits == 16 { (r as u16).to_le_bytes().to_vec() } else { vec![r as u8] };
+                let b = if bits == 16 {
+                    (r as u16).to_le_bytes().to_vec()
+                } else {
+                    vec![r as u8]
+                };
                 (b, (r as f32 / max).to_bits())
             }
             (Snorm, bits) => {
                 let r = raw(fm, i, c);
                 let max = ((1u64 << (bits - 1)) - 1) as f32;
-                let b = if bits == 16 { (r as i16).to_le_bytes().to_vec() } else { vec![r as i8 as u8] };
+                let b = if bits == 16 {
+                    (r as i16).to_le_bytes().to_vec()
+                } else {
+                    vec![r as i8 as u8]
+                };
                 (b, (r as f32 / max).max(-1.0).to_bits())
             }
             (Uint, bits) => {
@@ -159,7 +180,7 @@ fn texel(fm: &F, i: usize) -> (Vec<u8>, [u32; 4]) {
             (Float, _) => unreachable!(),
         };
         bytes.extend(b);
-        want[c] = w;
+        *slot = w;
     }
     if !float_out && fm.chans < 4 {
         // (0, 0, 0, 1) for the channels the format lacks
@@ -189,7 +210,14 @@ fn typed_uav_loads_of_the_additional_formats() {
                O.Store4((id.y*4+id.x)*16, uint4(asuint(v.x), asuint(v.y), asuint(v.z), asuint(v.w))); }}\n"
         );
         // the shader's load format comes from the view (typed UAV): `RWTexture2D<float4>` over any of them
-        let Some(dxil) = dxil_checked(&format!("tuav_{}", fm.name), "cs_6_6", &format!("{PRELUDE}{src}"), &[op]) else { return };
+        let Some(dxil) = dxil_checked(
+            &format!("tuav_{}", fm.name),
+            "cs_6_6",
+            &format!("{PRELUDE}{src}"),
+            &[op],
+        ) else {
+            return;
+        };
         let built = rig.try_build(&dxil, flags::HEAP_INDEXED | flags::SAMPLER_HEAP_INDEXED);
         if let Err(e) = built {
             report.push(format!("{}: pipeline refused: {e}", fm.name));
@@ -197,7 +225,10 @@ fn typed_uav_loads_of_the_additional_formats() {
             continue;
         }
         let p = rig.prog_with(&dxil, flags::HEAP_INDEXED | flags::SAMPLER_HEAP_INDEXED);
-        let t = match rig.d.create_texture(&TextureDesc::tex2d(fm.dxgi, 4, 4, SRV | UAV)) {
+        let t = match rig
+            .d
+            .create_texture(&TextureDesc::tex2d(fm.dxgi, 4, 4, SRV | UAV))
+        {
             Ok(t) => t,
             Err(e) => {
                 report.push(format!("{}: texture refused: {e}", fm.name));
@@ -225,7 +256,11 @@ fn typed_uav_loads_of_the_additional_formats() {
             let g = &got[i * 4..i * 4 + 4];
             let ok = (0..4).all(|c| {
                 if matches!(fm.kind, Float | Unorm | Snorm) {
-                    close(f32::from_bits(g[c]), f32::from_bits(want[c]), 1.5e-5 * f32::from_bits(want[c]).abs().max(1.0))
+                    close(
+                        f32::from_bits(g[c]),
+                        f32::from_bits(want[c]),
+                        1.5e-5 * f32::from_bits(want[c]).abs().max(1.0),
+                    )
                 } else {
                     g[c] == want[c]
                 }
@@ -245,5 +280,9 @@ fn typed_uav_loads_of_the_additional_formats() {
         }
     }
     eprintln!("{}", report.join("\n"));
-    assert!(failed.is_empty(), "typed UAV loads that fail: {failed:?}\n{}", report.join("\n"));
+    assert!(
+        failed.is_empty(),
+        "typed UAV loads that fail: {failed:?}\n{}",
+        report.join("\n")
+    );
 }

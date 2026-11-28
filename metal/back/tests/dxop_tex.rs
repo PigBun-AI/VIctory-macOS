@@ -80,11 +80,21 @@ fn sample_sample_bias_and_calculate_lod_follow_the_quad_derivatives() {
         for gi in 0..64 {
             let g = |i: usize| f32::from_bits(got[gi * 2 + i]);
             let what = format!("s=({sx},{sy}) bias {bias} thread {gi}");
-            assert!(close(g(0), 1.0 + clamped, 0.0625), "{what}: Sample {} want {}", g(0), 1.0 + clamped);
+            assert!(
+                close(g(0), 1.0 + clamped, 0.0625),
+                "{what}: Sample {} want {}",
+                g(0),
+                1.0 + clamped
+            );
             // MSC 4.0.3 (measured 2026-11-28): in a compute stage the bias of SampleBias is
             // dropped, the result is Sample's (the stage-by-op census: sampleBias is used by
             // 906 pixel programs and no compute one; the pixel stage is exact, dxop_pixel.rs).
-            assert!(close(g(1), 1.0 + clamped, 0.0625), "{what}: SampleBias {} (Sample {}); the compute stage ignores the bias", g(1), g(0));
+            assert!(
+                close(g(1), 1.0 + clamped, 0.0625),
+                "{what}: SampleBias {} (Sample {}); the compute stage ignores the bias",
+                g(1),
+                g(0)
+            );
         }
     }
 }
@@ -119,7 +129,12 @@ fn sample_grad_uses_the_given_gradients() {
             &p,
             [1, 1, 1],
             [8, 8, 1],
-            &[dx[0].to_bits(), dx[1].to_bits(), dy[0].to_bits(), dy[1].to_bits()],
+            &[
+                dx[0].to_bits(),
+                dx[1].to_bits(),
+                dy[0].to_bits(),
+                dy[1].to_bits(),
+            ],
             &[],
             64 * 4,
             Some((&hs.0, &hs.1)),
@@ -132,7 +147,10 @@ fn sample_grad_uses_the_given_gradients() {
         let want = 1.0 + texels.log2().clamp(0.0, 3.0);
         for gi in 0..64 {
             let r = f32::from_bits(got[gi * 4]);
-            assert!(close(r, want, 0.0625), "grad {dx:?} {dy:?} thread {gi}: {r} want {want}");
+            assert!(
+                close(r, want, 0.0625),
+                "grad {dx:?} {dy:?} thread {gi}: {r} want {want}"
+            );
         }
     }
 }
@@ -204,7 +222,10 @@ fn texture_gather_returns_the_four_texels_in_d3d_order() {
         }
         want.extend(order(0, 1, -1));
         for t in 0..32 {
-            let g: Vec<f32> = got[t * 20..t * 20 + 20].iter().map(|&w| f32::from_bits(w)).collect();
+            let g: Vec<f32> = got[t * 20..t * 20 + 20]
+                .iter()
+                .map(|&w| f32::from_bits(w))
+                .collect();
             assert_eq!(g, want, "uv {uv:?} thread {t}");
         }
     }
@@ -293,11 +314,21 @@ fn sample_cmp_level_zero_on_a_depth_texture() {
             + wx * (1.0 - wy) * cmp(i0 + 1, j0)
             + (1.0 - wx) * wy * cmp(i0, j0 + 1)
             + wx * wy * cmp(i0 + 1, j0 + 1);
-        eprintln!("cmp uv {uv:?} ref {r}: got point {} linear {}; want point {want_point} linear {want_lin}", f32::from_bits(got[0]), f32::from_bits(got[1]));
+        eprintln!(
+            "cmp uv {uv:?} ref {r}: got point {} linear {}; want point {want_point} linear {want_lin}",
+            f32::from_bits(got[0]),
+            f32::from_bits(got[1])
+        );
         for t in 0..32 {
             let (gp, gl) = (f32::from_bits(got[t * 2]), f32::from_bits(got[t * 2 + 1]));
-            assert_eq!(gp, want_point, "uv {uv:?} ref {r}: point comparison, thread {t}");
-            assert!(close(gl, want_lin, 0.02), "uv {uv:?} ref {r}: linear comparison {gl} want {want_lin}");
+            assert_eq!(
+                gp, want_point,
+                "uv {uv:?} ref {r}: point comparison, thread {t}"
+            );
+            assert!(
+                close(gl, want_lin, 0.02),
+                "uv {uv:?} ref {r}: linear comparison {gl} want {want_lin}"
+            );
         }
     }
 }
@@ -321,12 +352,22 @@ fn sample_level_picks_the_mip_it_is_given() {
     let view = t.view(&ViewSpec::whole(ViewDim::D2)).unwrap();
     let hs = heaps(&rig.d, &[view], &[trilinear()]);
     for lod in [0.0f32, 1.0, 2.0, 3.0, 0.5, 1.75, 2.5, -2.0, 7.0] {
-        let got = rig.run_heaps(&p, [1, 1, 1], [32, 1, 1], &[lod.to_bits()], &[], 32, Some((&hs.0, &hs.1)));
+        let got = rig.run_heaps(
+            &p,
+            [1, 1, 1],
+            [32, 1, 1],
+            &[lod.to_bits()],
+            &[],
+            32,
+            Some((&hs.0, &hs.1)),
+        );
         let want = 1.0 + lod.clamp(0.0, 3.0);
         for (i, w) in got.iter().enumerate() {
             let r = f32::from_bits(*w);
-            assert!(close(r, want, 0.0625), "lod {lod} thread {i}: {r} want {want}");
+            assert!(
+                close(r, want, 0.0625),
+                "lod {lod} thread {i}: {r} want {want}"
+            );
         }
     }
 }
-

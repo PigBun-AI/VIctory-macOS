@@ -69,7 +69,14 @@ fn wave_size_is_32_and_lanes_follow_the_thread_index() {
                O.Store4(gi*16, uint4(WaveGetLaneIndex(), WaveGetLaneCount(), WaveIsFirstLane() ? 1u : 0u, gi)); }}\n"
         )
     };
-    for (nx, ny, nz) in [(128, 1, 1), (64, 1, 1), (32, 1, 1), (16, 8, 1), (8, 8, 1), (8, 4, 4)] {
+    for (nx, ny, nz) in [
+        (128, 1, 1),
+        (64, 1, 1),
+        (32, 1, 1),
+        (16, 8, 1),
+        (8, 8, 1),
+        (8, 4, 4),
+    ] {
         let name = format!("lane_index_{nx}_{ny}_{nz}");
         let Some(p) = rig.program(
             &name,
@@ -162,7 +169,7 @@ fn wave_read_lane_first_keeps_float_bit_patterns() {
         let mut input = lcg(128, 5 + i as u32);
         for w in 0..4 {
             input[w * 32] = sp;
-            input[w * 32 + 3] = sp ^ 0x0000_0000;
+            input[w * 32 + 3] = sp;
         }
         for mask in [FULL, 0x0000_0008] {
             let got = rig.run(&p, [1, 1, 1], [128, 1, 1], &[mask], &input, 128);
@@ -170,7 +177,8 @@ fn wave_read_lane_first_keeps_float_bit_patterns() {
                 for l in 0..32 {
                     if active(mask, l) {
                         assert_eq!(
-                            got[w * 32 + l], sp,
+                            got[w * 32 + l],
+                            sp,
                             "wave {w} lane {l} mask {mask:#x}: first-lane value {sp:#010x} came out as {:#010x}",
                             got[w * 32 + l]
                         );
@@ -315,7 +323,11 @@ fn wave_active_float_ops_and_special_values() {
         let got = rig.run(&p, [1, 1, 1], [32, 1, 1], &[], input, 32 * 4);
         // every lane of the wave gets the same four words
         for l in 1..32 {
-            assert_eq!(&got[l * 4..l * 4 + 4], &got[0..4], "lane {l} differs from lane 0");
+            assert_eq!(
+                &got[l * 4..l * 4 + 4],
+                &got[0..4],
+                "lane {l} differs from lane 0"
+            );
         }
         [got[0], got[1], got[2], got[3]]
     };
@@ -336,7 +348,11 @@ fn wave_active_float_ops_and_special_values() {
     inf[7] = 0x7f80_0000;
     inf[20] = 0xff80_0000;
     let r = run(&inf);
-    assert!(f32::from_bits(r[0]).is_nan(), "Inf + -Inf is NaN: {:#x}", r[0]);
+    assert!(
+        f32::from_bits(r[0]).is_nan(),
+        "Inf + -Inf is NaN: {:#x}",
+        r[0]
+    );
     assert_eq!(r[2], 0xff80_0000, "min with -Inf");
     assert_eq!(r[3], 0x7f80_0000, "max with +Inf");
     let mut one_inf = ints.clone();
@@ -355,7 +371,11 @@ fn wave_active_float_ops_and_special_values() {
     );
     assert!(r[0] == 0 || r[0] == 0x210, "denormal sum {:#x}", r[0]);
     assert!(r[2] == 0 || r[2] == 1, "denormal min {:#x}", r[2]);
-    assert!(r[3] == 0 || r[3] == 0x20 || r[3] == 1, "denormal max {:#x}", r[3]);
+    assert!(
+        r[3] == 0 || r[3] == 0x20 || r[3] == 1,
+        "denormal max {:#x}",
+        r[3]
+    );
     // A NaN lane: the sum is NaN. Min and max ignore the NaN, as DXIL's FMin
     // and FMax do (DXIL.rst: "if one operand is NaN, the other is returned");
     // measured: the wave's min is -5.0 and its max 10.5, the NaN lane absent.
@@ -363,7 +383,11 @@ fn wave_active_float_ops_and_special_values() {
     nan[12] = 0x7fc0_0000;
     let r = run(&nan);
     assert!(f32::from_bits(r[0]).is_nan(), "sum with NaN is NaN");
-    assert_eq!((r[2], r[3]), (f(-5.0), f(10.5)), "min/max skip the NaN lane");
+    assert_eq!(
+        (r[2], r[3]),
+        (f(-5.0), f(10.5)),
+        "min/max skip the NaN lane"
+    );
 }
 
 /// `waveActiveBallot` (all four dwords: lanes past the wave width are zero),
@@ -393,10 +417,10 @@ fn ballot_any_all_count_and_prefix() {
     };
     let mut input = lcg(64, 8);
     // wave 1: all lanes odd (AllTrue), same high nibble (AllEqual)
-    for t in 32..64 {
-        input[t] = (input[t] & 0xf) | 0x31 | 0x100;
-        input[t] = (input[t] & !0xf0) | 0x30;
-        input[t] |= 1;
+    for x in &mut input[32..64] {
+        *x = (*x & 0xf) | 0x131;
+        *x = (*x & !0xf0) | 0x30;
+        *x |= 1;
     }
     for mask in MASKS {
         let got = rig.run(&p, [1, 1, 1], [64, 1, 1], &[mask], &input, 64 * 16);
@@ -422,7 +446,9 @@ fn ballot_any_all_count_and_prefix() {
                     ballot.count_ones(),
                     u32::from(alleq),
                     before.iter().fold(0u32, |a, &u| a.wrapping_add(input[u])),
-                    before.iter().fold(1u32, |a, &u| a.wrapping_mul(input[u] | 1)),
+                    before
+                        .iter()
+                        .fold(1u32, |a, &u| a.wrapping_mul(input[u] | 1)),
                     before.iter().filter(|&&u| input[u] & 3 == 1).count() as u32,
                     0,
                 ]);
@@ -502,7 +528,11 @@ fn quad_ops_in_a_2d_group() {
         // the 1D rule on the flattened index (lane quads of 4 consecutive lanes)
         let q = gi & !3;
         let i = gi & 3;
-        let lin = [1000 + (q + (i ^ 1)) as u32, 1000 + (q + (i ^ 2)) as u32, 1000 + (q + (i ^ 3)) as u32];
+        let lin = [
+            1000 + (q + (i ^ 1)) as u32,
+            1000 + (q + (i ^ 2)) as u32,
+            1000 + (q + (i ^ 3)) as u32,
+        ];
         if g == lin {
             lane_pair_ok += 1;
         }
@@ -554,23 +584,44 @@ fn the_translators_wave_base_idiom_numbers_every_thread_once() {
         return;
     };
     let groups = 16usize;
-    let got = rig.run(&p, [groups as u32, 1, 1], [128, 1, 1], &[], &[], groups * 128 * 2);
+    let got = rig.run(
+        &p,
+        [groups as u32, 1, 1],
+        [128, 1, 1],
+        &[],
+        &[],
+        groups * 128 * 2,
+    );
     for g in 0..groups {
         let mut seen = [false; 128];
         for gi in 0..128usize {
             let ct = got[(g * 128 + gi) * 2] as usize;
             let ct2 = got[(g * 128 + gi) * 2 + 1] as usize;
-            assert!(ct < 128 && !seen[ct], "group {g}: console thread {ct} of thread {gi} out of range or twice");
+            assert!(
+                ct < 128 && !seen[ct],
+                "group {g}: console thread {ct} of thread {gi} out of range or twice"
+            );
             seen[ct] = true;
-            assert_eq!(ct % 32, gi % 32, "group {g} thread {gi}: the lane inside the run");
+            assert_eq!(
+                ct % 32,
+                gi % 32,
+                "group {g} thread {gi}: the lane inside the run"
+            );
             assert_eq!(ct / 32 == gi / 32, ct / 32 == gi / 32);
-            assert_eq!(ct2, gi, "group {g}: the LDS-free numbering is the thread index");
+            assert_eq!(
+                ct2, gi,
+                "group {g}: the LDS-free numbering is the thread index"
+            );
         }
         // each wave's lanes share one run of 32
         for w in 0..4 {
             let run = got[(g * 128 + w * 32) * 2] as usize / 32;
             for l in 0..32 {
-                assert_eq!(got[(g * 128 + w * 32 + l) * 2] as usize / 32, run, "group {g} wave {w}");
+                assert_eq!(
+                    got[(g * 128 + w * 32 + l) * 2] as usize / 32,
+                    run,
+                    "group {g} wave {w}"
+                );
             }
         }
     }
