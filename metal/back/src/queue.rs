@@ -409,6 +409,22 @@ pub(crate) struct Slot {
     pub(crate) busy_until: u64,
 }
 
+/// The scratch ring and its size, until it is made.
+struct Scratch {
+    ring: Option<ConstantRing>,
+    /// Bytes of a segment, number of segments.
+    config: (u64, u32),
+}
+
+impl Default for Scratch {
+    fn default() -> Self {
+        Scratch {
+            ring: None,
+            config: crate::mesh_emu::default_scratch_config(),
+        }
+    }
+}
+
 pub(crate) struct QueueInner {
     pub(crate) device: Device,
     pub(crate) raw: Retained<ProtocolObject<dyn MTL4CommandQueue>>,
@@ -418,6 +434,8 @@ pub(crate) struct QueueInner {
     idle: Mutex<Vec<Slot>>,
     slots_made: Mutex<u32>,
     ring: Mutex<ConstantRing>,
+    /// The scratch ring of the mesh emulation (made on first use).
+    scratch: Mutex<Scratch>,
     sink: Arc<Sink>,
     attached: Mutex<u32>,
     submissions: AtomicU64,
@@ -539,6 +557,7 @@ impl Queue {
                 idle: Mutex::new(Vec::new()),
                 slots_made: Mutex::new(0),
                 ring: Mutex::new(ring),
+                scratch: Mutex::new(Scratch::default()),
                 sink,
                 attached: Mutex::new(sets.len() as u32),
                 submissions: AtomicU64::new(0),
@@ -764,6 +783,70 @@ impl Queue {
         }
     }
 
+    /// Sets the size of the scratch ring (segments of `segment_bytes`, a
+    /// multiple of 256, `segments` of them) before its first use. A ring in use
+    /// keeps its size (`false`).
+    pub fn configure_scratch(&self, segment_bytes: u64, segments: u32) -> bool {
+        let mut s = lock(&self.inner.scratch);
+        if s.ring.is_some() {
+            return false;
+        }
+        s.config = (segment_bytes, segments);
+        true
+    }
+
+    /// Bytes of one scratch-ring segment: the most one
+    /// [`alloc_scratch`](Self::alloc_scratch) gives.
+    pub fn scratch_segment_bytes(&self) -> u64 {
+        lock(&self.inner.scratch).config.0
+    }
+
+    /// Space in the scratch ring: what a compute form of a mesh shader writes
+    /// and a vertex shader reads. GPU memory the CPU can see (`Shared`).
+    /// Recycled as the constant ring is: a segment is reused only after the
+    /// submission that last used it has completed. Waits when the ring is
+    /// full; fails when the request is over a segment or one submission
+    /// alone needs more than the ring.
+    pub fn alloc_scratch(&self, size: u64, align: u64) -> Result<RingAlloc> {
+        loop {
+            let completed = self.inner.timeline.completed();
+            let r = {
+                let mut s = lock(&self.inner.scratch);
+                if s.ring.is_none() {
+                    let (bytes, n) = s.config;
+                    s.ring = Some(ConstantRing::with_kind(
+                        &self.inner.device,
+                        crate::memory::BufferKind::Shared,
+                        bytes,
+                        n,
+                    )?);
+                }
+                s.ring
+                    .as_mut()
+                    .expect("made above")
+                    .try_alloc(size, align, completed)
+            };
+            match r {
+                Ok(a) => return Ok(a),
+                Err(RingFull::TooBig) => {
+                    return Err(Error::Unsupported(format!(
+                        "{size} bytes of mesh scratch do not fit a scratch-ring segment"
+                    )));
+                }
+                Err(RingFull::Open) => {
+                    return Err(Error::Unsupported(
+                        "one submission needs more mesh scratch than the whole ring".into(),
+                    ));
+                }
+                Err(RingFull::Busy(value)) => {
+                    if !self.inner.timeline.wait(value, 10_000) {
+                        return Err(Error::Timeout);
+                    }
+                }
+            }
+        }
+    }
+
     /// Bytes of one constant-ring segment: the most one [`alloc_constants`](Self::alloc_constants) gives.
     pub fn constant_segment_bytes(&self) -> u64 {
         lock(&self.inner.ring).segment_bytes()
@@ -842,6 +925,9 @@ impl Queue {
             sink: self.inner.sink.clone(),
         });
         lock(&self.inner.ring).seal(value);
+        if let Some(r) = lock(&self.inner.scratch).ring.as_mut() {
+            r.seal(value);
+        }
         self.inner.submissions.fetch_add(1, Ordering::Relaxed);
         for list in lists {
             list.into_submitted(value);

@@ -34,6 +34,12 @@ const MAX_ROOT_SIG_BYTES: u64 = 1 << 20;
 /// How long `DESTROY_QUEUE` and `SHUTDOWN` wait for a queue to drain.
 const DRAIN_MS: u64 = 10_000;
 
+/// The identity of a texture for the pass-split rule (a buffer's is its base
+/// address, which has these bits clear).
+pub(super) fn texture_key(id: u32) -> u64 {
+    (1 << 62) | u64::from(id)
+}
+
 pub(super) fn exhausted<T>(_: T) -> Status {
     Status::OUT_OF_MEMORY
 }
@@ -43,6 +49,9 @@ impl State {
         State {
             clear_kernels: device.clear_kernels(),
             indirect_kernels: device.indirect_kernels(),
+            emu_kernels: device.emu_kernels(),
+            emulations: 0,
+            emu_dropped_seen: 0,
             device,
             options,
             resources: Default::default(),
@@ -272,12 +281,40 @@ impl State {
             heap,
             sampler,
             shader_visible: a.flags & 1 != 0,
+            keys: Default::default(),
         };
         a.heap = HeapId(self.heaps.insert(entry).map_err(exhausted)?);
         Ok(())
     }
 
     fn write_descriptor(&mut self, a: &mut WriteDescriptorArgs) -> Result<(), Status> {
+        self.write_descriptor_view(a)?;
+        // The identity of what the view looks at, for the mesh emulation's
+        // pass-split rule.
+        let key = match a.view.kind {
+            ViewKind::TEXTURE_SRV | ViewKind::TEXTURE_UAV => Some(texture_key(a.view.resource.0)),
+            ViewKind::BUFFER_SRV | ViewKind::BUFFER_UAV => {
+                match self.resources.get(a.view.resource.0) {
+                    Some(Res::Buffer(b)) => Some(b.gpu_va()),
+                    _ => None,
+                }
+            }
+            ViewKind::CBV => self
+                .device
+                .resolve_va(a.view.gpu_va, 1)
+                .map(|(base, _)| base),
+            _ => None,
+        };
+        if let Some(h) = self.heaps.get_mut(a.heap.0) {
+            match key {
+                Some(k) => h.keys.insert(a.index, k),
+                None => h.keys.remove(&a.index),
+            };
+        }
+        Ok(())
+    }
+
+    fn write_descriptor_view(&mut self, a: &mut WriteDescriptorArgs) -> Result<(), Status> {
         let sampler = if a.view.kind == ViewKind::SAMPLER && self.heaps.get(a.heap.0).is_some() {
             Some(self.sampler(&a.sampler)?)
         } else {
@@ -447,6 +484,16 @@ impl State {
             dst.heap
                 .write(a.dst_index + i as u32, e)
                 .map_err(|e| status_of(&e))?;
+        }
+        let keys: Vec<Option<u64>> = (0..a.count)
+            .map(|i| src.keys.get(&(a.src_index + i)).copied())
+            .collect();
+        let dst = self.heaps.get_mut(a.dst_heap.0).ok_or(Status::NOT_FOUND)?;
+        for (i, k) in keys.into_iter().enumerate() {
+            match k {
+                Some(k) => dst.keys.insert(a.dst_index + i as u32, k),
+                None => dst.keys.remove(&(a.dst_index + i as u32)),
+            };
         }
         Ok(())
     }

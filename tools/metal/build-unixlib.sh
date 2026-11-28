@@ -46,6 +46,11 @@ cp "$MACHO/libvictory_metal_bridge.dylib" "$OUT/x86_64-unix/victory_metal_bridge
 cp "$PE/m0-probe.exe" "$OUT/m0-probe.exe"
 cp "$PE/d3d12.dll" "$PE/dxgi.dll" "$OUT/front/"
 cp "$PE/front-smoke.exe" "$PE/front-e2e.exe" "$PE/front-present.exe" "$OUT/"
+# CAPS: what this stage's back can do, one capability per line (docs/metal/mesh-compute.md, 8.10). tools/mac/run.sh
+# turns the lines into environment variables the translator's host hooks read, so an old stage run with a new
+# exe (or the other way round) does not get what it cannot take. Written last, so a half-made stage has none.
+# mesh_compute: the back builds the emulation of a mesh shader from the VMCS part (mesh_emu.rs, interface v1).
+printf '%s\n' mesh_compute > "$OUT/CAPS"
 
 # Checks: the mark is there, and the table Wine looks up is exported.
 if ! dd if="$OUT/x86_64-windows/victory_metal_bridge.dll" bs=1 skip=64 count=16 2>/dev/null | grep -q 'Wine builtin DLL'; then

@@ -60,6 +60,12 @@ pub struct ListStats {
     pub mesh_draws: u32,
     /// Clears of part of an attachment inside a pass.
     pub attachment_clears: u32,
+    /// Mesh draws emulated as compute plus a vertex-fetch draw (the mesh
+    /// emulation, [`crate::mesh_emu`]); `emu_splits` of them split their pass
+    /// (counted in both), `emu_dropped` were dropped.
+    pub emu_draws: u32,
+    pub emu_splits: u32,
+    pub emu_dropped: u32,
 }
 
 /// A command list being recorded. Made by [`Queue::begin_list`], finished
@@ -182,6 +188,11 @@ impl CommandList {
     /// What the list has encoded so far.
     pub fn stats(&self) -> ListStats {
         self.stats
+    }
+
+    /// Space in the scratch ring of the mesh emulation (see [`Queue::alloc_scratch`]).
+    pub fn alloc_scratch(&self, size: u64, align: u64) -> Result<RingAlloc> {
+        self.queue.alloc_scratch(size, align)
     }
 
     /// Space in the constant ring (see [`Queue::alloc_constants`]).

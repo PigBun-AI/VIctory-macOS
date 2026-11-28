@@ -366,11 +366,16 @@ fn the_compute_stream_alone_names_objects_that_do_not_exist() {
     assert_eq!(fx.queue(), QueueId(1));
     assert_eq!(fx.fence(1), FenceId(1));
     assert_eq!(fx.link.submit(&block), Status::NOT_FOUND);
+    // The block's final signal (fence 1 to value 2) is still given after the failing command: a signal never
+    // given is a title waiting for ever (exec_signal_after_failure.rs). It is given by the queue, after
+    // the lists before it, so it arrives *after* the submit returns: reading the value right away races
+    // with it (about 1 run in 8 saw 2, the rest 1). Wait for it, then nothing more may follow.
     assert_eq!(
-        fx.fence_value(FenceId(1)),
-        1,
-        "the final signal never happened"
+        fx.wait_for(FenceId(1), 2, 10_000),
+        Status::OK,
+        "the final signal of the block is given after the failing command"
     );
+    assert_eq!(fx.fence_value(FenceId(1)), 2, "and it is the only one");
 }
 
 #[test]

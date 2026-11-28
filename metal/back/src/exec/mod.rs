@@ -44,6 +44,7 @@
 //! conversion (and `VICTORY_METAL_LOG=1` prints it to stderr).
 
 mod dxil;
+mod emu;
 mod gfx;
 mod handles;
 mod indirect;
@@ -86,6 +87,9 @@ pub struct ExecOptions {
     /// alone: it is logged and counted (`Executor::isolated_commands`,
     /// `VICTORY_METAL_DROPSTATS`) and the rest of the block runs.
     pub strict_block: bool,
+    /// Whether mesh pipelines Metal cannot take are emulated by a compute
+    /// pass instead of refused (`VICTORY_METAL_MESH_COMPUTE`, default on).
+    pub mesh_compute: bool,
 }
 
 impl Default for ExecOptions {
@@ -98,6 +102,7 @@ impl Default for ExecOptions {
             },
             compat: crate::msc::Compat::BOUNDS_CHECK,
             strict_block: std::env::var_os("VICTORY_METAL_STRICT_BLOCK").is_some_and(|v| v != "0"),
+            mesh_compute: crate::mesh_emu::enabled(),
         }
     }
 }
@@ -146,6 +151,9 @@ pub(crate) enum PsoBody {
     },
     /// A render pipeline; drawing with it is the next milestone's.
     Graphics(crate::render::GraphicsPipeline),
+    /// A mesh pipeline Metal cannot take, made as a compute pipeline and a
+    /// vertex-fetch pipeline ([`crate::mesh_emu`]).
+    Emulated(Arc<crate::mesh_emu::Emulated>),
 }
 
 /// What a `ResId` names.
@@ -159,6 +167,10 @@ pub(crate) struct Heap {
     pub(crate) heap: crate::descriptors::DescriptorHeap,
     pub(crate) sampler: bool,
     pub(crate) shader_visible: bool,
+    /// What each written view of the heap looks at, by identity (see
+    /// [`emu`]'s pass-split rule): a buffer's base address, a texture's
+    /// resource id with bit 62 set. Slots never written or cleared are absent.
+    pub(crate) keys: std::collections::HashMap<u32, u64>,
 }
 
 /// Everything `HELLO` made.
@@ -173,6 +185,13 @@ pub(crate) struct State {
     pub(crate) samplers: std::collections::HashMap<String, crate::sampler::Sampler>,
     pub(crate) clear_kernels: crate::clear::ClearKernels,
     pub(crate) indirect_kernels: crate::indirect::Kernels,
+    pub(crate) emu_kernels: crate::mesh_emu::EmuKernels,
+    /// Emulated mesh pipelines made so far (0: the stream code skips the
+    /// pre-scan).
+    pub(crate) emulations: u32,
+    /// Indirect records the GPU dropped, as far as the drop statistics have
+    /// said (`PRESENT` reports the change).
+    pub(crate) emu_dropped_seen: u64,
     pub(crate) heaps: Table<Heap>,
     pub(crate) root_sigs: Table<Arc<RootSig>>,
     pub(crate) psos: Table<Arc<Pso>>,
@@ -394,6 +413,14 @@ impl Executor {
         size: u32,
     ) -> Result<(), Status> {
         self.with_state(|st| st.set_tlab_layout(root_sig, offsets, size))?
+    }
+
+    /// What the mesh emulation's kernels counted on the GPU since the
+    /// executor was made (read when the work they belong to is finished; the
+    /// drop statistics add the change per frame).
+    pub fn mesh_emu_gpu_stats(&self) -> crate::mesh_emu::GpuStats {
+        self.with_state(|st| st.emu_kernels.gpu_stats())
+            .unwrap_or_default()
     }
 
     /// The argument buffer layout of a root signature (tests, tools).

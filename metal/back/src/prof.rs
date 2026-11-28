@@ -719,3 +719,13 @@ pub(crate) fn cap_kernel(
     K.get_or_init(|| device.compute_pipeline_from_msl(CAP_SOURCE, "capk").ok())
         .as_ref()
 }
+
+// `VICTORY_METAL_NO_RASTER=<hash>[,..]` (a diagnostic): the geometry-shader pipelines with these
+// label hashes are made with rasterization off (no fragment work), to tell whether their cost is
+// in the object and mesh stages or in the pixels. The executor sets the flag while it makes one.
+thread_local! {
+    pub(crate) static NO_RASTER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// `VICTORY_METAL_NO_PS=<hash>[,..]`: the same pipelines without their fragment function,
+    /// rasterization on (blending and the colour writes stay): the pixel shader's own cost.
+    pub(crate) static NO_PS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}

@@ -518,7 +518,38 @@ impl Executor {
             };
             let parts: Vec<&[u8]> = code.iter().map(|c| c.unwrap_or(&[])).collect();
             *label = crate::dropstats::label_of_stages(ty, &parts);
+            // `VICTORY_METAL_DUMP_PSO=<dir>` (with `VICTORY_METAL_DUMP_PSO_HASH=<hex>[,..]` to pick
+            // pipelines by their label hash, as the GPU time table prints it): the stages' DXIL
+            // as `<hash>-<stage>.dxil`, for reading what a slow pipeline runs.
+            if let Some(dir) = std::env::var_os("VICTORY_METAL_DUMP_PSO") {
+                let hex = format!("{:016x}", label.hash);
+                let wanted = std::env::var("VICTORY_METAL_DUMP_PSO_HASH").ok();
+                if wanted.is_none_or(|w| w.split(',').any(|h| hex.contains(h.trim()))) {
+                    for (name, bytes) in
+                        ["vs", "ps", "amp", "ms", "gs"].into_iter().zip(code.iter())
+                    {
+                        if let Some(b) = bytes {
+                            let path =
+                                std::path::Path::new(&dir).join(format!("{hex}-{name}.dxil"));
+                            let _ = std::fs::create_dir_all(&dir);
+                            let _ = std::fs::write(path, b);
+                        }
+                    }
+                }
+            }
         }
+        let no_raster = std::env::var("VICTORY_METAL_NO_RASTER").is_ok_and(|v| {
+            let hex = format!("{:016x}", label.hash);
+            v.split(',')
+                .any(|h| !h.trim().is_empty() && hex.contains(h.trim()))
+        });
+        crate::prof::NO_RASTER.with(|c| c.set(no_raster));
+        let no_ps = std::env::var("VICTORY_METAL_NO_PS").is_ok_and(|v| {
+            let hex = format!("{:016x}", label.hash);
+            v.split(',')
+                .any(|h| !h.trim().is_empty() && hex.contains(h.trim()))
+        });
+        crate::prof::NO_PS.with(|c| c.set(no_ps));
         let desc = describe(d, &sig.msc_desc, code, self.options.compat).map_err(|r| {
             self.note_error(format!("CREATE_GRAPHICS_PIPELINE: {}", r.text()));
             r.status()
@@ -527,6 +558,42 @@ impl Executor {
             // A mesh pipeline over Metal's 32 KB: once more with its
             // outputs packed tighter (docs/metal/mesh32k.md).
             Err(e) => crate::mesh_fit::retry(&device, &desc, &e).unwrap_or(Err(e)),
+            made => made,
+        };
+        let made = match made {
+            // A mesh pipeline Metal cannot take (too big after the repack,
+            // Apple's compiler crashes on it, or it is on the denylist) runs
+            // as a compute pass and a vertex pass instead of being refused
+            // (docs/metal/mesh-compute.md, section 8).
+            Err(e)
+                if kind == PsoKind::Mesh
+                    && self.options.mesh_compute
+                    && super::emu::is_problem_pair(&e) =>
+            {
+                match crate::mesh_emu::Emulated::build(
+                    &device,
+                    &desc,
+                    &super::emu::app_layout(&sig),
+                ) {
+                    Ok(em) => {
+                        let pso = Arc::new(Pso {
+                            body: PsoBody::Emulated(Arc::new(em)),
+                            root_sig: sig,
+                        });
+                        a.pso = victory_metal_proto::ids::PsoId(self.with_state(|st| {
+                            st.emulations += 1;
+                            st.psos.insert(pso).map_err(exhausted)
+                        })??);
+                        return Ok(());
+                    }
+                    Err(why) => {
+                        self.note_error(format!(
+                            "CREATE_GRAPHICS_PIPELINE: {e}; the emulation: {why}"
+                        ));
+                        return Err(status_of_msc(&e));
+                    }
+                }
+            }
             made => made,
         };
         let pipeline = made.map_err(|e| {
