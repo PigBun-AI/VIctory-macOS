@@ -1692,3 +1692,11 @@ Third run (control for the paragraph above): the first run again with `VICTORY_D
 Matrix: `mac.res.output`, `mac.res.internal`, `mac.res.drs`, `mac.res.display_mode`, `mac.res.ui_layout`, `mac.loader.resolution` (updated); new: `mac.loader.output_chain`, `mac.loader.display_mode_record`,
 `mac.loader.scanout_reservation`, `mac.loader.temporal_scale_min`, `mac.loader.temporal_scale_controller`, `mac.loader.settings_preview_viewport`, `mac.loader.title_frame_rate_loads`, `mac.gpu.native_frontend_viewport`, `mac.res.ui_scale` (gap).
 *Retire when:* the Windows line is merged into mac/livetr (the chain's commits then come with it; the profile rule, `output_chain.rs`, stays ours).
+
+### Shared RT builder and consumers (shared.rt.bvh_build)
+
+Default on since 2026-11-28 per user: Xbox runs ray tracing. Fidelity and perf use one policy in `pipeline/rt.rs` for creation and dispatch. Only `VICTORY_BVH_BUILDER=0` disables the builder. Ray activation and hit resolve follow it unless explicitly overridden; `VICTORY_RT_PAGECACHE` already defaults on. Neither profile needs a launcher export.
+
+Cold cache: both profiles queue builder programs on workers, skip pending dispatches, reject a failed set and resume only with a whole set. A binding failure rests the group through the next frame. On-thread compilation (`VICTORY_BVH_BUILDER_SYNC=1`) remains opt-in: it was the cause of the recorded 30 s watchdog overrun. `VICTORY_BVH_QUARANTINE=1` confines stores to host copies during acceptance (run 98 had corrupt pointers with a partial builder); it is not the watchdog guard and hides compacted sizes and counters from the title, so it stays opt-in. The acceptance baseline explicitly disables the builder.
+
+Default policy is not proof of output or cold-start timing. Track the reported 2.4–4× slowdown separately in `shared.rt.builder_perf`. Retire this patch when shared upstream provides the same defaults, all-or-none protection and explicit fallback.

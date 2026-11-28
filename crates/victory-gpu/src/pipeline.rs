@@ -16,6 +16,9 @@
 //! our null command-list limits keep from running.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+#[cfg(any(windows, test))]
+mod rt;
+
 use std::collections::HashMap;
 use std::mem::offset_of;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -293,18 +296,14 @@ fn translate(container: &[u8], reads: &[victory_shader::emit::VertexRead], rect_
 /// submission, on pointers that had become bounding-box bit patterns).
 ///
 /// So a builder dispatch runs only while every builder pipeline the title
-/// has created has a host pipeline; the first builder dispatch makes them
-/// all on the spot instead of over the next frames (a stage "still being
-/// made" would be a dropped stage). While one cannot be made the builder
+/// has created has a host pipeline; dispatches skip the whole group while
+/// workers make any stage. While one cannot be made the builder
 /// is off; it is looked at again when the title creates another. A stage
 /// that could not be bound stops the stages after it for the rest of that
 /// frame and the next ([`builder_rests`]); it turned the builder off for the
 /// rest of the run at first.
 ///
-/// shortcut: and only with `VICTORY_BVH_BUILDER=1`, until a run has shown
-/// the whole builder and the host side of title memory by address
-/// (`memory.rs`) working on a card; nothing reads the structures before
-/// the programs that walk them translate.
+/// Both profiles request the builder unless `VICTORY_BVH_BUILDER=0`.
 #[cfg(windows)]
 struct Builder {
     pipelines: Vec<Arc<make::Pending>>,
@@ -350,8 +349,7 @@ fn of_builder(shaders: &[Arc<Shader>]) -> bool {
 /// memory when the title writes them.
 #[cfg(windows)]
 pub(crate) fn builder_quarantined(this: This) -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    is_builder(this) && *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_QUARANTINE").is_some_and(|v| v == "1"))
+    is_builder(this) && rt::policy().quarantine
 }
 
 /// Whether the title's pipeline `this` is one of the structure builder's.
@@ -382,8 +380,7 @@ pub(crate) static BUILDER_MAKING: std::sync::atomic::AtomicU64 = std::sync::atom
 /// 30 s watchdog on a cold cache).
 #[cfg(windows)]
 fn builder_sync() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER_SYNC").is_some_and(|v| v == "1"))
+    rt::policy().sync
 }
 
 /// What the builder's pipelines allow, from each one's state (`None`: being
@@ -433,8 +430,7 @@ mod builder_verdict_tests {
 /// [`Builder`]).
 #[cfg(windows)]
 pub(crate) fn builder_runs() -> bool {
-    static ALLOWED: OnceLock<bool> = OnceLock::new();
-    if !*ALLOWED.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1")) {
+    if !rt::policy().builder {
         return false;
     }
     let mut b = BUILDER.lock().unwrap_or_else(|e| e.into_inner());

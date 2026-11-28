@@ -84,7 +84,11 @@ case "${1:-}" in
     for r in "${runs[@]}"; do
         b=${r%%:*}; s=${r##*:}; dir="$out/$b-builder-$s"
         env=(VICTORY_MAC_DROP_STATS=1)
-        [ "$s" = on ] && env+=(VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1)
+        if [ "$s" = on ]; then
+            env+=(VICTORY_BVH_BUILDER=1 VICTORY_BVH_QUARANTINE=1)
+        else
+            env+=(VICTORY_BVH_BUILDER=0)
+        fi
         cmd=(env "${env[@]}" "$RUN" ${pargs[@]+"${pargs[@]}"} --backend "$b" --perf --timeout "$tmo" --sample 10 --frametime-log --out "$dir" ${extra[@]+"${extra[@]}"})
         if [ "$mode" = print ]; then printf '%q ' "${cmd[@]}"; echo; continue; fi
         mkdir -p "$dir"; echo "== $b builder $s -> $dir"

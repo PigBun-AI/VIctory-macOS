@@ -35,6 +35,10 @@ only ones): the backend choice, `WINEDLLPATH` / `WINEDLLOVERRIDES`, `VICTORY_MET
 
 ### Profiles
 
+Both profiles run the title's RT builder, ray activation and hit resolve by default.
+`VICTORY_BVH_BUILDER=0` opts out; neither profile sets it. Cold builder pipelines compile on workers.
+`VICTORY_BVH_QUARANTINE=1` is for isolated diagnostic runs only: it suppresses title readback.
+
 - **fidelity**: Xbox Series X (no `--console`); the output is not patched (`VICTORY_OUTPUT=0`); internal resolution, dynamic resolution and
   TAA upscaling are the title's own logic. **The title outputs 4K (3840x2160) by itself**: neither `video/resolutionFullscreen` in its
   `settings.xml` nor the display mode the HLE reports changes that (measured 2026-11-28 with 1280x720, 1920x1080 and 2560x1440 for each;

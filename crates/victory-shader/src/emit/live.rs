@@ -272,6 +272,15 @@ pub fn parse(text: &str) -> Result<Vec<(String, String)>, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn rt_pagecache_is_opt_out() {
+        for (value, enabled) in [(None, true), (Some("1"), true), (Some("0"), false)] {
+            let settings = value.map(|v| ("VICTORY_RT_PAGECACHE".into(), String::from(v)));
+            let snapshot = snapshot_of(settings.as_slice()).unwrap();
+            scoped(&snapshot, || assert_eq!(crate::emit::rt_pagecache(), enabled));
+        }
+    }
+
     /// The sun-speed switches are read through the snapshot: a scope with them set sees them on, one
     /// without sees the defaults (RT_PAGECACHE on, the others off).
     #[test]

@@ -4,6 +4,8 @@ Plan for one batch of game runs; nothing here runs by itself. Base: `mac/livetr`
 Written 2026-11-27 from the code: `pipeline.rs` (`Builder`, `of_builder`, `builder_runs`, `builder_quarantined`),
 `pipeline/make.rs` (`left_out`), `draw.rs` (dispatch gate, `writes`), `memory.rs`, `mac/drop_stats.rs`.
 
+> **2026-11-28 update:** The plan below records the old base. Both profiles now request the builder, resolve and activation by default. Cold builder compilation is asynchronous unless `VICTORY_BVH_BUILDER_SYNC=1`; warm caches are not required to avoid synchronous builder compilation. The guarded `on` test still sets quarantine explicitly; the `off` control uses `VICTORY_BVH_BUILDER=0`, not an unset variable. RT pagecache is on when unset. The default decision does not imply this batch passed.
+
 ## Before the batch: what must be true
 
 1. **The 53 builder programs translate.** The builder is *all or none*: it runs only while every pipeline the title created with a
