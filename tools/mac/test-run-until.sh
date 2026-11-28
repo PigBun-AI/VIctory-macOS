@@ -9,6 +9,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="${1:-$(mktemp -d "${TMPDIR:-/tmp}/run-until-test.XXXXXX")}"
 mkdir -p "$T/wine/bin" "$T/game" "$T/root" "$T/cap"
 T="$(cd "$T" && pwd)"   # (no double slash from a TMPDIR that ends in one: run.sh prints the cleaned path)
+# the pattern of run.sh's "another victory.exe is running" check (and of no_fake_left): the fake exe's path in THIS test's own directory, so neither a
+# real game nor another copy of this test running at the same time can match it (VICTORY_MAC_EXE_PATTERN is a regular expression)
+FAKE_PAT="${T//./\\.}/victory-fake-until-test\\.exe"
 # the fake Wine: FAKE_MODE says what the "title" does; it ends when it is stopped (TERM), like the real one
 cat >"$T/wine/bin/wine" <<'EOF'
 #!/bin/bash
@@ -42,7 +45,7 @@ echo fake >"$T/victory-fake-until-test.exe"
 mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/sh\n' >"$ROOT/target/dxc-d3dmetal"; chmod +x "$ROOT/target/dxc-d3dmetal"; }
 
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock"
-export VICTORY_MAC_EXE_PATTERN='victory-fake-until-test\.exe' FAKE_SERVER_CALLS="$T/server.calls" VICTORY_MAC_UNTIL_POLL=0.25
+export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_SERVER_CALLS="$T/server.calls" VICTORY_MAC_UNTIL_POLL=0.25
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD
 fails=0; n=0
 ok() { n=$((n + 1)); echo "ok $n - $1"; }
@@ -58,7 +61,7 @@ run() {
     secs=$(( $(date +%s) - t_start ))
 }
 lock_free() { ! [ -d "$VICTORY_GAME_LOCK" ]; }
-no_fake_left() { ! pgrep -f 'victory-fake-until-test\.exe' >/dev/null; }
+no_fake_left() { ! pgrep -f "$FAKE_PAT" >/dev/null; }
 
 echo "== --until-log: a matching line ends the run, exit 0, the lock is let go"
 run log log --timeout 30 --until-log 'RENDER-READY frame=[0-9]+'
@@ -124,7 +127,11 @@ mkdir -p "$T/before/tools"
 if git -C "$ROOT" show HEAD:tools/mac/run.sh >"$T/run-before.sh" 2>/dev/null && ! git -C "$ROOT" diff --quiet HEAD -- tools/mac/run.sh; then
     mkdir -p "$T/before/tools/mac"; cp "$T/run-before.sh" "$T/before/tools/mac/run.sh"
     ln -sfn "$ROOT/tools/macos" "$T/before/tools/macos"; ln -sfn "$ROOT/target" "$T/before/target"
-    for f in game-lock.sh; do ln -sfn "$ROOT/tools/mac/$f" "$T/before/tools/mac/$f"; done
+    # (every other script of tools/mac that run.sh sources or calls: game-lock.sh, purpose.sh, collect-title-crash.sh ...)
+    for f in "$ROOT"/tools/mac/*; do
+        case "${f##*/}" in run.sh|run.local.env) continue ;; esac
+        ln -sfn "$f" "$T/before/tools/mac/${f##*/}"
+    done
     # (the machine's untracked settings are part of the environment both copies print: the before tree reads the same file)
     [ ! -f "$ROOT/tools/mac/run.local.env" ] || cp -p "$ROOT/tools/mac/run.local.env" "$T/before/tools/mac/run.local.env"
     for who in before new; do

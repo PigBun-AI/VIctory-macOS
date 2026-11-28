@@ -12,6 +12,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 T="${1:-$(mktemp -d "${TMPDIR:-/tmp}/run-lock-test.XXXXXX")}"
 RUN="${TEST_RUN_SH:-$ROOT/tools/mac/run.sh}"      # (a knob to point the test at another copy of run.sh, for example one with the lock moved)
+mkdir -p "$T"; T="$(cd "$T" && pwd)"
 mkdir -p "$T/wine/bin" "$T/game" "$T/root/data/livetr/data/title1/storage" "$T/root/data/livetr/cache" "$T/root/data/livetr/dxc" \
          "$T/stage/front" "$T/stage/x86_64-windows"
 echo seed >"$T/root/data/livetr/data/title1/seed.txt"; echo warm >"$T/root/data/livetr/cache/warm.txt"
@@ -39,10 +40,13 @@ exit 0
 EOF
 chmod +x "$T/wine/bin/wine" "$T/wine/bin/wineserver"
 echo fake >"$T/victory-fake-lock-test.exe"
+# the pattern of run.sh's "another victory.exe is running" check (and of no_fake_left): the fake exe in THIS test's own directory, so neither a real
+# game nor another copy of this test running at the same time can match it
+FAKE_PAT="${T//./\\.}/victory-fake-lock-test\\.exe run --execute"
 mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/sh\n' >"$ROOT/target/dxc-d3dmetal"; chmod +x "$ROOT/target/dxc-d3dmetal"; }
 
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock" VICTORY_METAL_OUT="$T/stage"
-export VICTORY_MAC_EXE_PATTERN='victory-fake-lock-test\.exe run --execute' FAKE_SERVER_CALLS="$T/server.calls" FAKE_EVENTS="$T/events" GL_POLL=0.2 GL_REPORT=1
+export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_SERVER_CALLS="$T/server.calls" FAKE_EVENTS="$T/events" GL_POLL=0.2 GL_REPORT=1
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD VICTORY_DATA_DIR VICTORY_CACHE_DIR VICTORY_RENDER_SCALE VICTORY_UPSCALER VICTORY_OUTPUT
 : >"$FAKE_EVENTS"; : >"$FAKE_SERVER_CALLS"
 fails=0; n=0
@@ -63,7 +67,7 @@ wait_for() { local i; for i in $(seq 1 ${2:-100}); do eval "$1" && return 0; sle
 event() { grep -q -x -F "$1" "$FAKE_EVENTS"; }
 lock_free() { ! [ -d "$VICTORY_GAME_LOCK" ]; }
 queue_empty() { [ -z "$(ls "$VICTORY_GAME_LOCK.queue" 2>/dev/null)" ]; }
-no_fake_left() { ! pgrep -f 'victory-fake-lock-test\.exe run --execute' >/dev/null; }
+no_fake_left() { ! pgrep -f "$FAKE_PAT" >/dev/null; }
 tree() { (cd "$1" 2>/dev/null && find . | LC_ALL=C sort | tr '\n' ' '); }
 
 echo "== two --new-game runs started at once on one data directory"

@@ -109,9 +109,10 @@ printf '#!/bin/bash\nexit 0\n' >"$T/wine/bin/wineserver"
 printf '#!/bin/bash\necho "11:00  up 1 day,  2 users,  load averages: $(cat "$FAKE_LOADFILE") 20.00 10.00"\n' >"$T/bin/uptime"
 chmod +x "$T/wine/bin/wine" "$T/wine/bin/wineserver" "$T/bin/uptime"
 echo fake >"$T/victory-fake-ft-test.exe"
+FAKE_PAT="${T//./\\.}/victory-fake-ft-test\\.exe"   # (this test's own directory: no real game, no other copy of the test can match)
 mkdir -p "$ROOT/target"; [ -x "$ROOT/target/dxc-d3dmetal" ] || { printf '#!/bin/sh\n' >"$ROOT/target/dxc-d3dmetal"; chmod +x "$ROOT/target/dxc-d3dmetal"; }
 export GTA6_ROOT="$T/root" VICTORY_MAC_WINE_DIR="$T/wine" VICTORY_GAME_DIR="$T/game" VICTORY_GAME_LOCK="$T/game.lock"
-export VICTORY_MAC_EXE_PATTERN='victory-fake-ft-test\.exe' FAKE_EMIT="$T/emit.py" FAKE_LOADFILE="$T/load.now" VICTORY_LOAD_LOG_INTERVAL=1
+export VICTORY_MAC_EXE_PATTERN="$FAKE_PAT" FAKE_EMIT="$T/emit.py" FAKE_LOADFILE="$T/load.now" VICTORY_LOAD_LOG_INTERVAL=1
 unset VICTORY_CAPTURE VICTORY_RECORD VICTORY_CAPTURE_FRAMES VICTORY_LOG_WORLD
 runit() { # NAME TOTAL HIGH
     echo "3.00" >"$T/load.now"
@@ -134,7 +135,7 @@ expect "noisy: frames of the first seconds are marked invalid in frametime-annot
 echo "== run.sh: a short load peak (0.4 s of 10): under 20%, the data stay valid"
 runit blip 10 0.4
 expect "blip: no 数据无效, and the share is printed" '! grep -q 数据无效 "$T/blip/summary.txt" && grep -q "invalid = [0-9.]*%" "$T/blip/summary.txt"'
-expect "the fake title and the lock are gone" '! pgrep -f "victory-fake-ft-test" >/dev/null && [ ! -d "$VICTORY_GAME_LOCK" ]'
+expect "the fake title and the lock are gone" '! pgrep -f "$FAKE_PAT" >/dev/null && [ ! -d "$VICTORY_GAME_LOCK" ]'
 echo
 echo "$((n - fails)) of $n passed (logs in $T)"
 [ "$fails" = 0 ]
