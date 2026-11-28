@@ -20,7 +20,8 @@ use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
 use victory_metal_proto::sync::{
-    CreateGraphicsPipelineArgs, CreateTextureArgs, QueryCapsArgs, WrapMemoryArgs,
+    CreateGraphicsPipelineArgs, CreateHeapArgs, CreatePlacedBufferArgs, CreateTextureArgs,
+    QueryCapsArgs, WrapMemoryArgs,
 };
 use victory_metal_proto::types::*;
 use victory_metal_proto::wire::Wire;
@@ -2439,6 +2440,109 @@ fn a_typed_srv_of_a_shared_buffer_reads_what_the_cpu_wrote() {
         ..RootSigDesc::default()
     });
     let shared = g.fx.buffer(BufferKind::SHARED, 0x10000);
+    let words: Vec<f32> = vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0];
+    cpu_write(
+        shared.cpu_addr,
+        &words.iter().map(|f| f.to_bits()).collect::<Vec<_>>(),
+    );
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0xDEAD_BEEF; 8]);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    g.fx.write_view(
+        heap.heap,
+        2,
+        ViewDesc::typed(
+            ViewKind::BUFFER_SRV,
+            shared.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        3,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, out.res, 0, 64),
+    );
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let mut d = g.desc();
+    d.ps = StageCode::of(&pr);
+    let pso = g.pso(d);
+    let mut data = Vec::new();
+    for x in [2u32, 3, 0, 0] {
+        data.extend_from_slice(&x.to_le_bytes());
+    }
+    let mut cmds = vec![begin(1, g.q)];
+    cmds.extend(g.state(pso, va, 3 * STRIDE));
+    cmds.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+        cbv_srv_uav: heap.heap,
+        sampler: HeapId::NULL,
+    }));
+    cmds.push(Command::SetRootConstants(SetRootConstants {
+        bind_point: BindPoint::GRAPHICS,
+        root_index: 0,
+        dest_offset: 0,
+        data: &data,
+    }));
+    cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0; 4]));
+    cmds.push(draw(3));
+    cmds.push(Command::Barrier(Barrier::memory(
+        stage::FRAGMENT,
+        stage::ALL,
+    )));
+    cmds.push(end_pass());
+    cmds.push(copy(rb.res, out.res, 256));
+    cmds.push(end(1));
+    assert_eq!(
+        g.fx.submit(&cmds),
+        Status::OK,
+        "{:?}",
+        g.fx.executor().last_error()
+    );
+    g.settle();
+    let got: Vec<f32> = cpu_read(rb.cpu_addr, 8)
+        .iter()
+        .map(|w| f32::from_bits(*w))
+        .collect();
+    assert_eq!(got, words);
+}
+
+/// A buffer placed in a `SHARED` heap *after* the queue has submitted work (so
+/// after a residency commit), with its typed SRV made then: a pixel shader reads
+/// what the CPU wrote (residency of a texture buffer view made late).
+#[test]
+fn a_typed_srv_of_a_placed_buffer_made_after_the_first_submissions_reads_what_the_cpu_wrote() {
+    let Some(pr) = dxil_or_skip("draw_ps_typed_r2", "ps_6_6", PS_TYPED_READ) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.sig = g.fx.root_sig(&RootSigDesc {
+        flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants_param(4)],
+        ..RootSigDesc::default()
+    });
+    g.settle();
+    let mut hp = CreateHeapArgs::new();
+    hp.kind = MemKind::SHARED;
+    hp.size = 1 << 20;
+    let hp = g.fx.ok(hp);
+    g.settle();
+    let mut pb = CreatePlacedBufferArgs::new();
+    pb.heap = hp.heap;
+    pb.offset = 0x10000;
+    pb.size = 0x10000;
+    let pb = g.fx.ok(pb);
+    assert_ne!(pb.cpu_addr, 0);
+    struct Placed {
+        res: ResId,
+        cpu_addr: u64,
+    }
+    let shared = Placed {
+        res: pb.res,
+        cpu_addr: pb.cpu_addr,
+    };
     let words: Vec<f32> = vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0];
     cpu_write(
         shared.cpu_addr,
