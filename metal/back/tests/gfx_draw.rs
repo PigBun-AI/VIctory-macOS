@@ -19,7 +19,9 @@ use victory_metal_proto::pso::*;
 use victory_metal_proto::render::*;
 use victory_metal_proto::root::*;
 use victory_metal_proto::status::Status;
-use victory_metal_proto::sync::{CreateGraphicsPipelineArgs, CreateTextureArgs};
+use victory_metal_proto::sync::{
+    CreateGraphicsPipelineArgs, CreateTextureArgs, QueryCapsArgs, WrapMemoryArgs,
+};
 use victory_metal_proto::types::*;
 use victory_metal_proto::wire::Wire;
 
@@ -2100,4 +2102,408 @@ fn every_blend_factor_and_operation_gives_the_spec_result() {
             pack(want)
         );
     }
+}
+
+const PS_TYPED_WRITE: &str = "struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+cbuffer c : register(b0) { uint ui; uint ri; uint pad0; uint pad1; }\n\
+float4 main(VSOut i) : SV_Target0 {\n\
+  RWBuffer<float4> u = ResourceDescriptorHeap[ui];\n\
+  u[0] = float4(0.22, 0.3, 1.11, 0.089);\n\
+  u[1] = float4(0.03, 0.5, 0.06, 7.0);\n\
+  return i.col; }\n";
+
+const PS_TYPED_READ: &str = "struct VSOut { float4 pos : SV_Position; float4 col : COLOR0; };\n\
+cbuffer c : register(b0) { uint si; uint ri; uint pad0; uint pad1; }\n\
+float4 main(VSOut i) : SV_Target0 {\n\
+  Buffer<float4> s = ResourceDescriptorHeap[si];\n\
+  RWByteAddressBuffer r = ResourceDescriptorHeap[ri];\n\
+  float4 a = s[0]; float4 b = s[1];\n\
+  r.Store4(0, asuint(a)); r.Store4(16, asuint(b));\n\
+  return i.col; }\n";
+
+/// The title's tone-curve constants: a pixel shader writes an
+/// `RWBuffer<float4>` (typed UAV, `R32G32B32A32_FLOAT`) in one command list,
+/// a pixel shader of a later list reads it as `Buffer<float4>`.
+#[test]
+fn a_typed_buffer_written_by_a_pixel_shader_is_read_by_a_later_lists_pixel_shader() {
+    let Some(pw) = dxil_or_skip("draw_ps_typed_w", "ps_6_6", PS_TYPED_WRITE) else {
+        return;
+    };
+    let Some(pr) = dxil_or_skip("draw_ps_typed_r", "ps_6_6", PS_TYPED_READ) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.sig = g.fx.root_sig(&RootSigDesc {
+        flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants_param(4)],
+        ..RootSigDesc::default()
+    });
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let typed = g.fx.buffer(BufferKind::DEFAULT, 0x10000);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0xDEAD_BEEF; 8]);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    // The view sits inside the buffer like the title's: first element 0 of a
+    // buffer, count 2.
+    g.fx.write_view(
+        heap.heap,
+        1,
+        ViewDesc::typed(
+            ViewKind::BUFFER_UAV,
+            typed.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        2,
+        ViewDesc::typed(
+            ViewKind::BUFFER_SRV,
+            typed.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        3,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, out.res, 0, 64),
+    );
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let consts = |a: u32, b: u32| {
+        let mut d = Vec::new();
+        for w in [a, b, 0u32, 0] {
+            d.extend_from_slice(&w.to_le_bytes());
+        }
+        d
+    };
+    let run = |g: &Gfx, list: u32, ps: &[u8], c: Vec<u8>, tail: Vec<Command<'static>>| {
+        let mut d = g.desc();
+        d.ps = StageCode::of(ps);
+        let pso = g.pso(d);
+        let mut cmds = vec![begin(list, g.q)];
+        cmds.extend(g.state(pso, va, 3 * STRIDE));
+        cmds.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+            cbv_srv_uav: heap.heap,
+            sampler: HeapId::NULL,
+        }));
+        cmds.push(Command::SetRootConstants(SetRootConstants {
+            bind_point: BindPoint::GRAPHICS,
+            root_index: 0,
+            dest_offset: 0,
+            data: Box::leak(c.into_boxed_slice()),
+        }));
+        cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0; 4]));
+        cmds.push(draw(3));
+        cmds.push(Command::Barrier(Barrier::memory(
+            stage::FRAGMENT,
+            stage::ALL,
+        )));
+        cmds.push(end_pass());
+        cmds.extend(tail);
+        cmds.push(end(list));
+        assert_eq!(
+            g.fx.submit(&cmds),
+            Status::OK,
+            "{:?}",
+            g.fx.executor().last_error()
+        );
+    };
+    run(&g, 1, &pw, consts(1, 3), vec![]);
+    run(&g, 2, &pr, consts(2, 3), vec![copy(rb.res, out.res, 256)]);
+    g.settle();
+    let got: Vec<f32> = cpu_read(rb.cpu_addr, 8)
+        .iter()
+        .map(|w| f32::from_bits(*w))
+        .collect();
+    assert_eq!(got, vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0]);
+}
+
+/// The same at the title's place for the tone-curve constants: byte 0xfed0 of
+/// a 64 KiB buffer (first element 4077, not 256-byte aligned). A pixel shader writes an
+/// `RWBuffer<float4>` (typed UAV, `R32G32B32A32_FLOAT`) in one command list,
+/// a pixel shader of a later list reads it as `Buffer<float4>`.
+#[test]
+fn a_typed_buffer_view_at_the_title_offset_is_written_and_read_by_pixel_shaders() {
+    let Some(pw) = dxil_or_skip("draw_ps_typed_w", "ps_6_6", PS_TYPED_WRITE) else {
+        return;
+    };
+    let Some(pr) = dxil_or_skip("draw_ps_typed_r", "ps_6_6", PS_TYPED_READ) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.sig = g.fx.root_sig(&RootSigDesc {
+        flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants_param(4)],
+        ..RootSigDesc::default()
+    });
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let typed = g.fx.buffer(BufferKind::DEFAULT, 0x10000);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0xDEAD_BEEF; 8]);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    // The view sits inside the buffer like the title's: first element 0 of a
+    // buffer, count 2.
+    g.fx.write_view(
+        heap.heap,
+        1,
+        ViewDesc::typed(
+            ViewKind::BUFFER_UAV,
+            typed.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        2,
+        ViewDesc::typed(
+            ViewKind::BUFFER_SRV,
+            typed.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        3,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, out.res, 0, 64),
+    );
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let consts = |a: u32, b: u32| {
+        let mut d = Vec::new();
+        for w in [a, b, 0u32, 0] {
+            d.extend_from_slice(&w.to_le_bytes());
+        }
+        d
+    };
+    let run = |g: &Gfx, list: u32, ps: &[u8], c: Vec<u8>, tail: Vec<Command<'static>>| {
+        let mut d = g.desc();
+        d.ps = StageCode::of(ps);
+        let pso = g.pso(d);
+        let mut cmds = vec![begin(list, g.q)];
+        cmds.extend(g.state(pso, va, 3 * STRIDE));
+        cmds.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+            cbv_srv_uav: heap.heap,
+            sampler: HeapId::NULL,
+        }));
+        cmds.push(Command::SetRootConstants(SetRootConstants {
+            bind_point: BindPoint::GRAPHICS,
+            root_index: 0,
+            dest_offset: 0,
+            data: Box::leak(c.into_boxed_slice()),
+        }));
+        cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0; 4]));
+        cmds.push(draw(3));
+        cmds.push(Command::Barrier(Barrier::memory(
+            stage::FRAGMENT,
+            stage::ALL,
+        )));
+        cmds.push(end_pass());
+        cmds.extend(tail);
+        cmds.push(end(list));
+        assert_eq!(
+            g.fx.submit(&cmds),
+            Status::OK,
+            "{:?}",
+            g.fx.executor().last_error()
+        );
+    };
+    run(&g, 1, &pw, consts(1, 3), vec![]);
+    run(&g, 2, &pr, consts(2, 3), vec![copy(rb.res, out.res, 256)]);
+    g.settle();
+    let got: Vec<f32> = cpu_read(rb.cpu_addr, 8)
+        .iter()
+        .map(|w| f32::from_bits(*w))
+        .collect();
+    assert_eq!(got, vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0]);
+}
+
+/// The title's buffers are wrapped host memory (`WRAP_MEMORY`), written by the
+/// CPU: a pixel shader reads one through a typed SRV.
+#[test]
+fn a_typed_srv_of_wrapped_memory_reads_what_the_cpu_wrote() {
+    let Some(pr) = dxil_or_skip("draw_ps_typed_r2", "ps_6_6", PS_TYPED_READ) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.sig = g.fx.root_sig(&RootSigDesc {
+        flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants_param(4)],
+        ..RootSigDesc::default()
+    });
+    let page = g.fx.ok(QueryCapsArgs::new()).page_size as usize;
+    // SAFETY: an anonymous private mapping, checked below; it outlives the test body.
+    let mem = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        )
+    };
+    assert_ne!(mem, libc::MAP_FAILED);
+    let words: Vec<f32> = vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0];
+    cpu_write(
+        mem as u64,
+        &words.iter().map(|f| f.to_bits()).collect::<Vec<_>>(),
+    );
+    let mut w = WrapMemoryArgs::new();
+    w.addr = mem as u64;
+    w.len = page as u64;
+    let w = g.fx.ok(w);
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0xDEAD_BEEF; 8]);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    g.fx.write_view(
+        heap.heap,
+        2,
+        ViewDesc::typed(
+            ViewKind::BUFFER_SRV,
+            w.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        3,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, out.res, 0, 64),
+    );
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let mut d = g.desc();
+    d.ps = StageCode::of(&pr);
+    let pso = g.pso(d);
+    let mut data = Vec::new();
+    for x in [2u32, 3, 0, 0] {
+        data.extend_from_slice(&x.to_le_bytes());
+    }
+    let mut cmds = vec![begin(1, g.q)];
+    cmds.extend(g.state(pso, va, 3 * STRIDE));
+    cmds.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+        cbv_srv_uav: heap.heap,
+        sampler: HeapId::NULL,
+    }));
+    cmds.push(Command::SetRootConstants(SetRootConstants {
+        bind_point: BindPoint::GRAPHICS,
+        root_index: 0,
+        dest_offset: 0,
+        data: &data,
+    }));
+    cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0; 4]));
+    cmds.push(draw(3));
+    cmds.push(Command::Barrier(Barrier::memory(
+        stage::FRAGMENT,
+        stage::ALL,
+    )));
+    cmds.push(end_pass());
+    cmds.push(copy(rb.res, out.res, 256));
+    cmds.push(end(1));
+    assert_eq!(
+        g.fx.submit(&cmds),
+        Status::OK,
+        "{:?}",
+        g.fx.executor().last_error()
+    );
+    g.settle();
+    let got: Vec<f32> = cpu_read(rb.cpu_addr, 8)
+        .iter()
+        .map(|w| f32::from_bits(*w))
+        .collect();
+    assert_eq!(got, words);
+}
+
+/// A committed buffer in CPU-visible memory (`SHARED`), written by the CPU: a
+/// pixel shader reads it through a typed SRV (the tone-curve constants).
+#[test]
+fn a_typed_srv_of_a_shared_buffer_reads_what_the_cpu_wrote() {
+    let Some(pr) = dxil_or_skip("draw_ps_typed_r2", "ps_6_6", PS_TYPED_READ) else {
+        return;
+    };
+    let Some(mut g) = setup() else { return };
+    g.sig = g.fx.root_sig(&RootSigDesc {
+        flags: root_flags::CBV_SRV_UAV_HEAP_INDEXED | root_flags::SAMPLER_HEAP_INDEXED,
+        params: vec![constants_param(4)],
+        ..RootSigDesc::default()
+    });
+    let shared = g.fx.buffer(BufferKind::SHARED, 0x10000);
+    let words: Vec<f32> = vec![0.22, 0.3, 1.11, 0.089, 0.03, 0.5, 0.06, 7.0];
+    cpu_write(
+        shared.cpu_addr,
+        &words.iter().map(|f| f.to_bits()).collect::<Vec<_>>(),
+    );
+    let t = g.texture(format::R8G8B8A8_UNORM, tex_usage::RENDER_TARGET);
+    let out = g.fx.buffer(BufferKind::DEFAULT, 256);
+    let rb = g.fx.buffer(BufferKind::READBACK, 256);
+    cpu_write(rb.cpu_addr, &[0xDEAD_BEEF; 8]);
+    let heap = g.fx.heap(HeapKind::CBV_SRV_UAV, 16, true);
+    g.fx.write_view(
+        heap.heap,
+        2,
+        ViewDesc::typed(
+            ViewKind::BUFFER_SRV,
+            shared.res,
+            format::R32G32B32A32_FLOAT,
+            0,
+            2,
+        ),
+    );
+    g.fx.write_view(
+        heap.heap,
+        3,
+        ViewDesc::raw(ViewKind::BUFFER_UAV, out.res, 0, 64),
+    );
+    let (_vb, va) = g.vertex_buffer(&BIG.vertices());
+    let mut d = g.desc();
+    d.ps = StageCode::of(&pr);
+    let pso = g.pso(d);
+    let mut data = Vec::new();
+    for x in [2u32, 3, 0, 0] {
+        data.extend_from_slice(&x.to_le_bytes());
+    }
+    let mut cmds = vec![begin(1, g.q)];
+    cmds.extend(g.state(pso, va, 3 * STRIDE));
+    cmds.push(Command::SetDescriptorHeaps(SetDescriptorHeaps {
+        cbv_srv_uav: heap.heap,
+        sampler: HeapId::NULL,
+    }));
+    cmds.push(Command::SetRootConstants(SetRootConstants {
+        bind_point: BindPoint::GRAPHICS,
+        root_index: 0,
+        dest_offset: 0,
+        data: &data,
+    }));
+    cmds.push(begin_pass(t, LoadAction::CLEAR, [0.0; 4]));
+    cmds.push(draw(3));
+    cmds.push(Command::Barrier(Barrier::memory(
+        stage::FRAGMENT,
+        stage::ALL,
+    )));
+    cmds.push(end_pass());
+    cmds.push(copy(rb.res, out.res, 256));
+    cmds.push(end(1));
+    assert_eq!(
+        g.fx.submit(&cmds),
+        Status::OK,
+        "{:?}",
+        g.fx.executor().last_error()
+    );
+    g.settle();
+    let got: Vec<f32> = cpu_read(rb.cpu_addr, 8)
+        .iter()
+        .map(|w| f32::from_bits(*w))
+        .collect();
+    assert_eq!(got, words);
 }
